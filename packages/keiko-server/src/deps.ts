@@ -4725,7 +4725,7 @@ interface UiHandlerDepsAssemblyArgs {
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
   /** The one repository credential relay the run binding mints capabilities from (#4522). */
-  readonly repositoryCredentialRelay?: RepositoryCredentialRelay | undefined;
+  readonly repositoryCredentialRelay: RepositoryCredentialRelay;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
@@ -5143,17 +5143,15 @@ function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcp
   };
 }
 
-// One repository credential relay per deps graph, reached by the run binding as
-// `deps.repositoryRelay.relay`; an assembly may inject its own. Relayed repository reads leave through
-// Keiko's own egress configuration (proxy and CA) as well.
+// One repository credential relay per deps graph (`createProcessCredentialRelays`), reached by the run
+// binding as `deps.repositoryRelay.relay`. Relayed repository reads leave through Keiko's own egress
+// configuration (proxy and CA) as well.
 function repositoryRelayDeps(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<UiHandlerDeps, "repositoryRelay"> {
   return {
     repositoryRelay: {
-      relay:
-        args.repositoryCredentialRelay ??
-        createRepositoryCredentialRelay({ activityLog: () => processServerLogSink() }),
+      relay: args.repositoryCredentialRelay,
       upstream: egressRepositoryRelayUpstream(() =>
         resolveOutboundHttpEgressConfig(undefined, args.options.env),
       ),
@@ -6649,9 +6647,7 @@ function credentialRelayInputs(
 ): Pick<Parameters<typeof resolveProductionOpenCodeActivation>[0], "mcpRelay" | "repositoryRelay"> {
   return {
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
-    ...(args.repositoryCredentialRelay === undefined
-      ? {}
-      : { repositoryRelay: args.repositoryCredentialRelay }),
+    repositoryRelay: args.repositoryCredentialRelay,
   };
 }
 
@@ -6666,7 +6662,7 @@ function createProcessCredentialRelays(): Pick<
   return {
     mcpCredentialRelay: createMcpCredentialRelay(),
     repositoryCredentialRelay: createRepositoryCredentialRelay({
-      activityLog: () => processServerLogSink(),
+      activityLog: processServerLogSink,
     }),
   };
 }

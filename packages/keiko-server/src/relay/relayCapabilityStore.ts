@@ -83,7 +83,8 @@ export class RelayCapabilityStore<Target extends RelayStoreTarget> {
     return stored.target;
   }
 
-  private revoke(relayId: string): void {
+  /** Ends one binding now (its run is still live) and reports it once; unknown ids are ignored. */
+  public revoke(relayId: string): void {
     const target = this.end(relayId);
     if (target !== undefined) this.notify([target]);
   }
@@ -153,8 +154,12 @@ export class RelayCapabilityStore<Target extends RelayStoreTarget> {
 
   public releaseRun(runId: string): void {
     const ended: Target[] = [];
-    for (const [relayId, stored] of [...this.bindings]) {
-      if (stored.target.runId !== runId) continue;
+    const matching: string[] = [];
+    for (const [relayId, stored] of this.bindings) {
+      if (stored.target.runId === runId) matching.push(relayId);
+    }
+    // Collected first: ending a binding removes it from the map being walked.
+    for (const relayId of matching) {
       const target = this.end(relayId);
       if (target !== undefined) ended.push(target);
     }

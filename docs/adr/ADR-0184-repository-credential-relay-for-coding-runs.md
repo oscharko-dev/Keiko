@@ -119,8 +119,16 @@ to a file of the run.
 
 - **Maven.** The mirror, repository and plugin repository URLs that were bound are rewritten to
   their relay URLs, one binding per repository id. A `<server>` per id carries the fixed user name
-  `keiko-relay` and the capability as its password. A second URL under the same id is not bound
-  (`id-ambiguous`), and a repository without an id cannot carry a `<server>` (`id-missing`). Maven
+  `keiko-relay` and the capability as its password. An id that two repositories declare with
+  different URLs is bound for none of them (`id-ambiguous`, once per distinct URL): the shared
+  `<server>` would send the capability to whichever host Maven asked. A repository without an id
+  cannot carry a `<server>` (`id-missing`). The rewrite reads ids and URLs with the XML reader's own
+  decoder (`x&#121;z` is `xyz` for both), and the rewritten settings are then read back the way Maven
+  reads them: a bound id that still names an element not on its relay URL, in any mirror or any
+  profile, active or not, is revoked and its elements restored (`id-ambiguous` when that element names
+  another repository, `rewrite-missed` when the rewrite did not recognise an element the resolution
+  did), so no `<server>` is emitted for it. A repository of an inactive profile is not relayed and is
+  counted as `profile-inactive`, so an authentication failure for it is explainable. Maven
   runs online (`offline=false`) in every mode when at least one target is bound, because it reaches
   the relay and nothing else. Every `<proxy>` gains `127.0.0.1|localhost` in `nonProxyHosts`. Maven
   sends its first request with the Basic credential: the relay on a relayed Host refuses an
@@ -140,10 +148,17 @@ to a file of the run.
 - **Nothing resolved.** The run's settings, environment and Java properties stay exactly as ADR-0137
   describes.
 - **Release.** `releaseRun` revokes every binding of a run when the run is disposed; no capability
-  outlives its run.
+  outlives its run. Each binding also carries the run's prepare signal, so a run that is aborted
+  revokes its bindings before `releaseRun` is reached, and a binding that the read-back drops is
+  revoked at once (`RepositoryCredentialRelay.revoke`).
+- **The person's Maven files stay out of reach.** The run never writes or reads the person's
+  `~/.m2/settings.xml` or `~/.m2/settings-security.xml`: the native profile's write allowlist is the
+  workspace and the run's private state, and the read allowlist names only the read-only cache and
+  wrapper distributions of `~/.m2` (`native-maven-settings-protection.test.ts` pins both).
 - **Activity Log.** The `coding-runtime.native-build-settings.admitted` line gains
   `relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and `relayRefusalReasons`, a closed
-  list: the resolution refusals plus `bind-refused`, `id-missing` and `id-ambiguous`.
+  list: the resolution refusals (including the informational `profile-inactive`) plus
+  `bind-refused`, `id-missing`, `id-ambiguous` and `rewrite-missed`.
 
 ### D6 — Modes
 
@@ -193,8 +208,10 @@ the credential scan and a packument rewrite can be a small multiple of it.
 - **Full access.** A run at Full access can read every artifact the person may read and also has
   the internet. That is the same reach it already has over the project's source.
 - **Active profiles only.** Repositories of a profile that is neither active by default nor named
-  in `activeProfiles` are not bound. A profile the run activates by `-P` reaches its real URL
-  without a credential.
+  in `activeProfiles` are not bound; each is counted as `profile-inactive`. A profile the run
+  activates by `-P` reaches its real URL without a credential, and an inactive-profile repository that
+  shares an id with a bound one makes that id unrelayed (`id-ambiguous`), never a credential for the
+  other host.
 - **Gradle.** Gradle names its repositories in build scripts. It is not covered yet; an init script
   in the private Gradle home can bind it to the same relay later.
 - **Git hosts.** Check runs, reviews and comments on the Git host are not covered.

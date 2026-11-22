@@ -292,6 +292,34 @@ describe("portable updater startup recovery composition", () => {
   });
 });
 
+describe("the repository credential relay of the deps graph (#4522)", () => {
+  it("composes one relay whose upstream leaves through Keiko's own egress and never reaches its own port", async () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-repository-relay-deps-evidence-"),
+      env: { KEIKO_STATE_DIR: tmp("keiko-repository-relay-deps-state-") },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const relay = deps.repositoryRelay;
+      expect(relay).toBeDefined();
+      // The egress policy refuses a denied loopback port before any connection is made.
+      await expect(
+        relay?.upstream("http://127.0.0.1:9/a.pom", {
+          method: "GET",
+          headers: {},
+          signal: AbortSignal.timeout(5_000),
+          deniedLoopbackPorts: [9],
+          allowPrivateNetwork: true,
+          allowLoopback: true,
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+});
+
 describe("composed clocks", () => {
   // PR #4515 CI: the composed approval registry kept the real Date.now while a test had set the
   // system time, so a Jira read grant issued on that clock expired early on a slow runner.

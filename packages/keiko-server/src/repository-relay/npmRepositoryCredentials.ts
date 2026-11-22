@@ -21,7 +21,7 @@ import {
  * registry at its own path or at the nearest parent path, as npm walks up. `${NAME}` takes its value
  * from the given environment; any other `${...}` form is refused.
  */
-const NPM_ENV = /^([A-Za-z_][A-Za-z0-9_]*)$/u;
+const NPM_ENV = /^([A-Za-z_]\w*)$/u;
 const NPMRC_MAX_CHARS = 256 * 1024;
 const SCOPE_REGISTRY = /^(@[a-z0-9][\w.-]*):registry$/iu;
 const AUTH_KEY = /^(\/\/.+\/):(_authToken|_auth|username|_password)$/u;

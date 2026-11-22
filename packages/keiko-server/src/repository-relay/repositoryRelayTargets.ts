@@ -33,6 +33,7 @@ export const REPOSITORY_REFUSAL_REASONS = [
   "credential-too-short",
   "encrypted-master-missing",
   "encrypted-decrypt-failed",
+  "profile-inactive",
 ] as const;
 export type RepositoryRefusalReason = (typeof REPOSITORY_REFUSAL_REASONS)[number];
 
@@ -67,8 +68,8 @@ export interface RepositoryResolution {
 export class RefusalTally {
   private readonly counts = new Map<RepositoryRefusalReason, number>();
 
-  public add(reason: RepositoryRefusalReason): void {
-    this.counts.set(reason, (this.counts.get(reason) ?? 0) + 1);
+  public add(reason: RepositoryRefusalReason, count = 1): void {
+    this.counts.set(reason, (this.counts.get(reason) ?? 0) + count);
   }
 
   public toCounts(): RepositoryRefusalCounts {
@@ -81,15 +82,39 @@ export class RefusalTally {
  * names of model providers and gateways never are: a settings file that points a repository at a
  * foreign host and a credential at `${env.KEIKO_GATEWAY_API_KEY}` would otherwise hand that key to it.
  */
-const DENIED_ENVIRONMENT_NAME =
-  /^KEIKO_|(?:^|_)(?:OPENAI|ANTHROPIC|AZURE|GEMINI|GOOGLE|MISTRAL|COHERE|GROQ|LITELLM|OPENROUTER|HUGGINGFACE|HF|DEEPSEEK|XAI|BEDROCK|AWS|GATEWAY)(?:_|$)/iu;
+const DENIED_ENVIRONMENT_SEGMENTS: ReadonlySet<string> = new Set([
+  "openai",
+  "anthropic",
+  "azure",
+  "gemini",
+  "google",
+  "mistral",
+  "cohere",
+  "groq",
+  "litellm",
+  "openrouter",
+  "huggingface",
+  "hf",
+  "deepseek",
+  "xai",
+  "bedrock",
+  "aws",
+  "gateway",
+]);
+
+// A name is denied when it starts with `KEIKO_` or when any `_`-delimited segment names a provider.
+// The double case mapping folds every spelling a case-insensitive Unicode match would (the Kelvin
+// sign, the long s).
+function isDeniedEnvironmentName(name: string): boolean {
+  const folded = name.toUpperCase().toLowerCase();
+  if (folded.startsWith("keiko_")) return true;
+  return folded.split("_").some((segment) => DENIED_ENVIRONMENT_SEGMENTS.has(segment));
+}
 
 export function repositoryResolutionEnvironment(
   env: Readonly<Record<string, string | undefined>>,
 ): Readonly<Record<string, string | undefined>> {
-  return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !DENIED_ENVIRONMENT_NAME.test(name)),
-  );
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !isDeniedEnvironmentName(name)));
 }
 
 /** A repository URL is never interpolated: its host is where a credential is sent. */

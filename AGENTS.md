@@ -1201,7 +1201,8 @@ summary per binding when its run is released (request, relayed, refused, failed,
 upstream client and server error and redirect counts, bytes, duration), under the run's
 correlation. The admission line `coding-runtime.native-build-settings.admitted` adds
 `relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and the closed
-`relayRefusalReasons`. Never a URL, host, path, artifact coordinate, user name or credential; a
+`relayRefusalReasons` (including `id-ambiguous`, `rewrite-missed` and the informational
+`profile-inactive`). Never a URL, host, path, artifact coordinate, user name or credential; a
 credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
 never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
 user-level files are read.

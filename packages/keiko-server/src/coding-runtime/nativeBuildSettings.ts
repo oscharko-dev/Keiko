@@ -11,6 +11,8 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   bindRepositoryRelays,
+  type BoundMavenRepository,
+  type NativeRelayRefusalReason,
   MAVEN_PREEMPTIVE_AUTH_PROPERTIES,
   NATIVE_RELAY_REFUSAL_REASONS,
   relayMavenSettings,
@@ -355,6 +357,8 @@ export interface NativeBuildSettingsInput {
   readonly repositoryRelay?: NativeRepositoryRelayInput | undefined;
   /** The run's inherited `NO_PROXY`, which the relay's loopback exemption extends. */
   readonly inheritedNoProxy?: string | undefined;
+  /** The run's signal: its bindings are revoked when it aborts, before the run is released. */
+  readonly signal?: AbortSignal | undefined;
   readonly activityLog?: ServerLogSink | undefined;
 }
 
@@ -458,8 +462,13 @@ export function prepareNativeBuildSettings(
   );
   const maven = admit(mavenSource, (text) => sanitizedMaven(text, run));
   const npm = admit(npmSource, sanitizeNpmrc);
-  const bound = boundRelays(input, { mavenSource, maven, npmSource, npm });
-  const relayed = relayedAdmissions(input, run, { mavenSource, maven, npm }, bound);
+  const relayed = relayedAdmissions(
+    input,
+    run,
+    { mavenSource, maven, npm },
+    boundRelays(input, { mavenSource, maven, npmSource, npm }),
+  );
+  const bound = relayed.bound;
   const userConfig = join(input.stateRoot, "config", "npm-user-config");
   writePrivate(join(home, ".m2", "settings.xml"), relayed.maven ?? emptyMavenSettings(run));
   writeAdmitted(join(home, ".gradle", "gradle.properties"), gradle);
@@ -528,7 +537,15 @@ function boundRelays(
     mavenSettings,
     mavenSecurity: securitySource?.state === "read" ? securitySource.text : undefined,
     npmrc: sourceText(sources.npmSource, sources.npm),
+    signal: input.signal,
   });
+}
+
+interface RelayedAdmissions {
+  readonly maven: string | undefined;
+  readonly npm: string | undefined;
+  /** What stayed bound once the settings were read back; its refusals include what was dropped. */
+  readonly bound: BoundRepositories | undefined;
 }
 
 /**
@@ -541,17 +558,23 @@ function relayedAdmissions(
   run: MavenRunBinding,
   sources: Pick<AdmittedSources, "mavenSource" | "maven" | "npm">,
   bound: BoundRepositories | undefined,
-): { readonly maven: string | undefined; readonly npm: string | undefined } {
+): RelayedAdmissions {
   const relay = input.repositoryRelay;
   if (relay === undefined || bound === undefined) {
-    return { maven: sources.maven.value?.text, npm: sources.npm.value?.text };
+    return { maven: sources.maven.value?.text, npm: sources.npm.value?.text, bound };
   }
+  const maven = relayedMaven(sources, run, bound, relay);
   return {
-    maven: relayedMaven(sources, run, bound, relay),
+    maven: maven.text,
     npm:
       bound.npm.length === 0
         ? sources.npm.value?.text
         : relayNpmConfig(sources.npm.value?.text ?? "", bound.npm, relay),
+    bound: {
+      ...bound,
+      maven: maven.bound,
+      refusals: [...bound.refusals, ...maven.dropped],
+    },
   };
 }
 
@@ -560,15 +583,25 @@ function relayedMaven(
   run: MavenRunBinding,
   bound: BoundRepositories,
   relay: NativeRepositoryRelayInput,
-): string | undefined {
+): {
+  readonly text: string | undefined;
+  readonly bound: readonly BoundMavenRepository[];
+  readonly dropped: readonly NativeRelayRefusalReason[];
+} {
   const text = sourceText(sources.mavenSource, sources.maven);
   const online =
     text === undefined || bound.maven.length === 0
       ? undefined
       : sanitizeMavenSettings(text, { ...run, offline: false });
-  return online === undefined
-    ? sources.maven.value?.text
-    : relayMavenSettings(online.xml, bound.maven, relay);
+  if (online === undefined)
+    return { text: sources.maven.value?.text, bound: bound.maven, dropped: [] };
+  const relayed = relayMavenSettings(online.xml, bound.maven, relay);
+  // Nothing left bound: the settings stay as the sanitizer wrote them for the run's mode.
+  return {
+    text: relayed.bound.length === 0 ? sources.maven.value?.text : relayed.xml,
+    bound: relayed.bound,
+    dropped: relayed.dropped,
+  };
 }
 
 /** Loopback is never proxied for a run whose repositories are reached through the relay. */
@@ -684,6 +717,12 @@ function recordNativeBuildSettingsAdmitted(
   );
 }
 
+// Code-unit order, not locale order: the reasons are closed ASCII words and must sort identically
+// on every machine.
+function compareCodeUnits(left: string, right: string): number {
+  return Number(left > right) - Number(left < right);
+}
+
 function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<string, unknown> {
   if (relay === undefined) return {};
   return {
@@ -692,6 +731,6 @@ function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<strin
     relayRefusedCount: relay.refusals.length,
     ...(relay.refusals.length === 0
       ? {}
-      : { relayRefusalReasons: [...new Set(relay.refusals)].sort() }),
+      : { relayRefusalReasons: [...new Set(relay.refusals)].sort(compareCodeUnits) }),
   };
 }

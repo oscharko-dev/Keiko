@@ -18,8 +18,11 @@ const XML_MAX_DEPTH = 64;
 // A tag's attributes are read as XML defines them, a quoted value that may hold `>` but no `<`: a
 // reader that ended the tag at the first `>` would take the rest of the value for character data
 // and resolve a different credential than Maven does. A tag whose attributes do not fit is refused.
-const TOKEN =
-  /<!\[CDATA\[(?<cdata>[\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(?<close>\/)?(?<name>[A-Za-z_][\w.:-]*)(?:\s+[^\s=<>/"']+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*(?<self>\/)?>|(?<text>[^<]+)/uy;
+// The scanner below advances by position with small sticky patterns and string searches, never one
+// large alternation, so no input can make it backtrack.
+const TAG_NAME = /(?<close>\/)?(?<name>[A-Za-z_][\w.:-]*)/uy;
+const TAG_ATTRIBUTE = /\s+[^\s=<>/"']+\s*=\s*(?:"[^"<]*"|'[^'<]*')/uy;
+const TAG_END = /\s*(?<self>\/)?>/uy;
 const REFERENCE =
   /&(?:(?<named>amp|lt|gt|quot|apos)|#(?<decimal>\d{1,7})|#x(?<hex>[0-9a-fA-F]{1,6}));/gu;
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
@@ -45,6 +48,58 @@ type TokenGroups = Readonly<
   Partial<Record<"cdata" | "close" | "name" | "self" | "text", string | undefined>>
 >;
 
+interface Token {
+  readonly groups: TokenGroups;
+  readonly next: number;
+}
+
+function delimited(xml: string, index: number, open: string, close: string): number | undefined {
+  const end = xml.indexOf(close, index + open.length);
+  return end < 0 ? undefined : end + close.length;
+}
+
+function matchAt(pattern: RegExp, xml: string, index: number): RegExpExecArray | null {
+  pattern.lastIndex = index;
+  return pattern.exec(xml);
+}
+
+function tagToken(xml: string, index: number): Token | undefined {
+  const head = matchAt(TAG_NAME, xml, index + 1);
+  if (head === null) return undefined;
+  let cursor = TAG_NAME.lastIndex;
+  while (matchAt(TAG_ATTRIBUTE, xml, cursor) !== null) cursor = TAG_ATTRIBUTE.lastIndex;
+  const end = matchAt(TAG_END, xml, cursor);
+  if (end === null) return undefined;
+  return {
+    groups: { close: head.groups?.close, name: head.groups?.name, self: end.groups?.self },
+    next: TAG_END.lastIndex,
+  };
+}
+
+function markupToken(xml: string, index: number): Token | undefined {
+  if (xml.startsWith("<![CDATA[", index)) {
+    const next = delimited(xml, index, "<![CDATA[", "]]>");
+    if (next === undefined) return undefined;
+    return { groups: { cdata: xml.slice(index + 9, next - 3) }, next };
+  }
+  if (xml.startsWith("<!--", index)) {
+    const next = delimited(xml, index, "<!--", "-->");
+    return next === undefined ? undefined : { groups: {}, next };
+  }
+  if (xml.startsWith("<?", index)) {
+    const next = delimited(xml, index, "<?", "?>");
+    return next === undefined ? undefined : { groups: {}, next };
+  }
+  return tagToken(xml, index);
+}
+
+function scanToken(xml: string, index: number): Token | undefined {
+  if (xml.codePointAt(index) === 0x3c) return markupToken(xml, index);
+  const end = xml.indexOf("<", index);
+  const next = end < 0 ? xml.length : end;
+  return { groups: { text: xml.slice(index, next) }, next };
+}
+
 function characterReference(code: number): string | undefined {
   return Number.isSafeInteger(code) &&
     code > 0 &&
@@ -59,6 +114,14 @@ function referenceText(found: Record<string, string | undefined>): string | unde
   return characterReference(
     found.decimal === undefined ? Number.parseInt(found.hex ?? "", 16) : Number(found.decimal),
   );
+}
+
+/**
+ * Character data with its references decoded, exactly as the parser decodes it; anything that
+ * must agree with the parser on an element's text (the run binding's rewrite) uses this.
+ */
+export function decodeXmlText(raw: string): string | undefined {
+  return decodeText(raw);
 }
 
 /** Character data with its references decoded; `undefined` for any reference it does not model. */
@@ -121,10 +184,9 @@ export function parseXmlElements(xml: string): XmlElement | undefined {
   const state: ParseState = { stack: [], root: undefined };
   let index = 0;
   while (index < xml.length) {
-    TOKEN.lastIndex = index;
-    const token = TOKEN.exec(xml);
-    if (token === null || !step(state, token.groups as TokenGroups)) return undefined;
-    index = TOKEN.lastIndex;
+    const token = scanToken(xml, index);
+    if (token === undefined || !step(state, token.groups)) return undefined;
+    index = token.next;
   }
   return state.stack.length === 0 ? state.root : undefined;
 }

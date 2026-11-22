@@ -76,6 +76,20 @@ describe("RelayCapabilityStore", () => {
     expect(relay.authenticate(other.relayId, other.capability)).toBeDefined();
   });
 
+  it("revokes exactly one binding on request, reports it once and ignores an unknown id", () => {
+    const revoked: string[] = [];
+    const relay = store((target) => revoked.push(target.label));
+    const first = bound(relay, "run-1", "a");
+    const second = bound(relay, "run-1", "b");
+    relay.revoke(first.relayId);
+    relay.revoke(first.relayId);
+    relay.revoke("unknown-id");
+    expect(revoked).toEqual(["a"]);
+    expect(relay.authenticate(first.relayId, first.capability)).toBeUndefined();
+    expect(relay.wasRevoked(first.relayId, first.capability)).toBe(true);
+    expect(relay.authenticate(second.relayId, second.capability)).toBeDefined();
+  });
+
   it("revokes every binding of a run before a throwing callback is reported, and reports each", () => {
     const records: ServerDiagnosticRecord[] = [];
     const seen: string[] = [];

@@ -2214,6 +2214,7 @@ function admitNativeBuildSettings(
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
     repositoryRelay: input.repositoryRelay,
     inheritedNoProxy: request.env.NO_PROXY ?? request.env.no_proxy,
+    signal: request.signal,
     activityLog: input.activityLog,
   });
 }

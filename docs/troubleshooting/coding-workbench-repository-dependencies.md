@@ -44,7 +44,13 @@ In the timeline, find the run's `coding-runtime.native-build-settings.admitted` 
   never reads its own or a model provider's variables.
 - `credential-too-short`, `credential-incomplete`, `encrypted-master-missing`,
   `encrypted-decrypt-failed`: the credential cannot be used as written.
-- `id-missing`, `id-ambiguous`: a Maven repository has no id, or one id names two URLs.
+- `id-missing`, `id-ambiguous`: a Maven repository has no id, or one id names two URLs (in a mirror
+  or in any profile, active or not). Such an id is relayed for none of its repositories.
+- `rewrite-missed`: Keiko could not point every element of a bound repository at the relay, so it
+  left that repository out rather than send its credential to the wrong place.
+- `profile-inactive`: the repository belongs to a profile that is not active (not in
+  `activeProfiles` and not active by default). It is not relayed and gets no credential; a build that
+  activates the profile with `-P` fails with a 401 for exactly this reason.
 - `upstream-rejected`: the repository answered the credential with an authentication failure.
 - `credential-in-response`: a served file contains the credential.
 - No relay line at all and no bound repository: the repository is not in your user-level files, or

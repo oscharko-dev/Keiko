@@ -111,6 +111,7 @@ function prepare(
     readonly env?: Record<string, string | undefined>;
     readonly relay?: boolean;
     readonly noProxy?: string;
+    readonly signal?: AbortSignal;
   } = {},
 ): Run {
   const stateRoot = join(temp(), "run");
@@ -138,6 +139,7 @@ function prepare(
       ? {}
       : { repositoryRelay: { relay, origin: ORIGIN, env: options.env ?? {} } }),
     inheritedNoProxy: options.noProxy,
+    signal: options.signal,
     activityLog: sink,
   });
   return {
@@ -404,6 +406,7 @@ describe("release and refusal (#4522)", () => {
 <server><id>short</id><username>u</username><password>tiny</password></server>
 <server><id>half</id><username>u</username></server>
 <server><id>twice</id><username>u</username><password>long-enough-password</password></server>
+<server><id>fine</id><username>u</username><password>long-enough-password</password></server>
 </servers>
 <mirrors>
 <mirror><id>short</id><mirrorOf>a</mirrorOf><url>https://short.corp.example/</url></mirror>
@@ -413,12 +416,15 @@ describe("release and refusal (#4522)", () => {
 <mirror><id>twice</id><mirrorOf>e</mirrorOf><url>https://one.corp.example/</url></mirror>
 <mirror><id>twice</id><mirrorOf>f</mirrorOf><url>https://two.corp.example/</url></mirror>
 <mirror><mirrorOf>g</mirrorOf><url>https://noid.corp.example/</url></mirror>
+<mirror><id>fine</id><mirrorOf>h</mirrorOf><url>https://fine.corp.example/</url></mirror>
 </mirrors></settings>`;
     const run = prepare(person({ maven: xml }));
+    // `twice` names two URLs: it is bound for neither (the shared server would serve both hosts).
     expect(run.result.relay?.mavenBoundCount).toBe(1);
     expect([...(run.result.relay?.refusals ?? [])].sort()).toEqual([
       "credential-incomplete",
       "credential-too-short",
+      "id-ambiguous",
       "id-ambiguous",
       "id-missing",
       "url-interpolated",
@@ -432,7 +438,7 @@ describe("release and refusal (#4522)", () => {
     expect(line?.extra).toMatchObject({
       relayMavenBoundCount: 1,
       relayNpmBoundCount: 0,
-      relayRefusedCount: 6,
+      relayRefusedCount: 7,
       relayRefusalReasons: [
         "credential-incomplete",
         "credential-too-short",
@@ -467,6 +473,7 @@ describe("release and refusal (#4522)", () => {
           authenticate: () => undefined,
           wasRevoked: () => false,
           releaseRun: () => undefined,
+          revoke: () => undefined,
         },
         origin: ORIGIN,
         env: {},
@@ -492,5 +499,168 @@ describe("release and refusal (#4522)", () => {
     expect(repositoryRelayBaseUrl(ORIGIN, "abc")).toBe(
       `${ORIGIN}/api/coding-sidecar/repository/abc/`,
     );
+  });
+});
+
+// A bound repository must be read back the way the run's Maven reads the settings: no element that
+// shares a bound id may keep its real URL while the id's `<server>` carries the capability (#4522).
+const SERVER = `<servers><server><id>xyz</id><username>u</username><password>${MAVEN_PASSWORD}</password></server></servers>`;
+
+function mavenWith(body: string): string {
+  return `<settings>${SERVER}${body}</settings>`;
+}
+
+function serverIds(settings: string): string[] {
+  return [...settings.matchAll(/<server><id>([^<]+)<\/id>/gu)].map((match) => match[1] ?? "");
+}
+
+describe("the rewrite and the resolution agree on identity (#4522)", () => {
+  it("relays a mirror whose id is spelled with a numeric character reference", () => {
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          "<mirrors><mirror><id>x&#121;z</id><mirrorOf>*</mirrorOf><url>https://xyz.corp/</url></mirror></mirrors>",
+        ),
+      }),
+    );
+    expect(run.settings()).not.toContain("xyz.corp");
+    expect(serverIds(run.settings())).toEqual(["xyz"]);
+    expect(run.result.relay).toMatchObject({ mavenBoundCount: 1, refusals: [] });
+  });
+
+  it("relays an element and a url that carry attributes", () => {
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          `<profiles><profile><id>p</id><repositories><repository xmlns="urn:x"><id lang="en">xyz</id><url lang="en">https://xyz.corp/</url></repository></repositories></profile></profiles><activeProfiles><activeProfile>p</activeProfile></activeProfiles>`,
+        ),
+      }),
+    );
+    expect(run.settings()).not.toContain("xyz.corp");
+    expect(run.result.relay).toMatchObject({ mavenBoundCount: 1, refusals: [] });
+  });
+
+  it("drops, revokes and counts a bound entry whose element the rewrite cannot recognise", () => {
+    // The parser reads the mirror's own `<id>`; the rewrite's pattern finds a nested decoy first and
+    // leaves the real URL while the server would carry the capability.
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          `<mirrors><mirror><extra><id>decoy</id></extra><id>xyz</id><mirrorOf>*</mirrorOf><url>https://xyz.corp/</url></mirror></mirrors>`,
+        ),
+      }),
+    );
+    expect(serverIds(run.settings())).toEqual([]);
+    expect(run.settings()).toContain("https://xyz.corp/");
+    expect(run.settings()).not.toContain("/api/coding-sidecar/repository/");
+    expect(run.result.relay).toMatchObject({ mavenBoundCount: 0, refusals: ["rewrite-missed"] });
+    expect(run.lines[0]?.extra).toMatchObject({
+      relayMavenBoundCount: 0,
+      relayRefusalReasons: ["rewrite-missed"],
+    });
+    // The binding was handed out and is revoked: its capability is of no use.
+    const released = run.relayLines.filter((line) => line.extra?.action === "release");
+    expect(released).toHaveLength(1);
+  });
+});
+
+describe("an id shared by two repositories is relayed for none of them (#4522)", () => {
+  const TWO_URLS = mavenWith(
+    `<mirrors><mirror><id>xyz</id><mirrorOf>a</mirrorOf><url>https://one.corp/</url></mirror></mirrors>` +
+      `<profiles><profile><id>p</id><repositories><repository><id>xyz</id><url>https://two.corp/</url></repository></repositories></profile></profiles>` +
+      `<activeProfiles><activeProfile>p</activeProfile></activeProfiles>`,
+  );
+
+  it("emits no server and keeps both real URLs, counting each as id-ambiguous", () => {
+    const run = prepare(person({ maven: TWO_URLS }));
+    expect(serverIds(run.settings())).toEqual([]);
+    expect(run.settings()).toContain("https://one.corp/");
+    expect(run.settings()).toContain("https://two.corp/");
+    expect(run.settings()).not.toContain(MAVEN_PASSWORD);
+    expect(run.result.relay).toMatchObject({
+      mavenBoundCount: 0,
+      refusals: ["id-ambiguous", "id-ambiguous"],
+    });
+    expect(run.relayLines.filter((line) => line.extra?.action === "bind")).toHaveLength(0);
+  });
+
+  it("revokes a bound id that an element of an inactive profile shares with another URL", () => {
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          `<mirrors><mirror><id>xyz</id><mirrorOf>*</mirrorOf><url>https://one.corp/</url></mirror></mirrors>` +
+            `<profiles><profile><id>off</id><repositories><repository><id>xyz</id><url>https://other.corp/</url></repository></repositories></profile></profiles>`,
+        ),
+      }),
+    );
+    expect(serverIds(run.settings())).toEqual([]);
+    expect(run.settings()).toContain("https://one.corp/");
+    expect(run.settings()).toContain("https://other.corp/");
+    expect([...(run.result.relay?.refusals ?? [])].sort()).toEqual([
+      "id-ambiguous",
+      "profile-inactive",
+    ]);
+  });
+
+  it("still relays two elements that name the same URL under one id", () => {
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          `<mirrors><mirror><id>xyz</id><mirrorOf>a</mirrorOf><url>https://same.corp/</url></mirror></mirrors>` +
+            `<profiles><profile><id>p</id><repositories><repository><id>xyz</id><url>https://same.corp/</url></repository></repositories></profile></profiles>` +
+            `<activeProfiles><activeProfile>p</activeProfile></activeProfiles>`,
+        ),
+      }),
+    );
+    expect(run.settings()).not.toContain("same.corp");
+    expect(serverIds(run.settings())).toEqual(["xyz"]);
+    expect(run.result.relay).toMatchObject({ mavenBoundCount: 1, refusals: [] });
+  });
+});
+
+describe("a repository of an inactive profile is counted, not silently skipped (#4522)", () => {
+  it("counts it as profile-inactive and leaves its real URL, with no credential", () => {
+    const run = prepare(
+      person({
+        maven: mavenWith(
+          `<profiles><profile><id>off</id><repositories><repository><id>other</id><url>https://off.corp/</url></repository></repositories><pluginRepositories><pluginRepository><id>other2</id><url>https://off2.corp/</url></pluginRepository></pluginRepositories></profile></profiles>`,
+        ),
+      }),
+    );
+    expect(run.settings()).toContain("https://off.corp/");
+    expect(serverIds(run.settings())).toEqual([]);
+    expect(run.result.relay).toMatchObject({
+      mavenBoundCount: 0,
+      refusals: ["profile-inactive", "profile-inactive"],
+    });
+    expect(run.lines[0]?.extra).toMatchObject({
+      relayRefusedCount: 2,
+      relayRefusalReasons: ["profile-inactive"],
+    });
+  });
+});
+
+describe("an aborted run revokes its bindings before it is released (#4522)", () => {
+  it("passes the run's signal to every binding", () => {
+    const controller = new AbortController();
+    const run = prepare(person({ maven: MAVEN_SETTINGS, npm: NPMRC }), {
+      signal: controller.signal,
+    });
+    const settings = run.settings();
+    const mavenPassword = /<password>([^<]+)<\/password>/u.exec(settings)?.[1];
+    const id = relayIdsOf(settings)[0] ?? "";
+    expect(run.relay.authenticate(id, mavenPassword)).toBeDefined();
+    controller.abort();
+    expect(run.relay.authenticate(id, mavenPassword)).toBeUndefined();
+    expect(run.relay.wasRevoked(id, mavenPassword)).toBe(true);
+    expect(run.relayLines.filter((line) => line.extra?.action === "release")).toHaveLength(4);
+  });
+
+  it("binds nothing for a run that already aborted, and says so", () => {
+    const controller = new AbortController();
+    controller.abort();
+    const run = prepare(person({ npm: NPMRC }), { signal: controller.signal });
+    expect(run.result.relay).toMatchObject({ npmBoundCount: 0 });
+    expect(run.result.relay?.refusals).toEqual(["bind-refused", "bind-refused"]);
   });
 });

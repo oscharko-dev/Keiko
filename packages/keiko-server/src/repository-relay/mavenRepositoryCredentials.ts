@@ -193,30 +193,62 @@ function declaredEntries(
   );
 }
 
-function activeProfiles(root: XmlElement): readonly XmlElement[] {
-  const named = new Set(
+function allProfiles(root: XmlElement): readonly XmlElement[] {
+  return childElements(root, "profiles").flatMap((group) => childElements(group, "profile"));
+}
+
+function isActiveProfile(profile: XmlElement, named: ReadonlySet<string>): boolean {
+  const activation = childElements(profile, "activation")[0];
+  return (
+    named.has(childText(profile, "id") ?? "") ||
+    (activation !== undefined && childText(activation, "activeByDefault") === "true")
+  );
+}
+
+function activeProfileNames(root: XmlElement): ReadonlySet<string> {
+  return new Set(
     childElements(root, "activeProfiles").flatMap((group) =>
       childElements(group, "activeProfile").map((profile) => profile.text),
     ),
   );
-  return childElements(root, "profiles").flatMap((group) =>
-    childElements(group, "profile").filter((profile) => {
-      const activation = childElements(profile, "activation")[0];
-      return (
-        named.has(childText(profile, "id") ?? "") ||
-        (activation !== undefined && childText(activation, "activeByDefault") === "true")
-      );
-    }),
-  );
+}
+
+function profileRepositories(profile: XmlElement): readonly Declared[] {
+  return [
+    ...declaredEntries(profile, "repositories", "repository", "repository"),
+    ...declaredEntries(profile, "pluginRepositories", "pluginRepository", "plugin-repository"),
+  ];
 }
 
 function declaredRepositories(root: XmlElement): readonly Declared[] {
+  const named = activeProfileNames(root);
   return [
     ...declaredEntries(root, "mirrors", "mirror", "mirror"),
-    ...activeProfiles(root).flatMap((profile) => [
-      ...declaredEntries(profile, "repositories", "repository", "repository"),
-      ...declaredEntries(profile, "pluginRepositories", "pluginRepository", "plugin-repository"),
-    ]),
+    ...allProfiles(root)
+      .filter((profile) => isActiveProfile(profile, named))
+      .flatMap(profileRepositories),
+  ];
+}
+
+/** The repositories of profiles that are neither listed in `activeProfiles` nor active by default. */
+function inactiveProfileRepositories(root: XmlElement): readonly Declared[] {
+  const named = activeProfileNames(root);
+  return allProfiles(root)
+    .filter((profile) => !isActiveProfile(profile, named))
+    .flatMap(profileRepositories);
+}
+
+/**
+ * Every mirror and every profile repository of a parsed `settings.xml`, active or not, with the
+ * `id` and `url` the parser read. The run binding uses it to prove that no element sharing a bound
+ * id can still send that id's credential to the repository's real host.
+ */
+export function everyMavenRepositoryElement(
+  root: XmlElement,
+): readonly { readonly id: string | undefined; readonly url: string | undefined }[] {
+  return [
+    ...declaredEntries(root, "mirrors", "mirror", "mirror"),
+    ...allProfiles(root).flatMap(profileRepositories),
   ];
 }
 
@@ -305,5 +337,9 @@ export function resolveMavenRepositories(
     const resolved = resolveDeclared(declared, context, tally);
     return resolved === undefined ? [] : [resolved];
   });
+  // A repository of an inactive profile is not relayed (Maven would not use it unless the person
+  // activates the profile on the command line): counted so a 401 for it can be explained.
+  const inactive = inactiveProfileRepositories(root).length;
+  if (inactive > 0) tally.add("profile-inactive", inactive);
   return { repositories, refusals: tally.toCounts() };
 }

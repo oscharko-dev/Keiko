@@ -82,8 +82,17 @@ const FORWARDED_RESPONSE_HEADERS = ["content-type", "content-length", "etag", "l
 const FORWARDED_REQUEST_HEADERS = ["accept", "if-none-match", "if-modified-since"] as const;
 
 /** The base URL a build tool is pointed at; the run's capability is a separate credential. */
+const SLASH_CODE_POINT = 0x2f;
+
 export function repositoryRelayBaseUrl(origin: string, relayId: string): string {
-  return `${origin.replace(/\/+$/u, "")}${REPOSITORY_RELAY_PATH_PREFIX}${relayId}/`;
+  return `${trimTrailingSlashes(origin)}${REPOSITORY_RELAY_PATH_PREFIX}${relayId}/`;
+}
+
+// A plain scan: a trailing-slash regex backtracks quadratically on a long run of slashes.
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.codePointAt(end - 1) === SLASH_CODE_POINT) end -= 1;
+  return value.slice(0, end);
 }
 
 export interface RepositoryRelayTarget {
@@ -156,6 +165,8 @@ export interface RepositoryCredentialRelay {
   wasRevoked(relayId: string, capability: string | undefined): boolean;
   /** Revokes every binding of the run and records one settled summary for each. */
   releaseRun(runId: string): void;
+  /** Revokes one binding that was handed out; a binding already gone is ignored. */
+  revoke(relayId: string): void;
 }
 
 export interface RepositoryRelayUpstreamRequest {
@@ -231,18 +242,18 @@ function credentialRefusal(
 function authorizationFor(credential: RepositoryCredential | undefined): string | undefined {
   if (credential === undefined) return undefined;
   if (credential.kind === "bearer") return `Bearer ${credential.token}`;
-  return `Basic ${Buffer.from(`${credential.username}:${credential.password}`, "utf8").toString("base64")}`;
+  const pair = `${credential.username}:${credential.password}`;
+  return `Basic ${Buffer.from(pair, "utf8").toString("base64")}`;
 }
 
 function credentialValues(target: RepositoryRelayTarget): readonly string[] {
-  const credential = target.credential;
-  const own =
-    credential === undefined
-      ? []
-      : credential.kind === "bearer"
-        ? [credential.token]
-        : [credential.password, `${credential.username}:${credential.password}`];
-  return [...own, ...target.secrets];
+  return [...ownCredentialValues(target.credential), ...target.secrets];
+}
+
+function ownCredentialValues(credential: RepositoryCredential | undefined): readonly string[] {
+  if (credential === undefined) return [];
+  if (credential.kind === "bearer") return [credential.token];
+  return [credential.password, `${credential.username}:${credential.password}`];
 }
 
 // Keiko's own origin is `http://<loopback>:<explicit port>`; anything else cannot protect its routes.
@@ -368,6 +379,10 @@ class InMemoryRepositoryCredentialRelay implements RepositoryCredentialRelay {
 
   public releaseRun(runId: string): void {
     this.store.releaseRun(runId);
+  }
+
+  public revoke(relayId: string): void {
+    this.store.revoke(relayId);
   }
 }
 
@@ -593,7 +608,7 @@ async function classifyConfiguredUpstream(
   if (literal !== undefined) return networkOfClasses([literal]);
   const resolve = options.resolveHost ?? defaultResolveHost;
   const addresses = await resolve(hostname, AbortSignal.timeout(UPSTREAM_RESOLVE_TIMEOUT_MS));
-  return networkOfClasses(addresses.map(classifyOutboundHost));
+  return networkOfClasses(addresses.map((address) => classifyOutboundHost(address)));
 }
 
 // A failed resolution fails the redirect (recorded with its frames) and is not remembered.
@@ -702,23 +717,25 @@ async function sendHop(
 }
 
 async function fetchUpstream(first: URL, context: FetchContext): Promise<Response> {
+  return followHops({ url: first, credential: true, network: FIRST_HOP_NETWORK }, 0, context);
+}
+
+// One hop per call, bounded by the redirect cap, so a chain never loops unobserved.
+async function followHops(hop: Hop, count: number, context: FetchContext): Promise<Response> {
   const { target } = context.admission;
-  const base = upstreamHeaders(context.request);
-  let hop: Hop = { url: first, credential: true, network: FIRST_HOP_NETWORK };
-  for (let count = 0; ; count += 1) {
-    const upstream = await sendHop(hop, base, context);
-    context.touch();
-    if (!REDIRECT_STATUSES.has(upstream.status)) return upstream;
-    await upstream.body?.cancel();
-    if (count >= REPOSITORY_RELAY_MAX_REDIRECTS) throw refusal("redirect-refused");
-    target.stats.redirects += 1;
-    hop = await nextHop(
-      upstream.headers.get("location"),
-      hop.url,
-      context.admission,
-      context.options,
-    );
-  }
+  const upstream = await sendHop(hop, upstreamHeaders(context.request), context);
+  context.touch();
+  if (!REDIRECT_STATUSES.has(upstream.status)) return upstream;
+  await upstream.body?.cancel();
+  if (count >= REPOSITORY_RELAY_MAX_REDIRECTS) throw refusal("redirect-refused");
+  target.stats.redirects += 1;
+  const next = await nextHop(
+    upstream.headers.get("location"),
+    hop.url,
+    context.admission,
+    context.options,
+  );
+  return followHops(next, count + 1, context);
 }
 
 function forwardedHeaders(
@@ -868,17 +885,20 @@ function isRelayableStatus(status: number): boolean {
   return status === 304 || (status >= 200 && status < 300) || (status >= 400 && status !== 407);
 }
 
-async function exchange(
-  request: IncomingMessage,
-  response: ServerResponse,
-  admission: RepositoryRelayAdmission,
-  method: RepositoryRelayMethod,
-  path: RepositoryPathAdmission & { readonly ok: true },
-  relayId: string,
-  options: RepositoryRelayServeOptions,
-  state: ExchangeState,
-  slot: RelaySlot,
-): Promise<"denied" | "ok"> {
+interface ExchangeInput {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly admission: RepositoryRelayAdmission;
+  readonly method: RepositoryRelayMethod;
+  readonly path: RepositoryPathAdmission & { readonly ok: true };
+  readonly relayId: string;
+  readonly options: RepositoryRelayServeOptions;
+  readonly state: ExchangeState;
+  readonly slot: RelaySlot;
+}
+
+async function exchange(input: ExchangeInput): Promise<"denied" | "ok"> {
+  const { request, response, admission, method, path, relayId, options, state, slot } = input;
   const { target } = admission;
   const signal = state.signal ?? admission.signal;
   if (signal.aborted) throw refusal("run-aborted");
@@ -1034,7 +1054,7 @@ async function handleRequest(
   const slot = await (options.gate ?? processRelayGate()).acquire(admission.target, bound.signal);
   let verdict: "denied" | "ok";
   try {
-    verdict = await exchange(
+    verdict = await exchange({
       request,
       response,
       admission,
@@ -1044,7 +1064,7 @@ async function handleRequest(
       options,
       state,
       slot,
-    );
+    });
   } finally {
     slot.release();
   }

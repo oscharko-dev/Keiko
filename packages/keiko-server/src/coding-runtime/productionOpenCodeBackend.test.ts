@@ -44,6 +44,7 @@ import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import { createRepositoryCredentialRelay } from "../repository-relay/repositoryCredentialRelay.js";
 import {
   devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
@@ -1025,6 +1026,45 @@ describe("production OpenCode backend composition", () => {
       contextUsage.recordProviderSample(input.request.runId, sample);
       expect(fits(tools, result)).toBe(true);
       await run.dispose?.();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4522: the native composition is handed the repository relay on the gateway's attested origin,
+  // with the environment its `${env.NAME}` placeholders read; a run offered none is handed none.
+  it("hands the native composition the repository relay on the gateway's origin, or none", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-relay-compose-")));
+    try {
+      const relay = createRepositoryCredentialRelay({ activityLog: () => undefined });
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      const processEnv = { REPO_USER: "builder" };
+      const offered = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        repositoryRelay: relay,
+        processEnv,
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay).toEqual({
+        relay,
+        origin: "http://127.0.0.1:1983",
+        env: processEnv,
+      });
+      await offered.dispose?.();
+      // Without an environment of its own the run's placeholders read the process's.
+      const inherited = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        repositoryRelay: relay,
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay?.env).toBe(process.env);
+      await inherited.dispose?.();
+      const unoffered = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay).toBeUndefined();
+      await unoffered.dispose?.();
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

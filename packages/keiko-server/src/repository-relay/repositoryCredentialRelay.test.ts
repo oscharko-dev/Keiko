@@ -243,6 +243,36 @@ describe("repository credential relay bindings (#4522)", () => {
     );
   });
 
+  it("builds a base URL from an origin with a very long run of trailing slashes in linear time", () => {
+    // A trailing-slash pattern that backtracks takes quadratic time here and would outlive the test.
+    const origin = `http://127.0.0.1:1983${"/".repeat(300_000)}x${"/".repeat(300_000)}`;
+    expect(repositoryRelayBaseUrl(origin, "abc")).toBe(
+      `http://127.0.0.1:1983${"/".repeat(300_000)}x/api/coding-sidecar/repository/abc/`,
+    );
+    expect(repositoryRelayBaseUrl(`http://127.0.0.1:1983${"/".repeat(300_000)}`, "abc")).toBe(
+      "http://127.0.0.1:1983/api/coding-sidecar/repository/abc/",
+    );
+  });
+
+  it("revokes one binding on request and records its settled summary once", () => {
+    const { sink: activityLog, records } = sink();
+    const relay = createRepositoryCredentialRelay({ activityLog: () => activityLog });
+    const binding = relay.bind({
+      runId: RUN_ID,
+      ecosystem: "maven",
+      upstreamBaseUrl: "https://repo.example.test/maven",
+      credential: { kind: "basic", username: USER, password: PASSWORD },
+      secrets: [],
+      ownOrigin: OWN_ORIGIN,
+    });
+    if (binding === undefined) throw new Error("fixture-bind-failed");
+    relay.revoke(binding.relayId);
+    relay.revoke(binding.relayId);
+    expect(relay.authenticate(binding.relayId, binding.capability)).toBeUndefined();
+    expect(relay.wasRevoked(binding.relayId, binding.capability)).toBe(true);
+    expect(lines(records).filter((line) => line.action === "release")).toHaveLength(1);
+  });
+
   it("binds one capability per run and repository and records the binding body-free", () => {
     const { sink: activityLog, records } = sink();
     const relay = createRepositoryCredentialRelay({ activityLog: () => activityLog });

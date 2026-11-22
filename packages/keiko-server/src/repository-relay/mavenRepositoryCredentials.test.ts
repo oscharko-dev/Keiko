@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveMavenRepositories } from "./mavenRepositoryCredentials.js";
+import {
+  everyMavenRepositoryElement,
+  resolveMavenRepositories,
+} from "./mavenRepositoryCredentials.js";
+import { parseXmlElements } from "./repositoryRelayXml.js";
 
 // Values produced by the real Maven 3.10.0 on the development machine (mvn -emp / mvn -ep, run with a
 // temporary HOME and -Dsettings.security pointing at a settings-security.xml holding the master
@@ -255,5 +259,34 @@ describe("resolveMavenRepositories", () => {
       NO_ENV,
     );
     expect(JSON.stringify(resolved)).not.toContain("SECRET_NAME_CANARY");
+  });
+});
+
+describe("repositories of profiles that are not active (#4522)", () => {
+  const PROFILES = `<profiles>
+<profile><id>on</id><repositories><repository><id>a</id><url>https://a.example.test/</url></repository></repositories></profile>
+<profile><id>default</id><activation><activeByDefault>true</activeByDefault></activation><repositories><repository><id>b</id><url>https://b.example.test/</url></repository></repositories></profile>
+<profile><id>off</id><activation><activeByDefault>false</activeByDefault></activation>
+<repositories><repository><id>c</id><url>https://c.example.test/</url></repository></repositories>
+<pluginRepositories><pluginRepository><id>d</id><url>https://d.example.test/</url></pluginRepository></pluginRepositories></profile>
+</profiles><activeProfiles><activeProfile>on</activeProfile></activeProfiles>`;
+
+  it("relays the active ones and counts every repository of the others as profile-inactive", () => {
+    const resolved = resolveMavenRepositories(settings(PROFILES), undefined, NO_ENV);
+    expect(resolved.repositories.map((repository) => repository.id)).toEqual(["a", "b"]);
+    expect(resolved.refusals).toEqual({ "profile-inactive": 2 });
+  });
+
+  it("names every mirror and profile repository, active or not, for the run binding", () => {
+    const root = parseXmlElements(settings(mirror("m", "https://m.example.test/") + PROFILES));
+    expect(root).toBeDefined();
+    if (root === undefined) return;
+    expect(everyMavenRepositoryElement(root).map((element) => element.id)).toEqual([
+      "m",
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
   });
 });
