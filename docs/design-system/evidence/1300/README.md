@@ -437,3 +437,12 @@ which no stylesheet or capture reads. The
 as for release 1.5.4. The other 26 digests match the 1.5.4 input inventory. The proofs retain
 their Linux captures, rendered CSS digest, measurements, tolerances and accessibility records; no
 producer was rerun for this metadata change.
+
+## Release 1.5.6 input metadata — 2026-11-22
+
+The release changes the same three of the 29 declared shared inputs (`package.json`,
+`package-lock.json` and `packages/keiko-ui/package.json`), only in their version fields (#4504),
+which no stylesheet or capture reads. The `designEvidenceSourceHashes` producer recalculates the
+ordered list for each of the four proofs, as for release 1.5.5. The other 26 digests match the
+1.5.5 input inventory. The proofs retain their Linux captures, rendered CSS digest, measurements,
+tolerances and accessibility records; no producer was rerun for this metadata change.

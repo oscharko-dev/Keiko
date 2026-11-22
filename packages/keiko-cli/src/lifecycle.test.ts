@@ -1140,11 +1140,17 @@ describe("runLifecycleCli", () => {
       expect(result.spawnFn).not.toHaveBeenCalled();
     });
 
-    it("still calls the tracked instance stale when its own port is unreachable", async () => {
+    // Until #4504 an unreachable own port restarted the tracked instance. Its process is alive and
+    // its launch identity verified, so it is busy: every probe still goes to its own port (L1), and
+    // it is left running.
+    it("asks the tracked instance on its own port and leaves it running while it does not answer", async () => {
       const result = await startWithTracked(makeRoot(), trackedCommandLine("1991"), []);
       expect(result.probed[0]).toBe("1991");
-      expect(result.c.out()).toContain("stale (health check is unreachable); restarting pid 12345");
-      expect(result.killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
+      expect(new Set(result.probed)).toEqual(new Set(["1991"]));
+      expect(result.code).toBe(1);
+      expect(result.c.err()).toContain("it was left running");
+      expect(result.killProcess).not.toHaveBeenCalled();
+      expect(result.spawnFn).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -1273,7 +1279,9 @@ describe("runLifecycleCli", () => {
     );
   });
 
-  it("restarts an existing process when its health endpoint is unreachable", async () => {
+  // #4504: before, the first unanswered probe restarted the process. A live, verified UI that
+  // answers on the second probe is running, not stale.
+  it("keeps an existing process whose health answers only on the second probe", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
@@ -1314,9 +1322,10 @@ describe("runLifecycleCli", () => {
     );
 
     expect(code).toBe(0);
-    expect(c.out()).toContain("health check is unreachable");
-    expect(fetchCalls).toBeGreaterThanOrEqual(2);
-    expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
+    expect(c.out()).toContain("already running");
+    expect(c.out()).not.toContain("stale");
+    expect(fetchCalls).toBe(2);
+    expect(killProcess).not.toHaveBeenCalled();
   });
 
   it("returns a usage error for invalid ports", async () => {
