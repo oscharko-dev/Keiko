@@ -157,6 +157,8 @@ type TimelineItem =
       readonly order: number;
       readonly event: CodingWorkbenchRuntimeSseEvent;
       readonly turnFailureProgress: TurnFailureProgress;
+      /** A later check of the same verifier in the same run replaced this check's verdict. */
+      readonly superseded: boolean;
     };
 
 export interface CodingWorkbenchTimelineProps {
@@ -238,7 +240,7 @@ function useShownItems(
     () =>
       groupCompletedTools(
         allItems.filter(
-          (item) => showEvents || item.kind !== "event" || eventTone(item.event) === "attention",
+          (item) => showEvents || item.kind !== "event" || itemTone(item) === "attention",
         ),
       ),
     [allItems, showEvents],
@@ -320,25 +322,39 @@ function timelineEventItems(
 ): Extract<TimelineItem, { kind: "event" }>[] {
   const newestByRun = new Map<string, CodingWorkbenchRuntimeSseEvent>();
   const lastFailureByRun = new Map<string, string>();
+  const lastCheckByVerifier = new Map<string, string>();
   for (const event of events) {
     newestByRun.set(event.runId, event);
     if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") {
       lastFailureByRun.set(event.runId, event.cursor);
     }
+    const verifier = verifierKey(event);
+    if (verifier !== undefined) lastCheckByVerifier.set(verifier, event.cursor);
   }
-  return events.map((event, index) => ({
-    kind: "event",
-    id: `event:${event.runId}:${event.cursor}`,
-    occurredAt: event.occurredAt,
-    order: index,
-    event,
-    turnFailureProgress: turnFailureProgress(
+  return events.map((event, index) => {
+    const verifier = verifierKey(event);
+    return {
+      kind: "event",
+      id: `event:${event.runId}:${event.cursor}`,
+      occurredAt: event.occurredAt,
+      order: index,
       event,
-      newestByRun.get(event.runId),
-      lastFailureByRun.get(event.runId),
-      activeRunId,
-    ),
-  }));
+      turnFailureProgress: turnFailureProgress(
+        event,
+        newestByRun.get(event.runId),
+        lastFailureByRun.get(event.runId),
+        activeRunId,
+      ),
+      superseded: verifier !== undefined && lastCheckByVerifier.get(verifier) !== event.cursor,
+    };
+  });
+}
+
+// A check is replaced by the next check of the same verifier in the same run: a failed test run
+// the model then repaired is history, not a verdict that still needs attention.
+function verifierKey(event: CodingWorkbenchRuntimeSseEvent): string | undefined {
+  if (event.kind !== "runtime-event" || event.verificationSummary === undefined) return undefined;
+  return `${event.runId}\u0000${event.verificationSummary.verifierId}`;
 }
 
 function turnFailureProgress(
@@ -1428,7 +1444,7 @@ function EventRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
-  const tone = eventTone(item.event);
+  const tone = itemTone(item);
   const detail = timelineEventDetail(item, t);
   return (
     <li
@@ -1594,6 +1610,13 @@ function VerificationDetail({
       </p>
     </div>
   );
+}
+
+// A replaced check stays in the run details, closed: only the latest verdict asks for attention.
+function itemTone(
+  item: Extract<TimelineItem, { kind: "event" }>,
+): "attention" | "routine" | "success" {
+  return item.superseded ? "routine" : eventTone(item.event);
 }
 
 function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {

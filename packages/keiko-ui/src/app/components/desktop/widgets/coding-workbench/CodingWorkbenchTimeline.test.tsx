@@ -1782,6 +1782,65 @@ describe("verification detail and active turn failures", () => {
     expect(screen.getByText("Targeted tests: Failed")).toBeVisible();
   });
 
+  // Lab 2026-11-23: a run that failed its test, repaired the code and passed the same test showed
+  // only the stale "Failed" row, because a failed check asks for attention and a passing one is
+  // routine. The later check of the same verifier replaces the earlier verdict.
+  describe("a check replaced by a later check of the same verifier", () => {
+    const check = (
+      sequence: number,
+      status: "passed" | "failed",
+      verifierId: "test" | "lint" = "test",
+    ): Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }> => ({
+      ...event(sequence),
+      eventKind: "verification-summarized",
+      verificationSummary: {
+        ...summary,
+        verifierId,
+        status,
+        passedCount: status === "passed" ? 1 : 0,
+        failedCount: status === "passed" ? 0 : 1,
+      },
+    });
+
+    it("moves a repaired failure into the run details", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed"), check(2, "passed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container).not.toHaveTextContent("Tests: Failed");
+      expect(container.querySelector('[data-event-tone="attention"]')).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+      expect(container).toHaveTextContent("Tests: Failed");
+      expect(container).toHaveTextContent("Tests: Passed");
+    });
+
+    it("keeps only the latest of two failures in view", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed"), check(2, "failed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelectorAll('[data-event-tone="attention"]')).toHaveLength(1);
+    });
+
+    it("keeps a failure of another verifier in view", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed", "lint"), check(2, "passed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelectorAll('[data-event-tone="attention"]')).toHaveLength(1);
+      expect(container).toHaveTextContent("Lint: Failed");
+    });
+  });
+
   it("does not advise restarting or changing output settings while a turn is still active", () => {
     const failed = {
       ...event(1),
