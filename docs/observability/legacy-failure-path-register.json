@@ -2679,12 +2679,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "monitorLoop",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "reconcile",
       "kind": "unregistered-catch",
       "count": 1

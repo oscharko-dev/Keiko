@@ -7,6 +7,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
@@ -1736,7 +1737,7 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(
       reconnects.map((record) =>
         record.code?.replace(
-          /:cause=(?:events-ended|events-invalid|history-incomplete|stream-error)$/u,
+          /:cause=(?:events-ended|events-invalid|history-incomplete|history-invalid|stream-error)$/u,
           "",
         ),
       ),
@@ -1826,6 +1827,45 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(lines.slice(1).every((r) => r.code?.endsWith(":cause=events-invalid") === true)).toBe(
       true,
     );
+    dispose();
+    await adapter.close();
+  });
+
+  it("fails the monitor at once on a history the projection deterministically refuses", async () => {
+    const harness = readinessPorts();
+    let subscriptions = 0;
+    let broken = false;
+    harness.ports.readiness.subscribe = (signal): AsyncIterable<OpenCodeSyncHint> => {
+      subscriptions += 1;
+      return subscriptions === 1
+        ? finiteHints([{ id: "evt_0" }])
+        : hints([{ requiresHistoryIdentity: false }], signal);
+    };
+    const readHistory = harness.ports.readiness.history;
+    harness.ports.readiness.history = (...args): ReturnType<typeof readHistory> => {
+      if (broken) {
+        return Promise.reject(new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported"));
+      }
+      return readHistory(...args);
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      reconnect: clock.reconnect,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    broken = true;
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+    await vi.waitFor(() => {
+      expect(failures).toEqual(["failed"]);
+    });
+    // The refusal repeats on every read, so a reconnect can only fail again: no backoff is spent.
+    expect(clock.delays.length).toBeLessThanOrEqual(1);
+    const lines = records.filter((record) => record.source === "opencode.monitor.reconnect");
+    expect(lines.at(-1)?.code).toMatch(/:cause=history-invalid$/u);
     dispose();
     await adapter.close();
   });

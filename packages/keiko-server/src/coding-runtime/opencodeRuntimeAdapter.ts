@@ -42,6 +42,7 @@ import {
   isApprovedOpenCodeRuntimeVersion,
   openCodeRuntimeVersionPin,
 } from "./opencodeRuntimeVersions.js";
+import { OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -588,6 +589,19 @@ export function createOpenCodeRuntimeAdapter(
           } catch (error) {
             if (!isMonitoring()) return;
             await cancelSubscription();
+            // The projection refuses the same history on every read, so a reconnect can only fail
+            // again: the run ends now with its true cause instead of after the reconnect budget.
+            if (error instanceof OpenCodeV2HistoryError) {
+              recordMonitorReconnect(ports, {
+                attempt: 0,
+                outcome: "non-retryable",
+                delayMs: 0,
+                failingForMs: 0,
+                cause: error,
+              });
+              onFailure();
+              return;
+            }
             if (!(await backOff(ports, monitorStop.signal, health.recordDrop(), error))) {
               onFailure();
               return;
@@ -1283,7 +1297,7 @@ function recordMonitorReconnect(
   ports: Pick<OpenCodeRuntimeAdapterPorts, "diagnostics" | "correlationId">,
   facts: {
     readonly attempt: number;
-    readonly outcome: "backoff" | "budget-exhausted";
+    readonly outcome: "backoff" | "budget-exhausted" | "non-retryable";
     readonly delayMs: number;
     readonly failingForMs: number;
     readonly cause: unknown;
@@ -1324,7 +1338,8 @@ function recordTurnPollFailure(
 
 function monitorCauseToken(
   error: unknown,
-): "events-ended" | "events-invalid" | "history-incomplete" | "stream-error" {
+): "events-ended" | "events-invalid" | "history-incomplete" | "history-invalid" | "stream-error" {
+  if (error instanceof OpenCodeV2HistoryError) return "history-invalid";
   const message = error instanceof Error ? error.message : undefined;
   if (message === EVENTS_ENDED_MESSAGE) return "events-ended";
   if (message === EVENTS_INVALID_MESSAGE) return "events-invalid";
