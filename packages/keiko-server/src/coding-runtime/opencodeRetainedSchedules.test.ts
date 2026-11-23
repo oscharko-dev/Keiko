@@ -24,8 +24,9 @@ import {
 } from "./opencodeSessionRetention.js";
 
 /**
- * #4271 (ADR-0137 D10): the schedules a retained session carries — what retention admits, the
- * consent ledger it records, and the pause/resume/delete edits made through the store.
+ * #4271, #4546 (ADR-0137 D10): the scheduled wakes a retained session carries, as rows of the
+ * producer's `automation` table — what retention admits, the consent ledger it records, and the
+ * pause/resume/delete edits made through the store.
  */
 
 const SESSION_ID = "ses_retained_1";
@@ -45,16 +46,23 @@ interface ScheduleRow {
   readonly session_id?: string | null;
   readonly status?: string;
   readonly name?: string | null;
-  readonly when?: string;
+  readonly trigger?: string;
   readonly action?: string;
   readonly next_due_at?: number | null;
   readonly retry_at?: number | null;
   readonly run_count?: number;
   readonly failures?: number;
-  readonly ends_at?: number | null;
-  readonly remaining_runs?: number | null;
-  readonly check?: string | null;
+  readonly expires_at?: number | null;
   readonly state?: string | null;
+  readonly event_position?: string | null;
+  readonly last_output?: string | null;
+}
+
+const PROMPT = "SECRET-SCHEDULED-PROMPT";
+
+/** The action the runtime stores for a prompt automation: into the creating session. */
+function promptAction(prompt: string = PROMPT, session: string = SESSION_ID): string {
+  return JSON.stringify({ type: "prompt", prompt, to: { session } });
 }
 
 function schedule(id: string, overrides: Partial<ScheduleRow> = {}): ScheduleRow {
@@ -63,16 +71,16 @@ function schedule(id: string, overrides: Partial<ScheduleRow> = {}): ScheduleRow
     session_id: SESSION_ID,
     status: "active",
     name: "Check the build",
-    when: JSON.stringify({ type: "every", every: "30 minutes" }),
-    action: JSON.stringify({ type: "prompt", prompt: "SECRET-SCHEDULED-PROMPT" }),
+    trigger: JSON.stringify({ type: "every", every: "30 minutes" }),
+    action: promptAction(),
     next_due_at: NOW + 60_000,
     retry_at: null,
     run_count: 0,
     failures: 0,
-    ends_at: null,
-    remaining_runs: null,
-    check: null,
+    expires_at: null,
     state: null,
+    event_position: null,
+    last_output: null,
     ...overrides,
   };
 }
@@ -107,17 +115,18 @@ function writeDatabase(
 function insertSchedule(database: DatabaseSync, row: ScheduleRow, index: number): void {
   database
     .prepare(
-      `INSERT INTO schedule (id, session_id, status, name, "when", action, next_due_at, retry_at,
-         run_count, failures, ends_at, remaining_runs, "check", state, time_created, time_updated)
+      `INSERT INTO automation (id, session_id, status, name, trigger, action, next_due_at,
+         retry_at, run_count, failures, expires_at, state, event_position, last_output,
+         time_created, time_updated)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.id,
-      ...[row.session_id, row.status, row.name, row.when, row.action].map(orNull),
+      ...[row.session_id, row.status, row.name, row.trigger, row.action].map(orNull),
       ...[row.next_due_at, row.retry_at].map(orNull),
       row.run_count ?? 0,
       row.failures ?? 0,
-      ...[row.ends_at, row.remaining_runs, row.check, row.state].map(orNull),
+      ...[row.expires_at, row.state, row.event_position, row.last_output].map(orNull),
       index,
       index,
     );
@@ -200,14 +209,14 @@ describe("retaining a session's schedules", () => {
     const f = fixture();
 
     expect(
-      retain(f, f.source([schedule("sch_a"), schedule("sch_b")]), "supervised-coding"),
+      retain(f, f.source([schedule("aut_a"), schedule("aut_b")]), "supervised-coding"),
     ).toMatchObject({
       ok: true,
     });
 
     expect(manifest(f).scheduleModes).toEqual({
-      sch_a: "supervised-coding",
-      sch_b: "supervised-coding",
+      aut_a: "supervised-coding",
+      aut_b: "supervised-coding",
     });
     // The ledger names ids and modes only, never what a schedule does.
     expect(JSON.stringify(manifest(f))).not.toContain("SECRET-SCHEDULED-PROMPT");
@@ -216,33 +225,33 @@ describe("retaining a session's schedules", () => {
   it("records the narrowest mode when the run's mode is absent", () => {
     const f = fixture();
 
-    expect(retain(f, f.source([schedule("sch_a")]))).toMatchObject({ ok: true });
+    expect(retain(f, f.source([schedule("aut_a")]))).toMatchObject({ ok: true });
 
-    expect(manifest(f).scheduleModes).toEqual({ sch_a: "governed-assist" });
+    expect(manifest(f).scheduleModes).toEqual({ aut_a: "governed-assist" });
   });
 
   it("keeps the narrower of the recorded and the new mode, and records a new id with the new one", () => {
     const f = fixture();
-    expect(retain(f, f.source([schedule("sch_a")]), "supervised-coding")).toMatchObject({
+    expect(retain(f, f.source([schedule("aut_a")]), "supervised-coding")).toMatchObject({
       ok: true,
     });
 
     f.clock.value += 1_000;
     expect(
-      retain(f, f.source([schedule("sch_a"), schedule("sch_b")]), "autonomous-delivery"),
+      retain(f, f.source([schedule("aut_a"), schedule("aut_b")]), "autonomous-delivery"),
     ).toMatchObject({ ok: true });
     expect(manifest(f).scheduleModes).toEqual({
-      sch_a: "supervised-coding",
-      sch_b: "autonomous-delivery",
+      aut_a: "supervised-coding",
+      aut_b: "autonomous-delivery",
     });
 
     f.clock.value += 1_000;
     expect(
-      retain(f, f.source([schedule("sch_a"), schedule("sch_b")]), "governed-assist"),
+      retain(f, f.source([schedule("aut_a"), schedule("aut_b")]), "governed-assist"),
     ).toMatchObject({ ok: true });
     expect(manifest(f).scheduleModes).toEqual({
-      sch_a: "governed-assist",
-      sch_b: "governed-assist",
+      aut_a: "governed-assist",
+      aut_b: "governed-assist",
     });
   });
 
@@ -257,12 +266,12 @@ describe("retaining a session's schedules", () => {
   it("drops the scheduler's lease row, and only that kv row", () => {
     const f = fixture();
 
-    expect(retain(f, f.source([schedule("sch_a")], ["schedule:leader"]))).toMatchObject({
+    expect(retain(f, f.source([schedule("aut_a")], ["automation:leader"]))).toMatchObject({
       ok: true,
     });
     expect(retainedRows(f, "SELECT key FROM kv")).toEqual([]);
 
-    expect(retain(f, f.source([schedule("sch_a")], ["schedule:leader", "other"]))).toEqual({
+    expect(retain(f, f.source([schedule("aut_a")], ["automation:leader", "other"]))).toEqual({
       ok: false,
       reason: "schema-unknown",
       check: "kv-rows",
@@ -270,26 +279,45 @@ describe("retaining a session's schedules", () => {
   });
 
   it.each([
-    ["of another session", schedule("sch_a", { session_id: "ses_other" })],
-    ["of no session", schedule("sch_a", { session_id: null })],
-    ["gated by a check", schedule("sch_a", { check: JSON.stringify({ type: "shell" }) })],
-    ["carrying check state", schedule("sch_a", { state: "{}" })],
-    ["with a status the runtime does not write", schedule("sch_a", { status: "running" })],
-    ["with an id outside the runtime's alphabet", schedule("sch_a-b")],
-    ["with an empty id suffix", schedule("sch_")],
-    ["with an overlong id", schedule(`sch_${"a".repeat(65)}`)],
+    ["of another session", schedule("aut_a", { session_id: "ses_other" })],
+    ["of no session", schedule("aut_a", { session_id: null })],
+    // #4546: only a prompt into the session itself, on a time, an interval or a cron, is a wake.
+    [
+      "running a shell command",
+      schedule("aut_a", { action: JSON.stringify({ type: "shell", command: "id" }) }),
+    ],
+    [
+      "running a Code Mode program",
+      schedule("aut_a", { action: JSON.stringify({ type: "code", code: "return" }) }),
+    ],
+    [
+      "watching an MCP server",
+      schedule("aut_a", { trigger: JSON.stringify({ type: "event", server: "s", event: "e" }) }),
+    ],
+    ["with a trigger the runtime has not got", schedule("aut_a", { trigger: "not json" })],
+    ["prompting another session", schedule("aut_a", { action: promptAction(PROMPT, "ses_other") })],
+    [
+      "starting a subagent each run",
+      schedule("aut_a", {
+        action: JSON.stringify({ type: "prompt", prompt: PROMPT, to: { subagent: "build" } }),
+      }),
+    ],
+    ["carrying code state", schedule("aut_a", { state: "{}" })],
+    ["carrying an event cursor", schedule("aut_a", { event_position: '{"agent":"build"}' })],
+    ["with an oversized output", schedule("aut_a", { last_output: "o".repeat(1_025) })],
+    ["with a status the runtime does not write", schedule("aut_a", { status: "running" })],
+    ["with an id outside the runtime's alphabet", schedule("aut_a-b")],
+    ["with an empty id suffix", schedule("aut_")],
+    ["with an overlong id", schedule(`aut_${"a".repeat(65)}`)],
     [
       "with an oversized action",
-      schedule("sch_a", {
-        action: JSON.stringify({
-          type: "prompt",
-          prompt: "x".repeat(RETAINED_SCHEDULE_ACTION_MAX_CHARS),
-        }),
+      schedule("aut_a", {
+        action: promptAction("x".repeat(RETAINED_SCHEDULE_ACTION_MAX_CHARS)),
       }),
     ],
     [
       "with an oversized name",
-      schedule("sch_a", { name: "n".repeat(RETAINED_SCHEDULE_NAME_MAX_CHARS + 1) }),
+      schedule("aut_a", { name: "n".repeat(RETAINED_SCHEDULE_NAME_MAX_CHARS + 1) }),
     ],
   ] as const)("refuses a schedule %s", (_name, row) => {
     const f = fixture();
@@ -304,7 +332,7 @@ describe("retaining a session's schedules", () => {
   it("refuses more schedules than a ledger carries", () => {
     const f = fixture();
     const rows = Array.from({ length: RETAINED_SCHEDULE_MAX + 1 }, (_, index) =>
-      schedule(`sch_${String(index)}`),
+      schedule(`aut_${String(index)}`),
     );
 
     expect(retain(f, f.source(rows))).toEqual({
@@ -322,14 +350,13 @@ describe("listing a task's retained schedules", () => {
     retain(
       f,
       f.source([
-        schedule("sch_a", { retry_at: NOW + 120_000, run_count: 2, failures: 1 }),
-        schedule("sch_b", {
+        schedule("aut_a", { retry_at: NOW + 120_000, run_count: 2, failures: 1 }),
+        schedule("aut_b", {
           status: "paused",
           name: null,
-          when: JSON.stringify({ type: "at", at: NOW }),
-          action: JSON.stringify({ type: "command", command: "x" }),
+          trigger: JSON.stringify({ type: "at", at: NOW }),
+          action: promptAction(""),
         }),
-        schedule("sch_c", { when: JSON.stringify({ type: "unknown" }) }),
       ]),
       "supervised-coding",
     );
@@ -342,7 +369,7 @@ describe("listing a task's retained schedules", () => {
       retainedAtMs: NOW,
       schedules: [
         {
-          id: "sch_a",
+          id: "aut_a",
           name: "Check the build",
           status: "active",
           cadence: "every",
@@ -354,7 +381,7 @@ describe("listing a task's retained schedules", () => {
           consentMode: "supervised-coding",
         },
         {
-          id: "sch_b",
+          id: "aut_b",
           status: "paused",
           cadence: "at",
           cadenceText: new Date(NOW).toISOString(),
@@ -362,20 +389,9 @@ describe("listing a task's retained schedules", () => {
           failures: 0,
           consentMode: "supervised-coding",
         },
-        {
-          id: "sch_c",
-          name: "Check the build",
-          status: "active",
-          cadence: "other",
-          dueAtMs: NOW + 60_000,
-          runCount: 0,
-          failures: 0,
-          prompt: "SECRET-SCHEDULED-PROMPT",
-          consentMode: "supervised-coding",
-        },
       ],
     });
-    expect(retainedScheduleCount(f.store, TASK)).toBe(3);
+    expect(retainedScheduleCount(f.store, TASK)).toBe(2);
   });
 
   it("returns nothing for a task without an entry, and no schedule for one without a ledger", () => {
@@ -390,7 +406,7 @@ describe("listing a task's retained schedules", () => {
 
   it("refuses to read an entry whose database no longer matches its digest", () => {
     const f = fixture();
-    retain(f, f.source([schedule("sch_a")]));
+    retain(f, f.source([schedule("aut_a")]));
     const database = join(f.root, "retained", retainedSessionKey(TASK), "opencode.db");
     const bytes = readFileSync(database);
     bytes[bytes.length - 1] = (bytes.at(-1) ?? 0) ^ 0xff;
@@ -402,7 +418,7 @@ describe("listing a task's retained schedules", () => {
   it("names the task ids whose entries are whole", () => {
     const f = fixture();
     expect(f.store.listTaskIds()).toEqual([]);
-    retain(f, f.source([schedule("sch_a")]));
+    retain(f, f.source([schedule("aut_a")]));
     mkdirSync(join(f.root, "retained", "not-an-entry"));
 
     expect(f.store.listTaskIds()).toEqual([TASK]);
@@ -422,49 +438,49 @@ describe("controlling a retained schedule", () => {
     const f = fixture();
     retain(
       f,
-      f.source([schedule("sch_a", { failures: 2, retry_at: NOW + 999 })]),
+      f.source([schedule("aut_a", { failures: 2, retry_at: NOW + 999 })]),
       "supervised-coding",
     );
 
-    expect(control(f, "sch_a", "pause")).toEqual({ ok: true, status: "paused" });
-    expect(control(f, "sch_a", "pause")).toEqual({ ok: false, reason: "not-applicable" });
-    expect(control(f, "sch_a", "resume")).toEqual({ ok: true, status: "active" });
-    expect(control(f, "sch_a", "resume")).toEqual({ ok: false, reason: "not-applicable" });
+    expect(control(f, "aut_a", "pause")).toEqual({ ok: true, status: "paused" });
+    expect(control(f, "aut_a", "pause")).toEqual({ ok: false, reason: "not-applicable" });
+    expect(control(f, "aut_a", "resume")).toEqual({ ok: true, status: "active" });
+    expect(control(f, "aut_a", "resume")).toEqual({ ok: false, reason: "not-applicable" });
 
-    expect(retainedRows(f, "SELECT status, failures, retry_at FROM schedule")).toEqual([
+    expect(retainedRows(f, "SELECT status, failures, retry_at FROM automation")).toEqual([
       { status: "active", failures: 0, retry_at: null },
     ]);
     // An edit keeps the ledger: it never widens the consent a schedule was held under.
-    expect(manifest(f).scheduleModes).toEqual({ sch_a: "supervised-coding" });
+    expect(manifest(f).scheduleModes).toEqual({ aut_a: "supervised-coding" });
   });
 
-  it.each([
-    ["whose end has passed", { ends_at: NOW - 1 }],
-    ["without a run left", { remaining_runs: 0 }],
-  ] as const)("resumes a schedule %s as done", (_name, overrides) => {
-    const f = fixture();
-    retain(f, f.source([schedule("sch_a", { status: "paused", ...overrides })]));
+  it.each([["whose expiry has passed", { expires_at: NOW - 1 }]] as const)(
+    "resumes a schedule %s as done",
+    (_name, overrides) => {
+      const f = fixture();
+      retain(f, f.source([schedule("aut_a", { status: "paused", ...overrides })]));
 
-    expect(control(f, "sch_a", "resume")).toEqual({ ok: true, status: "done" });
-  });
+      expect(control(f, "aut_a", "resume")).toEqual({ ok: true, status: "done" });
+    },
+  );
 
   it("deletes a schedule and drops it from the ledger", () => {
     const f = fixture();
-    retain(f, f.source([schedule("sch_a"), schedule("sch_b")]), "autonomous-delivery");
+    retain(f, f.source([schedule("aut_a"), schedule("aut_b")]), "autonomous-delivery");
 
-    expect(control(f, "sch_a", "delete")).toEqual({ ok: true, status: "deleted" });
+    expect(control(f, "aut_a", "delete")).toEqual({ ok: true, status: "deleted" });
 
-    expect(retainedRows(f, "SELECT id FROM schedule")).toEqual([{ id: "sch_b" }]);
-    expect(manifest(f).scheduleModes).toEqual({ sch_b: "autonomous-delivery" });
-    expect(control(f, "sch_b", "delete")).toEqual({ ok: true, status: "deleted" });
+    expect(retainedRows(f, "SELECT id FROM automation")).toEqual([{ id: "aut_b" }]);
+    expect(manifest(f).scheduleModes).toEqual({ aut_b: "autonomous-delivery" });
+    expect(control(f, "aut_b", "delete")).toEqual({ ok: true, status: "deleted" });
     expect(manifest(f)).not.toHaveProperty("scheduleModes");
   });
 
   it("refuses an unknown schedule and a task without an entry", () => {
     const f = fixture();
-    expect(control(f, "sch_a", "delete")).toEqual({ ok: false, reason: "no-retained-state" });
+    expect(control(f, "aut_a", "delete")).toEqual({ ok: false, reason: "no-retained-state" });
 
-    retain(f, f.source([schedule("sch_a")]));
-    expect(control(f, "sch_zz", "pause")).toEqual({ ok: false, reason: "not-found" });
+    retain(f, f.source([schedule("aut_a")]));
+    expect(control(f, "aut_zz", "pause")).toEqual({ ok: false, reason: "not-found" });
   });
 });

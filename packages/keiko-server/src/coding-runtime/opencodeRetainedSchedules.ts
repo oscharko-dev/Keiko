@@ -9,20 +9,21 @@ import type {
 } from "./opencodeSessionRetention.js";
 
 /**
- * The schedules a retained native session holds (#4271, ADR-0137 D10), read and changed only
- * through the retention store's whole-entry, digest-verified `readEntry` and `editEntry`. The
- * retention audit already admits only rows of the retained session without any `if`/`until`
- * check, so what is read here is what the runtime will fire at a wake.
+ * The scheduled wakes a retained native session holds (#4271, ADR-0137 D10): since 2.3.1 the rows
+ * of the producer's `automation` table, read and changed only through the retention store's
+ * whole-entry, digest-verified `readEntry` and `editEntry`. The retention audit already admits only
+ * rows of the retained session that prompt that session on a time, an interval or a cron
+ * (`opencodeAutomationRows.ts`), so what is read here is what the runtime will fire at a wake.
  *
  * A change is the producer's own: pause makes an active row `paused`, delete removes the row, and
  * resume makes a paused row `active` again with its failures and retry cleared. A resumed one-shot
- * whose time has passed, and a repeating schedule whose next slot has passed, fire once at the next
- * wake; the runtime then moves a repeating schedule to its following slot. A schedule whose end
- * time has passed, or that has no run left, is `done` instead.
+ * whose time has passed, and a repeating automation whose next slot has passed, fire once at the
+ * next wake; the runtime then moves a repeating one to its following slot. An automation whose
+ * expiry has passed is `done` instead.
  */
 
 export type RetainedScheduleStatus = "active" | "paused" | "done";
-export type RetainedScheduleCadence = "in" | "at" | "every" | "cron" | "other";
+export type RetainedScheduleCadence = "at" | "every" | "cron" | "other";
 export type RetainedScheduleAction = "pause" | "resume" | "delete";
 
 export const RETAINED_SCHEDULE_ACTIONS: readonly RetainedScheduleAction[] = [
@@ -63,7 +64,7 @@ interface ScheduleRow {
   readonly id?: unknown;
   readonly name?: unknown;
   readonly status?: unknown;
-  readonly when?: unknown;
+  readonly trigger?: unknown;
   readonly action?: unknown;
   readonly next_due_at?: unknown;
   readonly retry_at?: unknown;
@@ -74,7 +75,7 @@ interface ScheduleRow {
 function hasScheduleTable(database: DatabaseSync): boolean {
   return (
     database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automation'")
       .get() !== undefined
   );
 }
@@ -106,17 +107,17 @@ function parsedObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-const CADENCES = new Set<RetainedScheduleCadence>(["in", "at", "every", "cron"]);
+const CADENCES = new Set<RetainedScheduleCadence>(["at", "every", "cron"]);
 
-function cadenceOf(when: Record<string, unknown> | undefined): {
+function cadenceOf(trigger: Record<string, unknown> | undefined): {
   readonly cadence: RetainedScheduleCadence;
   readonly cadenceText?: string;
 } {
-  const type = when?.type;
+  const type = trigger?.type;
   if (typeof type !== "string" || !CADENCES.has(type as RetainedScheduleCadence)) {
     return { cadence: "other" };
   }
-  const text = cadenceTextOf(when?.[type]);
+  const text = cadenceTextOf(trigger?.[type]);
   return {
     cadence: type as RetainedScheduleCadence,
     ...(text === undefined ? {} : { cadenceText: text.slice(0, CADENCE_MAX_CHARS) }),
@@ -178,7 +179,7 @@ function scheduleOf(
     id: row.id,
     ...nameField(row),
     status,
-    ...cadenceOf(parsedObject(row.when)),
+    ...cadenceOf(parsedObject(row.trigger)),
     ...(status === "active" && due !== undefined ? { dueAtMs: due } : {}),
     runCount: integer(row.run_count) ?? 0,
     failures: integer(row.failures) ?? 0,
@@ -194,7 +195,7 @@ function readSchedules(
   if (!hasScheduleTable(database)) return [];
   const rows = database
     .prepare(
-      'SELECT id, name, status, "when", action, next_due_at, retry_at, run_count, failures FROM schedule WHERE session_id = ? ORDER BY time_created, id',
+      "SELECT id, name, status, trigger, action, next_due_at, retry_at, run_count, failures FROM automation WHERE session_id = ? ORDER BY time_created, id",
     )
     .all(manifest.sessionId) as readonly ScheduleRow[];
   const schedules: RetainedSchedule[] = [];
@@ -252,14 +253,12 @@ type EditOutcome =
 
 interface ControlRow {
   readonly status?: unknown;
-  readonly ends_at?: unknown;
-  readonly remaining_runs?: unknown;
+  readonly expires_at?: unknown;
 }
 
 function finished(row: ControlRow, nowMs: number): boolean {
-  const endsAt = integer(row.ends_at);
-  const remaining = integer(row.remaining_runs);
-  return (endsAt !== undefined && endsAt <= nowMs) || remaining === 0;
+  const expiresAt = integer(row.expires_at);
+  return expiresAt !== undefined && expiresAt <= nowMs;
 }
 
 function applyControl(
@@ -272,19 +271,19 @@ function applyControl(
   database.exec("PRAGMA busy_timeout = 5000");
   if (!hasScheduleTable(database)) return { kind: "not-found" };
   const row = database
-    .prepare("SELECT status, ends_at, remaining_runs FROM schedule WHERE id = ? AND session_id = ?")
+    .prepare("SELECT status, expires_at FROM automation WHERE id = ? AND session_id = ?")
     .get(scheduleId, sessionId) as ControlRow | undefined;
   if (row === undefined) return { kind: "not-found" };
   if (action === "delete") {
     database
-      .prepare("DELETE FROM schedule WHERE id = ? AND session_id = ?")
+      .prepare("DELETE FROM automation WHERE id = ? AND session_id = ?")
       .run(scheduleId, sessionId);
     return { kind: "changed", status: "deleted" };
   }
   if (action === "pause") {
     if (row.status !== "active") return { kind: "not-applicable" };
     database
-      .prepare("UPDATE schedule SET status = 'paused', time_updated = ? WHERE id = ?")
+      .prepare("UPDATE automation SET status = 'paused', time_updated = ? WHERE id = ?")
       .run(nowMs, scheduleId);
     return { kind: "changed", status: "paused" };
   }
@@ -292,7 +291,7 @@ function applyControl(
   const status: RetainedScheduleStatus = finished(row, nowMs) ? "done" : "active";
   database
     .prepare(
-      "UPDATE schedule SET status = ?, failures = 0, retry_at = NULL, time_updated = ? WHERE id = ?",
+      "UPDATE automation SET status = ?, failures = 0, retry_at = NULL, time_updated = ? WHERE id = ?",
     )
     .run(status, nowMs, scheduleId);
   return { kind: "changed", status };
@@ -324,7 +323,7 @@ export function controlRetainedSchedule(
     status: hasScheduleTable(database)
       ? (
           database
-            .prepare("SELECT status FROM schedule WHERE id = ? AND session_id = ?")
+            .prepare("SELECT status FROM automation WHERE id = ? AND session_id = ?")
             .get(scheduleId, manifest.sessionId) as { readonly status?: unknown } | undefined
         )?.status
       : undefined,

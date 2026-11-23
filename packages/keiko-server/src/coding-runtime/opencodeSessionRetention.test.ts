@@ -354,9 +354,11 @@ describe("retaining a settled run's session state", () => {
     ["a credential", { rows: { credential: 1 } }, "credential-present"],
     ["an account", { rows: { account: 1 } }, "credential-present"],
     ["a control account", { rows: { control_account: 1 } }, "credential-present"],
-    // #4271: a schedule is retained only as the session's own, checked row; one of no session is
-    // state Keiko never admits.
-    ["a schedule of no session", { rows: { schedule: 1 } }, "schema-unknown", "schedule-rows"],
+    // #4271, #4546: an automation is retained only as the session's own prompt on a time, an
+    // interval or a cron; one of no session is state Keiko never admits.
+    ["an automation of no session", { rows: { automation: 1 } }, "schema-unknown", "schedule-rows"],
+    // #4546: a linked machine's key is a credential-like row nothing in a native run writes.
+    ["a linked machine", { rows: { machine: 1 } }, "schema-unknown", "machine-rows"],
     ["an inbox entry", { rows: { session_inbox: 1 } }, "pending-input"],
     ["a suspended session", { session: { time_suspended: 5 } }, "pending-input"],
     ["a staged undo", { session: { revert: '{"messageID":"msg_1"}' } }, "revert-staged"],

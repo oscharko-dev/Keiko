@@ -160,9 +160,17 @@ function remoteOAuthConfig(admitted: AdmittedMcpOAuthServer | undefined): unknow
   };
 }
 
+/**
+ * 2.2.6 can share one connection to a server across every project of the runtime (`pool`). A run is
+ * one workspace with its own server process or relay capability, so Keiko states the switch off
+ * on every server: no connection, credential or tool list is shared (#4546).
+ */
+const MCP_SERVER_POOL = false;
+
 function relayedConfig(relay: OpenCodeNativeMcpRelayEndpoint): Readonly<Record<string, unknown>> {
   return {
     type: "remote",
+    pool: MCP_SERVER_POOL,
     url: relay.url,
     oauth: false,
     headers: {
@@ -181,12 +189,18 @@ function serverConfig(
   const transport = server.transport;
   if (relay !== undefined) return relayedConfig(relay);
   if (transport.kind === "remote")
-    return { type: "remote", url: transport.url, oauth: remoteOAuthConfig(admitted) };
+    return {
+      type: "remote",
+      pool: MCP_SERVER_POOL,
+      url: transport.url,
+      oauth: remoteOAuthConfig(admitted),
+    };
   const environment = Object.entries(transport.environment).map(
     ([name, value]) => `${name}=${value}`,
   );
   return {
     type: "local",
+    pool: MCP_SERVER_POOL,
     command: [
       ENV_EXECUTABLE,
       "-i",

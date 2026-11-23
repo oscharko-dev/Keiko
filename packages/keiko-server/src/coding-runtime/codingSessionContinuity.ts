@@ -287,6 +287,7 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
       values: [
         "kv-rows",
         "workspace-rows",
+        "machine-rows",
         "job-rows",
         "blob-rows",
         "copy-unreadable",

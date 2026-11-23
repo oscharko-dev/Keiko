@@ -180,16 +180,33 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   "opencode.provider.ollama",
   "opencode.provider.vllm",
   "opencode.tool.artifact",
+  // Automations run outside any human run, so only the native profile loads the tool, and even
+  // there only for the time-based prompt automation Keiko's scheduled wakes are built on
+  // (`OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS`, #4546).
+  "opencode.tool.automation",
   "opencode.tool.image-generate",
-  "opencode.tool.schedule",
+  // The remaining built-in plugins 2.4.x added each offer a capability with no owner in Keiko yet
+  // (#4546): a tool that names another machine, one that interrupts sessions, a full-text search of
+  // every session in the database, video generation, MCP event delivery, a persistent home-folder
+  // memory the agent writes freely and a notice for forked sessions.
+  "opencode.fork-notice",
+  "opencode.home-memory",
+  "opencode.tool.machine",
+  "opencode.tool.session-interrupt",
+  "opencode.tool.session-search",
+  "opencode.tool.video-generate",
+  "opencode.tools.mcp-events",
 ]);
 
 /**
- * The built-in plugins only the native profile loads (ADR-0137 D10, #4271): scheduled wakes of a
- * session. Keiko holds the producer's scheduler lease in every native run and releases it only in
- * the wake run it starts at a schedule's due time (`opencodeScheduleLease.ts`).
+ * The built-in plugins only the native profile loads (ADR-0137 D10, #4271, #4546): scheduled wakes
+ * of a session, which the producer carries as time-based prompt automations. Keiko holds the
+ * producer's scheduler lease in every native run and releases it only in the wake run it starts at
+ * an automation's due time (`opencodeScheduleLease.ts`).
  */
-export const OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS = Object.freeze(["opencode.tool.schedule"]);
+export const OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS = Object.freeze([
+  "opencode.tool.automation",
+]);
 
 /** What a native run withholds: every withheld plugin except the ones it admits. */
 export const OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze(
@@ -206,16 +223,48 @@ const OPENCODE_NATIVE_PLUGIN_REMOVALS = Object.freeze(
   OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS.map((plugin) => `-${plugin}`),
 );
 
-/** Experimental switches stated explicitly, so a changed producer default cannot open one. */
+/**
+ * Experimental switches stated explicitly, so a changed producer default cannot open one. The
+ * switches 2.4.x added (#4546) are each a capability with no owner in Keiko: console watches,
+ * machines, home memory, the project overlay, the in-process API for Code Mode, the full-text
+ * index, video generation and the producer's wildcard. `part_rows` stays the producer's default,
+ * which is its storage format and no capability.
+ */
 const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
+  all_flags: false,
   artifacts: false,
+  codemode_vm: false,
+  console_watches: false,
+  full_codemode: false,
+  home_memory: false,
   image_generate: false,
   // A session idle for an hour would otherwise unload the directory's plugins and tools under a
   // run Keiko still holds; Keiko alone bounds the runtime's lifetime.
   location_idle_timeout: false,
+  machines: false,
   media_blob: false,
-  schedules: false,
+  model_speeds: false,
+  opencode_api: false,
+  project_overlay: false,
+  recommended_api: false,
+  sqlite_fts: false,
+  video_generate: false,
 });
+
+/**
+ * Automations are the producer's scheduled prompts, Code Mode programs and shell commands (2.3.1:
+ * on by default). Every profile states the switch: only a native run enables them, because only
+ * its policy plugin decides each automation change and only Keiko's wake run releases the
+ * scheduler lease (#4546).
+ */
+const OPENCODE_AUTOMATIONS_OFF = false;
+
+/**
+ * 2.3.1 writes a compaction summary in the background as a session nears automatic compaction.
+ * Keiko fixes compaction itself (governed prompt, `keep`, `buffer`), and a summary nothing uses
+ * costs tokens, so the background write is off in every profile (#4546).
+ */
+const OPENCODE_COMPACTION_BACKGROUND = false;
 
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 // The pinned runtime (2.2.5) defaults a provider's `headerTimeout` to 300 s and its `chunkTimeout` to
@@ -649,8 +698,14 @@ function createGovernedOpenCodeV2Config(
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_PLUGIN_REMOVALS,
-    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    compaction: {
+      auto: true,
+      background: OPENCODE_COMPACTION_BACKGROUND,
+      keep: { tokens: recent },
+      buffer: reserved,
+    },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    automations: OPENCODE_AUTOMATIONS_OFF,
     experimental: OPENCODE_CLOSED_EXPERIMENTS,
     permissions,
   };
@@ -720,13 +775,20 @@ function createNativeOpenCodeV2Config(
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
-    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    compaction: {
+      auto: true,
+      background: OPENCODE_COMPACTION_BACKGROUND,
+      keep: { tokens: recent },
+      buffer: reserved,
+    },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    // The producer offers its automation tools unless this is false; an automation wakes the
+    // session only in Keiko's wake run, which alone releases the scheduler lease (#4546).
+    automations: true,
     // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
     // update as a read in every mode and projects it as the plan card (parity row T19, owner
     // decision of 2026-10-24).
-    // Its schedule tools need their switch; a schedule wakes the session only in Keiko's wake run.
-    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true, schedules: true },
+    experimental: { ...OPENCODE_CLOSED_EXPERIMENTS, todo: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
     // The operator's accepted external references, as the producer's own local references

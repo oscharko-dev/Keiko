@@ -36,6 +36,14 @@ import {
 } from "@oscharko-dev/keiko-security/windows-owner-private";
 
 import {
+  AUTOMATION_ID_PATTERN,
+  RETAINED_SCHEDULE_ACTION_MAX_CHARS,
+  RETAINED_SCHEDULE_MAX,
+  RETAINED_SCHEDULE_NAME_MAX_CHARS,
+  UNADMITTED_AUTOMATION_PREDICATE,
+} from "./opencodeAutomationRows.js";
+import { SCHEDULER_LEASE_KEY } from "./opencodeScheduleLease.js";
+import {
   OPENCODE_PERSISTENCE_SCHEMAS,
   OPENCODE_PERSISTENCE_TABLE_CLASSES,
   type OpenCodePersistenceTableClass,
@@ -127,6 +135,7 @@ export type RetentionRefusal =
 export type RetentionAuditCheck =
   | "kv-rows"
   | "workspace-rows"
+  | "machine-rows"
   | "job-rows"
   | "blob-rows"
   | "schedule-rows"
@@ -945,11 +954,7 @@ function stagedRowsRefused(path: string, manifest: RetainedSessionManifest): boo
   }
 }
 
-/** The scheduler's leader lease row (`kv`, 2.2.5): process-lifetime state of the runtime. */
-const SCHEDULER_LEASE_KEY = "schedule:leader";
-const SCHEDULE_ID = /^sch_[0-9A-Za-z]{1,64}$/u;
-/** At most this many schedules are carried in a ledger; more refuse the retain as unknown state. */
-export const RETAINED_SCHEDULE_MAX = 64;
+export { RETAINED_SCHEDULE_MAX };
 
 /**
  * The lease row is process-lifetime state: Keiko's own hold (`opencodeScheduleLease.ts`) or a
@@ -977,7 +982,7 @@ function validScheduleModes(value: unknown): boolean {
   return (
     entries.length > 0 &&
     entries.length <= RETAINED_SCHEDULE_MAX &&
-    entries.every(([id, mode]) => SCHEDULE_ID.test(id) && isCodingWorkbenchMode(mode))
+    entries.every(([id, mode]) => AUTOMATION_ID_PATTERN.test(id) && isCodingWorkbenchMode(mode))
   );
 }
 
@@ -1008,16 +1013,16 @@ function scheduleIds(path: string): readonly string[] {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     const table = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automation'")
       .get();
     if (table === undefined) return [];
     const rows = database
-      .prepare("SELECT id FROM schedule ORDER BY id LIMIT ?")
+      .prepare("SELECT id FROM automation ORDER BY id LIMIT ?")
       .all(RETAINED_SCHEDULE_MAX + 1) as readonly { readonly id?: unknown }[];
     const ids = rows.map((row) => row.id);
     if (
       ids.length > RETAINED_SCHEDULE_MAX ||
-      ids.some((id) => typeof id !== "string" || !SCHEDULE_ID.test(id))
+      ids.some((id) => typeof id !== "string" || !AUTOMATION_ID_PATTERN.test(id))
     )
       throw new Error("retained-schedules-invalid");
     return ids as readonly string[];
@@ -1041,6 +1046,7 @@ const CLASS_REFUSALS = [
 const UNKNOWN_STATE_CHECKS: Readonly<Record<string, RetentionAuditCheck>> = {
   kv: "kv-rows",
   workspace: "workspace-rows",
+  machine: "machine-rows",
   job: "job-rows",
   blob: "blob-rows",
   blob_ref: "blob-rows",
@@ -1153,22 +1159,21 @@ function refusalForClassifiedRows(
   };
 }
 
-/** The largest schedule action (its prompt) and name a retained copy may carry, in characters. */
-export const RETAINED_SCHEDULE_ACTION_MAX_CHARS = 16_384;
-export const RETAINED_SCHEDULE_NAME_MAX_CHARS = 256;
+export { RETAINED_SCHEDULE_ACTION_MAX_CHARS, RETAINED_SCHEDULE_NAME_MAX_CHARS };
 
 /**
- * Schedule rows a retained copy may not carry: one of another session or of none, a status the
- * producer does not write, an id Keiko cannot name, an oversized action or name, check state, or any
- * `if`/`until` check. A shell check runs with the runtime server's whole environment, its secrets
- * included, outside the policy hook's shell scrub (measured with the real 2.2.5 runtime); a Code
- * Mode check would boot a runtime for every poll. The policy refuses both at creation, so a row
- * that carries one is state Keiko did not admit. More than `RETAINED_SCHEDULE_MAX` rows count too.
+ * Automation rows a retained copy may not carry (`opencodeAutomationRows.ts`): anything but a
+ * prompt into the retained session on a time, an interval or a cron. A shell action runs with the
+ * runtime server's whole environment, its secrets included, outside the policy hook's shell scrub,
+ * and a Code Mode program or an MCP event watch runs without a human; the policy refuses all three
+ * at creation, so a row that carries one is state Keiko did not admit. More than
+ * `RETAINED_SCHEDULE_MAX` rows count too.
  */
 function unadmittedScheduleRows(database: DatabaseSync, table: string, sessionId: string): number {
   const unadmitted = rowCount(
     database,
-    `SELECT COUNT(*) AS n FROM "${table}" WHERE session_id IS NOT ? OR status NOT IN ('active', 'paused', 'done') OR "check" IS NOT NULL OR state IS NOT NULL OR id NOT GLOB 'sch_?*' OR substr(id, 5) GLOB '*[^0-9A-Za-z]*' OR length(id) > 68 OR length(action) > ${String(RETAINED_SCHEDULE_ACTION_MAX_CHARS)} OR length(COALESCE(name, '')) > ${String(RETAINED_SCHEDULE_NAME_MAX_CHARS)}`,
+    `SELECT COUNT(*) AS n FROM "${table}" WHERE ${UNADMITTED_AUTOMATION_PREDICATE}`,
+    sessionId,
     sessionId,
   );
   const total = rowCount(database, `SELECT COUNT(*) AS n FROM "${table}"`);
