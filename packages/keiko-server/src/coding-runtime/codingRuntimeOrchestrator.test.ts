@@ -5392,6 +5392,53 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
   });
 
+  it("does not let a finished turn's queued settlement stop the follow-up turn dispatched ahead of it", async () => {
+    const f = fixture();
+    let finishFirst: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        finishFirst = resolve;
+      }),
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">(() => undefined),
+    });
+    const started = successfulSnapshot(await f.orchestrator.start(start));
+    // Hold the serial lane so the follow-up queues first and the settlement queues behind it.
+    let releaseLane: (() => void) | undefined;
+    const lane = (
+      f.orchestrator as unknown as { serial: <T>(work: () => Promise<T>) => Promise<T> }
+    ).serial(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseLane = resolve;
+        }),
+    );
+    const followUp = f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-ahead",
+      expectedRevision: started.revision,
+      taskIntent: "continue with this instruction",
+    });
+    finishFirst?.("succeeded");
+    await Promise.resolve();
+    releaseLane?.();
+    await lane;
+    expect((await followUp).ok).toBe(true);
+    // Everything queued behind the follow-up, the finished turn's settlement included, has run.
+    const flush = (): Promise<void> =>
+      (f.orchestrator as unknown as { serial: <T>(work: () => Promise<T>) => Promise<T> }).serial(
+        () => Promise.resolve(),
+      );
+    await flush();
+    await flush();
+
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
   it("stops the paused manager when the durable resumed state cannot be published", async () => {
     const f = await runningFixture();
     await f.orchestrator.pause("run-1", { requestId: "run-1" });

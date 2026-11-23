@@ -3505,7 +3505,13 @@ export class CodingRuntimeOrchestrator {
   }
 
   private queueTaskSettlement(runId: string, outcome: CodingRuntimeTaskOutcome): void {
-    const settlement = this.serial(() => this.settleTask(runId, outcome));
+    const generation = this.operations.currentTaskGeneration(runId);
+    const settlement = this.serial(() =>
+      // A follow-up dispatched while this settlement waited in the lane replaced the turn that ended.
+      this.operations.currentTaskGeneration(runId) === generation
+        ? this.settleTask(runId, outcome)
+        : Promise.resolve(),
+    );
     void settlement.then(
       (): void => undefined,
       (error: unknown): void => {
