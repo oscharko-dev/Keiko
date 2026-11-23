@@ -4277,6 +4277,7 @@ export class CodingRuntimeOrchestrator {
     return (
       active !== undefined &&
       this.deps.history?.admits(taskId, active) === true &&
+      this.deps.history.isActive(taskId) &&
       this.deps.history.previousRunId(taskId) !== undefined
     );
   }

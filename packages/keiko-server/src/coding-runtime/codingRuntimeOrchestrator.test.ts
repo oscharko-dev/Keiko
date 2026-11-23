@@ -5,6 +5,7 @@ import {
   type CodingSessionContinuity,
 } from "./codingSessionContinuity.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
@@ -9756,6 +9757,26 @@ describe("native session continuity requested by a start", () => {
         refusal: "invalid-intent",
       });
       expect(w.f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("admits a wake only for a task that is still active, never for a completed one", () => {
+      const w = world();
+      const task = w.store.codingHistory?.create({
+        projectPath: tmpdir(),
+        title: "Scheduled task",
+        modelId: "coding",
+        workspaceId: "ws-sched",
+        taskId: "task-sched",
+        branch: "keiko/task/sched",
+        operatorDigest: createHash("sha256").update("operator").digest("hex"),
+      });
+      if (task === undefined) throw new Error("History unavailable");
+      const host = w.f.orchestrator.scheduledWakeHost();
+      expect(host.taskAdmitted(task.id)).toBe(true);
+
+      w.store.codingHistory?.update(task.id, { status: "completed" });
+
+      expect(host.taskAdmitted(task.id)).toBe(false);
     });
 
     it("starts nothing once the orchestrator shuts down", async () => {

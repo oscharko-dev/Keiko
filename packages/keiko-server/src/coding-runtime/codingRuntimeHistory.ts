@@ -426,6 +426,13 @@ export class CodingRuntimeHistory {
     });
   }
 
+  /** A completed task is closed: a scheduled wake never reopens it. */
+  public isActive(id: string): boolean {
+    const operator = this.operator();
+    const task = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
+    return task?.status === "active";
+  }
+
   public admits(id: string | undefined, active: ActiveWorkspaceView): boolean {
     if (id === undefined) return true;
     return this.taskIn(id, active.instance);
