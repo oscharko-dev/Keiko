@@ -31,6 +31,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.error":
     "The coding task could not be loaded or updated. Retry from Coding History.",
   "codingWorkbench.history.loading": "Loading task…",
+  "codingWorkbench.history.listError": "The task list could not be loaded. Try Refresh.",
+  "codingWorkbench.history.renameError": "The task could not be renamed. Try again.",
+  "codingWorkbench.history.listLoading": "Loading tasks…",
   "codingWorkbench.history.refresh": "Refresh",
   "codingWorkbench.history.empty": "No tasks match this view. Start a new task to get going.",
   "codingWorkbench.history.taskTitle": "Task title",

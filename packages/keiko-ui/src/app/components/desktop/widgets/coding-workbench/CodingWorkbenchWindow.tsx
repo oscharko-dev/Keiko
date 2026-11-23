@@ -1090,6 +1090,11 @@ export function CodingWorkbenchWindow({
   );
 
   useEffect(() => {
+    // A failed decision leaves the request open; a later disappearance has another cause.
+    if (state.mutation.status === "error") approvalAction.current = false;
+  }, [state.mutation.status]);
+
+  useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
     approvalAction.current = false;
     focusRef.current?.focus();

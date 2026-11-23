@@ -32,8 +32,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.active": "Aktiv",
   "codingWorkbench.history.completed": "Abgeschlossen",
   "codingWorkbench.history.error":
-    "Die Coding-Aufgabe konnte nicht geladen oder aktualisiert werden. Bitte über die Coding History erneut versuchen.",
+    "Die Coding-Aufgabe konnte nicht geladen oder aktualisiert werden. Versuche es über die Coding History erneut.",
   "codingWorkbench.history.loading": "Aufgabe wird geladen…",
+  "codingWorkbench.history.listError":
+    "Die Aufgabenliste konnte nicht geladen werden. Versuche es mit Aktualisieren erneut.",
+  "codingWorkbench.history.renameError":
+    "Die Aufgabe konnte nicht umbenannt werden. Versuche es erneut.",
+  "codingWorkbench.history.listLoading": "Aufgaben werden geladen…",
   "codingWorkbench.history.refresh": "Aktualisieren",
   "codingWorkbench.history.empty": "Keine passenden Aufgaben. Starte eine neue Aufgabe.",
   "codingWorkbench.history.taskTitle": "Aufgabentitel",

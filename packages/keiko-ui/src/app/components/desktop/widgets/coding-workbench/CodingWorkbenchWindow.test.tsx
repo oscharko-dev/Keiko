@@ -2976,6 +2976,41 @@ describe("CodingWorkbenchWindow", () => {
     expect(approveB).not.toHaveFocus();
   });
 
+  it("does not move focus when the permission disappears after a failed approval", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
+    const pending = nativeAskState("shell");
+    runtimeHookMock.mockReturnValue({ state: pending, actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...pending,
+        mutation: {
+          status: "error",
+          kind: "approval",
+          requestId: "req-a",
+          error: { code: "failed", message: "failed" } as never,
+        },
+      },
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      }),
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("#3897: the same approval request keeps its prompt across unrelated re-renders", () => {
     approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
     runtimeHookMock.mockReturnValue({ state: nativeAskState("shell"), actions: actions() });
