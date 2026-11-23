@@ -2099,6 +2099,10 @@ describe("pinned native OpenCode plan tool (T19)", () => {
           "mv .git .git.moved",
           "printf /elsewhere > .git/commondir",
           "mkdir -p .git/modules/x && echo x > .git/modules/x/config",
+          // The person's own `git commit` runs these with the person's rights, outside the sandbox,
+          // and an untracked hook shows in no diff (#4491 G0 audit).
+          "mkdir -p .git/hooks && printf '#!/bin/sh\\ntouch OWNED\\n' > .git/hooks/pre-commit",
+          "mv .git/hooks .git/hooks.moved",
         ];
         for (const command of tampering) {
           const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
@@ -2106,6 +2110,8 @@ describe("pinned native OpenCode plan tool (T19)", () => {
         }
         expect(readFileSync(config, "utf8")).toBe(before);
         expect(existsSync(join(run.fixture.workspace, ".git.moved"))).toBe(false);
+        expect(existsSync(join(run.fixture.workspace, ".git", "hooks", "pre-commit"))).toBe(false);
+        expect(existsSync(join(run.fixture.workspace, ".git", "hooks.moved"))).toBe(false);
         const work = "echo tracked > tracked.txt && /usr/bin/env git add tracked.txt; echo exit=$?";
         expect(await scriptedTurn(run, shell(work))).toContain("exit=0");
         const nested = "/usr/bin/env git init -q nested; echo exit=$?";

@@ -178,7 +178,9 @@ It records no path, no task text, no model answer and no other content.
 [`scripts/check-acceptance-evidence.mjs`](../../scripts/check-acceptance-evidence.mjs) reads that
 file, prints the platform, the user class, every sign of a container runtime and the case count,
 and passes only when the evidence certifies the promise. It recomputes each precondition from the
-facts instead of trusting `certifiesPromise`, and it names every precondition that failed.
+facts instead of trusting `certifiesPromise`, and it names every precondition that failed. It also
+fails on any string that is not a closed token (a path, a task text or a model answer), and on any
+key that names content, naming the JSON pointer and never the value (#4492 AC6).
 
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)
@@ -495,7 +497,59 @@ all 30 cases passed in 263 s, including the cases below.
 | missing dependencies, verifier never called | managed worktree, Supervised                            | `failed`; nothing installed, the negative control stays red          |
 | a tree Keiko did not install                | managed worktree, Supervised, governed verifier refused | `succeeded`; the tree is left alone, no failed installation reported |
 
-The hosted standard-account job runs the same set on this head; its evidence decides.
+The hosted standard-account job runs the same set on this head; its evidence decides. On PR #4537
+head 7cb1f148c, whose tree landed on `dev` as ac4b51c17, it passed all 30 cases as a standard
+account without a container runtime
+([job 137593619015](https://github.com/oscharko-dev/Keiko/actions/runs/45145492297/job/137593619015)).
+
+## Real model on macOS, 2026-11-23
+
+Each task was given through the Coding Workbench, one run at a time, and checked against the five
+criteria under "What counts as passed". Every timeline had integrity `complete` and loss `none`.
+The record is body-free: no task text, path or model answer.
+
+| Fact              | Value                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| Platform          | macOS 27.0.1 (26A434), arm64                                                       |
+| User class        | administrator                                                                      |
+| Container runtime | none visible to Keiko (Docker installed, not on Keiko's `PATH`)                    |
+| Keiko             | 1.5.6 from `dev` 35e23d068; the two reruns on PR #4537 head c7910abc5              |
+| Node.js, OpenCode | 26.13.1, 2.2.5                                                                     |
+| Runtime package   | none installed: `dev:start` staged the dev lane's OpenCode payload for macos-arm64 |
+| Model             | gemma-4-31b-it through a local LiteLLM gateway, one model loaded at a time         |
+
+| Case | Fixture                                                    | Location         | Mode                             | Result                                                                                                                              |
+| ---- | ---------------------------------------------------------- | ---------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | no dependencies                                            | own folder       | Ask for approval                 | `succeeded`, all five criteria                                                                                                      |
+| 2    | no dependencies                                            | own folder       | Supervised workspace             | `succeeded`, all five criteria                                                                                                      |
+| 3    | no dependencies                                            | own folder       | Full access (egress `inherited`) | `succeeded`, all five criteria                                                                                                      |
+| 4    | no dependencies                                            | managed worktree | Supervised workspace             | `succeeded`, all five criteria; the original folder unchanged                                                                       |
+| 5    | with dependency, no `node_modules` at start                | own folder       | Supervised workspace             | `dev`: `succeeded`, but the model replaced the dependency with its own code. #4537: `succeeded`, all five criteria, dependency kept |
+| 6    | npm package only an authenticated internal registry serves | own folder       | Supervised workspace             | `dev`: failed, the relay defect of #4530. #4537: `succeeded`, all five criteria                                                     |
+| 7    | Maven, dependencies only from an authenticated repository  | own folder       | Supervised workspace             | `succeeded`, all five criteria                                                                                                      |
+
+Criterion 3 was checked with `git status --porcelain --ignored` on everything outside `src/` and
+`.acceptance-checks`, and outside `target` for Maven. In every npm case the check also left out
+`node_modules` and `package-lock.json`: in case 5 Keiko's dependency installation creates them.
+No case changed anything else outside `src/`. That an installed `node_modules` stayed unchanged
+is therefore not established by this record.
+
+Two code defects surfaced and were repaired in #4537, each with a test that failed first:
+
+- **Case 6.** The relay rewrote packument tarball URLs onto the request's `Host`. A proxy in front
+  of the server, such as the development runner, rewrites `Host`, so npm fetched the tarball from an
+  origin its configuration does not name, without the run's capability. The rewrite now uses the
+  relay's bound loopback origin (ADR-0184 D4).
+- **Case 5.** Keiko installed the missing dependency for the shell, but the answer the model received
+  did not say so, and the model reimplemented the dependency. The answer now adds one fixed
+  sentence: run the check again in the shell, and do not replace a dependency (ADR-0043 D17). In the
+  rerun the model ran its check again and kept the dependency.
+
+**User class.** The owner decided on 2026-11-23 that the standard-user proof comes only from the
+hosted runner, whose job creates a standard account and certifies nothing for an administrator (see
+the standard-account section above). The real-model runs therefore used the lab Mac's administrator
+account. Together the two records cover the criterion: a real model in every mode on macOS, and
+every mode as a standard user without a container runtime.
 
 ## What this baseline does not prove yet
 
@@ -506,9 +560,12 @@ These points stay open:
 - **Dependencies from an internal registry only.** Keiko's install for the shell reaches the public
   registry only. A project whose dependencies only an internal registry serves installs them in the
   run's shell through the repository credential relay, as the npm cases above do in every mode.
-- **CI as a gate.** The job runs on every pull request to `dev` that touches the server, and on
-  dispatch. It is not yet a required check: that belongs to
-  [#4521](https://github.com/oscharko-dev/Keiko/issues/4521).
-- **Real model.** The scripted form closes no criterion. The real-model run on macOS is still to do.
+- **CI as a gate.** The acceptance job runs on every pull request to `dev` that touches the server,
+  and on dispatch; it is not a required check. The boundary lane of
+  [#4521](https://github.com/oscharko-dev/Keiko/issues/4521) gates every release instead: the npm
+  publish needs it to succeed.
+- **Real model in every mode with dependencies.** Cases 5 to 7 of the real-model record ran in
+  Supervised workspace only; the hosted job covers all three modes with the scripted model. Docker
+  installed but not running ran with the scripted model only.
 - **Windows.** The Windows half of #4492 runs after the macOS gate. See the
   [Windows qualification](opencode-windows-qualification.md).

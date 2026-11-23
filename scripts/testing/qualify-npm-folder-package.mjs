@@ -211,7 +211,7 @@ function runnerIdentity() {
   return { os: platform(), arch: arch(), osRelease: release() };
 }
 
-async function freePort() {
+export async function freePort() {
   const server = createServer();
   await new Promise((resolveListen, rejectListen) => {
     server.once("error", rejectListen);
@@ -263,11 +263,11 @@ async function writeBounded(body, destination, url) {
   }
 }
 
-function startFile(folder, os) {
+export function startFile(folder, os) {
   return join(folder, os === "win32" ? "Start Keiko.cmd" : "Start Keiko.command");
 }
 
-function stopFile(folder, os) {
+export function stopFile(folder, os) {
   return join(folder, os === "win32" ? "Stop Keiko.cmd" : "Stop Keiko.command");
 }
 
@@ -284,6 +284,11 @@ export function shellInvocation(file, os) {
 /** Runs a start or stop file with output to files: the Keiko it opens must not hold a pipe open. */
 export function runWrapper(file, { env, cwd, logPath, timeoutMs, os = platform() }) {
   const { command, args, verbatim } = shellInvocation(file, os);
+  return runLogged(command, args, { env, cwd, logPath, timeoutMs, verbatim });
+}
+
+/** Runs one command with its output in a file and resolves its exit status and that output. */
+export function runLogged(command, args, { env, cwd, logPath, timeoutMs, verbatim = false }) {
   const fd = openSync(logPath, "w", 0o600);
   return new Promise((resolveRun) => {
     const child = spawn(command, args, {
@@ -311,7 +316,7 @@ function windowsTar() {
   return join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
 }
 
-function extractZip(zipPath, destination, os) {
+export function extractZip(zipPath, destination, os) {
   mkdirSync(destination, { recursive: true });
   const result =
     os === "win32"
@@ -368,7 +373,7 @@ export function processesOf(folder, os = platform()) {
   return pids.filter((pid) => Number.isInteger(pid) && !own.has(pid));
 }
 
-async function healthVersion(port) {
+export async function healthVersion(port) {
   try {
     const response = await globalThis.fetch(`http://127.0.0.1:${port}/api/health`, {
       signal: globalThis.AbortSignal.timeout(5000),
@@ -380,7 +385,7 @@ async function healthVersion(port) {
   }
 }
 
-async function waitFor(condition, timeoutMs) {
+export async function waitFor(condition, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
   for (;;) {
     const value = await condition();
@@ -391,7 +396,7 @@ async function waitFor(condition, timeoutMs) {
 }
 
 /** Runs named checks in order; a failed check ends the run (later ones need its result). */
-class Checks {
+export class Checks {
   constructor(print = (line) => console.log(line)) {
     this.results = [];
     this.print = print;
@@ -416,7 +421,7 @@ class Checks {
   }
 }
 
-function ensure(condition, message) {
+export function ensure(condition, message) {
   if (!condition) throw new Error(message);
 }
 

@@ -4731,6 +4731,60 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4504#7074334559",
         "rationale": "On 2026-11-22 the repository owner approved repairing #4503 and #4504 and publishing the npm folder packages, after being told that the macOS folder qualifies only on a Keiko release carrying the #4504 fix (1.5.6). 1.5.6 also carries #4481 (MemoriaViva) and the quality-gate changes of #4513 and #4515, which change no product behaviour. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-23-keiko-1.5.7-macos-coding-without-administrator",
+      "packageVersion": "1.5.7",
+      "releaseTag": "v1.5.7",
+      "supportedFrom": ["0.2.0", "1.5.0", "1.5.1", "1.5.2", "1.5.3", "1.5.4", "1.5.5", "1.5.6"],
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "On macOS a coding run changes files, runs the project's own checks and ends succeeded only when they ran and passed, without administrator rights or Docker, and builds Maven and npm projects whose dependencies come from the password-protected repositories in the person's own settings. The README states for each macOS delivery form what a person without administrator rights needs, and the macOS boundary statement now says only what is proven.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Coding on a Mac without administrator rights or Docker: a run changes files, runs the project's own checks in its confined shell and ends succeeded only when they ran and passed. A standard account proves this in all three modes; the npm and standalone folder packages install, start, stop and complete a short Workbench run as a standard account, and the npm folder package is qualified so in its publication run. #4491 #4519 #4520",
+        "Maven and npm projects behind a company login: on macOS a run builds and tests a project whose dependencies come from the password-protected repositories in the person's own ~/.m2/settings.xml and ~/.npmrc, in every mode and without an approval for the read. Keiko adds the credential outside the run; the run holds only a read-only capability that ends with it. #4530",
+        "Missing npm dependencies: on macOS, when the model calls Keiko's verifier for an npm project without node_modules, Keiko installs them from the public npm registry with install scripts off and tells the model; Yarn, pnpm, a mismatched lockfile, a package that needs its own install scripts and sources outside the public registry are refused with a closed reason. #4522",
+        "A run starts on a busy Mac: reading a Git repository's identity before a run starts now has 20 seconds instead of 5. On macOS a run's shell can no longer write the hooks in an opened repository's .git folder, which the person's own next git commit would run outside the sandbox. #4520 #4491",
+        "Install without an administrator on a Mac: the README shows the Node.js archive in the user's own folder, and every guide says the same about the download mark; the portable Keiko.app is not covered. The macOS boundary statement in the README is corrected after an independent audit and names its limits. #4520 #4521",
+        "A second start after a crash or a restart no longer refuses when another program now holds the old process number; on Windows the Coding Workbench no longer flashes console windows while it prepares a local task workspace. #4503 #4531"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-23",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7106820462",
+        "rationale": "On 2026-11-23 the repository owner approved G0 for Milestone 0 of epic #4491 as recommended: the corrected macOS boundary statement, the 1.5.7 release text with its named limits, the protection of .git/hooks before the release, and the release of Keiko 1.5.7 once #4543 is merged, followed by the npm folder packages whose publication run records the npm folder form (#4520 AC1). 1.5.7 also carries #4523, #4537, #4529, #4532, #4527, #4534, #4533 and #4538. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
+      }
     }
   ]
 }

@@ -221,6 +221,48 @@ describe("repository identity before runtime confirmation", () => {
     },
   );
 
+  // #4520: on a loaded hosted runner the two `git` reads outlasted the five-second one-use window,
+  // and the start was refused before any run existed. The window opens once the read has finished.
+  it("keeps a preparation whose identity read outlasted the one-use window", async () => {
+    let calls = 0;
+    const slow = createRuntimeGitPreparation({
+      deps: { resolveWorkspace: () => workspace },
+      context: () => {
+        calls += 1;
+        if (calls === 2) now += 6_000;
+        return context;
+      },
+      now: () => now,
+    });
+    const input = request();
+    await expect(slow.prepare(input)).resolves.toBeUndefined();
+    expect(slow.consume(input).repositoryIdentity?.kind).toBe("local");
+  });
+
+  it("logs a failed preparation when the identity read runs out of time", async () => {
+    const bounded = createRuntimeGitPreparation({
+      deps: {
+        resolveWorkspace: () => workspace,
+        execution: { activityLog: { write: (event): void => void events.push(event) } },
+      },
+      context: () => context,
+      now: () => now,
+      identityReadSignal: () => AbortSignal.abort(),
+    });
+    // A run id of the shape the server mints, so the line keeps it as its correlation.
+    const input = { ...request(), runId: "run-identity-timeout-0001" };
+    await expect(bounded.prepare(input)).rejects.toBeInstanceOf(Error);
+    expect(events.at(-1)).toMatchObject({
+      op: "git.runtime-identity",
+      correlationId: "run-identity-timeout-0001",
+      errorKind: "internal",
+      extra: { state: "failed", runId: "run-identity-timeout-0001" },
+    });
+    const frames = events.at(-1)?.extra?.frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
+    expect(() => bounded.consume(input)).toThrow("preparation-unavailable");
+  });
+
   // #3565 Observation 18: the customer's repository lives on their own Git server. Its origin used
   // to be refused as `remote-unsupported`, which reached the Workbench as the generic authority
   // failure; a foreign origin now prepares as its own identity and the run can start.

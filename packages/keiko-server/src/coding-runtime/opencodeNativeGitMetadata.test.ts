@@ -103,6 +103,7 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
         "worktrees",
         "modules",
         "objects/info/alternates",
+        "hooks",
       ].map((path) => join(repository, ".git", path)),
     });
     expect(resolveNativeGitMetadata(folder, access("ordinary", folder))).toEqual({
