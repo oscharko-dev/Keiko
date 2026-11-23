@@ -197,11 +197,7 @@ function distOf(version: unknown): Record<string, unknown> | undefined {
 }
 
 function parsedUrl(value: string): URL | undefined {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
+  return URL.canParse(value) ? new URL(value) : undefined;
 }
 
 /**
