@@ -9131,7 +9131,12 @@ describe("verification truth at task settlement", () => {
         "coding-runtime.run.settled.emitted-line",
         formatActivityLogProofLine(settled),
       ),
-    ).toMatchObject({ failureCode: "verification-not-evidenced", verificationGap: "no-check-run" });
+    ).toMatchObject({
+      failureCode: "verification-not-evidenced",
+      verificationGap: "no-check-run",
+      // A missing check is the run's verification verdict, never a Keiko fault (#4491 lab).
+      errorKind: "validation-failed",
+    });
     expect(f.eventHub.publish).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "status",

@@ -1803,7 +1803,7 @@ function recordRuntimeRunSettled(
   verificationBlockedReason?: CodingVerificationBlockedReason,
   verificationGap?: CodingWorkbenchVerificationGap,
 ): void {
-  const errorKind = settlementErrorKind(state, cause, verificationBlockedReason);
+  const errorKind = settlementErrorKind(state, cause, verificationBlockedReason, verificationGap);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
@@ -1850,12 +1850,21 @@ function settlementErrorKind(
   state: CodingWorkbenchRuntimeStateName,
   cause: RunSettlementCause | undefined,
   verificationBlockedReason: CodingVerificationBlockedReason | undefined,
+  verificationGap: CodingWorkbenchVerificationGap | undefined,
 ): ActivityLogErrorKind | undefined {
   // A change kept but not verifiable on this computer is a capability the host lacks, not a Keiko
   // fault: it never settles as `internal`.
   if (cause === undefined && verificationBlockedReason === "VERIFICATION_ISOLATION_UNAVAILABLE") {
     return "unavailable";
   }
+  // A change the run itself left without a passing check is its verification verdict, not a Keiko
+  // fault. A check a person or the host blocked keeps its classification above and below.
+  if (
+    cause === undefined &&
+    verificationBlockedReason === undefined &&
+    verificationGap !== undefined
+  )
+    return "validation-failed";
   if (cause === undefined) return runtimeRunSettledErrorKind(state);
   return isRefusalEscalation(cause) ? cause.errorKind : terminalFailureErrorKind(cause);
 }

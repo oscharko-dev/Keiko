@@ -781,7 +781,8 @@ reported the run's model and agent (`modelReported`, `agentReported`) and its cl
 (`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
 `primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). A run that changed code and
 ended without a passing check after its last change records why, on `coding-runtime.run.settled` as the closed
-`verificationGap` (`no-check-run`, `check-failed`, `check-not-started`, `budget-exhausted`; #4491), and why no
+`verificationGap` (`no-check-run`, `check-failed`, `check-not-started`, `budget-exhausted`; #4491) with
+`errorKind=validation-failed` unless a check was blocked, and why no
 continuation ran on `coding-runtime.run.verification-continuation` as `state: skipped` with the closed `skipReason`
 (`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`); the one continuation that does
 run records `state: continued` with the failed `check` and its `failedCount`, never a path or output. What a delivery card showed is `delivery-step-shown` with the closed

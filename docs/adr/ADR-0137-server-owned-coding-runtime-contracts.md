@@ -331,7 +331,9 @@ generic "verification is not complete" request at the end of a run. Three facts 
   `check-not-started`, then `budget-exhausted`, then `no-check-run`. A failed check stays the gap when the
   budget ran out afterwards; the continuation is still skipped for the budget. The gap rides the snapshot
   (persisted by the snapshot store's `verification_gap` column, schema version 83), the `status`
-  frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. The Workbench names
+  frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. Without a blocker,
+  `coding-runtime.run.settled` classifies such a run `errorKind=validation-failed`, not `internal`:
+  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench names
   it in one plain sentence that ends with what the person can do, and offers "Run the check now"
   (de: "Prüfung nachholen") in place of the error report: the button starts the existing composer
   request with a short localized sentence in the person's own name, because it is the person's own
