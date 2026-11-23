@@ -90,6 +90,17 @@ interface SessionInput {
   readonly onLeftRun?: ((runId: string | undefined) => void) | undefined;
 }
 
+/**
+ * The repository the session shows. While a run is active it stays the one the run started in: a
+ * Coding History pick that moves the window to another repository is held until the run ends, and
+ * the running task stays on display meanwhile.
+ */
+function useRunRoot(root: string | undefined, active: boolean): string | undefined {
+  const held = useRef(root);
+  if (!active) held.current = root;
+  return held.current;
+}
+
 function reportFailure(error: unknown): void {
   reportClientDiagnostic(`[keiko] coding task session failed: ${clientErrorSummary(error)}`, {
     correlationId: correlationIdOf(error),
@@ -99,7 +110,8 @@ function reportFailure(error: unknown): void {
 /**
  * Reads a task. `followed` marks a read of the run the window follows: "refresh" is a background
  * read that never raises the loading or error state, "initial" is the first read of a followed
- * run. Both announce a changed history only after the read succeeded.
+ * run. Both announce a changed history only after the read succeeded. A repository's remembered
+ * task is shown again with a "refresh" read too, so a task completed or removed meanwhile is not.
  */
 type LoadTask = (id: string, activate: boolean, followed?: "initial" | "refresh") => Promise<void>;
 
@@ -122,11 +134,11 @@ interface TaskLoader {
 
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const [forkTarget, setForkTarget] = useState<string | undefined>(undefined);
-  const input = {
-    ...options,
-    root: options.root ?? options.workspace?.activeInstance?.repositoryRoot,
-    forkTarget,
-  };
+  const root = useRunRoot(
+    options.root ?? options.workspace?.activeInstance?.repositoryRoot,
+    options.active,
+  );
+  const input = { ...options, root, forkTarget };
   const ignoredRun = useRef<string | undefined>(options.leftRun);
   const awaitingRun = useRef<AwaitedRun>(undefined);
   const latest = useRef(input);
@@ -330,12 +342,16 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
   const sequence = useRef(0);
+  const shown = useRef(detail);
+  shown.current = detail;
   const scopeRevision = useHistoryScope(latest, detail, setDetail, sequence);
   const load = useCallback(
     async (id: string, activate: boolean, followed?: "initial" | "refresh"): Promise<void> => {
       const seq = ++sequence.current;
       const operation = historyLoad(id, scopeRevision.current.scope);
       const background = followed === "refresh";
+      const openedCompleted =
+        shown.current?.task.id === id && shown.current.task.status === "completed";
       // A failed read for another task must never leave the previous task's conversation id
       // attached to the composer. A refresh of the same task may retain its visible history.
       setDetail((current) => (current?.task.id === id ? current : null));
@@ -351,6 +367,7 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
           setDetail,
           isCurrent: () => seq === sequence.current,
           followed,
+          openedCompleted,
         });
         if (accepted && followed !== undefined)
           window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
@@ -372,6 +389,8 @@ interface TaskReadContext {
   readonly setDetail: TaskLoader["setDetail"];
   readonly isCurrent: () => boolean;
   readonly followed: "initial" | "refresh" | undefined;
+  /** The read task is a completed one already on display, opened from Coding History. */
+  readonly openedCompleted: boolean;
 }
 
 /** Shows a read task when it is still the current read of the current scope; says whether it did. */
@@ -385,7 +404,11 @@ async function acceptTaskRead(
   if (!isCurrent() || historyLoadCancelled(operation, scopeRevision.current.scope)) return false;
   // A completed task is never the current task by following its run: after a reload the next
   // message would reopen it instead of starting a new task. Coding History still opens it (#4491).
-  if (context.followed !== undefined && result.task.status === "completed") {
+  if (
+    context.followed !== undefined &&
+    !context.openedCompleted &&
+    result.task.status === "completed"
+  ) {
     setDetail(null);
     return false;
   }
@@ -571,9 +594,12 @@ function useTaskUpdates(setDetail: TaskLoader["setDetail"]): void {
     const apply = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return;
       const task: unknown = event.detail;
-      setDetail((current) =>
-        current !== null && sameTask(task, current.task) ? { ...current, task } : current,
-      );
+      setDetail((current) => {
+        if (current === null || !sameTask(task, current.task)) return current;
+        return task.status === "completed" && current.task.status !== "completed"
+          ? null
+          : { ...current, task };
+      });
     };
     window.addEventListener(CODING_HISTORY_CHANGED, apply);
     return (): void => {
@@ -621,8 +647,10 @@ function useScopeTasks(
   useEffect(() => {
     const current = latest.current;
     const id = root === undefined ? undefined : scopeTasks.current.get(root);
-    if (id === undefined || current.active || current.selection !== undefined) return;
-    void load(id, false);
+    if (root === undefined || id === undefined || current.active || current.selection !== undefined)
+      return;
+    scopeTasks.current.delete(root);
+    void load(id, false, "refresh");
   }, [root, latest, load]);
   return scopeTasks;
 }
