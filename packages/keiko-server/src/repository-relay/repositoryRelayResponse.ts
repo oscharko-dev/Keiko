@@ -196,10 +196,28 @@ function distOf(version: unknown): Record<string, unknown> | undefined {
   return isRecord(version.dist) ? version.dist : undefined;
 }
 
+function parsedUrl(value: string): URL | undefined {
+  return URL.canParse(value) ? new URL(value) : undefined;
+}
+
 /**
- * The packument with every `versions.*.dist.tarball` that starts with the upstream base URL moved
- * onto the relay's base URL, so the tarball is fetched through the relay as well. Another tarball
- * URL is left as it is. The count is the number of rewritten URLs.
+ * The part of `tarball` below the upstream base, or undefined when it lies elsewhere. Both are
+ * compared as parsed URLs: scheme and host in any case and an explicit default port name the same
+ * registry, the path stays case-sensitive, and dot segments are resolved first, so a tarball cannot
+ * climb out of the registry path into the relay's neighbours (#4530).
+ */
+function upstreamRemainder(tarball: string, upstreamBase: string): string | undefined {
+  const url = parsedUrl(tarball);
+  const base = parsedUrl(upstreamBase);
+  if (url === undefined || base === undefined) return undefined;
+  if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) return undefined;
+  return `${url.pathname.slice(base.pathname.length)}${url.search}${url.hash}`;
+}
+
+/**
+ * The packument with every `versions.*.dist.tarball` under the upstream base URL moved onto the
+ * relay's base URL, so the tarball is fetched through the relay as well. Another tarball URL is
+ * left as it is. The count is the number of rewritten URLs.
  */
 export function rewritePackument(
   body: Uint8Array,
@@ -220,8 +238,10 @@ export function rewritePackument(
     for (const version of Object.values(versions)) {
       const dist = distOf(version);
       const tarball = dist?.tarball;
-      if (dist !== undefined && typeof tarball === "string" && tarball.startsWith(upstreamBase)) {
-        dist.tarball = `${relayBase}${tarball.slice(upstreamBase.length)}`;
+      const remainder =
+        typeof tarball === "string" ? upstreamRemainder(tarball, upstreamBase) : undefined;
+      if (dist !== undefined && remainder !== undefined) {
+        dist.tarball = `${relayBase}${remainder}`;
         rewritten += 1;
       }
     }

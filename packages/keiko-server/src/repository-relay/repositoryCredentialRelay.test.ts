@@ -874,8 +874,9 @@ describe("a relayed npm read (#4522)", () => {
     const packument = JSON.parse(reply.body.toString()) as {
       versions: Record<string, { dist: { tarball?: string } }>;
     };
+    // The run's configuration names the bound origin, so its tarballs move there too.
     expect(packument.versions["1.0.0"]?.dist.tarball).toBe(
-      `${fx.origin}${REPOSITORY_RELAY_PATH_PREFIX}${fx.relayId}/left-pad/-/left-pad-1.0.0.tgz`,
+      `${OWN_ORIGIN}${REPOSITORY_RELAY_PATH_PREFIX}${fx.relayId}/left-pad/-/left-pad-1.0.0.tgz`,
     );
     expect(packument.versions["1.0.1"]?.dist.tarball).toBe(
       "https://elsewhere.example.test/left-pad-1.0.1.tgz",
@@ -883,6 +884,32 @@ describe("a relayed npm read (#4522)", () => {
     expect(reply.headers["content-length"]).toBe(String(reply.body.length));
     expect(upstream.seen[0]?.url).toBe("/npm/left-pad");
     expect(upstream.seen[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  // #4530 real-model lab: the dev runner proxies the run's request to the BFF and rewrites Host to
+  // the BFF's port. A tarball URL built from that header named an origin npm sends no capability
+  // to, so the install fetched every packument and never a tarball.
+  it("moves tarballs onto the bound origin even when a proxy rewrote the request's Host", async () => {
+    const { fx, upstream } = await npmFixture((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          name: "left-pad",
+          versions: {
+            "1.0.0": { dist: { tarball: `${upstream.base}/npm/left-pad/-/left-pad-1.0.0.tgz` } },
+          },
+        }),
+      );
+    });
+    const reply = await send(fx.origin, fx.path("left-pad"), {
+      headers: { ...bearer(fx.capability), host: "127.0.0.1:19841" },
+    });
+    expect(reply.status).toBe(200);
+    const packument = JSON.parse(reply.body.toString()) as {
+      versions: Record<string, { dist: { tarball?: string } }>;
+    };
+    expect(packument.versions["1.0.0"]?.dist.tarball).toBe(
+      `${OWN_ORIGIN}${REPOSITORY_RELAY_PATH_PREFIX}${fx.relayId}/left-pad/-/left-pad-1.0.0.tgz`,
+    );
   });
 
   it("requests a scoped packument with its encoded slash and streams a tarball", async () => {
