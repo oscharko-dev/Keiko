@@ -98,19 +98,19 @@ keiko start
 
 ### On a Mac without administrator rights
 
-The Node.js installer from nodejs.org needs an administrator, and a global npm install into a system folder needs `sudo`. Neither is needed: unpack the Node.js archive from nodejs.org into your own folder, and npm installs Keiko there too. Use `NODE_ARCH=arm64` on Apple silicon and `NODE_ARCH=x64` on an Intel Mac, and any Node.js 26 release from 26.13.1 on. The download is checked against the checksum file nodejs.org publishes, and `curl` sets no download mark.
+The Node.js installer from nodejs.org needs an administrator, and a global npm install into a system folder needs `sudo`. Neither is needed: unpack the Node.js archive from nodejs.org into your own folder, and npm installs Keiko there too. Use `NODE_ARCH=arm64` on Apple silicon and `NODE_ARCH=x64` on an Intel Mac, and any Node.js 26 release from 26.13.1 on. The download is checked against the checksum file nodejs.org publishes, and nothing after that check runs when it does not match; `curl` sets no download mark.
 
 ```bash
 cd "$HOME/Downloads"
 NODE_VERSION=26.13.1
 NODE_ARCH=arm64
 curl -fsSLO "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz"
-curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" | shasum -a 256 -c -
-mkdir -p "$HOME/.local/nodejs"
-tar -xzf "node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" -C "$HOME/.local/nodejs" --strip-components 1
-echo 'export PATH="$HOME/.local/nodejs/bin:$PATH"' >> "$HOME/.zprofile"
-export PATH="$HOME/.local/nodejs/bin:$PATH"
-npm install -g @oscharko-dev/keiko
+curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" | shasum -a 256 -c - &&
+  mkdir -p "$HOME/.local/nodejs" &&
+  tar -xzf "node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" -C "$HOME/.local/nodejs" --strip-components 1 &&
+  echo 'export PATH="$HOME/.local/nodejs/bin:$PATH"' >> "$HOME/.zprofile" &&
+  export PATH="$HOME/.local/nodejs/bin:$PATH" &&
+  npm install -g @oscharko-dev/keiko
 ```
 
 Then start Keiko with `keiko start`. New Terminal windows find `node`, `npm` and `keiko` through the line added to `~/.zprofile`. A hosted macOS job runs these lines as a standard account it creates, starts Keiko and completes a coding run ([macOS delivery forms without administrator rights](docs/qa/macos-delivery-forms-standard-account.md)).

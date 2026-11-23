@@ -196,6 +196,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26.13.1"

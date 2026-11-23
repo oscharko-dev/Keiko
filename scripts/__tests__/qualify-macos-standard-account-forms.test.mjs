@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -85,14 +86,23 @@ describe("the Node.js a person unpacks in their own folder", () => {
     expect(script).toHaveLength(NODE_USER_INSTALL_LINES.length);
     expect(script).toContain("NODE_VERSION=26.14.0");
     expect(script).toContain("NODE_ARCH=x64");
-    expect(script).toContain("npm install -g @oscharko-dev/keiko@1.5.6");
+    expect(script).toContain("  npm install -g @oscharko-dev/keiko@1.5.6");
     expect(script.filter((line) => !NODE_USER_INSTALL_LINES.includes(line))).toHaveLength(3);
   });
 
   it("installs below the home folder and never asks for sudo", () => {
     expect(NODE_USER_INSTALL_LINES.join("\n")).not.toMatch(/\bsudo\b/u);
-    expect(NODE_USER_INSTALL_LINES).toContain(`mkdir -p "$HOME/${NODE_FOLDER}"`);
-    expect(NODE_USER_INSTALL_LINES.some((line) => line.includes("shasum -a 256 -c -"))).toBe(true);
+    expect(NODE_USER_INSTALL_LINES).toContain(`  mkdir -p "$HOME/${NODE_FOLDER}" &&`);
+  });
+
+  it("unpacks and runs nothing when the checksum does not match", () => {
+    const check = NODE_USER_INSTALL_LINES.findIndex((line) => line.includes("shasum -a 256 -c -"));
+    const unpack = NODE_USER_INSTALL_LINES.findIndex((line) => line.includes("tar -xzf"));
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(unpack);
+    const list = NODE_USER_INSTALL_LINES.slice(check);
+    for (const line of list.slice(0, -1)) expect(line.endsWith(" &&")).toBe(true);
+    for (const line of list.slice(1)) expect(line.startsWith("  ")).toBe(true);
   });
 
   it("is printed in README.md exactly as the qualification runs it", () => {
@@ -228,6 +238,22 @@ describe("assertDisposableHome", () => {
     expect(() => assertDisposableHome(any, "/lab/home", {}, "/Users/me")).not.toThrow();
     expect(() => assertDisposableHome(any, "/Users/me/", {}, "/Users/me")).toThrow(FormsRefusal);
   });
+
+  it("refuses a rehearsal home that is a link to the real home", () => {
+    const root = mkdtempSync(join(tmpdir(), "forms-home-"));
+    try {
+      const real = join(root, "real");
+      const separate = join(root, "separate");
+      mkdirSync(real);
+      mkdirSync(separate);
+      symlinkSync(real, join(root, "link"));
+      const any = { account: "any" };
+      expect(() => assertDisposableHome(any, join(root, "link"), {}, real)).toThrow(FormsRefusal);
+      expect(() => assertDisposableHome(any, separate, {}, real)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("release assets", () => {
@@ -280,6 +306,13 @@ describe("the standard-account job (#4520)", () => {
       'sudo "$(command -v node)" scripts/testing/standard-account-footprint.mjs',
     );
     expect(check.run).toContain("--account keikoqa");
+  });
+
+  it("qualifies the exact merge candidate of a pull request", () => {
+    const candidate = step("Verify pull-request merge candidate consistency");
+    expect(candidate.if).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(candidate.run).toBe("node scripts/check-ci-merge-candidate.mjs");
+    expect(job.steps[0].with.ref).toBe("${{ github.sha }}");
   });
 
   it("keeps its evidence apart from the npm folder ZIPs the publication collects", () => {

@@ -15,6 +15,7 @@ import {
   DATA_VOLUME,
   FootprintRefusal,
   accountAreas,
+  classifyDiagnostics,
   classifyEntry,
   findArguments,
   findChanged,
@@ -91,6 +92,15 @@ describe("classifyEntry", () => {
     };
     expect(classifyEntry("/x", ACCOUNT, missing)).toBe("gone");
   });
+
+  it("refuses an entry it could not inspect instead of calling it gone", () => {
+    for (const code of ["EACCES", "EIO", "EPERM"]) {
+      const failing = () => {
+        throw Object.assign(new Error(code), { code });
+      };
+      expect(() => classifyEntry("/x", ACCOUNT, failing)).toThrow(FootprintRefusal);
+    }
+  });
 });
 
 describe("summarize", () => {
@@ -158,9 +168,9 @@ describe("findChanged", () => {
     const { root, volume, marker } = tree();
     try {
       at(marker, -3600);
-      const { paths, unreadable } = findChanged(volume, [join(volume, "own")], marker);
+      const { paths, unreadable, vanished } = findChanged(volume, [join(volume, "own")], marker);
       expect(paths.sort()).toEqual([volume, join(volume, "other"), join(volume, "other", "b.txt")]);
-      expect(unreadable).toBe(0);
+      expect(unreadable + vanished).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -192,6 +202,43 @@ describe("findChanged", () => {
       chmodSync(closed, 0o700);
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("find's diagnostics", () => {
+  it("counts unreadable folders and entries that vanished during the walk", () => {
+    const stderr = [
+      "find: /V/Users/runner/Library/Mail: Operation not permitted",
+      "find: ‘/V/private/var/db/x’: Permission denied",
+      "find: /V/private/var/tmp/gone: No such file or directory",
+      "",
+    ].join("\n");
+    expect(classifyDiagnostics(stderr)).toEqual({ unreadable: 2, vanished: 1 });
+    expect(classifyDiagnostics("")).toEqual({ unreadable: 0, vanished: 0 });
+  });
+
+  it("refuses any other diagnostic: the walk would be incomplete", () => {
+    expect(() => classifyDiagnostics("find: /V/x: Input/output error\n")).toThrow(FootprintRefusal);
+  });
+
+  it("fails a walk that exited with an unknown error and listed nothing", () => {
+    const run = () => ({ status: 1, stderr: "find: /V: Input/output error\n", stdout: "" });
+    expect(() => findChanged("/V", [], "/m", run)).toThrow(FootprintRefusal);
+    const silent = () => ({ status: 2, stderr: "", stdout: "" });
+    expect(() => findChanged("/V", [], "/m", silent)).toThrow(FootprintRefusal);
+  });
+
+  it("keeps a walk whose only diagnostics are tolerated ones", () => {
+    const run = () => ({
+      status: 1,
+      stderr: "find: /V/a: Operation not permitted\n",
+      stdout: "/V/b\0/V/c\0",
+    });
+    expect(findChanged("/V", [], "/m", run)).toEqual({
+      paths: ["/V/b", "/V/c"],
+      unreadable: 1,
+      vanished: 0,
+    });
   });
 });
 

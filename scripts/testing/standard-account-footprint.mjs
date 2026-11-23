@@ -102,8 +102,11 @@ export function classifyEntry(path, account, stat = lstatSync) {
   let stats;
   try {
     stats = stat(path);
-  } catch {
-    return "gone";
+  } catch (error) {
+    // Only an entry that is no longer there is gone; any other failure leaves it uninspected.
+    const code = error instanceof Error && "code" in error ? String(error.code) : "unknown";
+    if (code === "ENOENT" || code === "ENOTDIR") return "gone";
+    refuse(`a changed entry could not be inspected (${code})`);
   }
   if (stats.uid === account.uid) return "owned";
   // A regular file only: a socket or a folder of another account changes without the account.
@@ -147,23 +150,40 @@ export function summarize(paths, classify) {
   return { counts, attributed, violationCount: counts.owned + counts.writable };
 }
 
+// What find may report without the walk losing an entry the account could have written: a folder
+// it may not read (a privacy-protected folder of another account) and an entry removed while it
+// walked (it left nothing behind). Any other diagnostic means a part of the volume went unexamined.
+const UNREADABLE_DIAGNOSTIC = /: (?:Permission denied|Operation not permitted)$/u;
+const VANISHED_DIAGNOSTIC = /: No such file or directory$/u;
+
+/** Sorts find's diagnostics; an unknown one refuses the walk instead of passing a partial one. */
+export function classifyDiagnostics(stderr) {
+  const counts = { unreadable: 0, vanished: 0 };
+  for (const line of String(stderr).split("\n")) {
+    if (line.trim() === "") continue;
+    if (UNREADABLE_DIAGNOSTIC.test(line)) counts.unreadable += 1;
+    else if (VANISHED_DIAGNOSTIC.test(line)) counts.vanished += 1;
+    else refuse(`find reported an error that leaves the walk incomplete: ${line}`);
+  }
+  return counts;
+}
+
 /**
  * Runs `find` over one volume and returns the changed entries and how many folders it could not
- * read. A folder root cannot read (a privacy-protected folder of another account) is counted; find
- * then exits 1, which is not a failure of the walk itself.
+ * read or saw vanish. find exits 1 after such a diagnostic, which is not a failure of the walk.
  */
-export function findChanged(volume, prunedRoots, marker) {
-  const found = spawnSync("find", findArguments(volume, prunedRoots, marker), {
+export function findChanged(volume, prunedRoots, marker, run = spawnSync) {
+  const found = run("find", findArguments(volume, prunedRoots, marker), {
     encoding: "utf8",
     maxBuffer: 512 << 20,
     timeout: FIND_TIMEOUT_MS,
   });
   if (found.error !== undefined) refuse(`find did not finish: ${found.error.message}`);
-  const unreadable = String(found.stderr)
-    .split("\n")
-    .filter((line) => line.trim() !== "").length;
-  if (found.status !== 0 && unreadable === 0) refuse(`find exited ${String(found.status)}`);
-  return { paths: String(found.stdout).split("\0").filter(Boolean), unreadable };
+  const { unreadable, vanished } = classifyDiagnostics(found.stderr);
+  if (found.status !== 0 && unreadable + vanished === 0) {
+    refuse(`find exited ${String(found.status)}`);
+  }
+  return { paths: String(found.stdout).split("\0").filter(Boolean), unreadable, vanished };
 }
 
 function changedEntries(options, areas) {
@@ -178,7 +198,7 @@ export function runFootprint(options) {
   if (process.getuid?.() !== 0) refuse("run as root: only root can read every folder");
   const started = performance.now();
   const areas = accountAreas(options.account);
-  const { paths, unreadable, prunedCount } = changedEntries(options, areas);
+  const { paths, unreadable, vanished, prunedCount } = changedEntries(options, areas);
   const summary = summarize(paths, (path) => classifyEntry(path, areas));
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
@@ -188,6 +208,7 @@ export function runFootprint(options) {
     prunedAreaCount: prunedCount,
     changedEntryCount: paths.length,
     unreadableFolderCount: unreadable,
+    vanishedDuringWalkCount: vanished,
     counts: summary.counts,
     violationCount: summary.violationCount,
     attributed: summary.attributed,
@@ -209,7 +230,7 @@ function main(argv) {
     }
     const { counts } = evidence;
     console.log(
-      `changed after the marker: ${String(evidence.changedEntryCount)} entries; owned by ${options.account}: ${String(counts.owned)}; writable by it: ${String(counts.writable)}; by other accounts: ${String(counts.others)}; removed since: ${String(counts.gone)}; unreadable folders: ${String(evidence.unreadableFolderCount)}`,
+      `changed after the marker: ${String(evidence.changedEntryCount)} entries; owned by ${options.account}: ${String(counts.owned)}; writable by it: ${String(counts.writable)}; by other accounts: ${String(counts.others)}; removed since: ${String(counts.gone)}; unreadable folders: ${String(evidence.unreadableFolderCount)}; vanished during the walk: ${String(evidence.vanishedDuringWalkCount)}`,
     );
     for (const line of evidence.attributed) console.log(`attributed ${line}`);
     console.log(

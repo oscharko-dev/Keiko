@@ -20,7 +20,7 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { arch, homedir, platform, release, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -82,12 +82,14 @@ export const NODE_USER_INSTALL_LINES = Object.freeze([
   "NODE_VERSION=26.13.1",
   "NODE_ARCH=arm64",
   'curl -fsSLO "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz"',
-  'curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" | shasum -a 256 -c -',
-  'mkdir -p "$HOME/.local/nodejs"',
-  'tar -xzf "node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" -C "$HOME/.local/nodejs" --strip-components 1',
-  `echo 'export PATH="$HOME/.local/nodejs/bin:$PATH"' >> "$HOME/.zprofile"`,
-  'export PATH="$HOME/.local/nodejs/bin:$PATH"',
-  "npm install -g @oscharko-dev/keiko",
+  // Everything after the checksum check is one list joined by `&&`: a mismatch stops it before
+  // anything is unpacked or run.
+  'curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" | shasum -a 256 -c - &&',
+  '  mkdir -p "$HOME/.local/nodejs" &&',
+  '  tar -xzf "node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" -C "$HOME/.local/nodejs" --strip-components 1 &&',
+  `  echo 'export PATH="$HOME/.local/nodejs/bin:$PATH"' >> "$HOME/.zprofile" &&`,
+  '  export PATH="$HOME/.local/nodejs/bin:$PATH" &&',
+  "  npm install -g @oscharko-dev/keiko",
 ]);
 
 // Where Keiko keeps its state; every form starts with none of them (an empty state).
@@ -160,7 +162,7 @@ export function nodeUserInstallScript({ nodeVersion, nodeArch, keikoVersion }) {
   const filled = NODE_USER_INSTALL_LINES.map((line) => {
     if (line.startsWith("NODE_VERSION=")) return `NODE_VERSION=${nodeVersion}`;
     if (line.startsWith("NODE_ARCH=")) return `NODE_ARCH=${nodeArch}`;
-    if (line.startsWith("npm install -g ")) return `${line}@${keikoVersion}`;
+    if (line.trimStart().startsWith("npm install -g ")) return `${line}@${keikoVersion}`;
     return line;
   });
   return filled.join("\n");
@@ -615,6 +617,16 @@ async function runForms(context) {
   return { forms, marked };
 }
 
+/** The path with every symbolic link resolved, so a link to the real home is that home. */
+function canonical(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    // A path that does not exist yet links nowhere; its resolved form is all there is to compare.
+    return resolve(path);
+  }
+}
+
 /**
  * Every form starts from an empty state, so the run removes Keiko's state folders in the home it
  * runs in. It runs only where that loses nothing: as the CI job's fresh standard account, or in a
@@ -634,7 +646,7 @@ export function assertDisposableHome(
       `a standard-account run belongs to the CI job's fresh account (CI=true, ${DISPOSABLE_ACCOUNT_VARIABLE}=1)`,
     );
   }
-  if (options.account === "any" && resolve(home) === resolve(realHome)) {
+  if (options.account === "any" && canonical(home) === canonical(realHome)) {
     refuse(
       "a rehearsal needs HOME set to a folder of its own: the run removes Keiko's state there",
     );
