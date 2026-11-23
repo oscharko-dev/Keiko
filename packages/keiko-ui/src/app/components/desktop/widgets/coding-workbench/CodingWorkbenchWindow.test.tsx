@@ -785,7 +785,12 @@ describe("CodingWorkbenchWindow", () => {
       expect(timeline).toHaveTextContent("I read the parser and ran the tests.");
       expect(settledRows()).toHaveLength(1);
       expect(settledRows()[0]).toHaveAttribute("data-event-tone", "attention");
-      expect(settledRows()[0]).toHaveTextContent("The coding run ended with an internal error");
+      expect(settledRows()[0]).toHaveTextContent("because of an internal error");
+      expect(
+        within(settledRows()[0] as HTMLElement).getByRole("button", {
+          name: "Create error report",
+        }),
+      ).toBeInTheDocument();
       const transcript = screen.getByRole("region", { name: "Previous conversation" });
       expect(transcript).toHaveTextContent("Earlier request");
       expect(transcript).not.toHaveTextContent("I read the parser");

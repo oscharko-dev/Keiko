@@ -1324,7 +1324,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.edit-retries-exhausted":
     "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.runtime":
-    "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
+    "Keiko hat den Lauf nach den angezeigten Aktionen wegen eines internen Fehlers beendet. Starte die Aufgabe erneut. Tritt der Fehler wieder auf, erstelle unten einen Fehlerbericht und gib ihn an deinen Support weiter.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko hat die Aufgabe abgelehnt, bevor sie lief, zum Beispiel weil eine mit @ referenzierte Datei fehlt, außerhalb des Arbeitsbereichs liegt oder geschützt ist, oder weil der Slash-Befehl nicht verfügbar ist. Prüfe die referenzierten Dateien und den Befehl und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.workspace-unqualified":
@@ -1342,7 +1342,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows den Start verweigert hat. Starte die Aufgabe erneut. Tritt es wieder auf, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.generic":
-    "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
+    "Dieser Schritt konnte nicht abgeschlossen werden. Versuche es erneut. Tritt der Fehler wieder auf, erstelle unten einen Fehlerbericht und gib ihn an deinen Support weiter.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "Der Lauf hat sein Zeitlimit aufgebraucht – wie lange ein Lauf arbeiten darf –, deshalb endete er, bevor die Aufgabe erledigt war. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Zeitlimit erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Limit mit KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES bis höchstens 480 Minuten verlängern. Keiko liest die Einstellung nur beim Start: Nach einer Änderung muss Keiko neu gestartet werden.",
   "codingWorkbench.event.failure.output-exhausted-repeated":

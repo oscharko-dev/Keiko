@@ -575,6 +575,19 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  it.each([
+    "codingWorkbench.event.failure.runtime",
+    "codingWorkbench.event.failure.generic",
+  ] as const)(
+    "sends a failed run's reader to the error report, not the Activity Log, in %s",
+    (key) => {
+      expect(translateCodingWorkbench("en", key)).not.toMatch(/Activity Log/u);
+      expect(translateCodingWorkbench("en", key)).toMatch(/error report/iu);
+      expect(translateCodingWorkbench("de", key)).not.toMatch(/Activity Log|Aktivitätsprotokoll/u);
+      expect(translateCodingWorkbench("de", key)).toMatch(/Fehlerbericht/u);
+    },
+  );
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

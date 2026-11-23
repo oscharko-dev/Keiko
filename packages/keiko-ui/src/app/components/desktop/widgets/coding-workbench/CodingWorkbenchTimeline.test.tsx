@@ -17,6 +17,8 @@ import {
   fanOutClientDiagnostic,
   resetClientDiagnosticPostStateForTests,
 } from "@/lib/install-client-diagnostics";
+import * as reportApi from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { Timeline } from "./CodingWorkbenchTimeline";
 import { eventsWithRestoredSettlement } from "./codingWorkbenchRestoredRun";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -2789,5 +2791,84 @@ describe("CodingWorkbenchTimeline long operator messages", () => {
     expect(marks).toHaveLength(1);
     expect(message?.querySelector("p")?.lastElementChild).toBe(marks[0]);
     expect(container).toHaveTextContent("Activity truncated.");
+  });
+});
+
+describe("Timeline — error report on a failed run", () => {
+  const RUN_ID = "run-272120967981827964065820685403290179367";
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    resetSupportReportOutcomesForTests();
+  });
+
+  function settled(
+    state: "failed" | "succeeded" | "cancelled",
+    runId: string = RUN_ID,
+  ): CodingWorkbenchRuntimeSseEvent {
+    const base = {
+      schemaVersion: "1",
+      cursor: "cursor-5",
+      sequence: 5,
+      occurredAt: AT,
+      kind: "status",
+      runId,
+      revision: 5,
+    } as const;
+    if (state === "failed") return { ...base, state, failureCode: "runtime-failed" };
+    return { ...base, state };
+  }
+
+  function renderSettled(
+    state: "failed" | "succeeded" | "cancelled",
+    runId?: string,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        events={[settled(state, runId)]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+  }
+
+  it("offers the error report on a failed run and selects that run by its id", async () => {
+    const report = { fileName: "report.json.gz", reportJson: "{}" };
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:run-report",
+      dispose: vi.fn(),
+    });
+    const { container } = renderSettled("failed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(RUN_ID, expect.any(AbortSignal));
+    expect(container).not.toHaveTextContent(/Activity Log/u);
+
+    const violations = (await axe(container)).violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("falls back to the most recent failure when the run id is not a correlation id", async () => {
+    const create = vi
+      .spyOn(reportApi, "createSupportReport")
+      .mockResolvedValue({ fileName: "report.json.gz", reportJson: "{}" });
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:run-report",
+      dispose: vi.fn(),
+    });
+    renderSettled("failed", "run 1");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
+  });
+
+  it.each(["succeeded", "cancelled"] as const)("shows no error report on a %s run", (state) => {
+    renderSettled(state);
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
   });
 });

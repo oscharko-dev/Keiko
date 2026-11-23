@@ -1280,7 +1280,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.edit-retries-exhausted":
     "Keiko stopped the run because the model's edits were refused several times in a row, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
-    "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
+    "Keiko ended the run after the actions shown above because of an internal error. Start the task again. If the error recurs, create an error report below and pass it to your support.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.workspace-unqualified":
@@ -1298,7 +1298,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko could not start the coding run on this Windows computer because Windows refused the start. Start the task again. If it happens again, ask your administrator.",
   "codingWorkbench.event.failure.generic":
-    "This step could not be completed. Check the Activity Log and try again.",
+    "This step could not be completed. Try again. If the error recurs, create an error report below and pass it to your support.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.output-exhausted-repeated":

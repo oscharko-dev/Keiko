@@ -33,6 +33,8 @@ import {
 } from "@/lib/coding-workbench-interaction";
 import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
+import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { SupportReportButton } from "../../SupportReportButton";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
@@ -1397,8 +1399,28 @@ function EventRow({
         </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
+        <RunFailureReport event={item.event} />
       </details>
     </li>
+  );
+}
+
+/**
+ * A run that settled `failed` offers the existing user-initiated error report. The server uses the
+ * run id as the run's Activity Log correlation id, so the report selects that run's lines; an id
+ * that is not a valid correlation id falls back to the most recent registered failure.
+ */
+function RunFailureReport({
+  event,
+}: {
+  readonly event: CodingWorkbenchRuntimeSseEvent;
+}): ReactNode {
+  if (event.kind !== "status" || event.state !== "failed") return null;
+  const correlationId = isActivityLogCorrelationId(event.runId) ? event.runId : undefined;
+  return (
+    <p className={styles.timelineDetail} data-run-failure-report="">
+      <SupportReportButton correlationId={correlationId} errorKey={`coding-run-${event.runId}`} />
+    </p>
   );
 }
 
