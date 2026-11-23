@@ -239,18 +239,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       shell: false,
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
-    const tree = ownTree(
-      `dev-lane-opencode-${String(this.nextTreeId++)}`,
-      child,
-      request.parentLifetime,
-      (error) => {
-        recordChildConfinementFailure(this.activityLog, request.runId, child, error);
-      },
-    );
-    this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
-    return tree;
+    return this.ownLaunchedTree(child, request, () => {
+      this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
+    });
   }
 
   private spawnConfinedTree(
@@ -275,15 +266,26 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       shell: false,
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    this.attachLaunchPorts(child, request, decision.attestation.backend, setLaunchPhase);
-    recordRuntimeGatewayConfinementSpawned(
-      this.activityLog,
-      request.runId,
-      recordedConfinementBackend(decision.attestation.backend),
-      policy,
-      gitExecutable,
-      request.parentLifetime,
-    );
+    return this.ownLaunchedTree(child, request, () => {
+      this.attachLaunchPorts(child, request, decision.attestation.backend, setLaunchPhase);
+      recordRuntimeGatewayConfinementSpawned(
+        this.activityLog,
+        request.runId,
+        recordedConfinementBackend(decision.attestation.backend),
+        policy,
+        gitExecutable,
+        request.parentLifetime,
+      );
+    });
+  }
+
+  // The child's error listener exists from the moment it is spawned; a step that fails before the
+  // tree is owned must not leave the detached process behind.
+  private ownLaunchedTree(
+    child: DevLaneRuntimeChildProcess,
+    request: RuntimeSupervisorLaunchRequest,
+    beforeOwned: () => void,
+  ): RuntimeProcessTree {
     const tree = ownTree(
       `dev-lane-opencode-${String(this.nextTreeId++)}`,
       child,
@@ -292,8 +294,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
         recordChildConfinementFailure(this.activityLog, request.runId, child, error);
       },
     );
-    this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
+    try {
+      beforeOwned();
+      this.ownedTrees.add(tree);
+      this.trackDescendants(tree, request.runId);
+    } catch (error) {
+      terminateUnownedChild(child, this.killProcessGroup);
+      throw error;
+    }
     return tree;
   }
 
@@ -364,15 +372,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
   ): void {
     setLaunchPhase("tree-ownership");
-    assertStdinLifetime(child, request.parentLifetime, this.killProcessGroup);
+    assertStdinLifetime(child, request.parentLifetime);
     setLaunchPhase("launcher-diagnostics");
-    attachOrTerminateLinuxGatewayDiagnostics(
-      child,
-      this.activityLog,
-      request.runId,
-      backend,
-      this.killProcessGroup,
-    );
+    attachLinuxGatewayDiagnostics(child, this.activityLog, request.runId, backend);
     setLaunchPhase("tree-ownership");
   }
 
@@ -665,21 +667,6 @@ function attachLinuxGatewayDiagnostics(
   });
 }
 
-function attachOrTerminateLinuxGatewayDiagnostics(
-  child: DevLaneRuntimeChildProcess,
-  sink: ServerLogSink,
-  runId: string,
-  backend: string,
-  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
-): void {
-  try {
-    attachLinuxGatewayDiagnostics(child, sink, runId, backend);
-  } catch (error) {
-    terminateUnownedChild(child, killProcessGroup);
-    throw error;
-  }
-}
-
 function terminateUnownedChild(
   child: DevLaneRuntimeChildProcess,
   killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
@@ -703,13 +690,11 @@ function terminateUnownedChild(
 function assertStdinLifetime(
   child: DevLaneRuntimeChildProcess,
   parentLifetime: "stdin-eof" | undefined,
-  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
 ): void {
   if (parentLifetime === undefined) return;
   const stdin = child.stdin;
   if (stdin instanceof Writable && stdin.writable && !stdin.destroyed && !stdin.writableEnded)
     return;
-  terminateUnownedChild(child, killProcessGroup);
   throw new TypeError("runtime-stdin-lifetime-unavailable");
 }
 

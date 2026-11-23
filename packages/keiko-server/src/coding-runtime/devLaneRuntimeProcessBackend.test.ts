@@ -490,6 +490,33 @@ describe("dev-lane runtime process backend", () => {
     },
   );
 
+  it("kills the unowned child and listens for its errors when launch evidence cannot be written", () => {
+    const fixture = stageFixture();
+    const child = fakeChild(4711);
+    const kills: [number, NodeJS.Signals][] = [];
+    const sink = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog: {
+        write: (event) => {
+          if (event.op === "runtime.confinement.spawned") throw new Error("sink-unavailable");
+          sink.write(event);
+        },
+      },
+      spawnRuntime: () => child,
+      killProcessGroup: (pid, signal) => {
+        kills.push([pid, signal]);
+      },
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(fixture))).toThrow("sink-unavailable");
+    expect(kills).toEqual([[4711, "SIGKILL"]]);
+    expect(child.emitter.listenerCount("error")).toBeGreaterThan(0);
+    expect(sink.events.some((event) => event.op === "runtime.confinement.failed")).toBe(true);
+  });
+
   it("records stdin port errors without pretending that the live child was reaped", async () => {
     const fixture = stageFixture();
     const stdin = new PassThrough();
