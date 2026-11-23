@@ -163,6 +163,7 @@ export interface CodingHistoryStore {
     sourceId: string,
     role: "user" | "assistant",
     content: string,
+    origin?: CodingHistoryMessageOrigin,
   ) => boolean;
   readonly append: (
     id: string,
@@ -170,8 +171,12 @@ export interface CodingHistoryStore {
     sourceId: string,
     role: "user" | "assistant",
     content: string,
+    origin?: CodingHistoryMessageOrigin,
   ) => void;
 }
+
+/** A user message Keiko dispatched itself, kept apart from the person's own words (#4491). */
+export type CodingHistoryMessageOrigin = "keiko";
 
 interface HistoryRow {
   readonly chat_id: string;
@@ -286,6 +291,32 @@ const INTENT_SOURCE_ID = "intent";
  */
 export const CODING_HISTORY_SCHEDULED_TASK_TYPE = "scheduled-continuation";
 const SCHEDULED_SOURCE_ID = "scheduled-intent";
+/**
+ * How Coding History shows a turn Keiko dispatched itself (#4491): its words are Keiko's request to
+ * continue the person's task, not a message the person wrote. The message is bound a second time
+ * under `KEIKO_NOTE_SOURCE_PREFIX` plus its own source id, and the detail reads it with this
+ * `taskType`.
+ */
+export const CODING_HISTORY_KEIKO_TASK_TYPE = "keiko-continuation";
+const KEIKO_NOTE_SOURCE_PREFIX = "keiko-note:";
+
+function markKeikoNote(db: DatabaseSync, runId: string, sourceId: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO coding_history_message_bindings (run_id, source_id, message_id)
+       SELECT run_id, ?, message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?`,
+  ).run(`${KEIKO_NOTE_SOURCE_PREFIX}${sourceId}`, runId, sourceId);
+}
+
+function keikoNoteMessageIds(db: DatabaseSync, chatId: string): ReadonlySet<string> {
+  const rows = db
+    .prepare(
+      `SELECT b.message_id FROM coding_history_message_bindings b
+         JOIN coding_history_runs r ON r.run_id = b.run_id
+        WHERE r.chat_id = ? AND b.source_id LIKE ?`,
+    )
+    .all(chatId, `${KEIKO_NOTE_SOURCE_PREFIX}%`);
+  return new Set(rows.map((row) => String(row.message_id)));
+}
 
 function markScheduledIntent(db: DatabaseSync, runId: string): void {
   db.prepare(
@@ -576,6 +607,11 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
          JOIN chat_messages stored ON stored.id = intent.message_id
         WHERE run.chat_id = ?
           AND echo.source_id NOT IN ('intent', 'scheduled-intent')
+          AND echo.source_id NOT LIKE 'keiko-note:%'
+          AND echo.message_id NOT IN (
+            SELECT note.message_id FROM coding_history_message_bindings note
+             WHERE note.source_id LIKE 'keiko-note:%'
+          )
           AND echo.message_id <> intent.message_id
           AND echoed.role = 'user'
           AND stored.role = 'user'
@@ -586,6 +622,7 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
               JOIN chat_messages prior ON prior.id = earlier.message_id
              WHERE earlier.run_id = echo.run_id
                AND earlier.source_id NOT IN ('intent', 'scheduled-intent')
+               AND earlier.source_id NOT LIKE 'keiko-note:%'
                AND (prior.timestamp < echoed.timestamp
                     OR (prior.timestamp = echoed.timestamp AND prior.rowid < echoed.rowid))
                AND ((prior.role = 'user' AND prior.content = stored.content)
@@ -622,6 +659,7 @@ function readDetail(
   const listed = store.listMessages(id, 200);
   const repeated = repeatedIntentMessageIds(db, id);
   const scheduled = scheduledIntentMessageIds(db, id);
+  const keikoNotes = keikoNoteMessageIds(db, id);
   const messages = listed
     .filter((message) => !repeated.has(message.id))
     .map((message) => {
@@ -630,6 +668,7 @@ function readDetail(
         ...message,
         ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}),
         ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
+        ...(keikoNotes.has(message.id) ? { taskType: CODING_HISTORY_KEIKO_TASK_TYPE } : {}),
       };
     });
   return { task, messages, truncated: store.countMessages(id) > listed.length };
@@ -855,10 +894,14 @@ export function createCodingHistoryStore(
       bindRun(db, store, id, runId, now);
     },
     update: (id, patch) => updateTask(db, store, now, id, patch),
-    upsert: (id, runId, sourceId, role, content) =>
-      upsertMessage(db, store, now, { id, runId, sourceId, role, content }),
-    append: (id, runId, sourceId, role, content): void => {
+    upsert: (id, runId, sourceId, role, content, origin): boolean => {
+      const written = upsertMessage(db, store, now, { id, runId, sourceId, role, content });
+      if (origin === "keiko") markKeikoNote(db, runId, sourceId);
+      return written;
+    },
+    append: (id, runId, sourceId, role, content, origin): void => {
       appendMessage(db, store, now, { id, runId, sourceId, role, content });
+      if (origin === "keiko") markKeikoNote(db, runId, sourceId);
     },
   };
 }

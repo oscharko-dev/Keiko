@@ -36,6 +36,7 @@ function message(
   messageId: string,
   role: "user" | "assistant",
   parentMessageId?: string,
+  origin?: "keiko",
 ): CodingSafeActivitySignal {
   return {
     kind: "message",
@@ -43,6 +44,7 @@ function message(
     role,
     occurredAt: "2026-07-18T17:00:00.000Z",
     ...(parentMessageId === undefined ? {} : { parentMessageId }),
+    ...(origin === undefined ? {} : { origin }),
   };
 }
 
@@ -81,6 +83,56 @@ function firstTurnToolStates(
   if (feed?.availability !== "available") return [];
   return (feed.turns[0]?.tools ?? []).map(({ callId, state }) => [callId, state] as const);
 }
+// #4491: a user message Keiko dispatched itself keeps its closed origin in the feed; the person's
+// own message never carries one, and an origin on an assistant message is refused.
+describe("coding safe-activity projection: the origin of a user message", () => {
+  function openProjection(): ReturnType<typeof createCodingSafeActivityProjection> {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    return projection;
+  }
+
+  it("projects a Keiko turn with its origin, the person's without one, and validates the feed", () => {
+    const projection = openProjection();
+    projection.ingest(RUN_ID, message("msg_person", "user"));
+    projection.ingest(RUN_ID, text("msg_person", "Fix it."));
+    projection.ingest(RUN_ID, message("msg_keiko", "user", undefined, "keiko"));
+    projection.ingest(RUN_ID, text("msg_keiko", "Rerun the failed check."));
+
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new Error("expected a feed");
+    const [person, keiko] = feed.turns.flatMap((turn) => turn.messages);
+    expect(person).not.toHaveProperty("origin");
+    expect(keiko).toMatchObject({ messageId: "msg_keiko", origin: "keiko" });
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+  });
+
+  it("refuses an origin on an assistant message and an origin outside the closed word", () => {
+    const projection = openProjection();
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    expect(
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user", "keiko")),
+    ).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "message",
+        messageId: "msg_other",
+        role: "user",
+        origin: "scheduler",
+        occurredAt: "2026-07-18T17:00:00.000Z",
+      } as unknown as CodingSafeActivitySignal),
+    ).toBe(false);
+  });
+});
+
 describe("bounded coding safe-activity projection", () => {
   it("owns canonical tool facts across native restatement and replay without logging paths", () => {
     const log = createBufferedServerLogSink();

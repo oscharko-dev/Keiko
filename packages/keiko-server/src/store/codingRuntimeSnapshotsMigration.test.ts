@@ -82,7 +82,11 @@ describe("V81 supervisor-refusal causes", () => {
     const db = v80Database();
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").all();
     runMigrations(db);
-    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(before);
+    // The one column a later migration appended (v83 `verification_gap`, #4491) reads NULL for a
+    // row that predates it; every other value carries through unchanged.
+    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
+      before.map((row) => ({ ...row, verification_gap: null })),
+    );
     expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
     expect(
       db
@@ -108,13 +112,23 @@ describe("V81 supervisor-refusal causes", () => {
   it("changes nothing of the table but the list of failure codes", () => {
     const db = v80Database();
     const shape = (): unknown => ({
-      columns: db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all(),
+      columns: db
+        .prepare("PRAGMA table_info(coding_runtime_snapshots)")
+        .all()
+        .filter((column) => column.name !== LATER_COLUMN),
       foreignKeys: db.prepare("PRAGMA foreign_key_list(coding_runtime_snapshots)").all(),
       definition: tableDefinition(db),
     });
     const before = shape();
     runMigrations(db);
+    // A column a later migration appended (v83, #4491) is the only addition the shape may show.
     expect(shape()).toEqual(before);
+    expect(
+      db
+        .prepare("PRAGMA table_info(coding_runtime_snapshots)")
+        .all()
+        .some((column) => column.name === LATER_COLUMN),
+    ).toBe(true);
   });
 
   // A store may carry an orphan from before a constraint was enforced. It is not the rebuild's
@@ -152,6 +166,9 @@ describe("V82 output-limit cause", () => {
 });
 
 // The stored CREATE TABLE text with the one part V81 is allowed to change taken out.
+// The column v83 appended to the table; the V81 and V82 rebuilds are judged without it.
+const LATER_COLUMN = "verification_gap";
+
 function tableDefinition(db: DatabaseSync): string {
   const row = db
     .prepare(
@@ -161,5 +178,9 @@ function tableDefinition(db: DatabaseSync): string {
   return row.sql
     .replace(/failure_code IN \([^)]*\)/u, "failure_code IN (…)")
     .replace(/"?coding_runtime_snapshots(?:_v\d+)?"?/u, "coding_runtime_snapshots")
-    .replaceAll(/\s+/gu, " ");
+    .replaceAll(/\s+/gu, " ")
+    .replace(
+      /, verification_gap TEXT CHECK \(verification_gap IS NULL OR verification_gap IN \([^)]*\)\)/u,
+      "",
+    );
 }

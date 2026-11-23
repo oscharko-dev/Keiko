@@ -231,6 +231,8 @@ export interface CodingHistoryMessage {
   readonly messageId: string;
   readonly role: "user" | "assistant";
   readonly content: string;
+  /** A user message Keiko dispatched itself, from the runtime message's origin metadata (#4491). */
+  readonly origin?: "keiko";
 }
 
 /** Native history and the bounded display feed share the same local conversation store. */
@@ -626,6 +628,7 @@ export class CodingRuntimeHistory {
           sourceId,
           message.role,
           content.slice(offset, end),
+          message.origin,
         )
       )
         written += 1;
@@ -681,7 +684,14 @@ export class CodingRuntimeHistory {
     for (const message of operatorConversation(messages, displayText, intentEchoPresent)) {
       const text = displayText(message);
       if (text.length > 0)
-        this.store.codingHistory?.append(id, runId, message.messageId, message.role, text);
+        this.store.codingHistory?.append(
+          id,
+          runId,
+          message.messageId,
+          message.role,
+          text,
+          message.origin,
+        );
     }
   }
 

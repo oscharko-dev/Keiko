@@ -42,6 +42,7 @@ import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
 import { OPTIONAL_COUNT_FIELD } from "../activity-log-field-shapes.js";
+import { keikoContinuationOrigin } from "./opencodeTurnOrigin.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -934,6 +935,10 @@ function messageCandidates(
       candidate(`${id}:message`, "observation", id, {
         kind: "message",
         role: "user",
+        // A turn Keiko dispatched itself says so in its own metadata; the text never decides it.
+        ...(keikoContinuationOrigin(message.metadata) === undefined
+          ? {}
+          : { origin: "keiko" as const }),
         messageId: id,
         occurredAt,
       }),

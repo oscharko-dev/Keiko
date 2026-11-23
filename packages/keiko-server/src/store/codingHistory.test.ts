@@ -224,6 +224,61 @@ describe("Coding History on the existing conversation store", () => {
     ]);
   });
 
+  // #4491: a turn Keiko dispatched itself is stored as the user row it is, and read back as Keiko's,
+  // so a restored transcript never labels it as the person's own message.
+  it("reads a Keiko-dispatched turn back as Keiko's, whatever words it carries", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Continuation",
+      modelId: "coding",
+      workspaceId: "ws_keiko",
+      taskId: "task_keiko",
+      branch: "keiko/task/keiko",
+      operatorDigest: "a".repeat(64),
+    });
+    history.bindRun(task.id, "run-keiko");
+    history.append(task.id, "run-keiko", "intent", "user", "Fix the failing test");
+    history.append(task.id, "run-keiko", "msg_answer", "assistant", "Done.");
+    history.append(task.id, "run-keiko", "msg_keiko", "user", "Rerun the failed check.", "keiko");
+    history.upsert(task.id, "run-keiko", "msg_keiko_2", "user", "Rerun it.", "keiko");
+    history.upsert(task.id, "run-keiko", "msg_keiko_2", "user", "Rerun it.", "keiko");
+    history.append(task.id, "run-keiko", "msg_person", "user", "Rerun the failed check.");
+
+    const messages = history.detail(task.id, "a".repeat(64))?.messages ?? [];
+    expect(messages.map(({ role, content, taskType }) => [role, content, taskType])).toEqual([
+      ["user", "Fix the failing test", undefined],
+      ["assistant", "Done.", undefined],
+      ["user", "Rerun the failed check.", "keiko-continuation"],
+      ["user", "Rerun it.", "keiko-continuation"],
+      ["user", "Rerun the failed check.", undefined],
+    ]);
+  });
+
+  it("keeps the person's message that repeats Keiko's words and the intent echo rule apart", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Echo",
+      modelId: "coding",
+      workspaceId: "ws_keiko_echo",
+      taskId: "task_keiko_echo",
+      branch: "keiko/task/echo",
+      operatorDigest: "a".repeat(64),
+    });
+    history.bindRun(task.id, "run-echo");
+    history.append(task.id, "run-echo", "intent", "user", "Run the check");
+    // Keiko's own turn repeats the intent word for word before any answer: it is not the 1.1.x
+    // echo, so it stays, and it stays Keiko's.
+    history.append(task.id, "run-echo", "msg_keiko", "user", "Run the check", "keiko");
+
+    const messages = history.detail(task.id, "a".repeat(64))?.messages ?? [];
+    expect(messages.map(({ content, taskType }) => [content, taskType])).toEqual([
+      ["Run the check", undefined],
+      ["Run the check", "keiko-continuation"],
+    ]);
+  });
+
   // The 1.1.x echo is the first repeat of the intent, before the model answered in that run. The
   // operator sending the same words again after an answer (the model stalled, say) is a real
   // message and must stay in the transcript and in continuation context.

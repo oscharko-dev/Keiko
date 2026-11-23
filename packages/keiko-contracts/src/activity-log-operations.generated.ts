@@ -16543,6 +16543,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "VERIFICATION_ISOLATION_UNAVAILABLE",
         ],
       },
+      verificationGap: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
+      },
       taskOutcomeStatus: {
         type: "string",
         dataClass: "closed-enum",
@@ -16975,11 +16981,41 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "continued",
+          "skipped",
           "dispatch-refused",
           "dispatch-threw",
           "run-superseded",
           "not-evidenced",
         ],
+      },
+      skipReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "docs-only",
+          "no-failed-check",
+          "blocked",
+          "budget-exhausted",
+          "already-continued",
+        ],
+      },
+      gap: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
+      },
+      check: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["test", "targeted-test", "typecheck", "lint", "build", "check"],
+      },
+      failedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       blockedReason: {
         type: "string",

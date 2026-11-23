@@ -242,6 +242,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "runEffort",
   "envelopeDurationExhausted",
   "taskHasShellTool",
+  "toolBudgetExhausted",
   "sweepOrphanedRunState",
 ] as const;
 

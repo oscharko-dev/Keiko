@@ -9,6 +9,7 @@ import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
 
 import {
@@ -30,6 +31,7 @@ export type CodingRuntimeEventHubInput =
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
       readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
     }
   | {
       readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -524,7 +526,7 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
           "schemaVersion",
           "state",
         ]
-      : ["failureCode", "kind", "revision", "runId", "schemaVersion", "state"];
+      : ["failureCode", "verificationGap", "kind", "revision", "runId", "schemaVersion", "state"];
   return keys.every((key) => allowed.includes(key)) && required.every((key) => keys.includes(key));
 }
 

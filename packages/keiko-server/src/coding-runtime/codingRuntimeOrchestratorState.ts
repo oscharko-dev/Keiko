@@ -72,6 +72,7 @@ export class CodingRuntimeOrchestratorState {
       modelSource: snapshot.modelSource,
       ...this.deps.runIdentity?.(snapshot.runId),
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
+      ...(snapshot.verificationGap ? { verificationGap: snapshot.verificationGap } : {}),
       ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
       ...this.stateBoundDetail(snapshot),
       ...snapshotDetail(snapshot),
@@ -136,6 +137,7 @@ export class CodingRuntimeOrchestratorState {
             state: snapshot.state,
             revision: snapshot.revision,
             ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
+            ...(snapshot.verificationGap ? { verificationGap: snapshot.verificationGap } : {}),
           },
     ).ok;
   }

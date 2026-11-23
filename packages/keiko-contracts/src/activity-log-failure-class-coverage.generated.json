@@ -17688,6 +17688,12 @@
               "required": false
             },
             {
+              "name": "verificationGap",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "wallDurationMs",
               "type": "integer",
               "dataClass": "duration",
@@ -19201,6 +19207,12 @@
               "required": false
             },
             {
+              "name": "check",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "code",
               "type": "string",
               "dataClass": "opaque-id",
@@ -19213,9 +19225,21 @@
               "required": false
             },
             {
+              "name": "failedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "gap",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -19229,6 +19253,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "skipReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "state",

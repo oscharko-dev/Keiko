@@ -7,6 +7,7 @@ import {
   CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS,
   CODING_WORKBENCH_COMMANDS_MAX,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_PROMPT_DELIVERIES,
   CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS,
@@ -891,6 +892,77 @@ describe("Coding Workbench runtime API contracts", () => {
     });
     expect(
       validateCodingWorkbenchRuntimeSnapshot({ ...paused, pauseReason: "operator-override" }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // #4491: the concrete gap of a run that settled without a passing check after its last change.
+  it("binds the verification gap to a verification-not-evidenced snapshot and status frame only", () => {
+    const failed = {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+      failureCode: "verification-not-evidenced",
+    };
+    for (const gap of CODING_WORKBENCH_VERIFICATION_GAPS) {
+      const snapshot = { ...failed, verificationGap: gap };
+      expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({
+        ok: true,
+        value: snapshot,
+      });
+      const frame = {
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode: "verification-not-evidenced",
+        verificationGap: gap,
+      };
+      expect(validateCodingWorkbenchRuntimeSseEvent(frame)).toEqual({ ok: true, value: frame });
+    }
+    expect(validateCodingWorkbenchRuntimeSnapshot(failed)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGap: "no-check" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...failed,
+        failureCode: "model-turn-failed",
+        verificationGap: "no-check-run",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode: "model-turn-failed",
+        verificationGap: "no-check-run",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "runtime-event",
+        eventKind: "permission-requested",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        verificationGap: "no-check-run",
+      }),
     ).toMatchObject({ ok: false });
   });
 

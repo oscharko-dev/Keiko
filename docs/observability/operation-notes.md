@@ -764,7 +764,12 @@ run status sentence, and holds its secondary notices until it is paired; each ho
 `editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
 reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
 (`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
-`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). What a delivery card showed is `delivery-step-shown` with the closed
+`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). A run that changed code and
+ended without a passing check after its last change records why, on `coding-runtime.run.settled` as the closed
+`verificationGap` (`no-check-run`, `check-failed`, `check-not-started`, `budget-exhausted`; #4491), and why no
+continuation ran on `coding-runtime.run.verification-continuation` as `state: skipped` with the closed `skipReason`
+(`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`); the one continuation that does
+run records `state: continued` with the failed `check` and its `failedCount`, never a path or output. What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;

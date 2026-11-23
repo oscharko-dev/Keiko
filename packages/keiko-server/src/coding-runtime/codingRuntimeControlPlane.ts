@@ -111,6 +111,11 @@ export interface CodingRuntimeHost {
    * error; absent, no failure is attributed to the duration.
    */
   readonly envelopeDurationExhausted?: ((runId: string) => boolean) | undefined;
+  /**
+   * #4491: whether the run's tool-call or patch budget refused a delegation, read when a run settles
+   * without a passing check so the Workbench says the budget was used up.
+   */
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
   /** Whether the composed tool profile hands the model a shell tool (only `native` does). */
   readonly taskHasShellTool?: boolean | undefined;
   readonly runtimeCapabilityAuthenticator?:
@@ -336,10 +341,14 @@ function controlPlaneHistory(
 // hands the model a shell tool (the verification continuation words itself accordingly).
 function hostRunFacts(
   runtimeHost: CodingRuntimeHost | undefined,
-): Pick<Parameters<typeof createCodingRuntimeOrchestrator>[0], "runEffort" | "taskHasShellTool"> {
+): Pick<
+  Parameters<typeof createCodingRuntimeOrchestrator>[0],
+  "runEffort" | "taskHasShellTool" | "toolBudgetExhausted"
+> {
   return {
     runEffort: runtimeHost?.runEffort?.read,
     taskHasShellTool: runtimeHost?.taskHasShellTool,
+    toolBudgetExhausted: runtimeHost?.toolBudgetExhausted,
   };
 }
 

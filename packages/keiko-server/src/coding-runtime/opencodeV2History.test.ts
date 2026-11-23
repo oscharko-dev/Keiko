@@ -416,6 +416,96 @@ describe("OpenCode V2 native tool history", () => {
 // part. It reaches the live timeline as its own growing signal and never Coding History. The pulls
 // below model a history that grows by suffix; OpenCode 2.0.10 persists the part empty and then
 // complete, and its stream in between is pinned under "OpenCode V2 live streamed text".
+// #4491: a turn Keiko dispatched itself says so in its own message metadata, and the projection
+// carries that as a closed origin on the user message and into the captured conversation; the text
+// of a message never decides it.
+describe("OpenCode V2 history: turns Keiko dispatched itself", () => {
+  const ORIGIN_KEY = "keikoTurnOriginV1";
+  function twoTurns(
+    metadata: Record<string, unknown> | undefined,
+    text = "Continue.",
+  ): readonly Record<string, unknown>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Fix the parser." },
+      {
+        id: "msg_answer",
+        type: "assistant",
+        time: { created: 2 },
+        content: [{ type: "text", text: "Done." }],
+      },
+      {
+        id: "msg_keiko",
+        type: "user",
+        time: { created: 3 },
+        text,
+        ...(metadata === undefined ? {} : { metadata }),
+      },
+    ];
+  }
+  function userMessageSignals(
+    history: readonly Record<string, unknown>[],
+  ): CodingSafeActivitySignal[] {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-origin",
+      activityLog: undefined,
+    });
+    const signals: CodingSafeActivitySignal[] = [];
+    for (const event of projection.project("ses_origin", history, undefined)) {
+      const signal = projection.takeSignal(event);
+      if (signal?.kind === "message" && signal.role === "user") signals.push(signal);
+    }
+    return signals;
+  }
+
+  it.each(["verification-continuation", "delivery-continuation"])(
+    "marks a %s user message as Keiko's and leaves the person's own unmarked",
+    (origin) => {
+      const [person, keiko] = userMessageSignals(twoTurns({ [ORIGIN_KEY]: origin }));
+      expect(person).not.toHaveProperty("origin");
+      expect(keiko).toMatchObject({ messageId: "msg_keiko", origin: "keiko" });
+    },
+  );
+
+  it.each([
+    ["no metadata", undefined],
+    ["an unknown origin word", { [ORIGIN_KEY]: "scheduler" }],
+    ["a non-string origin", { [ORIGIN_KEY]: 7 }],
+    [
+      "another metadata key",
+      { keikoContextPresentationV1: undefined, other: "verification-continuation" },
+    ],
+  ])("never marks a message with %s as Keiko's", (_label, metadata) => {
+    const [, second] = userMessageSignals(twoTurns(metadata));
+    expect(second).not.toHaveProperty("origin");
+  });
+
+  it("never infers the origin from the text a message carries", () => {
+    const [, second] = userMessageSignals(
+      twoTurns(undefined, "Verification is not complete for the accepted task. Continue."),
+    );
+    expect(second).not.toHaveProperty("origin");
+  });
+
+  it("carries the origin into the conversation Coding History captures", () => {
+    const captureMessages = vi.fn((): boolean => true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-origin-capture",
+      activityLog: undefined,
+      captureMessages,
+    });
+    projection.project(
+      "ses_origin",
+      twoTurns({ [ORIGIN_KEY]: "verification-continuation" }),
+      undefined,
+    );
+    expect(captureMessages).toHaveBeenLastCalledWith([
+      { messageId: "msg_user", role: "user", content: "Fix the parser." },
+      { messageId: "msg_answer", role: "assistant", content: "Done." },
+      { messageId: "msg_keiko", role: "user", content: "Continue.", origin: "keiko" },
+    ]);
+  });
+});
+
 describe("OpenCode V2 native reasoning history", () => {
   function reasoningHistory(
     reasoning: string,

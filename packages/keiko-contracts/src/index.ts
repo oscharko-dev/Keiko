@@ -1486,9 +1486,11 @@ export type {
   CodingWorkbenchRuntimeTakeoverRequest,
   CodingWorkbenchRuntimeUnavailableReason,
   CodingWorkbenchRuntimeVersion,
+  CodingWorkbenchVerificationGap,
 } from "./coding-workbench-runtime-api.js";
 export type {
   CODING_WORKBENCH_AGENTS,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
@@ -1595,6 +1597,7 @@ export type {
   AvailableCodingSafeActivityFeed,
   CodingSafeActivityFeed,
   CodingSafeActivityMessage,
+  CodingSafeActivityMessageOrigin,
   CodingSafeActivityMessageRole,
   CodingSafeActivityPlan,
   CodingSafeActivityPlanStep,

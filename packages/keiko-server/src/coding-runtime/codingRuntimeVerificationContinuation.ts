@@ -6,12 +6,20 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
+import type { CodingWorkbenchVerificationGap } from "@oscharko-dev/keiko-contracts";
+import type { CodingVerificationFailureEvidence } from "./codingRuntimeRunEffort.js";
 import {
   CODING_VERIFICATION_BLOCKED_REASONS,
   type CodingVerificationBlockedReason,
 } from "./codingToolFacadePorts.js";
 
-export const VERIFICATION_CONTINUATION_MAX = 2;
+/**
+ * At most one automatic continuation per run, and only for one fact (#4491): a check ran after the
+ * run's last code change, failed, and the model ended its turn without a passing one. Verification
+ * is asked for up front in the run's instructions (the launch profile's "Verify" step), so Keiko
+ * never repeats a generic request at the end; every other gap is named to the person instead.
+ */
+export const VERIFICATION_CONTINUATION_MAX = 1;
 /**
  * How a check run in the model's own shell counts as verification (`openCodeNativeVerificationKind`).
  * The runtime reports one exit status per line, so only a line whose status is the check's own
@@ -19,26 +27,64 @@ export const VERIFICATION_CONTINUATION_MAX = 2;
  */
 export const SHELL_VERIFICATION_STATUS_RULE =
   "In your shell, run the check as its own line, or chain it with && only to cd or other checks: a pipe (such as | tail), ;, ||, & or a second line lets another command decide the exit status, and such a line does not count as verification.";
-export const VERIFICATION_CONTINUATION_INTENT = `Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification. Where the governed verifier cannot run that check, run the repository's own test command in your shell, where its result counts. ${SHELL_VERIFICATION_STATUS_RULE} A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.`;
 
-/**
- * The same continuation for a run whose tool profile hands the model no shell tool (the mapped
- * profiles: `keiko_verification` is their only command runner). Telling that model to "run the
- * repository's own test command in your shell" cannot be followed, and cost the 1.5.3 Windows lab run
- * two futile turns, so this form names only the governed verifier.
- */
-export const VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL =
-  "Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification with the governed verification tool. A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.";
-
-/** The continuation task for a run: the shell form only where the run's profile has a shell tool. */
-export function verificationContinuationIntent(hasShellTool: boolean | undefined): string {
-  return hasShellTool === false
-    ? VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL
-    : VERIFICATION_CONTINUATION_INTENT;
+function failedStepsSentence(failedCount: number): string {
+  return failedCount === 1 ? "1 step failed" : `${String(failedCount)} steps failed`;
 }
 
+/**
+ * The one continuation task: it names the fact (which check, how many steps failed) and nothing
+ * else of the run (never a path, a line of output or a message), and asks to repair the cause and
+ * rerun that check, or to state why it cannot. A run whose tool profile hands the model no shell
+ * (the mapped profiles, where `keiko_verification` is the only command runner) is told to rerun
+ * with the governed verifier, not a shell it does not have.
+ */
+export function verificationContinuationIntent(
+  failure: CodingVerificationFailureEvidence,
+  hasShellTool: boolean | undefined,
+): string {
+  const subject = failure.check === "check" ? "A check" : `The ${failure.check} check`;
+  const rerun =
+    hasShellTool === false
+      ? "rerun the same check with the governed verification tool"
+      : `rerun the same check in your shell. ${SHELL_VERIFICATION_STATUS_RULE}`;
+  return `${subject} you ran after your last change failed (${failedStepsSentence(failure.failedCount)}). Continue within the original scope and authority: read the relevant source and test files, repair the cause of the failure without weakening assertions, ${rerun} Do not claim completion until a check passes after your last change. If you cannot repair it or the check cannot run for a reason outside the task, state the exact cause once and finish.`;
+}
+
+/**
+ * Why no continuation ran for a run that ended without a passing check after its last change: the
+ * one-line answer a support analysis reads (`skipped`). `docs-only`: the run changed documentation
+ * alone and needs no check. `no-failed-check`: no check ran, so there is nothing to repair.
+ * `blocked`: a check could not start. `budget-exhausted`: the run's budget was used up.
+ * `already-continued`: the run's one continuation already ran.
+ */
+export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
+  "docs-only",
+  "no-failed-check",
+  "blocked",
+  "budget-exhausted",
+  "already-continued",
+] as const;
+
+export type VerificationContinuationSkipReason =
+  (typeof VERIFICATION_CONTINUATION_SKIP_REASONS)[number];
+
 type ContinuationState =
-  "continued" | "dispatch-refused" | "dispatch-threw" | "run-superseded" | "not-evidenced";
+  | "continued"
+  | "skipped"
+  | "dispatch-refused"
+  | "dispatch-threw"
+  | "run-superseded"
+  | "not-evidenced";
+
+/** What a continuation line may add to its state; every member is a closed word or a count. */
+export interface VerificationContinuationDetail {
+  readonly error?: unknown;
+  readonly blockedReason?: CodingVerificationBlockedReason;
+  readonly skipReason?: VerificationContinuationSkipReason;
+  readonly gap?: CodingWorkbenchVerificationGap;
+  readonly failure?: CodingVerificationFailureEvidence;
+}
 
 const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -73,12 +119,36 @@ const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
       required: true,
       values: [
         "continued",
+        "skipped",
         "dispatch-refused",
         "dispatch-threw",
         "run-superseded",
         "not-evidenced",
       ],
     },
+    // Why no continuation ran (`skipped`): a closed word naming the one fact that ruled it out (#4491).
+    skipReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...VERIFICATION_CONTINUATION_SKIP_REASONS],
+    },
+    // The concrete gap of a run that settled without a passing check (`not-evidenced`, #4491).
+    gap: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
+    },
+    // The failed check a `continued` line names (#4491): which check and how many steps failed,
+    // the only two facts the continuation task carries. Never a path or a line of output.
+    check: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["test", "targeted-test", "typecheck", "lint", "build", "check"],
+    },
+    failedCount: { type: "integer", dataClass: "count", required: false },
     // Why no further repair continuation ran: the blocker the ledger holds for the run (#4271).
     blockedReason: {
       type: "string",
@@ -100,27 +170,48 @@ export function recordVerificationContinuation(
   runId: string,
   attempt: number,
   state: ContinuationState,
-  error?: unknown,
-  blockedReason?: CodingVerificationBlockedReason,
+  detail: VerificationContinuationDetail = {},
 ): void {
+  const informational = state === "continued" || state === "skipped";
   activityLog?.write(
     activityLogEvent(
       VERIFICATION_CONTINUATION_OPERATION,
       {
         correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
-        level: state === "continued" ? "info" : "warn",
-        ...(state === "continued" ? {} : { errorKind: continuationErrorKind(state) }),
+        level: informational ? "info" : "warn",
+        ...(informational ? {} : { errorKind: continuationErrorKind(state) }),
       },
       {
         runId,
         attempt,
         max: VERIFICATION_CONTINUATION_MAX,
         state,
-        ...(error === undefined ? {} : continuationErrorFields(error)),
-        ...(blockedReason === undefined ? {} : { blockedReason }),
+        ...continuationDetailFields(detail),
       },
     ),
   );
+}
+
+// Every member is a closed word or a count; the failed check names only which check and how many
+// steps failed.
+function continuationDetailFields(detail: VerificationContinuationDetail): Partial<
+  ReturnType<typeof continuationErrorFields>
+> & {
+  readonly blockedReason?: CodingVerificationBlockedReason;
+  readonly skipReason?: VerificationContinuationSkipReason;
+  readonly gap?: CodingWorkbenchVerificationGap;
+  readonly check?: CodingVerificationFailureEvidence["check"];
+  readonly failedCount?: number;
+} {
+  return {
+    ...(detail.error === undefined ? {} : continuationErrorFields(detail.error)),
+    ...(detail.blockedReason === undefined ? {} : { blockedReason: detail.blockedReason }),
+    ...(detail.skipReason === undefined ? {} : { skipReason: detail.skipReason }),
+    ...(detail.gap === undefined ? {} : { gap: detail.gap }),
+    ...(detail.failure === undefined
+      ? {}
+      : { check: detail.failure.check, failedCount: detail.failure.failedCount }),
+  };
 }
 
 function continuationErrorFields(error: unknown): {
@@ -139,7 +230,7 @@ function continuationErrorFields(error: unknown): {
 }
 
 function continuationErrorKind(
-  state: Exclude<ContinuationState, "continued">,
+  state: Exclude<ContinuationState, "continued" | "skipped">,
 ): ActivityLogErrorKind {
   if (state === "run-superseded") return "conflict";
   return state === "not-evidenced" ? "validation-failed" : "unavailable";

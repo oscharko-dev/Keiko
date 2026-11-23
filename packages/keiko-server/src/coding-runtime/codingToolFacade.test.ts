@@ -2669,7 +2669,47 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
 
     await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
 
-    expect(outcomes).toEqual([{ kind: "applied" }]);
+    // The applied outcome now also carries the paths the edit changed (in memory, for the
+    // documentation-only decision); the closed kind is unchanged.
+    expect(outcomes).toEqual([{ kind: "applied", changedPaths: ["src/file.ts"] }]);
+  });
+
+  // #4491: a replacement edit names renames and deletions beside its files; every touched path is
+  // handed to the run's ledger, so a code change can never hide behind a documentation file.
+  it("reports every path of a replacement edit: files, deletions and both sides of a rename", async () => {
+    const { subject, outcomes } = observedFacade({ outcome: "completed" });
+    const replacement = {
+      edits: [{ file: "README.md", oldString: "a", newString: "b" }],
+      deletions: ["old/Removed.java"],
+      renames: [{ from: "src/Old.ts", to: "src/New.ts" }],
+      files: [
+        { file: "README.md", expectedContentHash: "a".repeat(64) },
+        { file: "old/Removed.java", expectedContentHash: "b".repeat(64) },
+      ],
+    };
+
+    await subject.execute({
+      body: requestBody({ action: "edit", changeset: replacement }),
+      capability,
+    });
+
+    expect(outcomes).toEqual([
+      {
+        kind: "applied",
+        changedPaths: ["README.md", "old/Removed.java", "src/Old.ts", "src/New.ts"],
+      },
+    ]);
+  });
+
+  it("never reports a path with a refused edit", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "NO_ACTIVE_SESSION",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(JSON.stringify(outcomes)).not.toContain("src/file.ts");
   });
 
   it("reports the exposed reason of a CI observation refusal", async () => {

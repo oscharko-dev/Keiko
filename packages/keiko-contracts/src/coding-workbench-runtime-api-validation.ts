@@ -13,6 +13,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
 import { isVerificationKind } from "./editor-verification.js";
@@ -90,7 +91,7 @@ export function sseEventKeys(kind: unknown): readonly string[] {
         "verificationSummary",
         "nativeRetry",
       ]
-    : common;
+    : [...common, "verificationGap"];
 }
 
 export function validateSseEventFields(
@@ -111,6 +112,7 @@ export function validateSseEventFields(
   validateNonNegativeSafeInteger(value.revision, "revision", errors);
   validateSseEventKind(value, errors);
   validateSseOptionalEnums(value, errors);
+  validateSseVerificationGap(value, errors);
   validateSseVerificationSummary(value, errors);
   validateSseNativeRetry(value, errors);
 }
@@ -218,6 +220,17 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
     !(value.eventKind === "failure-redacted" && isTurnFailureCode(value.failureCode))
   ) {
     errors.push("failureCode is invalid");
+  }
+}
+
+// #4491: the concrete gap of a run that settled `verification-not-evidenced`; only a status frame
+// carries it, and only with that code.
+function validateSseVerificationGap(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationGap === undefined) return;
+  if (!isOneOf(value.verificationGap, CODING_WORKBENCH_VERIFICATION_GAPS)) {
+    errors.push("verificationGap is invalid");
+  } else if (value.kind !== "status" || value.failureCode !== "verification-not-evidenced") {
+    errors.push("verificationGap is only admissible on a verification-not-evidenced status frame");
   }
 }
 

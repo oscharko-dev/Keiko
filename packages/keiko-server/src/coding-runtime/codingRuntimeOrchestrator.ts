@@ -27,6 +27,7 @@ import type {
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchVerificationGap,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -73,11 +74,13 @@ import {
 import {
   CodingRuntimeRunEffortLedger,
   type CodingRuntimeRunEffortRollUp,
+  type CodingVerificationFailureEvidence,
 } from "./codingRuntimeRunEffort.js";
 import {
   recordVerificationContinuation,
   verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
+  type VerificationContinuationSkipReason,
 } from "./codingRuntimeVerificationContinuation.js";
 import type {
   CodingRuntimeApprovalIssueResult,
@@ -779,6 +782,14 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [...CODING_VERIFICATION_BLOCKED_REASONS],
+    },
+    // The concrete gap of a run that settled `verification-not-evidenced` (#4491): no check ran, a
+    // check failed, a check could not start, or the run's budget was used up first.
+    verificationGap: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
     },
     taskOutcomeStatus: {
       type: "string",
@@ -1701,6 +1712,16 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
+// What the fact-based continuation may say about a failed check: which check and how many steps
+// failed, from the summary's closed verifier word and count. Never a path or a line of output.
+function verificationFailureEvidence(
+  event: CodingWorkbenchRuntimeEvent,
+): CodingVerificationFailureEvidence | undefined {
+  const failedCount = event.failedCount ?? 0;
+  if (failedCount < 1) return undefined;
+  return { check: event.verificationSummary?.verifierId ?? "check", failedCount };
+}
+
 function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean | null {
   if ((event.failedCount ?? 0) > 0) return false;
   if ((event.passedCount ?? 0) > 0 && event.verificationStatus !== "failed") return true;
@@ -1763,6 +1784,7 @@ function recordRuntimeRunSettled(
   failureCode?: CodingWorkbenchRuntimeFailureCode,
   cause?: RunSettlementCause,
   verificationBlockedReason?: CodingVerificationBlockedReason,
+  verificationGap?: CodingWorkbenchVerificationGap,
 ): void {
   const errorKind = settlementErrorKind(state, cause, verificationBlockedReason);
   activityLog?.write(
@@ -1782,6 +1804,7 @@ function recordRuntimeRunSettled(
         terminal: TERMINAL_STATES.has(state),
         ...(failureCode === undefined ? {} : { failureCode }),
         ...(verificationBlockedReason === undefined ? {} : { verificationBlockedReason }),
+        ...(verificationGap === undefined ? {} : { verificationGap }),
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
@@ -1793,6 +1816,8 @@ function recordRuntimeRunSettled(
 interface VerificationFailureSettlement {
   readonly state: "failed";
   readonly failureCode: "verification-not-evidenced";
+  /** Why no passing check followed the run's last change (#4491). */
+  readonly gap: CodingWorkbenchVerificationGap;
 }
 
 // The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
@@ -3174,6 +3199,7 @@ export class CodingRuntimeOrchestrator {
       verificationSummaryPassed(event),
       event.verificationTargetDigest ?? event.verificationKind,
       event.verificationEditRevision,
+      verificationFailureEvidence(event),
     );
   }
 
@@ -3498,7 +3524,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (current?.runId !== runId) return;
     if (outcome.kind === "applied" && EFFORT_COUNTED_STATES.has(current.state))
-      this.effort.edit(runId);
+      this.effort.edit(runId, outcome.changedPaths);
     if (!REFUSAL_COUNTED_STATES.has(current.state)) return;
     const escalation = this.editRefusals.observe(runId, outcome);
     if (escalation === undefined) return;
@@ -3513,6 +3539,7 @@ export class CodingRuntimeOrchestrator {
     const escalation = this.editRefusals.escalation(runId);
     const outcome = escalation === undefined ? reported : "failed";
     const verificationMissing = this.verificationMissing(runId, outcome);
+    if (outcome === "succeeded" && !verificationMissing) this.recordDocumentationOnlySkip(runId);
     const continued = verificationMissing
       ? await this.continueForVerification(current)
       : await this.continueForDelivery(current, outcome);
@@ -3521,7 +3548,11 @@ export class CodingRuntimeOrchestrator {
     // escalation of the run's refused edits wins over them: it names the run's cause (F5).
     const cause = escalation ?? this.terminalFailure(runId, outcome);
     const verificationFailure: VerificationFailureSettlement | undefined = verificationMissing
-      ? { state: "failed", failureCode: "verification-not-evidenced" }
+      ? {
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+          gap: this.verificationGap(runId),
+        }
       : undefined;
     await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
   }
@@ -3535,7 +3566,7 @@ export class CodingRuntimeOrchestrator {
     this.captureHistory(runId);
     const truthfulOutcome = verificationFailure?.state ?? outcome;
     if (verificationFailure !== undefined)
-      this.recordVerificationContinuation(runId, "not-evidenced");
+      this.recordVerificationNotEvidenced(runId, verificationFailure.gap);
     const ended = await this.endForSettlement(runId, truthfulOutcome);
     const live = this.current();
     if (live?.runId === runId)
@@ -3572,64 +3603,108 @@ export class CodingRuntimeOrchestrator {
     return outcome === "succeeded" && this.effort.needsVerification(runId);
   }
 
+  /**
+   * The concrete gap of a run that changed code and has no passing check after its last change
+   * (#4491), decided in this order: its budget was used up, a check could not start, a check ran
+   * and failed, or no check ran at all. Read from the ledger and the authority's own facts.
+   */
+  private verificationGap(runId: string): CodingWorkbenchVerificationGap {
+    if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
+    if (this.effort.verificationBlockedReason(runId) !== undefined) return "check-not-started";
+    return this.effort.failedCheck(runId) === undefined ? "no-check-run" : "check-failed";
+  }
+
+  // Why no continuation runs: only a failed check, with a repair still unspent, justifies one.
+  private verificationContinuationSkip(
+    runId: string,
+  ): VerificationContinuationSkipReason | undefined {
+    if ((this.verificationContinuations.get(runId) ?? 0) >= VERIFICATION_CONTINUATION_MAX)
+      return "already-continued";
+    switch (this.verificationGap(runId)) {
+      case "budget-exhausted":
+        return "budget-exhausted";
+      case "check-not-started":
+        return "blocked";
+      case "no-check-run":
+        return "no-failed-check";
+      case "check-failed":
+        return undefined;
+    }
+  }
+
+  /** A run that changed documentation alone asks for no check; the line says why none was asked. */
+  private recordDocumentationOnlySkip(runId: string): void {
+    if (!this.effort.documentationOnly(runId)) return;
+    recordVerificationContinuation(this.deps.activityLog, runId, 0, "skipped", {
+      skipReason: "docs-only",
+    });
+  }
+
   private async continueForVerification(live: CodingRuntimeSnapshot): Promise<boolean> {
-    const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
-    if (
-      live.state !== "running" ||
-      attempt > VERIFICATION_CONTINUATION_MAX ||
-      this.effort.verificationBlockedReason(live.runId) !== undefined
-    )
+    if (live.state !== "running") return false;
+    const skipReason = this.verificationContinuationSkip(live.runId);
+    const failure = this.effort.failedCheck(live.runId);
+    if (skipReason !== undefined || failure === undefined) {
+      recordVerificationContinuation(
+        this.deps.activityLog,
+        live.runId,
+        this.verificationContinuations.get(live.runId) ?? 0,
+        "skipped",
+        { skipReason: skipReason ?? "no-failed-check", gap: this.verificationGap(live.runId) },
+      );
       return false;
+    }
+    const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
+    const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
+    if (dispatched === undefined) return false;
+    if (this.continuationSuperseded(live)) {
+      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
+      return true;
+    }
+    recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
+      failure,
+    });
+    this.operations.observeContinuation(live.runId, dispatched.completion);
+    this.advanceRevision(live, "task-submitted");
+    return true;
+  }
+
+  // The one continuation task, naming the failed check; a refused or thrown dispatch is logged and
+  // leaves the run to settle with its gap.
+  private async dispatchVerificationContinuation(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    failure: CodingVerificationFailureEvidence,
+  ): Promise<Extract<CodingRuntimeTaskDispatchResult, { readonly ok: true }> | undefined> {
     let dispatched: CodingRuntimeTaskDispatchResult;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch({
         runId: live.runId,
         requestId: `verification-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
-        taskIntent: verificationContinuationIntent(this.deps.taskHasShellTool),
+        taskIntent: verificationContinuationIntent(failure, this.deps.taskHasShellTool),
         origin: "verification-continuation",
       });
     } catch (error) {
-      recordVerificationContinuation(
-        this.deps.activityLog,
-        live.runId,
-        attempt,
-        "dispatch-threw",
+      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "dispatch-threw", {
         error,
-      );
-      return false;
+      });
+      return undefined;
     }
-    if (!dispatched.ok) {
-      recordVerificationContinuation(
-        this.deps.activityLog,
-        live.runId,
-        attempt,
-        "dispatch-refused",
-      );
-      return false;
-    }
-    if (this.continuationSuperseded(live)) {
-      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
-      return true;
-    }
-    this.recordVerificationContinuation(live.runId, "continued");
-    this.operations.observeContinuation(live.runId, dispatched.completion);
-    this.advanceRevision(live, "task-submitted");
-    return true;
+    if (dispatched.ok) return dispatched;
+    recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "dispatch-refused");
+    return undefined;
   }
 
-  private recordVerificationContinuation(
-    runId: string,
-    state: "continued" | "not-evidenced",
-  ): void {
+  private recordVerificationNotEvidenced(runId: string, gap: CodingWorkbenchVerificationGap): void {
+    const blockedReason = this.effort.verificationBlockedReason(runId);
     recordVerificationContinuation(
       this.deps.activityLog,
       runId,
       this.verificationContinuations.get(runId) ?? 0,
-      state,
-      undefined,
-      state === "not-evidenced" ? this.effort.verificationBlockedReason(runId) : undefined,
+      "not-evidenced",
+      { gap, ...(blockedReason === undefined ? {} : { blockedReason }) },
     );
   }
 
@@ -3660,7 +3735,14 @@ export class CodingRuntimeOrchestrator {
       return;
     }
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
-    this.transition(live, target.state, target.failureCode, undefined, settledCause);
+    this.transition(
+      live,
+      target.state,
+      target.failureCode,
+      undefined,
+      settledCause,
+      verificationFailure?.gap,
+    );
   }
 
   private runtimeAgrees(
@@ -3810,6 +3892,7 @@ export class CodingRuntimeOrchestrator {
         requestId: `delivery-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
         taskIntent: DELIVERY_CONTINUATION_INTENT,
+        origin: "delivery-continuation",
       });
     } catch (error) {
       this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-threw", error);
@@ -5025,12 +5108,19 @@ export class CodingRuntimeOrchestrator {
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
     cause?: RunSettlementCause,
+    verificationGap?: CodingWorkbenchVerificationGap,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
     }
     if (this.isSuperseded(current)) return this.fail("invalid-intent");
-    const next = this.createTransitionSnapshot(current, state, failureCode, pauseReason);
+    const next = this.createTransitionSnapshot(
+      current,
+      state,
+      failureCode,
+      pauseReason,
+      verificationGap,
+    );
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
@@ -5045,6 +5135,7 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
+    verificationGap?: CodingWorkbenchVerificationGap,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -5053,6 +5144,7 @@ export class CodingRuntimeOrchestrator {
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
       ...(pauseReason === undefined ? {} : { pauseReason }),
+      ...(verificationGap === undefined ? {} : { verificationGap }),
       ...(result === undefined ? {} : { result }),
     });
   }
@@ -5104,6 +5196,7 @@ export class CodingRuntimeOrchestrator {
       failureCode === "verification-not-evidenced"
         ? this.effort.verificationBlockedReason(next.runId)
         : undefined,
+      next.verificationGap,
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);

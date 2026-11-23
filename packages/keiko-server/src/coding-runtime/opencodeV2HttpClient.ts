@@ -1,4 +1,8 @@
 import { parseRuntimeLoopbackServiceEndpoint } from "@oscharko-dev/keiko-sandbox";
+import {
+  OPENCODE_TURN_ORIGIN_METADATA,
+  type KeikoContinuationOrigin,
+} from "./opencodeTurnOrigin.js";
 import { isLocalAbsolutePath } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
@@ -116,11 +120,10 @@ export interface OpenCodeV2PromptInputs {
    * verification continuation). It is stored on the message as `OPENCODE_TURN_ORIGIN_METADATA`, so
    * an undo of the newest turn reaches back to that request (#3904 AC3).
    */
-  readonly origin?: "verification-continuation" | undefined;
+  readonly origin?: KeikoContinuationOrigin | undefined;
 }
 
-/** The prompt metadata key that marks a turn Keiko started to continue the human's request. */
-export const OPENCODE_TURN_ORIGIN_METADATA = "keikoTurnOriginV1";
+export { OPENCODE_TURN_ORIGIN_METADATA };
 
 /**
  * One slash command the runtime lists (`Command.Info` of the pinned schema): its name and the

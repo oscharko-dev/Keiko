@@ -19,6 +19,7 @@
 // Bounded like `codingRuntimeContextUsage`: the most recent runs, and a bounded list of open model
 // calls per run. A settlement that names no open call, or a run this process did not start, is not
 // counted (fail closed); nothing is guessed.
+import { editNeedsVerification } from "./codingRuntimeDocumentationPaths.js";
 import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
 import type {
   CodingVerificationBlockedReason,
@@ -219,8 +220,19 @@ export function createCodingRuntimeRunEffortRegistry(
   };
 }
 
+/**
+ * What a failed check left in the ledger for the fact-based continuation: which check (a closed
+ * word, `check` when the verifier is not one of the known kinds) and how many of its steps failed.
+ * Never a path, a line of output or a message.
+ */
+export interface CodingVerificationFailureEvidence {
+  readonly check: "test" | "targeted-test" | "typecheck" | "lint" | "build" | "check";
+  readonly failedCount: number;
+}
+
 interface OrchestratorEffortRecord {
   verificationCount: number;
+  appliedEditCount: number;
   verificationRequired: boolean;
   editRevision: number;
   readonly verificationTargets: Map<string, VerificationTargetState>;
@@ -234,6 +246,8 @@ interface OrchestratorEffortRecord {
 interface VerificationTargetState {
   readonly passed: boolean;
   readonly selected: boolean;
+  /** The target's check ran after the run's last code edit and failed; cleared by the next edit. */
+  readonly failure?: CodingVerificationFailureEvidence;
   readonly notRun?: boolean;
   readonly blockedReason?: CodingVerificationBlockedReason;
 }
@@ -268,13 +282,21 @@ export class CodingRuntimeRunEffortLedger {
     retained(this.runs, runId, newOrchestratorRecord, MAX_TRACKED_RUNS);
   }
 
-  edit(runId: string): void {
+  /**
+   * An applied edit of the run. An edit that changed documentation alone is no change a check could
+   * contradict: it demands no verification and leaves the run's earlier results standing; any edit
+   * that changed code, or named no path, demands one after it (#4491).
+   */
+  edit(runId: string, changedPaths?: readonly string[]): void {
     const run = this.runs.get(runId);
     if (run === undefined) return;
+    run.appliedEditCount = boundedSum(run.appliedEditCount, 1);
+    if (!editNeedsVerification(changedPaths)) return;
     run.verificationRequired = true;
     run.editRevision = boundedSum(run.editRevision, 1);
     for (const [target, state] of run.verificationTargets) {
-      run.verificationTargets.set(target, { ...state, passed: false });
+      const { failure: _superseded, ...rest } = state;
+      run.verificationTargets.set(target, { ...rest, passed: false });
     }
   }
 
@@ -288,6 +310,7 @@ export class CodingRuntimeRunEffortLedger {
     passed: boolean | null = false,
     target = "legacy",
     editRevision?: number,
+    failure?: CodingVerificationFailureEvidence,
   ): void {
     const run = this.runs.get(runId);
     if (run === undefined) return;
@@ -299,7 +322,7 @@ export class CodingRuntimeRunEffortLedger {
         run.verificationTargets.set(target, { passed: false, selected: true });
       return;
     }
-    run.verificationTargets.set(target, { passed, selected: true });
+    run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
   }
 
   verificationBlocked(
@@ -343,6 +366,25 @@ export class CodingRuntimeRunEffortLedger {
         (state) => state.selected && !state.passed && state.blockedReason !== undefined,
       )?.blockedReason
     );
+  }
+
+  /**
+   * The check that ran after the run's last code edit and failed, when one did: the one fact that
+   * justifies sending the model back to repair (#4491). Absent when no check ran, when a check
+   * could not start, or when every check since the last edit passed.
+   */
+  failedCheck(runId: string): CodingVerificationFailureEvidence | undefined {
+    const run = this.runs.get(runId);
+    if (run === undefined) return undefined;
+    return [...run.verificationTargets.values()].find(
+      (state) => state.selected && !state.passed && state.failure !== undefined,
+    )?.failure;
+  }
+
+  /** Whether the run applied edits and every one of them changed documentation alone. */
+  documentationOnly(runId: string): boolean {
+    const run = this.runs.get(runId);
+    return run !== undefined && run.appliedEditCount > 0 && !run.verificationRequired;
   }
 
   needsVerification(runId: string): boolean {
@@ -394,6 +436,14 @@ export class CodingRuntimeRunEffortLedger {
   forget(runId: string): void {
     this.runs.delete(runId);
   }
+}
+
+// The failed check's evidence rides the target only while the target is failing.
+function failedWith(
+  passed: boolean,
+  failure: CodingVerificationFailureEvidence | undefined,
+): { readonly failure?: CodingVerificationFailureEvidence } {
+  return passed || failure === undefined ? {} : { failure };
 }
 
 function verificationAtCurrentRevision(
@@ -454,6 +504,7 @@ function hasSelectedTargets(run: OrchestratorEffortRecord): boolean {
 function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
+    appliedEditCount: 0,
     verificationRequired: false,
     editRevision: 0,
     verificationTargets: new Map(),

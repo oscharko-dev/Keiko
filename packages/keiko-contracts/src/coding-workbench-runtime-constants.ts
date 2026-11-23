@@ -202,6 +202,19 @@ export type CodingWorkbenchTurnFailureCode =
   // gateway made — the model's result, not a provider rejection (1.1.8 lab run).
   | "invalid-tool-call";
 
+/**
+ * Why a run that changed code settled `verification-not-evidenced` (#4491): the concrete gap the
+ * Workbench names instead of a generic "not verified". `no-check-run`: no check ran after the last
+ * change. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
+ * could not start (it was refused or blocked). `budget-exhausted`: the run's tool-call or patch
+ * budget was used up before a check ran. A closed word, never inferred from text.
+ */
+export type CodingWorkbenchVerificationGap =
+  "no-check-run" | "check-failed" | "check-not-started" | "budget-exhausted";
+
+export const CODING_WORKBENCH_VERIFICATION_GAPS: readonly CodingWorkbenchVerificationGap[] =
+  Object.freeze(["no-check-run", "check-failed", "check-not-started", "budget-exhausted"] as const);
+
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",

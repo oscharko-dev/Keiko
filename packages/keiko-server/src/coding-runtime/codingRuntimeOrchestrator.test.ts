@@ -43,8 +43,7 @@ import {
   DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
 import {
-  VERIFICATION_CONTINUATION_INTENT,
-  VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL,
+  verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
 } from "./codingRuntimeVerificationContinuation.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
@@ -124,6 +123,7 @@ type OptionalOrchestratorDeps = Pick<
   | "runEffort"
   | "runtimeVersion"
   | "taskHasShellTool"
+  | "toolBudgetExhausted"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -190,6 +190,7 @@ function optionalOrchestratorDeps(input: {
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly taskHasShellTool?: boolean | undefined;
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -202,7 +203,20 @@ function optionalOrchestratorDeps(input: {
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
     ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
+    ...runFactDeps(input),
+  };
+}
+
+// The run facts a test sets explicitly: unset reads as unknown, which is not the same as false.
+function runFactDeps(input: {
+  readonly taskHasShellTool?: boolean | undefined;
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
+}): Partial<OptionalOrchestratorDeps> {
+  return {
     ...(input.taskHasShellTool === undefined ? {} : { taskHasShellTool: input.taskHasShellTool }),
+    ...(input.toolBudgetExhausted === undefined
+      ? {}
+      : { toolBudgetExhausted: input.toolBudgetExhausted }),
   };
 }
 
@@ -308,6 +322,8 @@ interface FixtureOptions {
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   // Whether the composed tool profile hands the model a shell tool; unset reads as unknown.
   readonly taskHasShellTool?: boolean | undefined;
+  // Whether the run's tool-call or patch budget is used up (#4491); unset reads as not.
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
 }
 
 /** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
@@ -374,6 +390,7 @@ function fixtureFrom({
   workspaceInventory,
   runtimeVersion,
   taskHasShellTool,
+  toolBudgetExhausted,
 }: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -612,6 +629,7 @@ function fixtureFrom({
         runEffort,
         runtimeVersion,
         taskHasShellTool,
+        toolBudgetExhausted,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -666,6 +684,18 @@ function captureActivityLog(): {
 function requireLoggedEvent(event: ServerLogEvent | undefined, message: string): ServerLogEvent {
   if (event === undefined) throw new Error(message);
   return event;
+}
+
+/** The fields of the one `skipped` verification-continuation line: why no continuation ran. */
+function skipLine(records: readonly ServerLogEvent[]): ServerLogEvent["extra"] {
+  return requireLoggedEvent(
+    records.find(
+      (event) =>
+        event.op === "coding-runtime.run.verification-continuation" &&
+        event.extra?.state === "skipped",
+    ),
+    "Expected the skipped verification-continuation line",
+  ).extra;
 }
 
 function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
@@ -8333,12 +8363,16 @@ describe("run effort roll-up (#3873)", () => {
 });
 
 describe("verification truth at task settlement", () => {
-  async function runningTask(taskHasShellTool?: boolean) {
+  async function runningTask(
+    taskHasShellTool?: boolean,
+    toolBudgetExhausted?: (runId: string) => boolean,
+  ) {
     const log = captureActivityLog();
     const f = fixtureFrom({
       seededRows: [],
       activityLog: log.activityLog,
       taskHasShellTool,
+      toolBudgetExhausted,
     });
     let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
     const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
@@ -8593,17 +8627,36 @@ describe("verification truth at task settlement", () => {
 
     it("never tells a model without a shell tool to use its shell", async () => {
       const intent = await continuedIntent(false);
-      expect(intent).toBe(VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL);
+      expect(intent).toBe(
+        verificationContinuationIntent({ check: "check", failedCount: 1 }, false),
+      );
       expect(intent.toLowerCase()).not.toContain("shell");
       expect(intent).toContain("governed verification tool");
     });
 
     it.each([true, undefined])(
-      "keeps the shell continuation unchanged where the shell is available or unknown (%s)",
+      "keeps the shell form where the shell is available or unknown (%s)",
       async (hasShell) => {
-        await expect(continuedIntent(hasShell)).resolves.toBe(VERIFICATION_CONTINUATION_INTENT);
+        const intent = await continuedIntent(hasShell);
+        expect(intent).toBe(
+          verificationContinuationIntent({ check: "check", failedCount: 1 }, hasShell),
+        );
+        expect(intent).toContain("in your shell");
       },
     );
+
+    it("names the failed check and its failed steps, never a path or an output line", async () => {
+      const { f, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+      await verification(f, "failed", { passed: 2, failed: 3, skipped: 0 });
+      finish();
+      await vi.waitFor(() => {
+        expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      });
+      const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+      expect(request.taskIntent).toContain("3 steps failed");
+      expect(request.taskIntent).not.toContain("src/a.ts");
+    });
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
@@ -8619,13 +8672,25 @@ describe("verification truth at task settlement", () => {
   });
 
   // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
-  it("still repairs when the verifier refused a target before any target was selected", async () => {
-    const { f, finish } = await runningTask();
+  // Replaces the old pin that sent the model back with a blind continuation: no check ran, so there
+  // is nothing to repair; the run settles with the gap "no check ran" (#4491).
+  it("names no-check-run, without a continuation, when the verifier refused a target nobody selected", async () => {
+    const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
     finish();
     await vi.waitFor(() => {
-      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({
+      state: "skipped",
+      skipReason: "no-failed-check",
+      gap: "no-check-run",
     });
   });
 
@@ -8780,50 +8845,65 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["failed", "partial"] as const)(
-    "does not report success after a %s verification",
-    async (status) => {
-      const { f, log, finish } = await runningTask();
-      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-      await verification(f, status);
-      finish();
-      await vi.waitFor(() => {
-        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-          state: "failed",
-          failureCode: "verification-not-evidenced",
-        });
+  it("does not report success after a failed verification: one refused repair, then the truthful gap", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "check-failed",
       });
-      const refused = requireLoggedEvent(
-        log.records.find(
-          (event) =>
-            event.op === "coding-runtime.run.verification-continuation" &&
-            event.extra?.state === "dispatch-refused",
-        ),
-        "Expected refused continuation dispatch",
-      );
-      expect(refused.errorKind).toBe("unavailable");
-      expect(
-        expectActivityLogProof(
-          "coding-runtime.run.verification-continuation.emitted-line",
-          formatActivityLogProofLine(refused),
-        ),
-      ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
-      const line = requireLoggedEvent(
-        log.records.find(
-          (event) =>
-            event.op === "coding-runtime.run.verification-continuation" &&
-            event.extra?.state === "not-evidenced",
-        ),
-        "Expected an unevidenced verification settlement.",
-      );
-      expect(
-        expectActivityLogProof(
-          "coding-runtime.run.verification-continuation.emitted-line",
-          formatActivityLogProofLine(line),
-        ),
-      ).toMatchObject({ state: "not-evidenced", runId: "run-1" });
-    },
-  );
+    });
+    const refused = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "dispatch-refused",
+      ),
+      "Expected refused continuation dispatch",
+    );
+    expect(refused.errorKind).toBe("unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(refused),
+      ),
+    ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected an unevidenced verification settlement.",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "not-evidenced", runId: "run-1", gap: "check-failed" });
+  });
+
+  // A partial summary with no executed step is no failed check: nothing ran, so nothing is repaired.
+  it("does not report success after a partial verification and sends no continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "partial");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
+  });
 
   it("does not count a pass from before the final edit", async () => {
     const { f, finish } = await runningTask();
@@ -8857,6 +8937,178 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  // #4491 part 4: a change to documentation alone needs no check, so the run settles succeeded
+  // with no continuation, and the line says why none was asked.
+  it("settles a documentation-only change succeeded without a continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", {
+      kind: "applied",
+      changedPaths: ["README.md", "docs/guide.md"],
+    });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ state: "skipped", skipReason: "docs-only" });
+  });
+
+  it("still requires a check when a changed path is code or none is named", async () => {
+    const code = await runningTask();
+    code.f.orchestrator.observeEditOutcome("run-1", {
+      kind: "applied",
+      changedPaths: ["README.md", "src/main.ts"],
+    });
+    code.finish();
+    await vi.waitFor(() => {
+      expect(code.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    const unnamed = await runningTask();
+    unnamed.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    unnamed.finish();
+    await vi.waitFor(() => {
+      expect(unnamed.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("keeps an earlier passing check when a later edit changed documentation alone", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "passed");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["CHANGELOG.md"] });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
+  // #4491 part 5: code changed and no check ran after it. No continuation (nothing to repair); the
+  // run settles with the concrete gap, on its snapshot, its stream frame and its settled line.
+  it("settles a code change no check followed with the gap no-check-run and no continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({
+      skipReason: "no-failed-check",
+      gap: "no-check-run",
+    });
+    const settled = requireLoggedEvent(
+      log.records.find(
+        (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+      ),
+      "Expected the terminal settlement line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ failureCode: "verification-not-evidenced", verificationGap: "no-check-run" });
+    expect(f.eventHub.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "status",
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      }),
+    );
+  });
+
+  // #4491 part 3: after the last code edit a check ran and failed. Exactly one continuation, which
+  // names that fact; the run that still lacks a passing check settles with the gap, never a second.
+  it("sends exactly one fact-based continuation after a failed check, never a second", async () => {
+    const { f, log, finish } = await runningTask();
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-failed",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1 + VERIFICATION_CONTINUATION_MAX);
+    expect(VERIFICATION_CONTINUATION_MAX).toBe(1);
+    expect(f.taskDispatcher.dispatch.mock.calls[1]?.[0]).toMatchObject({
+      origin: "verification-continuation",
+    });
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "already-continued" });
+    const continued = log.records.find(
+      (event) =>
+        event.op === "coding-runtime.run.verification-continuation" &&
+        event.extra?.state === "continued",
+    );
+    expect(continued?.extra).toMatchObject({ check: "check", failedCount: 1 });
+  });
+
+  // #4491 part 3: a check that could not start is not a failed check; the run is not sent back.
+  it("sends no continuation when the check could not start, and names check-not-started", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_RUNNER_UNAVAILABLE");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  it("prefers a check that could not start over an earlier failed one", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_RUNNER_UNAVAILABLE");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  // #4491 part 3: the budget refusal said "finish and report"; a continuation that said "verify"
+  // would contradict it, so an exhausted budget sends no continuation and names itself.
+  it("sends no continuation after the run's budget ran out, and names budget-exhausted", async () => {
+    const { f, log, finish } = await runningTask(undefined, () => true);
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "budget-exhausted",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "budget-exhausted" });
+  });
+
+  it("carries a gap only on a verification-not-evidenced settlement", async () => {
+    const { f, finish } = await runningTask();
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")).not.toHaveProperty("verificationGap");
+  });
+
   it("allows a read-only task to complete without inventing verification work", async () => {
     const { f, finish } = await runningTask();
     finish();
@@ -8881,7 +9133,7 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith(
       expect.objectContaining({
         runId: "run-1",
-        taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        taskIntent: verificationContinuationIntent({ check: "check", failedCount: 1 }, undefined),
         // It continues the human's request, so an undo reaches back to it (r4368344091).
         origin: "verification-continuation",
       }),
@@ -8912,6 +9164,7 @@ describe("verification truth at task settlement", () => {
   it("keeps the attempted ordinal and actual cause when verification continuation transport throws", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
     const error = Object.assign(
       new Error("PRIVATE_CONTINUATION_CANARY", { cause: new TypeError("PRIVATE_CAUSE_CANARY") }),
       { code: "TRANSPORT_UNAVAILABLE" },
@@ -8961,6 +9214,7 @@ describe("verification truth at task settlement", () => {
   it("records an actual operator stop that supersedes verification continuation dispatch", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
     let release: ((result: CodingRuntimeTaskDispatchResult) => void) | undefined;
     f.taskDispatcher.dispatch.mockImplementationOnce(
       () =>

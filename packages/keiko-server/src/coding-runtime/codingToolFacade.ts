@@ -298,7 +298,8 @@ async function executeParsed(
   lane.count += 1;
   try {
     const result = await routeParsed(context, input, request);
-    if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
+    if (request.action === "edit")
+      observeEditResult(context.observeEditOutcome, result, editChangedPaths(request));
     return result;
   } finally {
     lane.count -= 1;
@@ -324,10 +325,31 @@ function routeParsed(
 function observeEditResult(
   observe: ((outcome: CodingToolEditOutcome) => void) | undefined,
   result: CodingToolResult,
+  changedPaths: readonly string[],
 ): void {
   if (observe === undefined) return;
   const outcome = codingToolEditOutcome(result);
-  if (outcome !== undefined) observe(outcome);
+  if (outcome === undefined) return;
+  observe(outcome.kind === "applied" ? { kind: "applied", changedPaths } : outcome);
+}
+
+/**
+ * The workspace paths a governed edit request names: its files, deletions and both sides of a
+ * rename. A superset of what was applied is safe (it can only ask for a check, never skip one).
+ * Paths are read for the documentation-only decision and stay in memory.
+ */
+function editChangedPaths(request: CodingToolActionRequest): readonly string[] {
+  if (request.action !== "edit") return [];
+  const { changeset } = request;
+  const named = changeset.files.map((file) => file.file);
+  if (!("edits" in changeset)) return named;
+  return [
+    ...new Set([
+      ...named,
+      ...(changeset.deletions ?? []),
+      ...(changeset.renames ?? []).flatMap((rename) => [rename.from, rename.to]),
+    ]),
+  ];
 }
 
 /**

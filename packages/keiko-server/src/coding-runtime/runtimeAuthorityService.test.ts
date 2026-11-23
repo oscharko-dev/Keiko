@@ -1235,6 +1235,39 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.delegationFits(probe)).toBe(false);
   });
 
+  // #4491: a refused delegation that names the exhausted budget is the one fact a run's settlement
+  // reads to say the budget was used up before a check could run.
+  it("remembers that the run's tool-call budget refused a delegation, and only for that run", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const input = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      delegationId: "budget-action-1",
+      idempotencyKey: "budget-key-1",
+      usage: { toolCalls: 1, patchBytes: 0 },
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+
+    expect(authority.toolBudgetExhausted("run-1")).toBe(false);
+    expect(authority.resolveCapabilityForDelegation(input)).toMatchObject({ ok: true });
+    expect(authority.toolBudgetExhausted("run-1")).toBe(false);
+    expect(
+      authority.resolveCapabilityForDelegation({
+        ...input,
+        delegationId: "budget-action-2",
+        idempotencyKey: "budget-key-2",
+        usage: { toolCalls: 10, patchBytes: 0 },
+      }),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(authority.toolBudgetExhausted("run-1")).toBe(true);
+    expect(authority.toolBudgetExhausted("run-other")).toBe(false);
+  });
+
   it("authenticates the server-private capability before live-fact and replay admission", () => {
     const authority = service();
     const minted = mint(authority);

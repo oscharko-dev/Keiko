@@ -212,7 +212,7 @@ it("upgrades an existing v40 run and admits only the closed verification settlem
   runMigrations(db);
   expect(
     db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
-  ).toEqual(before);
+  ).toEqual({ ...before, verification_gap: null });
   settle("verification-not-evidenced");
   expect(
     db.prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = ?").get("run-v41"),
@@ -296,9 +296,11 @@ describe("v40 migration — edit refusal causes (F5, #3873)", () => {
 
     runMigrations(db);
 
+    // Every column value carries through unchanged; the one column a later migration appended
+    // (v83 `verification_gap`, #4491) reads NULL for a row that predates it.
     expect(
       db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
-    ).toEqual(before);
+    ).toEqual({ ...before, verification_gap: null });
     const indexes = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -643,9 +645,11 @@ describe("v40 migration — terminal run causes (F9, #3873)", () => {
 
     runMigrations(db);
 
+    // Every column value carries through unchanged; the one column a later migration appended
+    // (v83 `verification_gap`, #4491) reads NULL for a row that predates it.
     expect(
       db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
-    ).toEqual(before);
+    ).toEqual({ ...before, verification_gap: null });
     const indexes = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -691,3 +695,31 @@ it.each([46, 47, 48, 49, 50])(
     }
   },
 );
+
+// #4491: v83 adds the closed verification gap of a run that settled without a passing check, as a
+// plain column. It admits only its four words, and a row that predates it reads NULL.
+it("v83 adds a closed verification_gap column that reads NULL for older rows", () => {
+  const db = openWithForeignKeys();
+  applyMigrationsUpTo(db, 82);
+  insertMinimalCodingRuntimeSnapshot(db, "run-v83");
+  runMigrations(db);
+  expect(
+    db
+      .prepare("SELECT verification_gap FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-v83"),
+  ).toEqual({ verification_gap: null });
+  const set = (gap: string): void => {
+    db.prepare("UPDATE coding_runtime_snapshots SET verification_gap = ? WHERE run_id = ?").run(
+      gap,
+      "run-v83",
+    );
+  };
+  for (const gap of ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"])
+    expect(() => {
+      set(gap);
+    }).not.toThrow();
+  expect(() => {
+    set("invented-gap");
+  }).toThrow(/CHECK constraint failed/u);
+  db.close();
+});

@@ -173,6 +173,9 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "last_successful_verified_commit",
   // V36 distinguishes context from delivery using a closed SQL vocabulary, never issue text.
   "issue_purpose",
+  // V83 (#4491): one of four closed words naming why a run that changed code ended without a
+  // passing check. No path, command, output or model text.
+  "verification_gap",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
