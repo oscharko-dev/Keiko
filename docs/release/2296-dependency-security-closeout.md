@@ -35,6 +35,38 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
+### 2026-11-23 follow-up (#4538): two id-bound waivers retired
+
+Issue [#4538](https://github.com/oscharko-dev/Keiko/issues/4538) reported that two
+`[[IgnoredVulns]]` entries in `osv-scanner.toml` matched nothing. The report was checked against
+the OSV records and the lockfile on 2026-11-23, found correct, and both entries are removed. The
+paragraphs below that describe them remain as the record of what was decided at the time.
+
+- [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces; recorded by
+  [#3679](https://github.com/oscharko-dev/Keiko/pull/3679)) was withdrawn by GitHub; OSV carries
+  `withdrawn: 2026-10-23T12:53:02Z` on the record. A withdrawn advisory is no longer reported, so
+  its ignore suppressed nothing. The lockfile still holds the dev-only `braces@3.0.3` and
+  `npm ls --omit=dev --all braces` is still empty.
+- [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (minimatch; recorded
+  by [#4167](https://github.com/oscharko-dev/Keiko/pull/4167)) affects `minimatch` from 7.0.0 up
+  to but excluding 11.0.1 on OSV. The lockfile holds `minimatch@11.0.8` (`node_modules/minimatch`)
+  and the dev-only `minimatch@3.1.5` (`node_modules/eslint-config-next/node_modules/minimatch`);
+  neither is in range. The entry's reason text and the 2026-10-31 paragraph below that said the
+  advisory's range "matches" the legacy 3.1.5 copy were wrong, and the exception for that copy was
+  never needed. The shipped fix is unchanged: the root overrides that resolve patched `minimatch`
+  11.x.
+
+Both ignores carried `ignoreUntil = 2026-11-30`. An ignore that matches no finding hides nothing
+today and would silently hide a reintroduced vulnerable release, so removing it makes the scan
+strictly stricter; no threshold, gate or shipped dependency changed. With the minimatch entry gone,
+`check:osv-waiver-scope` no longer carries its minimatch-specific lockfile triage (the audited
+legacy-copy validator and its tests); the gate's shipped-graph check, which asks npm audit and OSV
+whether any remaining suppressed id reaches a package the lockfile does not flag dev, is unchanged.
+That validator existed only to keep the waiver from hiding a vulnerable modern matcher. With the
+waiver gone nothing is hidden: a second unreviewed `minimatch` inside 7.0.0 up to 11.0.1, such as
+the one PR #4514 below describes, now fails the OSV scan itself instead of being refused by the
+waiver-scope gate. The reviewed 11.0.8 pin below is unchanged.
+
 ### 2026-10-31 follow-up (#4090)
 
 The CI-identical OSV Scanner 2.7.0 scan reproduced three affected package instances:
