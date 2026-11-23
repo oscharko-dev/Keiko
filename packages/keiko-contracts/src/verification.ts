@@ -94,6 +94,12 @@ export const VERIFICATION_DEPENDENCY_REFUSAL_REASONS = [
   "egress-destination-refused",
   "installed-lockfile-unreadable",
   "installed-unapproved-source",
+  // #4522: refusals of an install for the run's own shell on this host (`host-shell` below): the
+  // project's own manifest names an install lifecycle script the install never runs, its tree
+  // belongs to a package manager other than npm, or its lockfile no longer records its manifest.
+  "install-scripts-required",
+  "package-manager-unsupported",
+  "lockfile-mismatch",
 ] as const;
 
 export type VerificationDependencyRefusalReason =
@@ -101,6 +107,18 @@ export type VerificationDependencyRefusalReason =
 
 const VERIFICATION_DEPENDENCY_REFUSAL_REASON_SET: ReadonlySet<unknown> = new Set(
   VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+);
+
+/**
+ * Who the bootstrap installs for (#4522). `verification-steps` is the governed verifier's own steps
+ * (ADR-0043 D17), in its execution root and for that root's measured target. `host-shell` is the
+ * native coding runtime's shell on this host, which runs the project's check itself when the host
+ * can isolate no governed step: the tree is installed for this host's own target.
+ */
+export const VERIFICATION_DEPENDENCY_CONSUMERS = ["verification-steps", "host-shell"] as const;
+export type VerificationDependencyConsumer = (typeof VERIFICATION_DEPENDENCY_CONSUMERS)[number];
+const VERIFICATION_DEPENDENCY_CONSUMER_SET: ReadonlySet<unknown> = new Set(
+  VERIFICATION_DEPENDENCY_CONSUMERS,
 );
 
 /** The dependency install's network use: counts only, never a destination or a byte. */
@@ -128,6 +146,9 @@ export interface VerificationDependencySummary {
   // started for the install, with zero counts when npm made no request through it (an install that
   // ended before npm spawned); absent when no proxy was started (CodeRabbit review, PR #3452).
   readonly egress?: VerificationDependencyEgress | undefined;
+  // Present only for an install for the run's own shell (`host-shell`, #4522); absent is the
+  // governed verifier's own steps, as on every report before it.
+  readonly consumer?: VerificationDependencyConsumer | undefined;
 }
 
 // ─── The governed verification tool's wait for a human decision ────────────────────
@@ -613,7 +634,9 @@ export function isVerificationDependencySummary(
       "completionReceipt",
       "completionRecorded",
       "refusalReason",
+      "consumer",
     ]) &&
+    (value.consumer === undefined || VERIFICATION_DEPENDENCY_CONSUMER_SET.has(value.consumer)) &&
     hasDependencyCompletion(value) &&
     hasDependencyRefusalReason(value) &&
     hasDependencySummaryStates(value) &&

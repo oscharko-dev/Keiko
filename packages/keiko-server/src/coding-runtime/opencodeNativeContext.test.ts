@@ -109,6 +109,23 @@ describe("native OpenCode context interface", () => {
     expect(guidance).toContain("a denial authorizes no effect");
   });
 
+  // #4522: below Full access the native shell reaches only the registries the person configured
+  // (ADR-0184), so a public-registry `npm install` there fails; the governed verifier installs the
+  // declared dependencies for that shell instead, into a folder without a tree.
+  it("points the native profile's offline shell to the governed dependency install (#4522)", () => {
+    const guidance = OPENCODE_NATIVE_PROFILE_CONTEXT_ADDENDUM;
+    expect(guidance).toContain(
+      "Below Full access your shell reaches no package registry except those the person configured",
+    );
+    expect(guidance).toContain(
+      "When npm install in your shell cannot fetch a project's missing npm dependencies, call keiko_verification",
+    );
+    expect(guidance).toContain("into a folder without node_modules");
+    expect(guidance).toContain("without running install scripts");
+    expect(guidance).toContain("report that blocker with its reason");
+    expect(OPENCODE_NATIVE_CONTEXT_ADDENDUM).not.toContain("reaches no package registry");
+  });
+
   it("derives the facts of each profile from the guidance its plugin materializes (#3897)", () => {
     const facts = (
       text: string,

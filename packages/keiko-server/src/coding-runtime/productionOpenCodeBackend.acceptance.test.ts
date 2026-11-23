@@ -22,6 +22,11 @@
 // credential relay (ADR-0184), in every autonomy mode, and the token never reaches what the run can
 // read. The model installs the dependency in its own shell call, then runs the project's tests.
 //
+// Where `with-dependency` starts without its dependencies (#4522), the run calls Keiko's governed
+// verifier, whose dependency installation for the run's own shell (ADR-0043 D17) fetches `semver`
+// from the public npm registry through its registry egress proxy, without install scripts. Those
+// cases, and only those, reach a registry outside this machine.
+//
 // Runs where the dev-lane functional suite runs: macOS with `KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1`
 // and the staged payload (`npm run dev:coding-runtime:stage`). Set `KEIKO_ACCEPTANCE_EVIDENCE_FILE`
 // to keep the body-free evidence of every case (platform, user class, container runtime, versions
@@ -194,6 +199,11 @@ interface AcceptanceCase {
    * `PATH` that cannot reach its daemon, and `DOCKER_HOST` naming a socket file nobody serves.
    */
   readonly docker?: "stopped";
+  /**
+   * #4522: the project's committed lockfile no longer records what its `package.json` declares, as
+   * after a manual edit of the manifest; Keiko's installation for the run's shell refuses it.
+   */
+  readonly lockfile?: "stale";
 }
 
 /** The confinement the run's runtime process was spawned with, as its Activity Log line says. */
@@ -233,6 +243,12 @@ interface AcceptanceObservation {
    * check's `native-proof` line belongs to its shell command, not to the governed verifier.
    */
   readonly governedVerifications: readonly string[];
+  /**
+   * The run's `editor.verification.dependencies` lines as `consumer:state:reason:refused=N`, in
+   * order (#4522): who the governed installation was for, how it ended, its closed refusal reason
+   * and the destinations its egress proxy refused. Empty when Keiko attempted no installation.
+   */
+  readonly dependencyBootstraps: readonly string[];
   /** How often the server ran the stopped Docker's client; the `docker: "stopped"` cases only. */
   readonly dockerClientCalls?: number;
   /**
@@ -427,9 +443,57 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expectVerifiedInMode(observed, mode);
     },
   })),
-  // Baseline until #4522: a managed task worktree is a fresh checkout without `node_modules`, and
-  // below Full access the run's shell has no registry, so its tests cannot load the dependency.
-  // The run must say so honestly rather than succeed; #4522 turns this case into a success.
+  // #4522: a managed task worktree is a fresh checkout without `node_modules`, and below Full
+  // access the run's shell reaches no public registry. The run asks Keiko's governed verifier,
+  // which installs the declared dependencies for that shell on this host (ADR-0043 D17) and still
+  // runs none of the project's commands; the shell then runs the check. In every mode, in both
+  // work locations; each of these cases ended not verified before the change.
+  ...VERIFIED_MODES.flatMap((mode) =>
+    (["managed-worktree", "own-folder"] as const).map((workspace): AcceptanceExpectation => ({
+      id: `dependency-installed-by-keiko-${workspace}-${mode}`,
+      title: `verifies a project after Keiko installed its missing dependencies in the ${workspace} in ${mode}`,
+      acceptanceCase: {
+        ...verified("with-dependency", mode, workspace),
+        dependencies: "missing",
+        governed: "before-edit",
+      },
+      check: (observed): void => {
+        expectVerifiedInMode(observed, mode, 1);
+        expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
+        expect(observed.dependencyBootstraps).toEqual(["host-shell:installed:-:refused=0"]);
+      },
+    })),
+  ),
+  // #4519 on the install path: Keiko attempts the installation for the run's shell and refuses it
+  // (here: a lockfile that no longer records the manifest). The run hears why, its check stays red
+  // and it must end not verified, never succeeded.
+  {
+    id: "dependency-install-refused",
+    title:
+      "does not report success when Keiko refuses to install a managed worktree's dependencies",
+    acceptanceCase: {
+      ...verified("with-dependency", "supervised-coding"),
+      dependencies: "missing",
+      governed: "before-edit",
+      lockfile: "stale",
+      expected: "not-succeeded",
+    },
+    check: (observed): void => {
+      // The governed call failed on its refused installation and ran no check of the project, so
+      // the project counts only the two shell checks.
+      expectNotVerified(observed, "supervised-coding", {
+        testsPassOutsideKeiko: false,
+        projectCheckCount: 2,
+      });
+      expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed", "test:failed"]);
+      expect(observed.governedVerifications).toEqual([]);
+      expect(observed.dependencyBootstraps).toEqual([
+        "host-shell:refused:lockfile-mismatch:refused=-",
+      ]);
+    },
+  },
+  // The control: a run that never asks Keiko still cannot load the dependency below Full access,
+  // so its tests stay red and it must say so honestly rather than succeed.
   {
     id: "dependency-missing-worktree",
     title: "does not report success while a managed worktree lacks the project's dependencies",
@@ -441,6 +505,7 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     check: (observed): void => {
       expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
+      expect(observed.dependencyBootstraps).toEqual([]);
     },
   },
   // #4519: Keiko's governed verifier needs an enforcing isolation backend, which a Mac without a
@@ -487,20 +552,19 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expect(observed.dockerClientCalls).toBe(0);
     },
   },
-  // Without isolation the governed verifier installs nothing, so the run must not hear that an
-  // installation failed (#4519); the dependencies themselves are #4522's.
+  // #4519: a governed verifier that attempted no installation must not tell the run that one
+  // failed. Since #4522 it installs for the run's shell wherever the dependencies are missing, so
+  // the case where it attempts none is a folder whose tree Keiko did not install: it leaves that
+  // tree alone, says so on its own line (nothing installed), and the run hears only the isolation
+  // refusal.
   {
-    id: "dependency-missing-governed",
-    title: "does not report a failed installation when the governed verifier attempted none",
-    acceptanceCase: {
-      ...verified("with-dependency", "supervised-coding"),
-      dependencies: "missing",
-      expected: "not-succeeded",
-      governed: "after-edit",
-    },
+    id: "dependency-foreign-tree-left-alone",
+    title: "leaves a tree Keiko did not install alone and reports no failed installation",
+    acceptanceCase: { ...verified("with-dependency", "supervised-coding"), governed: "after-edit" },
     check: (observed): void => {
-      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
+      expectVerifiedInMode(observed, "supervised-coding");
       expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
+      expect(observed.dependencyBootstraps).toEqual(["host-shell:none:-:refused=-"]);
     },
   },
   // #4492: a Maven project whose parent POM only an internal repository serves, behind a login the
@@ -601,11 +665,16 @@ function expectLoginNeverReachedTheRun(observed: AcceptanceObservation): void {
   expect(observed.credentialFootprint?.leakedLogLineCount, context).toBe(0);
 }
 
-function expectVerifiedInMode(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+function expectVerifiedInMode(
+  observed: AcceptanceObservation,
+  mode: AcceptanceMode,
+  governedCalls = 0,
+): void {
   expectSucceeded(observed, mode);
   // Ask for approval asks before each command and before the edit: the failing check, the
-  // edit, the passing check. The other modes ask for none of this workspace-contained work.
-  expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 : 0);
+  // edit, the passing check, and each governed verifier call. The other modes ask for none of
+  // this workspace-contained work.
+  expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 + governedCalls : 0);
   expect(observed.denialCount).toBe(0);
 }
 
@@ -739,7 +808,7 @@ async function observeAcceptanceCase(
   // ... and it fails because the project's tests ran and failed, not because the build died first.
   expect(recordedChecks(prepared.runRoot)).toBe(1);
   const checksBefore = recordedChecks(prepared.runRoot);
-  const outsideSourceBefore = outsideSourceDigest(acceptanceCase.project, prepared.runRoot);
+  const outsideSourceBefore = outsideSourceDigest(acceptanceCase, prepared.runRoot);
   const requestsBefore = prepared.surroundings?.statusCounts() ?? {};
   const script = acceptanceScript(acceptanceCase, prepared);
   const log = recordActivityLog();
@@ -778,7 +847,7 @@ async function observeAcceptanceCase(
     ...(prepared.surroundings === undefined ? {} : { credentialFootprint: footprint.result(log) }),
     testerCheckExitCode: await testerCheck(acceptanceCase, prepared),
     outsideSourceUnchanged:
-      outsideSourceDigest(acceptanceCase.project, prepared.runRoot) === outsideSourceBefore,
+      outsideSourceDigest(acceptanceCase, prepared.runRoot) === outsideSourceBefore,
     editLanded: readFileSync(target, "utf8") === finalContent,
     ...(acceptanceCase.docker === undefined
       ? {}
@@ -964,6 +1033,7 @@ async function prepareAcceptanceCase(
   roots.push(root);
   const repository = join(root, "repository");
   cpSync(join(FIXTURES, acceptanceCase.project), repository, { recursive: true });
+  if (acceptanceCase.lockfile === "stale") writeStaleLockfile(repository);
   commitFixture(repository);
   const owners = createFunctionalTaskWorkspaceOwners(
     join(root, "bff-state", "ui-db", "task-workspaces"),
@@ -1092,10 +1162,51 @@ function selectOwnFolder(
  * The dependency as `npm install` would leave it, taken from this checkout's own lockfile-pinned
  * copy so the test reaches no registry. `semver` has no dependencies of its own.
  */
+// The person's own install, as npm leaves it: the package and npm's hidden lockfile, which npm
+// writes last and by which Keiko tells an installed tree from an empty or partial folder (#4522).
 function installSemver(folder: string): void {
-  cpSync(join(REPOSITORY_ROOT, "node_modules", "semver"), join(folder, "node_modules", "semver"), {
-    recursive: true,
-  });
+  const source = join(REPOSITORY_ROOT, "node_modules", "semver");
+  cpSync(source, join(folder, "node_modules", "semver"), { recursive: true });
+  const { version } = JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as {
+    readonly version: string;
+  };
+  writeFileSync(
+    join(folder, "node_modules", ".package-lock.json"),
+    `${JSON.stringify(
+      {
+        name: "keiko-acceptance-release",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          "node_modules/semver": {
+            version,
+            resolved: `https://registry.npmjs.org/semver/-/semver-${version}.tgz`,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+// A lockfile whose root entry records none of the dependencies the manifest declares.
+function writeStaleLockfile(repository: string): void {
+  writeFileSync(
+    join(repository, "package-lock.json"),
+    `${JSON.stringify(
+      {
+        name: "keiko-acceptance-release",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: { "": { name: "keiko-acceptance-release", version: "1.0.0" } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 async function serveAcceptance(
@@ -1241,10 +1352,16 @@ function recordedChecks(folder: string): number {
  * A digest of every entry outside `src/`, in a stable order: its relative path, its kind and
  * mode, and its bytes or, for a symbolic link, its target.
  */
-function outsideSourceDigest(project: AcceptanceProject, folder: string): string {
+function outsideSourceDigest(acceptanceCase: AcceptanceCase, folder: string): string {
   const hash = createHash("sha256");
+  const { project } = acceptanceCase;
   const source = SOURCE_DIRECTORIES[project];
-  const ignored: ReadonlySet<string> = new Set([".git", CHECK_RECORD, ...BUILD_OUTPUT[project]]);
+  const ignored: ReadonlySet<string> = new Set([
+    ".git",
+    CHECK_RECORD,
+    ...BUILD_OUTPUT[project],
+    ...installOutput(acceptanceCase),
+  ]);
   const visit = (directory: string, prefix: string): void => {
     const names = readdirSync(directory).sort((a, b) => a.localeCompare(b));
     for (const name of names) {
@@ -1262,6 +1379,18 @@ function outsideSourceDigest(project: AcceptanceProject, folder: string): string
   return hash.digest("hex");
 }
 
+/**
+ * What Keiko's governed installation may add to a `with-dependency` folder that starts without its
+ * dependencies (#4522): the installed tree, which the project's own ignore file names. A lockfile
+ * is not on this list: that installation writes none (`--no-save`), so a new `package-lock.json`
+ * fails the comparison.
+ */
+function installOutput(acceptanceCase: AcceptanceCase): readonly string[] {
+  return acceptanceCase.project === "with-dependency" && acceptanceCase.dependencies === "missing"
+    ? ["node_modules"]
+    : [];
+}
+
 function settledFacts(
   log: BufferedServerLogSink,
   runId: string,
@@ -1276,6 +1405,7 @@ function settledFacts(
   | "buildSettings"
   | "relayLines"
   | "governedVerifications"
+  | "dependencyBootstraps"
 > {
   const settled = log.events.find(
     (event) => event.op === "coding-runtime.run.settled" && event.extra?.runId === runId,
@@ -1321,6 +1451,22 @@ function settledFacts(
     governedVerifications: log.events.flatMap((event) =>
       event.op === "coding-runtime.verification" && event.extra?.state !== "native-proof"
         ? [[event.extra?.state, ...stepList(event.extra?.steps)].map(String).join(" ")]
+        : [],
+    ),
+    // The governed installation's own line, under the run's correlation: it is in the run's
+    // timeline, whatever the verifier's steps then did.
+    dependencyBootstraps: log.events.flatMap((event) =>
+      event.op === "editor.verification.dependencies" && event.correlationId === runId
+        ? [
+            [
+              event.extra?.consumer ?? "-",
+              event.extra?.state,
+              event.extra?.refusalReason ?? "-",
+              `refused=${typeof event.extra?.egressRefused === "number" ? String(event.extra.egressRefused) : "-"}`,
+            ]
+              .map(String)
+              .join(":"),
+          ]
         : [],
     ),
     // Whether a build reached the relay at all, and how each request ended: closed values only.

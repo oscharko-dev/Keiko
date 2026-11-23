@@ -6,12 +6,12 @@ into a scratch Git repository, gives a run the task below and checks the end sta
 files are data, not product code: they are excluded from lint and from the repository's test
 collection.
 
-| Project                     | Defect                                                                                                                                          | Needs                                                      |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `no-dependencies`           | `invoiceTotal` drops the first line (`slice(1)`)                                                                                                | Node.js only                                               |
-| `with-dependency`           | `newestStable` sorts ascending and returns the oldest stable one                                                                                | the `semver` package, installed                            |
-| `npm-internal-registry`     | `statementTotal` returns the largest line instead of the sum; its dependency `@acceptance/ledger` exists only in an npm registry behind a token | the test's loopback registry; the run's own `npm install`  |
-| `maven-internal-repository` | `Invoice.total` drops the first line (`skip(1)`); the parent POM exists only in an internal repository behind a login                           | Maven, a JDK and `npm run provision:acceptance-maven` once |
+| Project                     | Defect                                                                                                                                          | Needs                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `no-dependencies`           | `invoiceTotal` drops the first line (`slice(1)`)                                                                                                | Node.js only                                                |
+| `with-dependency`           | `newestStable` sorts ascending and returns the oldest stable one                                                                                | the `semver` package, installed or from the public registry |
+| `npm-internal-registry`     | `statementTotal` returns the largest line instead of the sum; its dependency `@acceptance/ledger` exists only in an npm registry behind a token | the test's loopback registry; the run's own `npm install`   |
+| `maven-internal-repository` | `Invoice.total` drops the first line (`skip(1)`); the parent POM exists only in an internal repository behind a login                           | Maven, a JDK and `npm run provision:acceptance-maven` once  |
 
 Each Node.js project's `npm test` first runs `scripts/record-check.js`, which appends one line to
 `.acceptance-checks` (ignored by Git). The tester compares that count with the checks the run
@@ -49,5 +49,8 @@ Before the run, `npm test` in the project fails. After the run, these all hold:
 A failed, skipped, stale or denied check never counts as passed. The full rule, the procedure and
 the baseline are in [`docs/qa/coding-acceptance-task.md`](../../../docs/qa/coding-acceptance-task.md).
 
-`with-dependency` has no lockfile. A governed dependency installation that needs one (#4522) adds
-it with the public registry's integrity.
+`with-dependency` has no lockfile. Where a case starts it without `node_modules`, the run asks
+Keiko's governed verifier, which installs `semver` for the run's own shell from the public npm
+registry, without install scripts and without writing a lockfile (#4522, ADR-0043 D17). Those cases
+are the only ones that reach a registry outside the machine; the comparison of the files outside
+`src/` leaves out only the `node_modules` that install adds, so a new lockfile still fails it.

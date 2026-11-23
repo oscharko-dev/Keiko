@@ -53211,6 +53211,12 @@
               "required": false
             },
             {
+              "name": "consumer",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "durationMs",
               "type": "integer",
               "dataClass": "duration",

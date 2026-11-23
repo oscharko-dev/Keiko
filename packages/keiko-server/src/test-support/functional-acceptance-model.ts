@@ -33,9 +33,11 @@ export type AcceptancePlan = "verify" | "skip-check" | "stale-check";
 
 /**
  * Where a `verify` turn also calls Keiko's governed verifier (#4519): directly after its edit, so
- * its own shell check follows the governed answer, or after that shell check.
+ * its own shell check follows the governed answer, or after that shell check. `before-edit` calls
+ * it after the first failing check, as a model does that finds the project's dependencies missing
+ * (#4522): Keiko installs them for the shell, and the turn then reads, edits and checks.
  */
-export type AcceptanceGovernedCall = "after-edit" | "after-check";
+export type AcceptanceGovernedCall = "before-edit" | "after-edit" | "after-check";
 
 export interface AcceptanceModelScript {
   /** The model the answers name: the pipeline's own chat model. */
@@ -114,6 +116,10 @@ function verifyCalls(
   check: AcceptanceToolCall,
   governed: AcceptanceGovernedCall | undefined,
 ): readonly AcceptanceToolCall[] {
+  if (governed === "before-edit") {
+    const [first, ...repair] = opening;
+    return first === undefined ? [GOVERNED_TEST, check] : [first, GOVERNED_TEST, ...repair, check];
+  }
   if (governed === "after-edit") return [...opening, GOVERNED_TEST, check];
   if (governed === "after-check") return [...opening, check, GOVERNED_TEST];
   return [...opening, check];

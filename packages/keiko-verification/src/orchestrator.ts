@@ -8,6 +8,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  type VerificationDependencyConsumer,
   type VerificationDependencySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
@@ -32,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { classifyOutcome, type AbortReason } from "./classify.js";
 import {
+  otherManagerBootstrapRefusal,
   planDependencyBootstrap,
   runDependencyBootstrap,
   type DependencyBootstrapDeps,
@@ -41,8 +43,9 @@ import { classifyScripts } from "./detect.js";
 import { outputExcerpt } from "./excerpt.js";
 import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
+import { detectPackageManager } from "./package-dir.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
-import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "./plan.js";
+import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX, NATIVE_SHELL_SKIP_PREFIX } from "./plan.js";
 import type {
   VerificationKind,
   VerificationPlan,
@@ -697,32 +700,98 @@ function dependenciesReady(outcome: DependencyBootstrapOutcome | undefined): boo
 // the host cannot enforce. The bootstrap prepares dependencies only for such a step (#4519): with no
 // enforcing backend every isolated step is refused, and installing for it would spend a registry
 // read and could name missing dependencies as the cause instead of the missing isolation.
-function someStepCanRun(plan: VerificationPlan, deps: VerificationDeps): boolean {
+function stepCanRun(step: VerificationStep, deps: VerificationDeps): boolean {
   const mode = deps.networkEnforcement ?? "enforce-or-fail-closed";
   const available = deps.enforcedNetworkAvailable ?? false;
-  return plan.steps.some(
-    (step) =>
-      step.skipReason === undefined &&
-      resolveStepNetwork(step.limits, mode, available).kind === "run",
+  return (
+    step.skipReason === undefined && resolveStepNetwork(step.limits, mode, available).kind === "run"
   );
 }
 
+function someStepCanRun(plan: VerificationPlan, deps: VerificationDeps): boolean {
+  return plan.steps.some((step) => stepCanRun(step, deps));
+}
+
+// Whether the native runtime's shell on this host is the one consumer of an install (ADR-0043 D17,
+// #4522): on macOS, for a check the host would run but cannot isolate, or one that needs the native
+// shell's tree. Linux isolates its steps with the bubblewrap the native runtime needs, and Windows
+// enables its own consumer with its own proof (#4496). A plan whose every step is skipped for
+// another reason names no check the install would serve.
+function hostShellConsumes(plan: VerificationPlan, deps: VerificationDeps): boolean {
+  if (deps.sharedHostPlatform?.os !== "darwin") return false;
+  return plan.steps.some((step) =>
+    step.skipReason === undefined
+      ? !stepCanRun(step, deps)
+      : step.skipReason.startsWith(NATIVE_SHELL_SKIP_PREFIX),
+  );
+}
+
+// Who the bootstrap installs for, or undefined when it installs for nobody (#4519, #4522): the
+// governed steps when one of them can run on this host, else the native runtime's shell where
+// `hostShellConsumes` says so; otherwise nothing is installed for a step that cannot run.
+function bootstrapConsumer(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+): VerificationDependencyConsumer | undefined {
+  if (someStepCanRun(plan, deps)) return "verification-steps";
+  return hostShellConsumes(plan, deps) ? "host-shell" : undefined;
+}
+
+// Whether the folder the bootstrap installs into belongs to Yarn or pnpm without an installed tree.
+// A nested package carries its manager, and its steps are skipped while that tree is missing
+// (`plan.ts`). The workspace root is read for the host shell only (#4522): the governed steps keep
+// installing a root package with npm, as before.
+function otherManagerTreeMissing(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+  fs: WorkspaceFs,
+  consumer: VerificationDependencyConsumer,
+): boolean | undefined {
+  if (plan.packageManager !== undefined) {
+    if (plan.packageManager === "npm") return undefined;
+    return plan.steps.some(
+      (step) => step.skipReason?.startsWith(NATIVE_SHELL_SKIP_PREFIX) === true,
+    );
+  }
+  if (consumer !== "host-shell") return undefined;
+  const onFailure = deps.onDependencyBootstrapFailure;
+  const manager = detectPackageManager(deps.workspace, fs, "", (error) => {
+    onFailure?.({ stage: "inspection", error });
+  });
+  if (manager === "npm") return undefined;
+  const root = deps.workspace.root;
+  return !fs.exists(join(root, "node_modules")) && !fs.exists(join(root, ".pnp.cjs"));
+}
+
 // ADR-0043 D17: decide about, and if needed install, the workspace's dependencies before the first
-// script step. Nothing is done for a plan without a runnable step, or when the caller left the
-// bootstrap off; a bootstrap that did not succeed hands its redacted output tail to the caller's
-// seam exactly like a failed step does.
+// script step. Nothing is done for a plan without a consumer, or when the caller left the bootstrap
+// off; a bootstrap that did not succeed hands its redacted output tail to the caller's seam exactly
+// like a failed step does.
 async function bootstrapDependencies(
   plan: VerificationPlan,
   deps: VerificationDeps,
   baseSpawn: SpawnFn,
 ): Promise<DependencyBootstrapOutcome | undefined> {
-  if (!someStepCanRun(plan, deps)) return undefined;
-  // The bootstrap installs with npm only. A package that names Yarn or pnpm is never installed by
-  // it: its steps are already skipped as `native shell required` while its tree is missing.
-  if (plan.packageManager !== undefined && plan.packageManager !== "npm") return undefined;
+  const consumer = bootstrapConsumer(plan, deps);
+  if (consumer === undefined) return undefined;
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const bootstrap = bootstrapDeps(bootstrapScope(plan, deps), fs, baseSpawn);
-  const bootstrapPlan = planDependencyBootstrap(bootstrap.workspace, fs, bootstrap.onFailure);
+  const bootstrap = bootstrapDeps(bootstrapScope(plan, deps), fs, baseSpawn, consumer);
+  // The bootstrap installs with npm only. A package that names Yarn or pnpm is never installed by
+  // it: its steps are already skipped as `native shell required` while its tree is missing. For the
+  // host shell, which has no other way to that tree below Full access, that is a refusal (#4522).
+  const otherManager = otherManagerTreeMissing(plan, deps, fs, consumer);
+  if (otherManager !== undefined) {
+    return consumer === "host-shell" && otherManager
+      ? otherManagerBootstrapRefusal(bootstrap)
+      : undefined;
+  }
+  const bootstrapPlan = planDependencyBootstrap(
+    bootstrap.workspace,
+    fs,
+    bootstrap.onFailure,
+    undefined,
+    bootstrap.consumer,
+  );
   if (bootstrapPlan.kind === "none") return undefined;
   const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrap);
   if (outcome.excerpt !== undefined) {
@@ -743,10 +812,28 @@ function bootstrapScope(plan: VerificationPlan, deps: VerificationDeps): Verific
   };
 }
 
+// The host shell's tree is installed on this host for this host's own target (#4522): the governed
+// steps' execution root and its measured target are not that consumer's, so neither is passed on.
+function bootstrapTarget(
+  deps: VerificationDeps,
+  consumer: VerificationDependencyConsumer,
+): Pick<
+  DependencyBootstrapDeps,
+  "dependencyInstallTarget" | "resolveDependencyInstallTarget" | "sharedHostPlatform" | "consumer"
+> {
+  if (consumer === "host-shell") return { consumer };
+  return {
+    dependencyInstallTarget: deps.dependencyInstallTarget,
+    resolveDependencyInstallTarget: deps.resolveDependencyInstallTarget,
+    sharedHostPlatform: deps.sharedHostPlatform,
+  };
+}
+
 function bootstrapDeps(
   deps: VerificationDeps,
   fs: WorkspaceFs,
   baseSpawn: SpawnFn,
+  consumer: VerificationDependencyConsumer,
 ): DependencyBootstrapDeps {
   return {
     workspace: deps.workspace,
@@ -754,20 +841,26 @@ function bootstrapDeps(
     spawn: baseSpawn,
     processEnv: deps.processEnv ?? process.env,
     now: deps.now ?? Date.now,
-    dependencyInstallTarget: deps.dependencyInstallTarget,
-    resolveDependencyInstallTarget: deps.resolveDependencyInstallTarget,
-    sharedHostPlatform: deps.sharedHostPlatform,
-    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
-    ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
-    ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
-    ...(deps.onDependencyBootstrapFailure === undefined
-      ? {}
-      : { onFailure: deps.onDependencyBootstrapFailure }),
-    ...(deps.sandboxAvailability === undefined
-      ? {}
-      : { sandboxAvailability: deps.sandboxAvailability }),
-    ...(deps.platform === undefined ? {} : { platform: deps.platform }),
+    ...bootstrapTarget(deps, consumer),
+    // Every optional hook accepts `undefined`, and the bootstrap reads each one by that test.
+    signal: deps.signal,
+    resolveExecutable: deps.resolveExecutable,
+    onTerminated: deps.onTerminated,
+    onFailure: deps.onDependencyBootstrapFailure,
+    sandboxAvailability: deps.sandboxAvailability,
+    platform: deps.platform,
   };
+}
+
+function forHostShell(outcome: DependencyBootstrapOutcome): boolean {
+  return outcome.summary.consumer === "host-shell";
+}
+
+// A bootstrap for the steps that did not succeed leaves them without their dependencies. One for the
+// run's own shell leaves the steps as they are (#4522): none of them can run here, and the report
+// keeps why, while the summary names the install the shell lacks.
+function stepsLackDependencies(outcome: DependencyBootstrapOutcome): boolean {
+  return !dependenciesReady(outcome) && !forHostShell(outcome);
 }
 
 // Every planned step, unexecuted, when the bootstrap left the workspace without its dependencies.
@@ -897,7 +990,7 @@ export async function runVerification(
     (deps.dependencyBootstrap ?? "off") === "auto"
       ? await bootstrapDependencies(plan, deps, baseSpawn)
       : undefined;
-  if (bootstrap !== undefined && !dependenciesReady(bootstrap)) {
+  if (bootstrap !== undefined && stepsLackDependencies(bootstrap)) {
     const results = dependenciesUnavailableResults(plan, bootstrap);
     return finishReport(workspaceRoot, results, false, startedAtMs, now, bootstrap.summary);
   }

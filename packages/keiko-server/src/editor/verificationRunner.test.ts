@@ -35,6 +35,7 @@ import {
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { isVerificationDependencySummary } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/index.js";
@@ -1156,6 +1157,86 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
       formatActivityLogProofLine(dependencyLines[0] ?? {}),
     );
     expect(proven).toMatchObject({ state: "installed", lockfile: "created" });
+  });
+
+  // #4522: an install for the native runtime's own shell names that consumer and its closed refusal,
+  // so the timeline tells it from the governed steps' own install.
+  it("names the host-shell consumer and its refusal on the dependencies line", async () => {
+    const events: ServerLogEvent[] = [];
+    const hostShell: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "refused",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 3,
+        detail: "the lockfile does not record what package.json declares",
+        refusalReason: "lockfile-mismatch",
+        consumer: "host-shell",
+      },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(hostShell).port,
+    });
+
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts", correlationId: "deps-shell" }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    expect(line).toMatchObject({
+      correlationId: "deps-shell",
+      extra: { state: "refused", refusalReason: "lockfile-mismatch", consumer: "host-shell" },
+    });
+    const proven = expectActivityLogProof(
+      "editor.verification.dependencies.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ consumer: "host-shell", refusalReason: "lockfile-mismatch" });
+    expect(JSON.stringify(line)).not.toContain("package.json declares");
+  });
+
+  // #4522: a tree Keiko did not install is left alone, and the timeline says so: nothing installed,
+  // no receipt of this process, for the run's own shell.
+  it("records a tree it left alone for the host shell without a receipt", async () => {
+    const events: ServerLogEvent[] = [];
+    const leftAlone: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "none",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        completionReceipt: "missing",
+        completionRecorded: false,
+        consumer: "host-shell",
+      },
+    };
+    // The summary the orchestrator emits for this tree, which the run-completed event validates.
+    expect(isVerificationDependencySummary(leftAlone.dependencies)).toBe(true);
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(leftAlone).port,
+    });
+
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts", correlationId: "deps-left" }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    const proven = expectActivityLogProof(
+      "editor.verification.dependencies.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({
+      state: "none",
+      completionReceipt: "missing",
+      completionRecorded: false,
+      consumer: "host-shell",
+    });
   });
 
   it("carries the install's registry egress counts on the dependencies line", async () => {

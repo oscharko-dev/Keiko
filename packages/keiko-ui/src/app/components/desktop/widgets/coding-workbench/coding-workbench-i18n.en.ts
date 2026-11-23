@@ -761,6 +761,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
   "codingWorkbench.activity.toolState.not-run": "Not run",
   "codingWorkbench.activity.toolState.isolation-unavailable": "Cannot run here",
+  "codingWorkbench.activity.toolState.dependencies-unavailable": "Dependencies missing",
   "codingWorkbench.activity.toolState.not-done": "Not done",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
@@ -1372,6 +1373,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
   "codingWorkbench.activity.verification.isolation-unavailable":
     "Verification could not run on this computer: for this run Keiko runs project commands only inside a container runtime (Docker or Podman), and none is running. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
+  "codingWorkbench.activity.verification.dependencies-unavailable":
+    "Verification has not run: Keiko could not install the project's dependencies, so no check ran. That is not a failing check. Install the dependencies in the project folder yourself, then verify again.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":

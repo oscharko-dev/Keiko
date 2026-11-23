@@ -64,6 +64,11 @@ a named-pipe relay to the attested loopback ports. No launch uses the D18/D19 br
 `keiko start` no longer sets it up, and the Workbench offers no Repair. The work location of D18 is
 widened to the operator's own folders, with the protections D21 names.
 
+1.12 — #4522 amends D17 (2026-11-23): where no step can run on this host but the native runtime's
+own shell runs the checks there, the bootstrap installs for that shell (`host-shell`) with
+`--no-save`, leaves a tree it did not install alone, and refuses with three closed reasons of its
+own what such an install cannot give.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -711,6 +716,85 @@ bootstrap remains a failed verification. Isolation, the refusal and its evidence
 unchanged. The shell check the guidance asks for proves the staged commit candidate through the
 same verified-commit ticket (ADR-0137, #3907 AC3), so a native run on macOS can commit verified
 work.
+
+**The run's own shell as the consumer (#4522, 2026-11-23).** On a Mac without a container runtime
+no step can run, so the plan above installs nothing, and below Full access the native runtime's
+shell reaches no public registry: a fresh managed worktree, or a fresh clone, could not load its
+dependencies at all. Where a native run's verification names macOS as the host platform
+(`sharedHostPlatform`), no step of its plan can run on this host, and one of them is a check the host
+would run but cannot isolate, or one skipped for the native shell's missing Yarn or pnpm tree, the
+orchestrator installs for that shell instead (`consumer: "host-shell"` on the summary and on
+`editor.verification.dependencies`). A plan whose every step is skipped for another reason gets no
+install. Windows enables this consumer with its own proof (#4496); until then a Windows native run
+keeps the plan above. The steps are still refused for isolation and the report keeps
+that refusal; the shell then runs the project's own check, which the native policy reads as the
+run's evidence (ADR-0137). This install:
+
+- installs for the host as it is: no target probe, no target flags and no foreign-target check, since
+  the tree is for the host itself, and its receipt is bound to the host identity;
+- adds `--no-save`, so npm writes neither `package.json` nor a lockfile; the hidden lockfile is still
+  written and still held to the approved-registry rule after npm exits;
+- keeps every other rule of this decision: the source checks, the project `.npmrc` admission, the
+  empty HOME, the egress proxy to the approved registry, the limits and the receipt;
+- leaves a tree npm finished alone. npm writes its hidden lockfile
+  (`node_modules/.package-lock.json`) last in a completed install, so a hidden lockfile newer than
+  `package.json` and the lockfiles marks a tree npm finished for them: the person's own install, one
+  the shell made through the repository credential relay (ADR-0184), which names a registry this
+  install would refuse as a source and a firewalled network would refuse to reach, or one this
+  process installed. The shell writes caches into `node_modules` itself, so the shell's tree is
+  judged by that hidden lockfile rather than by the full-tree receipt of the steps above: a tree
+  this process installed stays `current` while the hidden lockfile is the one its install left
+  (bound to the host identity), and one npm rewrote since is left alone like any other. A left-alone
+  tree is `none` on its line, with `completionReceipt: "missing"` (or `"changed"` when this process
+  still holds a receipt npm has since rewritten) and `completionRecorded`. A folder without the
+  hidden lockfile, a tree older than its manifest or lockfiles, a tree this process installed for
+  another target, and a folder where an install of this process has not completed (npm may write the
+  hidden lockfile before it fails) are installed into;
+- refuses before npm runs, with its own closed reason, what such an install cannot give the shell:
+  `install-scripts-required` (the root or a workspace member names `preinstall`, `install` or
+  `postinstall`, or holds a `binding.gyp` without `gypfile: false`, for which npm runs `node-gyp
+  rebuild`, and no tree exists, so a fresh tree would lack that script's output),
+  `lockfile-mismatch` (the root lockfile's own entry, or a member entry it records, no longer
+  records the manifest's `dependencies`, `devDependencies`, `optionalDependencies` or
+  `peerDependencies`; `npm ci` refuses the same state), and `package-manager-unsupported` (a Yarn
+  or pnpm project without its installed tree).
+
+The install scripts of the project's dependencies are not refused: many packages declare one they
+work without (esbuild checks its binary there), and refusing them would refuse most projects. A
+dependency that needs its script, such as a native addon built from source, is left incomplete; the
+project's check then fails in the shell and nothing is reported as verified.
+
+Further limits of this install. Its record of what it installed, and of an install it started that
+did not complete, lives in the server process: after a restart such a tree counts as finished by npm
+when its hidden lockfile is newer than its inputs, and is left alone until its manifest or a lockfile
+changes. A finished tree that no longer matches its inputs without a newer manifest or lockfile
+(packages removed by hand) is left alone too; the shell's check then fails and nothing is reported
+as verified. Only the approved public registry is reachable, within the install's wall-time limit
+(`DEPENDENCY_INSTALL_LIMITS.wallTimeMs`). A tree whose manifest or lockfile changed after npm wrote
+it is installed into from that registry, so a dependency only an internal repository serves makes
+that install fail; the run installs such dependencies in its shell through the credential relay
+(ADR-0184).
+
+A refused, failed or timed-out host-shell install does not replace the step results. The coding
+facade presents it as a verification failure that names the dependency failure, with one fixed
+sentence for the model per refusal reason and one for every other failure of this install, and the
+Workbench card shows `dependencies-unavailable` ("Dependencies missing"), never a failing check;
+nothing is reported as verified. An install for the verifier's own steps keeps its card and its
+answer. On Linux the native runtime needs bubblewrap, which also isolates the steps,
+so a Linux run keeps the plan above, and every container-backed path, including
+`install-target-foreign` for a container whose target differs from the host, is unchanged. A Mac
+whose container runtime is running keeps that plan too: its container steps can run, so the
+foreign target is refused as before and the shell gets no install from this path.
+
+Security review (#4522 AC9). The install is a Keiko process over the project's declarations, not
+model code, and has the same host-network shape as the rest of this decision: npm itself has no
+kernel egress confinement on the host, and the loopback proxy, the pinned registry and npm's
+`allow-*` gates confine it. Lifecycle scripts stay off, and the npm canary proves on real npm that
+neither a root nor a member script runs and that no lockfile is written. The code the install
+unpacks runs later only in the model's shell, inside the Seatbelt boundary and under the mode's
+network rule, exactly as a tree the person installed would. The shell's own network rule is
+unchanged: below Full access it reaches loopback and the credential relay only, and nothing in this
+amendment opens a route for it.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in

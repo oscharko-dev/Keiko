@@ -61,7 +61,10 @@ import {
   type NetworkIsolationProbe,
   type TimedNetworkIsolationProbe,
 } from "./verificationExecution.js";
-import { VERIFICATION_DEPENDENCY_REFUSAL_REASONS } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  VERIFICATION_DEPENDENCY_CONSUMERS,
+  VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   VERIFICATION_COMPLETION_FIELD_CONTRACTS,
   VERIFICATION_DEPENDENCY_STATE_VALUES,
@@ -255,6 +258,14 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+    },
+    // Who the tree was installed for (#4522): `host-shell` is the native runtime's own shell on this
+    // host. Absent is the governed verifier's own steps, as on every line before it.
+    consumer: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: VERIFICATION_DEPENDENCY_CONSUMERS,
     },
   },
   causal: "correlation",
@@ -1050,6 +1061,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           ...(dependencies.refusalReason === undefined
             ? {}
             : { refusalReason: dependencies.refusalReason }),
+          ...(dependencies.consumer === undefined ? {} : { consumer: dependencies.consumer }),
         },
       ),
     );

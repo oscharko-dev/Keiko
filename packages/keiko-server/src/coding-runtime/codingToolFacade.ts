@@ -52,6 +52,7 @@ import {
   isVerificationFailureLocation,
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
   VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS,
+  type VerificationDependencyRefusalReason,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
@@ -402,11 +403,29 @@ export function codingToolVerificationPresentation(
     return "verification" in result ? Object.freeze({ verificationOutcome: "passed" }) : {};
   }
   if (result.status !== "failed") return {};
+  if (dependenciesUnavailable(result)) {
+    return Object.freeze({ verificationOutcome: "dependencies-unavailable" });
+  }
   const verificationOutcome =
     result.reasonCode === undefined
       ? undefined
       : VERIFICATION_OUTCOME_BY_REASON.get(result.reasonCode);
   return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
+}
+
+// A refused or failed installation for the run's own shell fails the report, but no check ran: the
+// card says so instead of "a check ran and failed" (#4522). An installation for the governed
+// verifier's own steps keeps its existing outcome (ADR-0043 D17). The facade forwards only a
+// validated summary.
+function dependenciesUnavailable(
+  result: Extract<CodingToolResult, { readonly status: "failed" }>,
+): boolean {
+  if (result.reasonCode !== "VERIFICATION_FAILED") return false;
+  const dependencies = result.verificationFailure?.dependencies;
+  return (
+    dependencies?.consumer === "host-shell" &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  );
 }
 
 // The shared lifecycle statuses of a stage, an unstage, a branch and the verified commit. A status
@@ -906,7 +925,43 @@ function projectGovernedFailure(
         reasonCode,
         evidence: [{ kind: "governed-delegate", code: reasonCode }],
         verificationFailure,
+        ...hostShellDependencyGuidance(verificationFailure),
       };
+}
+
+// #4522: what the model is told when Keiko could not install the dependencies its own shell needs.
+// Fixed sentences keyed by the closed refusal reason, never derived from content; every other state
+// or reason of that installation gets the general sentence. The governed verifier's installation for
+// its own steps keeps its existing answer (ADR-0043 D17).
+const HOST_SHELL_DEPENDENCY_GUIDANCE: Readonly<
+  Partial<Record<VerificationDependencyRefusalReason, string>>
+> = {
+  "install-scripts-required":
+    "Keiko did not install this project's dependencies: the project names an install script (preinstall, install or postinstall) or builds a native addon from binding.gyp, and Keiko's installation never runs one, so the installed dependencies would be incomplete. Nothing was verified. Do not retry keiko_verification unchanged and do not run the install script another way; tell the person that the change is applied but not verified and that the dependencies need their install scripts.",
+  "package-manager-unsupported":
+    "Keiko did not install this project's dependencies: they belong to Yarn or pnpm, and Keiko installs npm dependencies only. Nothing was verified. Do not retry keiko_verification unchanged and do not convert the project to npm; tell the person that the change is applied but not verified and that the dependencies need the project's own package manager.",
+  "lockfile-mismatch":
+    "Keiko did not install this project's dependencies: the lockfile no longer records what package.json declares, and Keiko installs only what the lockfile records. Nothing was verified. Do not retry keiko_verification unchanged and do not edit package.json or the lockfile only to make the installation pass; tell the person that the change is applied but not verified and that the lockfile is out of date with package.json.",
+};
+const HOST_SHELL_DEPENDENCY_FALLBACK_GUIDANCE =
+  "Keiko could not install this project's dependencies, so nothing was verified; the dependency summary names the state and, for a refusal, its reason. Do not retry keiko_verification unchanged; report this blocker with its reason and say that the change is applied but not verified.";
+
+function hostShellDependencyGuidance(failure: CodingToolVerificationFailure): {
+  readonly guidance?: string;
+} {
+  const dependencies = failure.dependencies;
+  if (
+    dependencies?.consumer !== "host-shell" ||
+    !VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    return {};
+  }
+  const reason = dependencies.refusalReason;
+  return {
+    guidance:
+      (reason === undefined ? undefined : HOST_SHELL_DEPENDENCY_GUIDANCE[reason]) ??
+      HOST_SHELL_DEPENDENCY_FALLBACK_GUIDANCE,
+  };
 }
 
 function forwardsReasonCode(request: CodingToolActionRequest, reasonCode: string): boolean {

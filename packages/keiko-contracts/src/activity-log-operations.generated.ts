@@ -18058,6 +18058,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "no-runnable-steps",
           "not-run",
           "isolation-unavailable",
+          "dependencies-unavailable",
         ],
       },
       gitOutcome: {
@@ -18092,6 +18093,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "no-runnable-steps",
           "not-run",
           "isolation-unavailable",
+          "dependencies-unavailable",
         ],
       },
       {
@@ -20551,7 +20553,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "egress-destination-refused",
           "installed-lockfile-unreadable",
           "installed-unapproved-source",
+          "install-scripts-required",
+          "package-manager-unsupported",
+          "lockfile-mismatch",
         ],
+      },
+      consumer: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["verification-steps", "host-shell"],
       },
     },
     causal: "correlation",
