@@ -1928,7 +1928,7 @@ async function runScanLoop(
         break;
       }
     }
-    const fileMatches = await collectFileMatches(runner, file, state, candidates, loopIndex);
+    const fileMatches = await collectFileMatches(runner, file, state, candidates, loopIndex); // NOSONAR typescript:S9382 -- each file spends from the scan budget the next hitScanLimit check reads
     if (fileMatches !== undefined) {
       matches.push(fileMatches);
     }
@@ -4434,7 +4434,7 @@ async function appendQueuedExcerptRange(
   const initial = state.batch.remainingBytes;
   for (const segment of uncoveredQueuedRanges(state, range)) {
     if (state.batch.remainingBytes <= 0 || state.batch.remainingWindows <= 0) break;
-    const results = await readBatchedExcerptRange(state.batch, segment);
+    const results = await readBatchedExcerptRange(state.batch, segment); // NOSONAR typescript:S9382 -- each segment draws down the remaining byte and window grant the loop head re-checks
     state.results.push(...results);
     for (const result of results)
       if (!result.truncated && result.atom.lineRange !== undefined)
@@ -4455,7 +4455,7 @@ async function initialExcerptQueue(
   while (queue.ranges.length > 0 && remaining > 0 && state.batch.remainingWindows > 0) {
     const range = queue.ranges[0];
     if (range === undefined || !queuedRangeFits(state, range, remaining)) break;
-    remaining -= await appendQueuedExcerptRange(state, range, remaining);
+    remaining -= await appendQueuedExcerptRange(state, range, remaining); // NOSONAR typescript:S9382 -- `remaining` is exactly what the previous range left, and it gates the next queuedRangeFits
     queue.ranges.shift();
     queue.served = true;
   }
@@ -4469,7 +4469,7 @@ async function retryUnservedExcerptQueues(
     const range = queue.ranges[0];
     if (queue.served || range === undefined || state.batch.remainingWindows <= 0) continue;
     if (!queuedRangeFits(state, range, state.batch.remainingBytes)) continue;
-    await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+    await appendQueuedExcerptRange(state, range, state.batch.remainingBytes); // NOSONAR typescript:S9382 -- every retry is admitted against the bytes the earlier retries left
     queue.ranges.shift();
     queue.served = true;
   }
@@ -4492,7 +4492,7 @@ async function expandExcerptQueues(
         state.batch.remainingWindows <= 0
       )
         continue;
-      await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+      await appendQueuedExcerptRange(state, range, state.batch.remainingBytes); // NOSONAR typescript:S9382 -- the queues take turns spending one shared remaining grant, which is also the while condition
     }
   }
 }
@@ -4563,7 +4563,8 @@ async function queryFacetRangeGroups(
   const groups = new Set<number>();
   for (let line = range.startLine; line <= Math.min(range.endLine, lines.length); line += 1) {
     if (cached.scannedLines > 0 && cached.scannedLines % SCAN_YIELD_INTERVAL === 0)
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // The yield that lets the event loop breathe between scanned-line batches.
+      await new Promise<void>((resolve) => setImmediate(resolve)); // NOSONAR typescript:S9382 -- a yield, not work: there is nothing here to overlap
     cached.scannedLines += 1;
     assertStructuralExecutionActive(control);
     let matched = cached.groups.get(line);
@@ -4592,7 +4593,7 @@ async function ordinaryQueryFacetQueues(
   const planned = new Set<number>();
   const cached: QueryFacetLineCache = { groups: new Map(), scannedLines: 0 };
   for (const range of queues[0]?.ranges ?? []) {
-    const groups = await queryFacetRangeGroups(range, lines, matcher, control, cached);
+    const groups = await queryFacetRangeGroups(range, lines, matcher, control, cached); // NOSONAR typescript:S9382 -- the ranges fill one shared line cache, and its scanned-line count sets the yield cadence
     if (groups.size === 0) unmatched.ranges.push(range);
     for (const group of groups) {
       facets[group]?.ranges.push(range);
@@ -4639,7 +4640,7 @@ async function queuedExcerptResults(
   for (const range of request.ranges ?? []) {
     if (previous.has(excerptRangeKey(range))) continue;
     if (batch.remainingBytes <= 0 || batch.remainingWindows <= 0) break;
-    await appendQueuedExcerptRange(state, range, batch.remainingBytes);
+    await appendQueuedExcerptRange(state, range, batch.remainingBytes); // NOSONAR typescript:S9382 -- the explicit ranges stop as soon as an earlier one has spent the shared grant
   }
   const plan = await ordinaryQueryFacetQueues(
     request,
@@ -4651,7 +4652,7 @@ async function queuedExcerptResults(
   const share = Math.floor(batch.remainingBytes / Math.max(1, queues.length));
   const remainder = batch.remainingBytes % Math.max(1, queues.length);
   for (const [index, queue] of queues.entries())
-    await initialExcerptQueue(state, queue, share + Number(index < remainder));
+    await initialExcerptQueue(state, queue, share + Number(index < remainder)); // NOSONAR typescript:S9382 -- each queue's share is drawn from the one remaining grant the retry and expansion rounds below read
   await retryUnservedExcerptQueues(state, queues);
   if (request.firstRoundOnly !== true) await expandExcerptQueues(state, queues);
   return {

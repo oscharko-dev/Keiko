@@ -622,6 +622,42 @@ describe("file workspace index runtime-directory identity", () => {
     }
   });
 
+  // The prune candidates are inspected through a bounded order-preserving pool (32 probes wide),
+  // and every other prune pin here works with one or two snapshots — so none of them runs the pool
+  // past its first wave. This drives more segments than that width through the real store: a pool
+  // that drops, reorders or mis-filters a probe leaves candidates behind, and they would survive
+  // here. Proven red by truncating the mapped probe results before the undefined filter.
+  it("prunes every candidate when the retention scan runs wider than one probe wave", async () => {
+    const runtimeDir = await mkdtemp(join(tmpdir(), "keiko-index-prune-wide-"));
+    const generationId = storageGenerationId(KEY);
+    const decoys = Array.from(
+      { length: 40 },
+      (_unused, index) =>
+        `workspace-index-v2-${generationId}-${index.toString(16).padStart(64, "0")}.json`,
+    );
+    try {
+      for (const [index, decoy] of decoys.entries()) {
+        const path = join(runtimeDir, decoy);
+        writeFileSync(path, "stale", { encoding: "utf8", mode: 0o600 });
+        // Distinct, clearly older times, so retention orders them below the snapshot saved next.
+        utimesSync(path, 1 + index, 1 + index);
+      }
+      const store = createFileWorkspaceIndexStore({
+        runtimeDir,
+        encryptionKey: KEY,
+        maxSnapshots: 1,
+      });
+
+      await store.saveSnapshot("wide-prune", snapshot("src/wide.ts"));
+
+      // Exactly the snapshot just saved: all 40 older candidates were seen and removed.
+      expect(snapshotFiles(runtimeDir)).toHaveLength(1);
+      expect(readdirSync(runtimeDir).filter((name) => decoys.includes(name))).toEqual([]);
+    } finally {
+      rmSync(runtimeDir, { force: true, recursive: true });
+    }
+  });
+
   it("does not prune snapshot-shaped files after the parent changes during enumeration", async () => {
     const parent = await mkdtemp(join(tmpdir(), "keiko-index-prune-race-"));
     const runtimeDir = await mkdtemp(join(parent, "runtime-"));

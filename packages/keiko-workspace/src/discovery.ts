@@ -598,7 +598,7 @@ async function descendAsync(
       break;
     }
     walk.entriesVisited += 1;
-    await handleEntryAsync(walk, state, relativeDir, entry, depth);
+    await handleEntryAsync(walk, state, relativeDir, entry, depth); // NOSONAR typescript:S9382 -- a depth-first walk: which entries the maxFiles and entry-budget caps above keep depends on this order
   }
 }
 
