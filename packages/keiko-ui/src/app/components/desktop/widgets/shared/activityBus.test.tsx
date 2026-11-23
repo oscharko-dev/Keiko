@@ -219,6 +219,29 @@ describe("activityBus", () => {
     expect(getActivity()[0]).toMatchObject({ id: "run-1:cursor-3", type: "approved" });
   });
 
+  it("never evicts an open decision entry from the window a long run fills", () => {
+    act(() => logRuntimeActivityEvents([decisionEvent("cursor-1", 1)]));
+    const observations = Array.from(
+      { length: 200 },
+      (_, index): CodingWorkbenchRuntimeSseEvent => ({
+        schemaVersion: "1",
+        cursor: `obs-${String(index)}`,
+        sequence: 10 + index,
+        occurredAt: "2026-06-15T10:00:02.000Z",
+        kind: "runtime-event",
+        runId: "run-1",
+        state: "running",
+        revision: 10 + index,
+        eventKind: "observation-streamed",
+      }),
+    );
+    act(() => logRuntimeActivityEvents(observations));
+    expect(getActivity().length).toBeLessThanOrEqual(120);
+    expect(
+      getActivity().some((row) => row.id === "run-1:cursor-1" && row.type === "approval"),
+    ).toBe(true);
+  });
+
   it("does not re-admit an open decision replayed after its settlement", () => {
     act(() =>
       logRuntimeActivityEvents([

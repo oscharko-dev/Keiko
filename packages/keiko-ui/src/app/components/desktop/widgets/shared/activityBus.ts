@@ -104,8 +104,20 @@ function notifyActivityChanged(): void {
 function appendActivity(event: ActivityEvent): void {
   const current = window[STORE_KEY] ?? [];
   if (event.id !== undefined && current.some((candidate) => candidate.id === event.id)) return;
-  window[STORE_KEY] = [event, ...current].slice(0, MAX_EVENTS);
+  window[STORE_KEY] = retainWindow([event, ...current]);
   notifyActivityChanged();
+}
+
+// The newest MAX_EVENTS entries stay, except that an open operator decision is never evicted by
+// the high-volume entries a long run appends after it.
+function retainWindow(entries: readonly ActivityEvent[]): ActivityEvent[] {
+  if (entries.length <= MAX_EVENTS) return [...entries];
+  const open = entries.filter((entry) => entry.decision?.open === true);
+  const room = Math.max(MAX_EVENTS - open.length, 0);
+  let others = 0;
+  return entries
+    .filter((entry) => entry.decision?.open === true || others++ < room)
+    .slice(0, MAX_EVENTS);
 }
 
 export function logActivity(event: Omit<ActivityEvent, "time">): void {
