@@ -297,11 +297,14 @@ generic "verification is not complete" request at the end of a run. Three facts 
   persisted or sent to the model) and `editNeedsVerification` (`codingRuntimeDocumentationPaths.ts`)
   decides. A file is documentation by its extension (`.md`, `.mdx`, `.markdown`, `.txt`,
   `.rst`, `.adoc`, `.asciidoc`, plus the extensionless `README`, `LICENSE`, `NOTICE`, `CHANGELOG`,
-  `CONTRIBUTING` and `AUTHORS`) unless one of its directory segments, in any letter case, is a
-  directory code or tests read (`CODE_READ_DIRECTORIES`: `src`, `lib`, `app`, test, spec, resource,
-  fixture, snapshot, prompt, template, skill, locale, data, mock, asset, public and static folders,
-  `.claude` and `.github`), because `src/test/resources/expected.txt` is a golden file and a prompt
-  or skill `.md` is read by code. A `docs/` folder is deliberately not enough on its own, because
+  `CONTRIBUTING` and `AUTHORS`) unless one of its directory segments, in any letter case, is a directory code or tests read
+  (`CODE_READ_DIRECTORIES`: test, spec, resource, fixture, snapshot, mock, prompt, template and skill
+  folders, plus `src`, `data`, `i18n`, `locales`, `.claude` and `.github`), because
+  `src/test/resources/expected.txt` is a golden file and a prompt or skill `.md` is read by code. A
+  conventional documentation name (`README`, `CHANGELOG`, `CONTRIBUTING`, `LICENSE`, `SECURITY` and
+  similar) stays documentation under the broad segments (`src/foo/README.md`) but not under the
+  strict test, fixture, resource, prompt, template, skill and mock ones. Folders that hold plain
+  documentation (`app`, `lib`, `assets`, `public`, `static`) are not listed. A `docs/` folder is deliberately not enough on its own, because
   `docs/conf.py` or an example source file in it is code a check covers, and a CMake list and a pip
   requirements or constraints `.txt` are build input. An edit that names no path reads as code.
   A documentation-only edit demands no verification and leaves earlier check results standing; a run

@@ -325,6 +325,12 @@ export class CodingRuntimeRunEffortLedger {
     run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
   }
 
+  /** Whether a summary's edit revision is the run's current one (the rule `verification` applies). */
+  summaryIsCurrent(runId: string, editRevision: number | undefined): boolean {
+    const run = this.runs.get(runId);
+    return run !== undefined && verificationAtCurrentRevision(run, editRevision);
+  }
+
   verificationBlocked(
     runId: string,
     reason: CodingVerificationBlockedReason,

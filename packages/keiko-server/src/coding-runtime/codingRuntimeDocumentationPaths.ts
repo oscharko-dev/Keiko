@@ -13,35 +13,60 @@
 // Directories whose files code or tests read (source and test trees, fixtures and snapshots,
 // runtime-loaded prompts, templates, skills, locale and data folders, mocks, and tool configuration
 // folders). A path with any of these segments, in any letter case, is never documentation.
-export const CODE_READ_DIRECTORIES: ReadonlySet<string> = new Set([
-  ".claude",
-  ".github",
+export const STRICT_CODE_READ_DIRECTORIES: ReadonlySet<string> = new Set([
   "__fixtures__",
   "__mocks__",
   "__snapshots__",
   "__tests__",
-  "app",
-  "assets",
-  "data",
   "fixtures",
-  "i18n",
-  "lib",
-  "locales",
   "mocks",
   "prompts",
-  "public",
   "resources",
   "skills",
   "snapshots",
   "spec",
   "specs",
-  "src",
-  "static",
   "templates",
   "test",
   "test-data",
   "testdata",
   "tests",
+]);
+
+// Broader directories: a conventional documentation file (below) stays documentation in them, since
+// `src/foo/README.md` is a note about the code, not input to it. Folders such as `app`, `lib`,
+// `assets`, `public` and `static` are deliberately absent: they hold plenty of plain documentation.
+const BROAD_CODE_READ_DIRECTORIES: readonly string[] = [
+  ".claude",
+  ".github",
+  "data",
+  "i18n",
+  "locales",
+  "src",
+];
+
+export const CODE_READ_DIRECTORIES: ReadonlySet<string> = new Set([
+  ...STRICT_CODE_READ_DIRECTORIES,
+  ...BROAD_CODE_READ_DIRECTORIES,
+]);
+
+/**
+ * Conventional documentation files, by name without the prose extension: documentation in any
+ * directory except under a strict segment, where a file of that name is a golden file or fixture.
+ */
+export const CONVENTIONAL_DOCUMENTATION_STEMS: ReadonlySet<string> = new Set([
+  "authors",
+  "changelog",
+  "changes",
+  "code_of_conduct",
+  "contributing",
+  "history",
+  "licence",
+  "license",
+  "notice",
+  "readme",
+  "security",
+  "support",
 ]);
 
 const DOCUMENTATION_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -54,27 +79,26 @@ const DOCUMENTATION_EXTENSIONS: ReadonlySet<string> = new Set([
   ".txt",
 ]);
 
-// Conventional prose files that carry no extension at all.
-const DOCUMENTATION_BASENAMES: ReadonlySet<string> = new Set([
-  "authors",
-  "changelog",
-  "contributing",
-  "license",
-  "notice",
-  "readme",
-]);
-
 function basename(path: string): string {
   const normalized = path.replaceAll("\\", "/");
   return normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
 }
 
-function underCodeReadDirectory(path: string): boolean {
+function underDirectory(path: string, directories: ReadonlySet<string>): boolean {
   return path
     .replaceAll("\\", "/")
     .split("/")
     .slice(0, -1)
-    .some((segment) => CODE_READ_DIRECTORIES.has(segment.toLowerCase()));
+    .some((segment) => directories.has(segment.toLowerCase()));
+}
+
+function isConventionalDocumentationName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return CONVENTIONAL_DOCUMENTATION_STEMS.has(name);
+  return (
+    DOCUMENTATION_EXTENSIONS.has(name.slice(dot)) &&
+    CONVENTIONAL_DOCUMENTATION_STEMS.has(name.slice(0, dot))
+  );
 }
 
 function isBuildInputText(name: string): boolean {
@@ -85,10 +109,12 @@ function isBuildInputText(name: string): boolean {
 
 /** Whether a workspace-relative path names a documentation file that no check covers. */
 export function isDocumentationPath(path: string): boolean {
-  if (underCodeReadDirectory(path)) return false;
+  if (underDirectory(path, STRICT_CODE_READ_DIRECTORIES)) return false;
   const name = basename(path);
+  if (isConventionalDocumentationName(name)) return true;
+  if (underDirectory(path, CODE_READ_DIRECTORIES)) return false;
   const dot = name.lastIndexOf(".");
-  if (dot <= 0) return DOCUMENTATION_BASENAMES.has(name);
+  if (dot <= 0) return false;
   if (name.endsWith(".txt") && isBuildInputText(name)) return false;
   return DOCUMENTATION_EXTENSIONS.has(name.slice(dot));
 }

@@ -3212,7 +3212,12 @@ export class CodingRuntimeOrchestrator {
       event.verificationEditRevision,
       verificationFailureEvidence(event),
     );
-    if (verificationNeverRan(event))
+    // A summary with a refused step, even beside a passed one, is a check that could not fully run:
+    // a blocker to report. Only a summary at the run's current revision says anything about it.
+    if (
+      verificationNeverRan(event) &&
+      this.effort.summaryIsCurrent(current.runId, event.verificationEditRevision)
+    )
       this.effort.verificationBlocked(current.runId, "VERIFICATION_RUNNER_UNAVAILABLE");
   }
 

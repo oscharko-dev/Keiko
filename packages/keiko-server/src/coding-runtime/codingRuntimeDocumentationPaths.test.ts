@@ -1,5 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { editNeedsVerification, isDocumentationPath } from "./codingRuntimeDocumentationPaths.js";
+import {
+  CODE_READ_DIRECTORIES,
+  CONVENTIONAL_DOCUMENTATION_STEMS,
+  STRICT_CODE_READ_DIRECTORIES,
+  editNeedsVerification,
+  isDocumentationPath,
+} from "./codingRuntimeDocumentationPaths.js";
+
+describe("the closed sets of the rule", () => {
+  const STRICT = [
+    "__fixtures__",
+    "__mocks__",
+    "__snapshots__",
+    "__tests__",
+    "fixtures",
+    "mocks",
+    "prompts",
+    "resources",
+    "skills",
+    "snapshots",
+    "spec",
+    "specs",
+    "templates",
+    "test",
+    "test-data",
+    "testdata",
+    "tests",
+  ];
+  const BROAD = [".claude", ".github", "data", "i18n", "locales", "src"];
+
+  it("holds exactly the strict and the broad directories, with none of the documentation-heavy ones", () => {
+    expect([...STRICT_CODE_READ_DIRECTORIES].sort()).toEqual([...STRICT].sort());
+    expect([...CODE_READ_DIRECTORIES].sort()).toEqual([...STRICT, ...BROAD].sort());
+    for (const dir of ["app", "lib", "assets", "public", "static", "docs"])
+      expect(CODE_READ_DIRECTORIES.has(dir)).toBe(false);
+  });
+
+  it("holds exactly the conventional documentation names", () => {
+    expect([...CONVENTIONAL_DOCUMENTATION_STEMS].sort()).toEqual(
+      [
+        "authors",
+        "changelog",
+        "changes",
+        "code_of_conduct",
+        "contributing",
+        "history",
+        "licence",
+        "license",
+        "notice",
+        "readme",
+        "security",
+        "support",
+      ].sort(),
+    );
+  });
+});
 
 describe("isDocumentationPath", () => {
   it.each([
@@ -15,6 +70,16 @@ describe("isDocumentationPath", () => {
     "CONTRIBUTING",
     "docs/architecture/overview.md",
     "handbook/notes.txt",
+    // Conventional documentation names stay documentation under broad segments and elsewhere.
+    "src/foo/README.md",
+    "lib/CHANGELOG.md",
+    "packages/a/src/CONTRIBUTING",
+    "data/SECURITY.md",
+    // Folders that hold plenty of plain documentation are not code-read directories.
+    "docs/assets/x.md",
+    "static/guide.mdx",
+    "app/overview.md",
+    "public/notes.txt",
   ])("treats %s as documentation", (path) => {
     expect(isDocumentationPath(path)).toBe(true);
   });
@@ -45,6 +110,12 @@ describe("isDocumentationPath", () => {
     ".github/pull_request_template.md",
     ".claude/commands/review.md",
     "docs\\tests\\expected.txt",
+    // A conventional name under a strict segment is a golden file or fixture.
+    "src/test/resources/README.md",
+    "tests/fixtures/CHANGELOG.md",
+    "prompts/LICENSE",
+    "data/input.txt",
+    "src/notes.md",
   ])("treats %s as code", (path) => {
     expect(isDocumentationPath(path)).toBe(false);
   });

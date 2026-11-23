@@ -9030,7 +9030,9 @@ describe("verification truth at task settlement", () => {
     f: ReturnType<typeof fixture>,
     failedCount: number,
     notRunCount: number,
+    options: { readonly passedCount?: number; readonly editRevision?: number | undefined } = {},
   ): Promise<void> {
+    const passedCount = options.passedCount ?? 0;
     await f.orchestrator.ingest({
       schemaVersion: "1",
       eventId: `verification-${String(f.orchestrator.status().revision)}`,
@@ -9039,15 +9041,16 @@ describe("verification truth at task settlement", () => {
       kind: "verification-summarized",
       verificationKind: "verification-command",
       verificationStatus: "failed",
-      passedCount: 0,
+      passedCount,
       failedCount,
       skippedCount: 0,
-      verificationEditRevision: f.orchestrator.verificationRevision("run-1"),
+      verificationEditRevision:
+        options.editRevision ?? f.orchestrator.verificationRevision("run-1"),
       verificationTargetDigest: codingVerificationTargetDigest("test"),
       verificationSummary: {
         verifierId: "test",
         status: "failed",
-        passedCount: 0,
+        passedCount,
         failedCount,
         ...(notRunCount === 0 ? {} : { notRunCount }),
         skippedCount: 0,
@@ -9071,6 +9074,40 @@ describe("verification truth at task settlement", () => {
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // One passed and one denied step: a step was refused, so the check could not fully run. That is a
+  // blocker to report, not a failure to repair, and the gap says so.
+  it("reads a passed step beside a denied one as a check that could not start", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 1, 1, { passedCount: 1 });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // A late summary of an older edit revision says nothing about the current change.
+  it("records no blocker from a denied-only summary at a stale edit revision", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    const stale = f.orchestrator.verificationRevision("run-1");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.ts"] });
+    await summarized(f, 2, 2, { editRevision: stale });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
   });
 
   it("names only the failed and timed-out steps in the continuation of a mixed summary", async () => {

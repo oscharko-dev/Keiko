@@ -8,30 +8,17 @@ import {
   propertySettings,
   type Generator,
 } from "../../../../tests/support/property-testing.js";
-import { CODE_READ_DIRECTORIES, isDocumentationPath } from "./codingRuntimeDocumentationPaths.js";
+import {
+  CODE_READ_DIRECTORIES,
+  CONVENTIONAL_DOCUMENTATION_STEMS,
+  STRICT_CODE_READ_DIRECTORIES,
+  isDocumentationPath,
+} from "./codingRuntimeDocumentationPaths.js";
 
-const LISTED: readonly string[] = [
-  "src",
-  "lib",
-  "app",
-  "test",
-  "tests",
-  "__tests__",
-  "spec",
-  "specs",
-  "resources",
-  "fixtures",
-  "__fixtures__",
-  "testdata",
-  "test-data",
-  "__snapshots__",
-  "snapshots",
-  "prompts",
-  "templates",
-  "skills",
-  ".claude",
-  ".github",
-];
+// Drawn from the rule's own exports, so a directory added there is exercised without an edit here.
+const LISTED: readonly string[] = [...CODE_READ_DIRECTORIES];
+const STRICT: readonly string[] = [...STRICT_CODE_READ_DIRECTORIES];
+const EXEMPT_STEMS: readonly string[] = [...CONVENTIONAL_DOCUMENTATION_STEMS];
 const NEUTRAL = ["docs", "guide", "notes", "api", "handbook", "a", "b2"];
 const PROSE = [".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc", ".asciidoc"];
 const CODE = [".ts", ".tsx", ".js", ".mjs", ".java", ".py", ".json", ".xml", ".yml", ".kt", ".go"];
@@ -52,14 +39,18 @@ interface Sample {
   readonly cased: (text: string) => string;
 }
 
-function sample(extensions: readonly string[], listed: boolean): Generator<Sample> {
+function sample(
+  extensions: readonly string[],
+  listed: boolean,
+  options: { readonly pool?: readonly string[]; readonly stems?: readonly string[] } = {},
+): Generator<Sample> {
   return (random) => {
     const dirs = arrayOf((r) => r.pick(NEUTRAL), 0, 3)(random);
     const cased = caseVariant(random);
-    if (listed) dirs.splice(random.integer(0, dirs.length), 0, random.pick(LISTED));
+    if (listed) dirs.splice(random.integer(0, dirs.length), 0, random.pick(options.pool ?? LISTED));
     return {
       dirs: dirs.map((dir) => (LISTED.includes(dir) ? cased(dir) : dir)),
-      stem: random.pick(STEMS),
+      stem: random.pick(options.stems ?? STEMS),
       extension: random.pick(extensions),
       separator: random.pick(["/", "\\"] as const),
       cased,
@@ -88,10 +79,6 @@ function run(name: string, generate: Generator<Sample>, hold: (value: Sample) =>
 }
 
 describe("documentation path rule properties", () => {
-  it("lists exactly the directories the properties draw from", () => {
-    expect([...CODE_READ_DIRECTORIES]).toEqual(expect.arrayContaining([...LISTED]));
-  });
-
   run("a prose file under a listed directory is never documentation", sample(PROSE, true), (v) => {
     expect(isDocumentationPath(render(v))).toBe(false);
   });
@@ -105,6 +92,25 @@ describe("documentation path rule properties", () => {
     sample(PROSE, false),
     (v) => {
       expect(isDocumentationPath(render(v))).toBe(true);
+    },
+  );
+
+  run(
+    "a conventional documentation name is documentation outside every strict directory",
+    sample(PROSE, true, {
+      pool: LISTED.filter((dir) => !STRICT.includes(dir)),
+      stems: EXEMPT_STEMS,
+    }),
+    (v) => {
+      expect(isDocumentationPath(render(v))).toBe(true);
+    },
+  );
+
+  run(
+    "a conventional documentation name is code inside any strict directory",
+    sample(PROSE, true, { pool: STRICT, stems: EXEMPT_STEMS }),
+    (v) => {
+      expect(isDocumentationPath(render(v))).toBe(false);
     },
   );
 
