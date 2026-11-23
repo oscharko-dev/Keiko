@@ -1817,7 +1817,13 @@ describe("pinned native OpenCode plan tool (T19)", () => {
     "keeps the person's clipboard out of a shell's reach, to read and to write, in every mode",
     async () => {
       // A pasteboard nothing uses: this test never reads or replaces what the person copied. The
-      // positive control is an ordinary program in the same shell line.
+      // positive control is this process: it copies a canary to the same pasteboard and reads it
+      // back, and the canary is still there after every mode's shell tried to replace it.
+      const canary = `clipboard-canary-${randomUUID()}`;
+      const pasted = (): string =>
+        execFileSync("/usr/bin/pbpaste", ["-pboard", "ruler"], { encoding: "utf8" });
+      execFileSync("/usr/bin/pbcopy", ["-pboard", "ruler"], { input: canary });
+      expect(pasted()).toBe(canary);
       const probe = [
         '/usr/bin/pbpaste -pboard ruler > /dev/null; echo "read=$?"',
         'echo canary | /usr/bin/pbcopy -pboard ruler; echo "write=$?"',
@@ -1836,6 +1842,7 @@ describe("pinned native OpenCode plan tool (T19)", () => {
         "supervised-coding": refused,
         "autonomous-delivery": refused,
       });
+      expect(pasted()).toBe(canary);
     },
     240_000,
   );

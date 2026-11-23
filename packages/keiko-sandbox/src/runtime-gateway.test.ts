@@ -1466,6 +1466,8 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         expect(readFileSync(sibling).length).toBeGreaterThan(0);
         expect(readdirSync("/Library/Preferences").length).toBeGreaterThan(0);
         const licensed = existsSync(license) ? "read" : "refused";
+        // GitHub's macOS images accept the license, so the lane always proves the admitted read.
+        if (process.env.CI === "true") expect(licensed).toBe("read");
         if (licensed === "read") expect(readFileSync(license).length).toBeGreaterThan(0);
         const result = run(wrapped.command, wrapped.args, { HOME: privateStateRoot }, root);
         expect(result.status).toBe(0);

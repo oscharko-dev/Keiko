@@ -20,6 +20,16 @@ const BOUNDARY_SUITES = [
   "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional.test.ts",
 ];
 
+// The acceptance suite runs as the same account in the repository-relay job (A in the doc).
+const ACCEPTANCE_SUITE =
+  "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts";
+
+// The test and describe titles the published statements name as their proofs.
+function documentedProofTitles() {
+  const text = read("docs/coding-runtime/macos-native-boundary.md").replace(/\s+/gu, " ");
+  return [...text.matchAll(/"([^"]{20,})"/gu)].map((match) => match[1] ?? "");
+}
+
 function proofStep() {
   const step = boundary.jobs["native-boundary"].steps.find(
     (entry) => entry.name === "Run the boundary proofs as the standard account",
@@ -72,6 +82,19 @@ describe("macOS native boundary lane (#4521)", () => {
     );
     expect(created).toBeGreaterThan(-1);
     expect(created).toBeLessThan(steps.indexOf(proofStep()));
+  });
+
+  it("names, for every published statement, a proof that exists in a suite the lanes run", () => {
+    const sources = [...BOUNDARY_SUITES, ACCEPTANCE_SUITE].map((suite) => read(suite));
+    expect(proofStep().run).not.toContain(ACCEPTANCE_SUITE);
+    expect(JSON.stringify(acceptance.jobs["repository-relay"])).toContain(
+      "productionOpenCodeBackend.acceptance.test.ts",
+    );
+    const titles = documentedProofTitles();
+    // A renamed or deleted proof leaves its statement without one; the lanes would not notice.
+    expect(titles.length).toBeGreaterThanOrEqual(18);
+    const missing = titles.filter((title) => !sources.some((source) => source.includes(title)));
+    expect(missing).toEqual([]);
   });
 
   it("creates one standard account for both macOS lanes and refuses an administrator", () => {
