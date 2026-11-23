@@ -1290,6 +1290,8 @@ jobs:
           TREE_EVIDENCE_TREE_SHA: ${{ needs.verified-tree.outputs.evidence-tree-sha }}
           VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
         run: |
+          # Every job result below is compared against these two states only.
+          readonly SUCCESS="success" SKIPPED="skipped"
           # One sanctioned reuse: this commit's tree is byte-identical to a pull-request head whose
           # own required matrix concluded success, with no job of that matrix skipped. The resolver
           # proved that before any gate was skipped here, and answers `false` on every uncertainty
@@ -1298,7 +1300,7 @@ jobs:
           if [ "${TREE_VERIFIED:-}" = "true" ]; then
             # A job can publish an output and fail afterwards, so the claim is only as good as the
             # job that made it. Checked here as well as after the loop: the reuse branch exits 0.
-            if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+            if [ "${VERIFIED_TREE_RESULT:-}" != "$SUCCESS" ]; then
               echo "Tree reuse claimed by a resolver that did not succeed (${VERIFIED_TREE_RESULT:-unset})."
               exit 1
             fi
@@ -1319,7 +1321,7 @@ jobs:
                          "PORTABLE_SECURE_READ:${PORTABLE_SECURE_READ_RESULT:-}" \
                          "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
-              if [ "$state" != "skipped" ] && [ "$state" != "success" ]; then
+              if [ "$state" != "$SKIPPED" ] && [ "$state" != "$SUCCESS" ]; then
                 echo "Gate did not skip or pass despite reusable tree evidence: ${named%%:*} ($state)"
                 exit 1
               fi
@@ -1328,74 +1330,74 @@ jobs:
             echo "All required CI dependencies satisfied by that run's evidence."
             exit 0
           fi
-          if [ "${CI_EVENT_NAME:-}" = "push" ] && [ "${SBOM_PROVENANCE_RESULT:-}" != "success" ]; then
+          if [ "${CI_EVENT_NAME:-}" = "push" ] && [ "${SBOM_PROVENANCE_RESULT:-}" != "$SUCCESS" ]; then
             echo "Trusted push SBOM provenance did not succeed (${SBOM_PROVENANCE_RESULT:-unset})."
             exit 1
           fi
           for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
-            if [ "$result" != "success" ]; then
+            if [ "$result" != "$SUCCESS" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
           # The package/release job is intentionally skipped only for early feat/keiko-editor PRs.
           # On dev, release, push, merge-group, and manual runs it is mandatory and aggregated.
-          if [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" = "skipped" ]; then
+          if [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" = "$SKIPPED" ]; then
             if [ "$EDITOR_FAST_PR" != "true" ]; then
               echo "Build, scan, SBOM, smoke was skipped outside an editor fast-path PR."
               exit 1
             fi
             echo "Build, scan, SBOM, smoke skipped: editor fast-path PR."
-          elif [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" != "success" ]; then
+          elif [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" != "$SUCCESS" ]; then
             echo "Required CI dependency did not succeed: $BUILD_SCAN_SBOM_SMOKE_RESULT"
             exit 1
           fi
           # Firefox and the other UI engines run independently. Join their verdicts here instead
           # of making the entire UI job wait for Firefox before it starts any work.
-          if [ "$FIREFOX_RESULT" = "skipped" ]; then
+          if [ "$FIREFOX_RESULT" = "$SKIPPED" ]; then
             if [ "$EDITOR_FAST_PR" != "true" ]; then
               echo "Firefox smoke was skipped outside an editor fast-path PR."
               exit 1
             fi
-          elif [ "$FIREFOX_RESULT" != "success" ]; then
+          elif [ "$FIREFOX_RESULT" != "$SUCCESS" ]; then
             echo "Both required Firefox smoke shards must succeed: $FIREFOX_RESULT"
             exit 1
           fi
-          if [ "$WEBKIT_RESULT" = "skipped" ]; then
+          if [ "$WEBKIT_RESULT" = "$SKIPPED" ]; then
             if [ "$EDITOR_FAST_PR" != "true" ]; then
               echo "WebKit smoke was skipped outside an editor fast-path PR."
               exit 1
             fi
-          elif [ "$WEBKIT_RESULT" != "success" ]; then
+          elif [ "$WEBKIT_RESULT" != "$SUCCESS" ]; then
             echo "Both required WebKit smoke shards must succeed: $WEBKIT_RESULT"
             exit 1
           fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
           # change-scope job classified this change set as documentation-only. Any other skip — a
           # cancellation, a dependency failure, a mistaken condition — still fails closed.
-          if [ "$CROSS_PLATFORM_RESULT" = "skipped" ]; then
+          if [ "$CROSS_PLATFORM_RESULT" = "$SKIPPED" ]; then
             if [ "$DOCUMENTATION_ONLY" != "true" ]; then
               echo "Cross-platform smoke was skipped without a documentation-only change set."
               exit 1
             fi
             echo "Cross-platform smoke skipped: documentation-only change set."
-          elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
+          elif [ "$CROSS_PLATFORM_RESULT" != "$SUCCESS" ]; then
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
             exit 1
           fi
           # Portable helper qualification uses the same smoke fixture as the staged artifacts.
-          if [ "${PORTABLE_SECURE_READ_RESULT:-}" = "skipped" ]; then
+          if [ "${PORTABLE_SECURE_READ_RESULT:-}" = "$SKIPPED" ]; then
             if [ "$DOCUMENTATION_ONLY" != "true" ]; then
               echo "Portable secure-read smoke was skipped without a documentation-only change set."
               exit 1
             fi
-          elif [ "${PORTABLE_SECURE_READ_RESULT:-}" != "success" ]; then
+          elif [ "${PORTABLE_SECURE_READ_RESULT:-}" != "$SUCCESS" ]; then
             echo "Required CI dependency did not succeed: portable-secure-read (${PORTABLE_SECURE_READ_RESULT:-unset})"
             exit 1
           fi
           # The resolver is never reusable evidence, so it is aggregated on every run. It is checked
           # after the loop above so that loop keeps emitting the exact message its pins bind.
-          if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+          if [ "${VERIFIED_TREE_RESULT:-}" != "$SUCCESS" ]; then
             echo "Required CI dependency did not succeed: verified-tree (${VERIFIED_TREE_RESULT:-unset})"
             exit 1
           fi

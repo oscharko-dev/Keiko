@@ -23,6 +23,7 @@ import {
   type CatalogLifecycleLogPort,
 } from "../../packages/keiko-server/src/tool-catalog/catalogToolLifecycle.js";
 import { recordWorkspaceRootDenial } from "../../packages/keiko-server/src/workspace-root-denial-log.js";
+import { recordRepositoryRelay } from "../../packages/keiko-server/src/repository-relay/repositoryRelayActivity.js";
 import {
   expectActivityLogProof,
   persistedActivityLogLines,
@@ -179,5 +180,65 @@ describe("Activity Log scenario: tools-workflows", () => {
       decision: "denied",
       reason: "denied-locus",
     });
+  });
+
+  // #4530: a run's repository refuses the login. The relay's bind, the upstream rejection (the
+  // `401` a build otherwise reports as "Unauthorized") and the binding's settled summary stay on the
+  // run's correlation, so `keiko support analyze` shows them in that run's timeline.
+  it("reconstructs a repository that refuses the relay's login to a dependency-failure trace", async () => {
+    const startedAtMs = Date.now();
+    const sink = processServerLogSink();
+    const runId = "tools-workflows-relay-0001";
+    recordRepositoryRelay(sink, runId, { action: "bind", outcome: "bound", ecosystem: "maven" });
+    recordRepositoryRelay(sink, runId, {
+      action: "request",
+      outcome: "failed",
+      reason: "upstream-rejected",
+      ecosystem: "maven",
+      method: "GET",
+      credentialKind: "basic",
+      upstreamStatusClass: "4xx",
+    });
+    recordRepositoryRelay(sink, runId, {
+      action: "release",
+      outcome: "settled",
+      ecosystem: "maven",
+      requestCount: 1,
+      relayedCount: 1,
+      upstreamClientErrorCount: 1,
+      responseBytes: 0,
+      durationMs: 12,
+    });
+
+    const relayOp = "coding-runtime.repository-relay";
+    const trace = await expectActivityLogScenario("tools-workflows.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: [relayOp, relayOp, relayOp],
+    });
+    expect(trace.failureClasses).toEqual(
+      expect.arrayContaining(["coding-runtime-repository-relay"]),
+    );
+
+    const lines = persistedActivityLogLines(readPersistedActivityLog(stateDir), relayOp);
+    const proven = lines.map((line) =>
+      expectActivityLogProof("coding-runtime.repository-relay.emitted-line", line),
+    );
+    expect(proven).toEqual([
+      expect.objectContaining({ correlationId: runId, action: "bind", outcome: "bound" }),
+      expect.objectContaining({
+        correlationId: runId,
+        action: "request",
+        outcome: "failed",
+        reason: "upstream-rejected",
+        upstreamStatusClass: "4xx",
+      }),
+      expect.objectContaining({
+        correlationId: runId,
+        action: "release",
+        outcome: "settled",
+        upstreamClientErrorCount: 1,
+      }),
+    ]);
   });
 });

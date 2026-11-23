@@ -23,6 +23,7 @@ import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-w
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
+import { pollUntilObserved } from "./live-poll.js";
 import {
   assertObservedRuntimeReady,
   RUN_READINESS,
@@ -255,27 +256,29 @@ async function bindGitWindowToControlledRepository(
   });
   const recent = gitWindow.getByRole("button", { name: label, exact: true });
   const connect = gitWindow.getByRole("button", { name: "Connect repository", exact: true });
-  const deadline = Date.now() + 60_000;
   let seen = "neither a recent entry nor a repository control";
-  for (;;) {
-    if ((await repository.getByText(label, { exact: true }).count()) > 0) return;
-    if (await firstVisible(recent)) {
-      seen = "the recent entry";
-      await recent.first().click();
-    } else if (await firstVisible(connect)) {
-      seen = "the connect panel";
-      await connect.first().click();
-      await addRepositoryThroughDialog(gitWindow, repositoryRoot);
-    } else if (await firstVisible(repository)) {
-      seen = "a toolbar bound to another repository";
-      await addRepositoryFromToolbarMenu(gitWindow, repositoryRoot);
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `the Git window did not bind the controlled repository "${label}" within a minute (last seen: ${seen})`,
-      );
-    }
-    await gitWindow.page().waitForTimeout(1_000);
+  const bound = await pollUntilObserved(
+    async () => {
+      if ((await repository.getByText(label, { exact: true }).count()) > 0) return true;
+      if (await firstVisible(recent)) {
+        seen = "the recent entry";
+        await recent.first().click();
+      } else if (await firstVisible(connect)) {
+        seen = "the connect panel";
+        await connect.first().click();
+        await addRepositoryThroughDialog(gitWindow, repositoryRoot);
+      } else if (await firstVisible(repository)) {
+        seen = "a toolbar bound to another repository";
+        await addRepositoryFromToolbarMenu(gitWindow, repositoryRoot);
+      }
+      return false;
+    },
+    { timeoutMs: 60_000, intervalMs: 1_000 },
+  );
+  if (!bound) {
+    throw new Error(
+      `the Git window did not bind the controlled repository "${label}" within a minute (last seen: ${seen})`,
+    );
   }
 }
 
@@ -452,12 +455,10 @@ async function displayedChatModelIds(page: Page): Promise<readonly string[]> {
 // readiness probe set and a gateway save against an environment that was already fine.
 async function usableModelSource(page: Page, timeoutMs = 120_000): Promise<boolean> {
   const readiness = workbenchSurface(page).locator(RUN_READINESS);
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (((await readiness.textContent()) ?? "").includes("Model source ready.")) return true;
-    if (Date.now() > deadline) return false;
-    await page.waitForTimeout(1_000);
-  }
+  return pollUntilObserved(
+    async () => ((await readiness.textContent()) ?? "").includes("Model source ready."),
+    { timeoutMs, intervalMs: 1_000 },
+  );
 }
 
 // Real affordance: SettingsPanel.tsx's Models tab, `ModelCapabilityRow`'s "Run readiness check"
@@ -826,25 +827,29 @@ async function waitForTrustDecision(
   resuming: boolean,
 ): Promise<boolean> {
   const trusted = page.locator('[data-trust="trusted"]');
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    if (await dialog.isVisible()) return true;
-    if ((await trusted.count()) > 0) {
-      if (resuming) return false;
-      throw new Error(
-        "the Editor reported the root as already trusted before this fresh run was offered the workspace trust decision -- a reused state directory; only a resume (KEIKO_QUALIFICATION_RESUME_WORKSPACE=1) may start from a trusted root",
-      );
-    }
-    if (Date.now() > deadline) {
-      const states = await page
-        .locator("[data-trust]")
-        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-trust")).join(","));
-      throw new Error(
-        `the Editor neither raised the workspace trust decision nor reported a trusted root (observed data-trust: ${states === "" ? "none" : states})`,
-      );
-    }
-    await page.waitForTimeout(500);
+  // The last observation, read after the wait: the dialog is checked before the trusted marker,
+  // as an operator sees the decision before the state behind it.
+  const last = { offered: false };
+  const decided = await pollUntilObserved(
+    async () => {
+      last.offered = await dialog.isVisible();
+      return last.offered || (await trusted.count()) > 0;
+    },
+    { timeoutMs: 60_000, intervalMs: 500 },
+  );
+  if (last.offered) return true;
+  if (decided) {
+    if (resuming) return false;
+    throw new Error(
+      "the Editor reported the root as already trusted before this fresh run was offered the workspace trust decision -- a reused state directory; only a resume (KEIKO_QUALIFICATION_RESUME_WORKSPACE=1) may start from a trusted root",
+    );
   }
+  const states = await page
+    .locator("[data-trust]")
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-trust")).join(","));
+  throw new Error(
+    `the Editor neither raised the workspace trust decision nor reported a trusted root (observed data-trust: ${states === "" ? "none" : states})`,
+  );
 }
 
 // The scratch Editor window served only to raise the trust decision for the selected root; closing
@@ -1412,41 +1417,46 @@ export async function waitWhileAnsweringApprovals<T>(
   isDone: (value: T) => boolean,
   options: { readonly timeoutMs: number; readonly message: string },
 ): Promise<T> {
-  const deadline = Date.now() + options.timeoutMs;
   const startedAt = Date.now();
   let heartbeatAt = startedAt;
   let pending: Error | undefined;
-  for (;;) {
-    try {
-      const value = await read();
-      pending = undefined;
-      if (isDone(value)) return value;
-    } catch (error) {
-      if (error instanceof QualificationRunStopped) throw error;
-      pending = error instanceof Error ? error : new Error(String(error));
-    }
-    // A wait that can run twenty minutes must say what it is waiting on WHILE it waits, not only
-    // when it gives up: without this, a read that failed on every poll was indistinguishable from
-    // a lane that was making progress, until the timeout finally named it.
-    heartbeatAt = liveWaitHeartbeat(options.message, startedAt, heartbeatAt, pending);
-    if (Date.now() > deadline) {
-      // A read that was still failing when the clock ran out is the most useful thing to report:
-      // a bare "expected X" would hide that the lane never got a clean reading at all.
-      throw pending === undefined
-        ? new Error(options.message)
-        : new Error(`${options.message}: ${pending.message}`, { cause: pending });
-    }
-    // Guarded like `clickWhenActionable`: an approval or a question the window is still binding,
-    // or an option that cannot be checked yet, defers to the next tick instead of ending the poll
-    // -- and the run.
-    await answerVisibleApproval(page).catch((error: unknown) => {
-      process.stderr.write(`[lane] approval answer deferred: ${firstErrorLine(error)}\n`);
-    });
-    await answerVisibleQuestion(page).catch((error: unknown) => {
-      process.stderr.write(`[lane] question answer deferred: ${firstErrorLine(error)}\n`);
-    });
-    await page.waitForTimeout(2_000);
-  }
+  let done: { readonly value: T } | undefined;
+  await pollUntilObserved(
+    async () => {
+      try {
+        const value = await read();
+        pending = undefined;
+        if (isDone(value)) {
+          done = { value };
+          return true;
+        }
+      } catch (error) {
+        if (error instanceof QualificationRunStopped) throw error;
+        pending = error instanceof Error ? error : new Error(String(error));
+      }
+      // A wait that can run twenty minutes must say what it is waiting on WHILE it waits, not only
+      // when it gives up: without this, a read that failed on every poll was indistinguishable
+      // from a lane that was making progress, until the timeout finally named it.
+      heartbeatAt = liveWaitHeartbeat(options.message, startedAt, heartbeatAt, pending);
+      // Guarded like `clickWhenActionable`: an approval or a question the window is still binding,
+      // or an option that cannot be checked yet, defers to the next tick instead of ending the
+      // poll -- and the run.
+      await answerVisibleApproval(page).catch((error: unknown) => {
+        process.stderr.write(`[lane] approval answer deferred: ${firstErrorLine(error)}\n`);
+      });
+      await answerVisibleQuestion(page).catch((error: unknown) => {
+        process.stderr.write(`[lane] question answer deferred: ${firstErrorLine(error)}\n`);
+      });
+      return false;
+    },
+    { timeoutMs: options.timeoutMs, intervalMs: 2_000 },
+  );
+  if (done !== undefined) return done.value;
+  // A read that was still failing when the clock ran out is the most useful thing to report: a
+  // bare "expected X" would hide that the lane never got a clean reading at all.
+  throw pending === undefined
+    ? new Error(options.message)
+    : new Error(`${options.message}: ${pending.message}`, { cause: pending });
 }
 
 const HEARTBEAT_EVERY_MS = 30_000;

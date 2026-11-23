@@ -45,6 +45,7 @@ import {
   prepareNativeBuildSettings,
   type NativeBuildSettingsResult,
 } from "./nativeBuildSettings.js";
+import type { NativeRepositoryRelayInput } from "./nativeRepositoryRelayBinding.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchNativeJiraWriteReview,
@@ -672,6 +673,12 @@ export interface OpenCodeRuntimeCompositionInput {
    * is not admitted.
    */
   readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
+  /**
+   * Keiko's repository credential relay (#4522): the person's Maven and npm repositories are bound
+   * to it for each native run, and the run's build settings carry capabilities instead of the
+   * person's credentials. Absent, the build settings carry no repository access.
+   */
+  readonly repositoryRelay?: NativeRepositoryRelayInput | undefined;
   /**
    * Managed MCP servers the human chose for this run (a Jira Pod picked in the composer): the choice
    * is the grant of their read tools, in every mode. Absent, the run grants nothing.
@@ -1959,6 +1966,15 @@ function lifecycleAdapter(
   };
 }
 
+/**
+ * The run's relayed MCP exchanges and repository reads (#4522) end with it, before its runtime is
+ * reaped: no capability outlives its run.
+ */
+function releaseRunRelays(input: OpenCodeRuntimeCompositionInput, runId: string): void {
+  input.mcpRelay?.relay.releaseRun(runId);
+  input.repositoryRelay?.relay.releaseRun(runId);
+}
+
 async function disposeRun(
   input: OpenCodeRuntimeCompositionInput,
   bridge: ToolBridgeController,
@@ -1976,8 +1992,7 @@ async function disposeRun(
     const drained = bridge.close(signal);
     input.safeActivity?.clear();
     input.gatewayReadiness.clear(runId);
-    // The run's relayed MCP exchanges end with it, before its runtime is reaped.
-    input.mcpRelay?.relay.releaseRun(runId);
+    releaseRunRelays(input, runId);
     if (!(await drained)) return false;
     if (run === undefined) return true;
     if (!currentDisposal(runs, run, signal)) return false;
@@ -2197,6 +2212,9 @@ function admitNativeBuildSettings(
     stateRoot: runRoot,
     readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
+    repositoryRelay: input.repositoryRelay,
+    inheritedNoProxy: request.env.NO_PROXY ?? request.env.no_proxy,
+    signal: request.signal,
     activityLog: input.activityLog,
   });
 }
@@ -5945,13 +5963,13 @@ function copyNativeReadIO(
   const purpose = record.purpose;
   if (purpose !== "native-tool-io" && purpose !== "native-instructions") return undefined;
   const keys = ["action", "phase", "runId", "identity", "ordinal", "relativePath", "purpose"];
-  const range = copyInitializationRange(record, keys);
-  if (!nativeReadRangeForPhase(phase, range)) return undefined;
+  const copied = copyInitializationRange(record, keys);
+  if (!nativeReadRangeForPhase(phase, copied)) return undefined;
   const input: CodingToolNativeReadFilePacket = Object.freeze({
     ordinal: record.ordinal,
     relativePath: record.relativePath,
     purpose,
-    ...(range === undefined ? {} : { range }),
+    ...(copied.range === undefined ? {} : { range: copied.range }),
   });
   return Object.freeze({ ...common, phase, identity, input });
 }
@@ -5962,11 +5980,12 @@ function nativeReadOrdinal(value: unknown): value is number {
 
 function nativeReadRangeForPhase(
   phase: string,
-  range: ReturnType<typeof copyInitializationRange>,
-): range is Exclude<ReturnType<typeof copyInitializationRange>, false> {
+  copied: InitializationRange,
+): copied is CopiedInitializationRange {
   return (
-    range !== false &&
-    (range === undefined || (phase === "readBytes" && isSecureWorkspaceNativeRange(range)))
+    copied.ok &&
+    (copied.range === undefined ||
+      (phase === "readBytes" && isSecureWorkspaceNativeRange(copied.range)))
   );
 }
 
@@ -6176,20 +6195,38 @@ function initialFields(
   );
 }
 
+/** A copied optional `range` field: refused, absent, or the exact offset and length sent. */
+interface CopiedInitializationRange {
+  readonly ok: true;
+  readonly range: { readonly offset: number; readonly length: number } | undefined;
+}
+type InitializationRange = CopiedInitializationRange | { readonly ok: false };
+
+const REFUSED_INITIALIZATION_RANGE: InitializationRange = Object.freeze({ ok: false });
+const ABSENT_INITIALIZATION_RANGE: InitializationRange = Object.freeze({
+  ok: true,
+  range: undefined,
+});
+
 function copyInitializationRange(
   record: Readonly<Record<string, unknown>>,
   keys: readonly string[],
-): { readonly offset: number; readonly length: number } | false | undefined {
-  if (!Object.hasOwn(record, "range")) return initialFields(record, keys) ? undefined : false;
+): InitializationRange {
+  if (!Object.hasOwn(record, "range"))
+    return initialFields(record, keys) ? ABSENT_INITIALIZATION_RANGE : REFUSED_INITIALIZATION_RANGE;
   const range = initializationData(record.range);
   if (
     range === undefined ||
     !initialFields(record, [...keys, "range"]) ||
     !initialFields(range, ["offset", "length"])
   )
-    return false;
-  if (typeof range.offset !== "number" || typeof range.length !== "number") return false;
-  return Object.freeze({ offset: range.offset, length: range.length });
+    return REFUSED_INITIALIZATION_RANGE;
+  if (typeof range.offset !== "number" || typeof range.length !== "number")
+    return REFUSED_INITIALIZATION_RANGE;
+  return Object.freeze({
+    ok: true,
+    range: Object.freeze({ offset: range.offset, length: range.length }),
+  });
 }
 
 function initializationRootCurrent(deps: ToolBridgeExecutionDeps, run: PreparedRun): boolean {

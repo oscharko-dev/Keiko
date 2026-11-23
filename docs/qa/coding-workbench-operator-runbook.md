@@ -360,9 +360,9 @@ Changes apply to the next run.
   `"transport": { "kind": "remote", "url": "https://wiki.example.com/mcp", "headers": {
 "Authorization": { "secretEnv": "KEIKO_MCP_SECRET_WIKI", "prefix": "Bearer " } } }`. Set
   `KEIKO_MCP_SECRET_WIKI` in Keiko's environment; only variables starting with
-  `KEIKO_MCP_SECRET_` can be named, at most 8 headers, and `prefix` is optional literal text. The
-  value never reaches the run: the runtime connects to Keiko's relay on its own loopback port with a
-  capability for that run and that server, and Keiko adds the header and forwards each request to
+  `KEIKO_MCP_SECRET_` can be named, at most 8 headers, and `prefix` is optional literal text. Keiko
+  never hands the value to the run: the runtime connects to Keiko's relay on its own loopback port
+  with a capability for that run and that server, and Keiko adds the header and forwards each request to
   exactly the registered URL through its egress (no redirect, no loopback or private target). A
   server that answers with the credential it received has it replaced by `[REDACTED]` before the
   run reads the answer, however its JSON, URL, HTML or base64 text spells it; a server that puts it
@@ -375,7 +375,10 @@ Changes apply to the next run.
   `oauth` cannot be combined. The Activity Log records `coding-runtime.mcp-relay` (bound with
   relayed and refused server counts, then one line per relayed request with method, status,
   sizes, the number of replaced credential occurrences and duration), never the value, the URL or
-  the server name.
+  the server name. One limit applies on macOS: a shell the model runs can read the environment the
+  Keiko process was started with (`sysctl(KERN_PROCARGS2)`, ADR-0137), so a `KEIKO_MCP_SECRET_*`
+  variable exported into that environment is readable from a run in every mode. A server that
+  signs in with OAuth keeps its credential sealed in Keiko's state directory instead.
 - To authorize, open the run's **MCP servers** section in the Workbench and choose **Authorize** on
   the server that needs it, then **Open the authorization page**: it opens in a new tab, and the
   runtime completes the sign-in on its own loopback callback. Keiko shows the page only when it

@@ -278,3 +278,25 @@ paths = ['''^scripts/testing/jira-chat-lab/api-qualification-operator-fixtures\.
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\n?export const DEFAULT_PERMISSION_ATTRIBUTE_KEY = "ac7\.synthetic\.attribute";$''']
+
+[[allowlists]]
+description = "PR #4523 (#4492): the Maven cache lock of the acceptance fixture pins the SHA-256 of public Maven Central artifacts. A key such as `maven-resolver-api-1.4.1.jar` contains `api` and the value is a 64-hex digest, which the generic-api-key rule mistakes for a credential. Scoped to that one lock file, the generic-api-key rule and lines that are exactly a `.jar` or `.pom` repository path mapped to a 64-hex digest; any other line or value in the file remains scanned."
+condition = "AND"
+paths = ['''^tests/fixtures/coding-acceptance/maven-cache\.lock\.json$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\n?[ \t]*"[A-Za-z0-9._/-]+\.(?:jar|pom)": "[0-9a-f]{64}",?[ \t]*$''']
+
+[[allowlists]]
+description = "PR #4523 (#4522): two synthetic credentials in the history of the repository relay tests: the planted password of the credential leak scanner test (commit f33bd57b6) and the fixture npm token of the resolver test (commit 00e267185). Neither is a credential; both prove that a leak or a hostile registry is refused. The lines were rewritten to assemble the values at runtime, so the squash-merged tree carries no credential-shaped literal. Scoped by content, not by commit: only these two exact historical lines in their two files and rule are exempt."
+condition = "AND"
+paths = [
+  '''^packages/keiko-server/src/test-support/credential-leak-scanner\.test\.ts$''',
+  '''^packages/keiko-server/src/repository-relay/npmRepositoryCredentials\.test\.ts$''',
+]
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''^\n?const SECRET = "planted-Secret-8f31c2d9";$''',
+  '''^\n?[ \t]*"registry=\$\{NPM_REGISTRY\}\\n@a:registry=https://\$\{HOST_NAME\}/x/\\n//evil\.example/:_authToken=tok-0123456789",$''',
+]

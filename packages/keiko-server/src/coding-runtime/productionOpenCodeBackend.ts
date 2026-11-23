@@ -31,10 +31,12 @@ import {
   nativeBuildCacheReadRoots,
   nativeBuildToolReadRoots,
   nativeBuildWrapperReadRoots,
+  nativeDeveloperDirectoryReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
   planWindowsGatewayRuntimeSandbox,
   type LongLivedRuntimeSandboxAttestation,
+  type NativeDeveloperDirectoryDisposition,
   type RuntimeGatewayEgress,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
@@ -94,6 +96,7 @@ import { pathIsContained } from "./nativeRuntimeProcessPaths.js";
 import type { WindowsFilesystemGrant } from "./nativeRuntimeProcessProtocol.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import type { RepositoryCredentialRelay } from "../repository-relay/repositoryCredentialRelay.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import {
   createOpenCodeRuntimeComposition,
@@ -226,6 +229,12 @@ export interface ProductionOpenCodeBackendInput {
    * at the gateway's origin, with the credentials read from `processEnv`.
    */
   readonly mcpRelay?: McpCredentialRelay | undefined;
+  /**
+   * Keiko's repository credential relay (#4522): a native run's Maven and npm repositories are
+   * reached through it at the gateway's origin, with the credentials read from `processEnv`'s
+   * placeholders and the person's own files, and the run never holds them.
+   */
+  readonly repositoryRelay?: RepositoryCredentialRelay | undefined;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /**
    * The Jira Pods a run may be started with (owner decision 2026-10-30): a run bound to one gets
@@ -594,6 +603,20 @@ function mcpRelayFor(
   };
 }
 
+// Like the MCP relay, the repository relay answers on the gateway's attested origin.
+function repositoryRelayFor(
+  input: LaunchInput,
+): Pick<OpenCodeRuntimeCompositionInput, "repositoryRelay"> {
+  if (input.repositoryRelay === undefined) return {};
+  return {
+    repositoryRelay: {
+      relay: input.repositoryRelay,
+      origin: new URL(input.gatewayUrl).origin,
+      env: input.processEnv ?? process.env,
+    },
+  };
+}
+
 interface BoundJira {
   readonly pods: CodingJiraPods;
   readonly authority: CodingJiraRunAuthority;
@@ -671,6 +694,7 @@ function nativeRunInputs(
   | "mcpOAuthIssuer"
   | "mcpCredentials"
   | "mcpRelay"
+  | "repositoryRelay"
   | "remoteSkills"
   | "nativeWorktrees"
   | "nativeWebSearch"
@@ -695,6 +719,7 @@ function nativeRunInputs(
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
     ...mcpRelayFor(input, jira),
+    ...repositoryRelayFor(input),
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
@@ -1637,19 +1662,29 @@ function gatewayFilesystem(
       workspaceAccess: native ? "read-write" : "read-only",
       privateStateRoot,
       runtimeReadRoot: realpathSync(join(portable.installRoot, portable.sidecar.payloadRootPath)),
-      ...(native
-        ? {
-            deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
-            toolchainReadRoots: nativeSupportReadRoots(input, run),
-            ...nativeGitMetadataRoots(input, run, privateStateRoot),
-            ...externalReadRootsField(input, run, macos),
-            ...linkedFilesField(input, run, macos),
-            ...certificateReadFilesField(input, run, macos),
-            // The plan agent's private notes take no link that could name a workspace file.
-            linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
-          }
-        : {}),
+      ...(native ? nativeFilesystemFields(input, run, privateStateRoot, macos) : {}),
     },
+  };
+}
+
+/** What the native profile reads and protects beyond the workspace and the private state. */
+function nativeFilesystemFields(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  privateStateRoot: string,
+  macos: boolean,
+): Partial<RuntimeGatewayFilesystem> {
+  // #4521: Git runs from the developer directory `xcode-select` chose, a versioned Xcode included.
+  const developer = macos ? nativeDeveloperDirectoryReadRoots(homedir()) : undefined;
+  return {
+    deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+    toolchainReadRoots: [...nativeSupportReadRoots(input, run), ...(developer?.roots ?? [])],
+    ...nativeGitMetadataRoots(input, run, privateStateRoot, developer?.disposition),
+    ...externalReadRootsField(input, run, macos),
+    ...linkedFilesField(input, run, macos),
+    ...certificateReadFilesField(input, run, macos),
+    // The plan agent's private notes take no link that could name a workspace file.
+    linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
   };
 }
 
@@ -1725,6 +1760,7 @@ function nativeGitMetadataRoots(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   privateStateRoot: string,
+  developerDirectory: NativeDeveloperDirectoryDisposition | undefined,
 ): {
   readonly gitMetadataReadRoots?: readonly string[];
   readonly protectedWriteRoots: readonly string[];
@@ -1737,6 +1773,7 @@ function nativeGitMetadataRoots(
     input.activityLog ?? processServerLogSink(),
     run.minted.authorityRef.runId,
     resolution,
+    developerDirectory,
   );
   return {
     ...(resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots }),

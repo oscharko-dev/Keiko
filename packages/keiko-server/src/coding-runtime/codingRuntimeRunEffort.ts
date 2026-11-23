@@ -23,6 +23,7 @@ import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
 import type {
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
+  CodingVerificationNotRunScope,
 } from "./codingToolFacadePorts.js";
 
 const MAX_RETAINED_RUNS = 16;
@@ -305,11 +306,12 @@ export class CodingRuntimeRunEffortLedger {
     runId: string,
     reason: CodingVerificationBlockedReason,
     targetDigest?: string,
+    scope: CodingVerificationNotRunScope = "blocks-repair",
   ): void {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     const selected = markVerificationNotRun(run, reason, targetDigest);
-    if (!verificationBlockerApplies(targetDigest, selected)) return;
+    if (scope === "evidence-only" || !verificationBlockerApplies(targetDigest, selected)) return;
     run.blockerRevision = boundedSum(run.blockerRevision, 1);
     setVerificationBlocker(run, reason, targetDigest);
   }

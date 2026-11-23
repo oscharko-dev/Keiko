@@ -742,6 +742,13 @@ nothing runs unconfined. The run settles through the existing not-verified outco
 `coding-runtime.run.settled` records the closed `verificationBlockedReason`. A continuation for a run
 whose tool profile has no shell tool (the mapped profiles) never tells the model to use a shell. A
 dedicated failure code for this outcome would need a snapshot-store migration and is not taken.
+A run whose model has a shell of its own (the native profile) is instead told
+`VERIFICATION_NOT_RUN` with the step reason and to run the check in that shell, where its result
+counts. For it a governed check whose every unrun step is `isolation-unavailable` or
+`native-shell-required` is no evidence either way and no blocker: it enters the ledger with the
+`evidence-only` scope, so its empty summary changes no target, an earlier shell pass stands, and a
+failing shell check still gets its repair continuation instead of settling as blocked (#4519,
+2026-11-22). Every other unrun step keeps the default `blocks-repair` scope.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
 `waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
@@ -1500,8 +1507,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   registry entry may carry `headers: { "<Name>": { secretEnv, prefix? } }` (at most 8, never with
   `oauth`): each value is read from the named `KEIKO_MCP_SECRET_*` variable of Keiko's own
   environment, so no credential is written in the registry and no other variable can be named;
-  transport, connection, cookie and Keiko headers are refused. The run never holds the value: its
-  binding addresses `/api/coding-sidecar/mcp/:relayId` on the same attested loopback origin as the
+  transport, connection, cookie and Keiko headers are refused. Keiko never hands the value to the
+  run, though on macOS a variable exported into the environment that starts Keiko stays readable
+  to a run's shell through `sysctl(KERN_PROCARGS2)` ("Launch secrets leave the exec environment"
+  below, ADR-0184 D2). The run's binding addresses `/api/coding-sidecar/mcp/:relayId` on the same attested loopback origin as the
   Model Gateway, with `oauth: false` and two headers the runtime sends on every request,
   `X-Keiko-CSRF` (so the route keeps the ordinary CSRF guard, no exemption) and
   `X-Keiko-Mcp-Relay`, a capability minted for that run and that server (`mcpCredentialRelay.ts`,
@@ -2321,7 +2330,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `~/.local/state/gh`, `~/.cargo/credentials.toml`); an executable in it that is a symbolic link
   into a bin directory of a real install prefix additionally admits that prefix. The home
   directory, an ancestor of it and any directory that contains or sits inside a denied location
-  are never roots. The
+  are never roots. The developer directory `xcode-select` chose (`/var/db/xcode_select_link`) is a
+  toolchain root under the same rule (`nativeDeveloperDirectoryReadRoots`, #4521): macOS runs Git
+  from it, through `/usr/bin/git` and in the runtime's own Git lookup, so a versioned or beta Xcode
+  (`/Applications/Xcode_16.4.app`) opens as a whole bundle like the fixed `/Applications/Xcode.app`
+  system root. Without it Git did not start in the run, the runtime treated the opened folder as no
+  repository, kept no snapshots and saw no change a shell made, so such a run required no check and
+  offered no undo. `coding-runtime.git-metadata.resolved` records the closed `developerDirectory`
+  disposition (`app-bundle`, `directory`, `none`, `refused`). An Xcode bundle's `xcrun` shims
+  refuse to run until they read the accepted license version in
+  `/Library/Preferences/com.apple.dt.Xcode.plist`, the one file of that directory the profile
+  opens; `xcrun_db` in the launch environment keeps `xcrun`'s cache in the run's `tmp`, because
+  `xcrun` ignores `TMPDIR`. The
   shared system temporary directories are not admitted: another process's file there is as
   unrelated to the task as any file outside the workspace. Writes are limited to the workspace and
   the private state, except the run's OpenCode configuration directory
@@ -2437,7 +2457,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   reach a second destination or reuse an ssh-agent or container socket; at Full access
   (`autonomous-delivery`) egress is inherited and stays bounded by the accepted Authority Envelope
   and the per-action policy. An absent disposition means loopback-only (fail closed); the
-  disposition is part of the policy digest. The child inherits the launcher's allowlisted
+  disposition is part of the policy digest. Loopback stays open as a whole below Full access
+  (decision 2026-11-22, #4521): narrowing it to Keiko's own ports, the rule the mapped profile
+  enforces, breaks a project's own checks. A test suite that serves and fetches on an ephemeral port
+  and a dev server a second process of the run calls both run natively and are refused `EPERM` under
+  that rule (`runtime-gateway.test.ts`, "loopback decision"). What follows is published as a limit:
+  below Full access a run's shell can reach any port a program on this machine serves on loopback,
+  a local forwarding proxy included. The child inherits the launcher's allowlisted
   environment (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the
   agent's shell finds the project's toolchains the way it does standalone; the mapped profiles
   still inherit nothing. An operator's explicit OpenSSL and FIPS configuration is kept as a
@@ -2486,7 +2512,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   unmatched quote, so a malformed inherited value stops the JVM instead of absorbing the run's
   options. These settings decide what a build reads and writes by default; the sandbox stays the
   boundary: a project's `.mvn/maven.config` or `MAVEN_OPTS` naming another `user.home` or local
-  repository still meets the read-only kernel root. The admission line records the cache
+  repository still meets the read-only kernel root. Credentialed repositories are the exception to
+  the offline rule above ([ADR-0184](ADR-0184-repository-credential-relay-for-coding-runs.md)): the
+  person's mirrors, repositories and npm registries are bound to Keiko's repository credential relay,
+  Maven then runs online in every mode (the read-only cache tail stays where it applies), the run's
+  settings carry a per-run capability and never the credential, a shell below Full access has its
+  `npm_config_offline` lifted only when an npm registry is bound (the runtime's own package manager
+  stays offline), and a run with nothing resolved keeps the behaviour described here. The admission line records the cache
   and wrapper dispositions (`mavenCache`, `mavenWrapper`). An in-repo `.npmrc` stays kernel-denied: no sanitized view is
   possible without rewriting a workspace read, and registry routing is available through the user
   config instead. The launch gate that keeps a host secret out of the child compares the

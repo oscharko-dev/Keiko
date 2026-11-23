@@ -43,6 +43,12 @@ import {
   type McpCredentialRelay,
   type McpRelayUpstream,
 } from "./mcp/mcpCredentialRelay.js";
+import {
+  createRepositoryCredentialRelay,
+  egressRepositoryRelayUpstream,
+  type RepositoryCredentialRelay,
+  type RepositoryRelayUpstream,
+} from "./repository-relay/repositoryCredentialRelay.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -251,6 +257,7 @@ import {
   createVerificationRunnerManager,
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
+import { timedNetworkIsolationProbe } from "./editor/verificationExecution.js";
 import {
   createOrdinaryWorkspaceRootAccess,
   grantedWorkspaceRootAccess,
@@ -964,6 +971,12 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // the SAME attested loopback port; the runtime host binds it, coding-sidecar-mcp-relay.ts serves it.
   readonly mcpRelay?:
     { readonly relay: McpCredentialRelay; readonly upstream: McpRelayUpstream } | undefined;
+  // #4522: the repository credential relay a native run's authenticated Maven and npm repositories
+  // are read through, on the SAME attested loopback port; coding-sidecar-repository-relay.ts serves
+  // it and the run binding mints each run's capability from `relay`.
+  readonly repositoryRelay?:
+    | { readonly relay: RepositoryCredentialRelay; readonly upstream: RepositoryRelayUpstream }
+    | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
@@ -2536,6 +2549,9 @@ function buildVerificationRunner(options: {
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
+    // #4519: an agent run asks for package-script trust only where a step can run isolated.
+    probeIsolation: (cwd, correlationId) =>
+      timedNetworkIsolationProbe(cwd, options.diagnostics, correlationId),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -4712,6 +4728,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
+  /** The one repository credential relay the run binding mints capabilities from (#4522). */
+  readonly repositoryCredentialRelay: RepositoryCredentialRelay;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
@@ -5129,6 +5147,22 @@ function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcp
   };
 }
 
+// One repository credential relay per deps graph (`createProcessCredentialRelays`), reached by the run
+// binding as `deps.repositoryRelay.relay`. Relayed repository reads leave through Keiko's own egress
+// configuration (proxy and CA) as well.
+function repositoryRelayDeps(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<UiHandlerDeps, "repositoryRelay"> {
+  return {
+    repositoryRelay: {
+      relay: args.repositoryCredentialRelay,
+      upstream: egressRepositoryRelayUpstream(() =>
+        resolveOutboundHttpEgressConfig(undefined, args.options.env),
+      ),
+    },
+  };
+}
+
 function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
   return createMcpSettingsStore({
     stateDir: dirname(args.resolvedUiDbPath),
@@ -5210,6 +5244,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
     ...mcpRelayDeps(args),
+    ...repositoryRelayDeps(args),
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
@@ -6610,6 +6645,32 @@ function nativeMcpMutationJournalFor(
   return createNativeMcpMutationJournal({ store, snapshots, log: processServerLogSink() });
 }
 
+/** The credential relays a native run binds (MCP, and repositories of #4522), when the assembly has them. */
+function credentialRelayInputs(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<Parameters<typeof resolveProductionOpenCodeActivation>[0], "mcpRelay" | "repositoryRelay"> {
+  return {
+    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    repositoryRelay: args.repositoryCredentialRelay,
+  };
+}
+
+/**
+ * The one MCP relay and the one repository relay (#4522) of the deps graph: the run binding mints
+ * capabilities from them and their routes authenticate against them.
+ */
+function createProcessCredentialRelays(): Pick<
+  UiHandlerDepsAssemblyArgs,
+  "mcpCredentialRelay" | "repositoryCredentialRelay"
+> {
+  return {
+    mcpCredentialRelay: createMcpCredentialRelay(),
+    repositoryCredentialRelay: createRepositoryCredentialRelay({
+      activityLog: processServerLogSink,
+    }),
+  };
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6633,7 +6694,7 @@ function resolveProductionRuntimePorts(
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     sessionContinuity: args.codingSessionContinuity,
-    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    ...credentialRelayInputs(args),
     ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
     ...(args.codingJiraPods === undefined ? {} : { codingJiraPods: args.codingJiraPods }),
     mcpMutations: nativeMcpMutationJournalFor(args),
@@ -7130,7 +7191,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
     contentPolicy: projections.contentPolicy,
     codingSessionContinuity: buildCodingSessionContinuity(options, resolvedUiDbPath, bundle),
-    mcpCredentialRelay: createMcpCredentialRelay(),
+    ...createProcessCredentialRelays(),
   });
 }
 

@@ -91,6 +91,7 @@ import type {
   CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
+  CodingVerificationNotRunScope,
 } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
@@ -619,7 +620,12 @@ export interface ProductionManagedWorktreeToolInput {
   /** Server-owned edit revision captured before a verifier executes or waits for script trust. */
   readonly verificationRevision?: (() => number | undefined) | undefined;
   readonly verificationBlocked?:
-    ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
+    | ((
+        reason: CodingVerificationBlockedReason,
+        targetDigest?: string,
+        scope?: CodingVerificationNotRunScope,
+      ) => void)
+    | undefined;
   readonly verificationAdmitted?:
     (() => CodingVerificationExecutedObserver | undefined) | undefined;
 }
@@ -1841,7 +1847,13 @@ function observeVerificationExecution(
   if (verificationRanAStep(report)) {
     executed?.(target);
   } else {
-    input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
+    // #4519: a run with its own shell verifies a target the governed verifier cannot run here in
+    // that shell, so the check that ran no step is no evidence either way and blocks no repair.
+    input.verificationBlocked?.(
+      "VERIFICATION_NOT_RUN",
+      target,
+      shellCarriesCheck(input, report) ? "evidence-only" : "blocks-repair",
+    );
     // A host that cannot isolate a step cannot verify any target for a run without a shell: the
     // blocker is the run's, not the target's, so a target nobody selected yet cannot hide it from
     // the continuation decision. It is decided by the predicate that words the model's reason.
@@ -2219,6 +2231,28 @@ function isolationBlocksRun(
   report: VerificationReport,
 ): boolean {
   return !runHasShell(input) && isolationUnavailable(report, modelFacingStatus(report));
+}
+
+// The reasons a step did not run for which the repository's own check in the run's shell is the
+// verification (the model's guidance says so): no isolation on this host, or a bootstrap refused
+// only because this host's runtime holds the dependencies (`native-shell-required`). Every other
+// reason, `dependencies-unavailable` included, is a blocker to report.
+const SHELL_CARRIED_NOT_RUN_REASONS: ReadonlySet<VerificationNotRunReason> = new Set([
+  "isolation-unavailable",
+  "native-shell-required",
+]);
+
+function shellCarriesCheck(
+  input: Pick<ProductionManagedWorktreeToolInput, "toolProfile">,
+  report: VerificationReport,
+): boolean {
+  if (!runHasShell(input)) return false;
+  const dependencies = dependenciesNotRunReason(report);
+  const notRun = report.results.filter((result) => NOT_RUN_STATUSES.has(result.status));
+  return (
+    notRun.length > 0 &&
+    notRun.every((result) => SHELL_CARRIED_NOT_RUN_REASONS.has(notRunReason(result, dependencies)))
+  );
 }
 
 function notRunReason(

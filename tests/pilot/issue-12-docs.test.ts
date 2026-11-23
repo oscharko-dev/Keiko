@@ -103,7 +103,8 @@ describe("Issue #12 docs drift", () => {
 
     expect(coreQuality).toContain("      - run: npm run check:version-consistency");
     expect(ciAggregate).toContain("      - core-quality");
-    expect(ciAggregate).toContain('if [ "$result" != "success" ]');
+    expect(ciAggregate).toContain('readonly SUCCESS="success" SKIPPED="skipped"');
+    expect(ciAggregate).toContain('if [ "$result" != "$SUCCESS" ]');
     expect(sdkIndex).toMatch(
       /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts\/runtime\/version";$/m,
     );

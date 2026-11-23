@@ -1,0 +1,13 @@
+{
+  "name": "keiko-acceptance-statement",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coding Workbench acceptance fixture whose dependency only an internal npm registry serves (#4530)",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/record-check.js && node --test"
+  },
+  "dependencies": {
+    "@acceptance/ledger": "1.0.0"
+  }
+}

@@ -54,6 +54,11 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 const MODEL = "knowledge-only-model";
+// The first case that calls the real Knowledge catalog pays its one-time cold start. It usually
+// takes about 3.5 s on the hosted Windows runner, but it once took 21.6 s there (CI run
+// 45022513474), past the suite's 15 s default. This raises the time limit only; no assertion
+// depends on it.
+const REAL_CATALOG_TIMEOUT_MS = 60_000;
 function configure(
   deps: UiHandlerDeps,
   maxOutputTokens = 1024,
@@ -255,59 +260,63 @@ it("refuses connected Knowledge-only tools with an accurate service-neutral mess
 it.each([
   { tool: "knowledge.requirements", args: {} },
   { tool: "knowledge.documents", args: { view: "inventory" } },
-])("executes $tool through the real MCP catalog in a Pod-only Chat", async ({ tool, args }) => {
-  const { pod, deps } = await fixture();
-  const accepted = deps.store.admitChatTurn(`human-${tool}`, {
-    chatId: pod.chatId,
-    role: "user",
-    content: "Read the attached documents",
-    timestamp: Date.now(),
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  });
-  if (accepted.kind !== "admitted") throw new Error("Expected human turn");
-  const calls: GatewayCallRequest[] = [];
-  const turn = await createChatToolTurn(
-    deps,
-    MODEL,
-    accepted.userMessage,
-    new AbortController().signal,
-    "knowledge-mcp-proof",
-  );
-  if (turn === undefined) throw new Error("Expected Knowledge-only turn");
-  const humanMessage = {
-    role: "user" as const,
-    content: "Read the documents",
-    contentParts: [
-      { type: "image_url" as const, image_url: { url: "data:image/png;base64,AAAA" } },
-    ],
-  };
-  const response = await turn.call(
-    turn.meter(model(calls, tool, args)),
-    { modelId: MODEL, messages: [humanMessage] },
-    new AbortController().signal,
-  );
-  assertRuntimeContext(
-    calls[0],
-    deps.store.listMessages(pod.chatId),
-    humanMessage,
-    accepted.userMessage.content,
-  );
-  expect(response.content).toBe("Observed the Knowledge Pod documents.");
-  expect(calls).toHaveLength(2);
-  const transcript = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript;
-  expect(transcript?.exchanges[0]?.result?.status).toBe("completed");
-  expect(
-    calls[1]?.messages.some(
-      (message) => message.role === "tool" && message.content.includes("succeeded"),
-    ),
-  ).toBe(true);
-  expect(deps.store.findChatById(pod.chatId)?.jiraPodBinding).toBeUndefined();
-  expect(transcript?.readGrant).toBeUndefined();
-});
+])(
+  "executes $tool through the real MCP catalog in a Pod-only Chat",
+  async ({ tool, args }) => {
+    const { pod, deps } = await fixture();
+    const accepted = deps.store.admitChatTurn(`human-${tool}`, {
+      chatId: pod.chatId,
+      role: "user",
+      content: "Read the attached documents",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (accepted.kind !== "admitted") throw new Error("Expected human turn");
+    const calls: GatewayCallRequest[] = [];
+    const turn = await createChatToolTurn(
+      deps,
+      MODEL,
+      accepted.userMessage,
+      new AbortController().signal,
+      "knowledge-mcp-proof",
+    );
+    if (turn === undefined) throw new Error("Expected Knowledge-only turn");
+    const humanMessage = {
+      role: "user" as const,
+      content: "Read the documents",
+      contentParts: [
+        { type: "image_url" as const, image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+    };
+    const response = await turn.call(
+      turn.meter(model(calls, tool, args)),
+      { modelId: MODEL, messages: [humanMessage] },
+      new AbortController().signal,
+    );
+    assertRuntimeContext(
+      calls[0],
+      deps.store.listMessages(pod.chatId),
+      humanMessage,
+      accepted.userMessage.content,
+    );
+    expect(response.content).toBe("Observed the Knowledge Pod documents.");
+    expect(calls).toHaveLength(2);
+    const transcript = deps.store.findMessageById(accepted.userMessage.id)?.toolTranscript;
+    expect(transcript?.exchanges[0]?.result?.status).toBe("completed");
+    expect(
+      calls[1]?.messages.some(
+        (message) => message.role === "tool" && message.content.includes("succeeded"),
+      ),
+    ).toBe(true);
+    expect(deps.store.findChatById(pod.chatId)?.jiraPodBinding).toBeUndefined();
+    expect(transcript?.readGrant).toBeUndefined();
+  },
+  REAL_CATALOG_TIMEOUT_MS,
+);
 it("sends the runtime inventory as the same prompt prefix in consecutive turns", async () => {
   const { pod, deps } = await fixture();
   const runtimePrefix = async (key: string): Promise<GatewayCallRequest["messages"]> => {

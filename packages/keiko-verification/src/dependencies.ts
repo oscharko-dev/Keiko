@@ -24,7 +24,7 @@
 // still held to the same rule.
 
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   CommandCancelledError,
@@ -45,12 +45,14 @@ import {
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
+  type VerificationDependencyConsumer,
   type VerificationDependencyRefusalReason,
   type VerificationDependencyState,
   type VerificationDependencySummary,
   type VerificationLockfileState,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { outputExcerpt } from "./excerpt.js";
+import { hostShellRefusal } from "./hostShellDependencies.js";
 import {
   registryEgressEnv,
   startRegistryEgressProxy,
@@ -98,8 +100,17 @@ const INSTALLED_TREE_MARKER = join("node_modules", ".package-lock.json");
 // Restarts discard receipts and require a fresh successful bootstrap.
 const completedInstalls = new Map<
   string,
-  { readonly targetIdentity: string; readonly fingerprint: string }
+  {
+    readonly targetIdentity: string;
+    readonly fingerprint: string;
+    // The identity of npm's hidden lockfile this install left: the run's own shell judges the tree
+    // by it, because the shell writes caches into `node_modules` itself (#4522).
+    readonly marker: string | undefined;
+  }
 >();
+// Folders where this process started an install that has not completed: npm may already have
+// written its hidden lockfile, so the tree stays this process's to install again (#4522).
+const pendingInstalls = new Set<string>();
 const MAX_INSTALL_RECEIPTS = 32;
 const MAX_INSTALL_ENTRIES = 100_000;
 // Every lockfile npm reads a source from: the root lockfiles and the tree it already installed.
@@ -139,6 +150,13 @@ export type DependencyBootstrapRefusal = Exclude<
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
+  // A tree this process did not install, left alone for the run's own shell (#4522).
+  | {
+      readonly kind: "foreign-tree";
+      readonly lockfile: VerificationLockfileState;
+      // Whether this process still holds a receipt for an install npm has since rewritten.
+      readonly receipt: "missing" | "changed";
+    }
   | { readonly kind: "current"; readonly lockfile: VerificationLockfileState }
   | { readonly kind: "install"; readonly lockfile: VerificationLockfileState }
   | {
@@ -174,6 +192,12 @@ export interface DependencyBootstrapDeps {
    * target installs as before.
    */
   readonly sharedHostPlatform?: HostInstallPlatform | undefined;
+  /**
+   * Who the tree is installed for (#4522). `host-shell` installs for the native runtime's own shell
+   * on this host, whose check runs where no governed step can: its own refusals then apply
+   * (`hostShellDependencies.ts`). Absent is the governed verifier's own steps, as before.
+   */
+  readonly consumer?: VerificationDependencyConsumer | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
   readonly onTerminated?: RunCommandDeps["onTerminated"] | undefined;
@@ -512,10 +536,22 @@ function effectiveTargetIdentity(target: DependencyInstallTarget | undefined): s
   );
 }
 
-function dependencyInstallArgs(target: DependencyInstallTarget | undefined): readonly string[] {
-  if (target === undefined) return DEPENDENCY_INSTALL_ARGS;
+// An install for the run's own shell (#4522) also passes `--no-save`: npm then writes neither
+// package.json nor a lockfile (a project without one does not gain one), so the person's own files
+// stay as they are and only the tree under `node_modules` changes.
+export const DEPENDENCY_HOST_SHELL_ARGS: readonly string[] = Object.freeze([
+  ...DEPENDENCY_INSTALL_ARGS,
+  "--no-save",
+]);
+
+function dependencyInstallArgs(
+  target: DependencyInstallTarget | undefined,
+  consumer: VerificationDependencyConsumer | undefined,
+): readonly string[] {
+  const base = consumer === "host-shell" ? DEPENDENCY_HOST_SHELL_ARGS : DEPENDENCY_INSTALL_ARGS;
+  if (target === undefined) return base;
   return [
-    ...DEPENDENCY_INSTALL_ARGS,
+    ...base,
     `--os=${target.os}`,
     `--cpu=${target.cpu}`,
     ...(target.libc === "none" ? [] : [`--libc=${target.libc}`]),
@@ -668,12 +704,32 @@ function installedTreeCurrent(
   fs: WorkspaceFs,
   target: DependencyInstallTarget | undefined,
 ): boolean {
+  return treeNewerThanInputs(root, fs) && completedInstallCurrent(root, fs, target);
+}
+
+// npm's own currency heuristic: its hidden lockfile was written after the manifest and lockfiles.
+function treeNewerThanInputs(root: string, fs: WorkspaceFs): boolean {
   const installed = optionalInspectionStat(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
-  if (installed === undefined || !completedInstallCurrent(root, fs, target)) return false;
+  if (installed === undefined) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
     .map((name) => optionalInspectionStat(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
+}
+
+function markerIdentity(root: string, fs: WorkspaceFs): string | undefined {
+  const stat = optionalInspectionStat(fs, join(root, INSTALLED_TREE_MARKER));
+  if (stat?.fileIdentity === undefined || stat.ctimeNs === undefined) return undefined;
+  return JSON.stringify([stat.fileIdentity, stat.ctimeNs, stat.size]);
+}
+
+function markInstallPending(root: string): void {
+  pendingInstalls.delete(root);
+  if (pendingInstalls.size >= MAX_INSTALL_RECEIPTS) {
+    const oldest = pendingInstalls.values().next().value;
+    if (oldest !== undefined) pendingInstalls.delete(oldest);
+  }
+  pendingInstalls.add(root);
 }
 
 function recordCompletedInstall(
@@ -683,11 +739,16 @@ function recordCompletedInstall(
 ): void {
   const fingerprint = installationFingerprint(root, fs, target);
   completedInstalls.delete(root);
+  pendingInstalls.delete(root);
   if (completedInstalls.size >= MAX_INSTALL_RECEIPTS) {
     const oldest = completedInstalls.keys().next().value;
     if (oldest !== undefined) completedInstalls.delete(oldest);
   }
-  completedInstalls.set(root, { targetIdentity: effectiveTargetIdentity(target), fingerprint });
+  completedInstalls.set(root, {
+    targetIdentity: effectiveTargetIdentity(target),
+    fingerprint,
+    marker: markerIdentity(root, fs),
+  });
 }
 
 function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
@@ -701,8 +762,13 @@ export function planDependencyBootstrap(
   fs: WorkspaceFs,
   onFailure?: DependencyBootstrapDeps["onFailure"],
   dependencyInstallTarget?: DependencyInstallTarget,
+  consumer?: VerificationDependencyConsumer,
 ): DependencyBootstrapPlan {
   const root = workspace.root;
+  if (consumer === "host-shell") {
+    const tree = hostShellTreePlan(root, fs, onFailure, dependencyInstallTarget);
+    if (tree !== undefined) return tree;
+  }
   const manifest = readManifest(root, fs);
   if (manifest === "absent") return { kind: "none" };
   const lockfile = lockfileState(root, fs);
@@ -710,25 +776,159 @@ export function planDependencyBootstrap(
     return { kind: "refused", reason: "manifest-unreadable", lockfile };
   }
   if (declaredDependencyCount(manifest) === 0) return { kind: "none" };
-  if (!projectNpmConfigApproved(root, fs, onFailure)) {
-    return { kind: "refused", reason: "project-npm-config", lockfile };
-  }
-  const refusal = sourceRefusal(root, manifest, fs);
+  const refusal = planRefusal(root, manifest, fs, onFailure, consumer);
   if (refusal !== undefined) return { kind: "refused", reason: refusal, lockfile };
+  return currentOrInstall(root, fs, lockfile, onFailure, dependencyInstallTarget);
+}
+
+// What refuses a declared install before npm runs: the project's own npm configuration, a source
+// the install must not fetch, and, for the run's own shell, what that shell's install cannot give.
+function planRefusal(
+  root: string,
+  manifest: Readonly<Record<string, unknown>>,
+  fs: WorkspaceFs,
+  onFailure: DependencyBootstrapDeps["onFailure"],
+  consumer: VerificationDependencyConsumer | undefined,
+): DependencyBootstrapRefusal | undefined {
+  if (!projectNpmConfigApproved(root, fs, onFailure)) return "project-npm-config";
+  return (
+    sourceRefusal(root, manifest, fs) ??
+    (consumer === "host-shell" ? hostShellPlanRefusal(root, manifest, fs, onFailure) : undefined)
+  );
+}
+
+function currentOrInstall(
+  root: string,
+  fs: WorkspaceFs,
+  lockfile: VerificationLockfileState,
+  onFailure: DependencyBootstrapDeps["onFailure"],
+  dependencyInstallTarget: DependencyInstallTarget | undefined,
+): DependencyBootstrapPlan {
   try {
     return installedTreeCurrent(root, fs, snapshotInstallTarget(dependencyInstallTarget))
       ? { kind: "current", lockfile }
       : { kind: "install", lockfile };
   } catch (error) {
     reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
-    return {
-      kind: "refused",
-      reason:
-        error instanceof DependencyTargetError
-          ? "install-target-invalid"
-          : "install-inspection-unavailable",
-      lockfile,
-    };
+    return inspectionRefusal(error, lockfile);
+  }
+}
+
+function inspectionRefusal(
+  error: unknown,
+  lockfile: VerificationLockfileState,
+): DependencyBootstrapPlan {
+  return {
+    kind: "refused",
+    reason:
+      error instanceof DependencyTargetError
+        ? "install-target-invalid"
+        : "install-inspection-unavailable",
+    lockfile,
+  };
+}
+
+/**
+ * Whether the folder holds npm's hidden lockfile, which npm writes last in a completed install,
+ * whoever installed it. A `node_modules` without it (an install that stopped early, a folder an
+ * editor created) is no tree, so it does not lift the install-script refusal.
+ */
+export function installedTreePresent(root: string, fs: WorkspaceFs): boolean {
+  return statOrUndefined(fs, join(root, INSTALLED_TREE_MARKER)) !== undefined;
+}
+
+// What the run's own shell already has (#4522). npm writes its hidden lockfile last in a completed
+// install, so a tree whose hidden lockfile is newer than the manifest and lockfiles is one npm
+// finished for them: the person's own, one the shell installed through the repository credential
+// relay (ADR-0184), or one this process installed. The shell already uses it, so the bootstrap does
+// not resolve it again against the public registry, which a firewalled network or an internal
+// registry would refuse although the tree works. The shell writes caches into `node_modules` itself,
+// so this process's install stays current while npm's hidden lockfile is the one it left. A tree
+// older than its inputs, an install of this process that has not completed, and an empty or
+// partial folder without the hidden lockfile go to the ordinary plan and are installed into, as
+// does a tree this process installed for another target.
+function hostShellTreePlan(
+  root: string,
+  fs: WorkspaceFs,
+  onFailure: DependencyBootstrapDeps["onFailure"],
+  dependencyInstallTarget: DependencyInstallTarget | undefined,
+): DependencyBootstrapPlan | undefined {
+  const lockfile = lockfileState(root, fs);
+  try {
+    if (pendingInstalls.has(root) || !treeNewerThanInputs(root, fs)) return undefined;
+    const receipt = completedInstalls.get(root);
+    if (receipt === undefined) return { kind: "foreign-tree", lockfile, receipt: "missing" };
+    const target = effectiveTargetIdentity(snapshotInstallTarget(dependencyInstallTarget));
+    if (receipt.targetIdentity !== target) return undefined;
+    const marker = markerIdentity(root, fs);
+    return marker !== undefined && marker === receipt.marker
+      ? { kind: "current", lockfile }
+      : { kind: "foreign-tree", lockfile, receipt: "changed" };
+  } catch (error) {
+    reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
+    return inspectionRefusal(error, lockfile);
+  }
+}
+
+// npm installs from `npm-shrinkwrap.json` when both lockfiles are present. Its readability was
+// checked before (`lockfile-unreadable`).
+function rootLockfile(
+  root: string,
+  fs: WorkspaceFs,
+): Readonly<Record<string, unknown>> | undefined {
+  for (const name of ["npm-shrinkwrap.json", "package-lock.json"]) {
+    const path = join(root, name);
+    if (statOrUndefined(fs, path) !== undefined) {
+      return parsedJsonObject(path, fs, LOCKFILE_MAX_BYTES);
+    }
+  }
+  return undefined;
+}
+
+// The root manifest under "" and each member manifest under its lockfile location. The sources were
+// approved before, so every member walk here already succeeded once.
+function projectManifests(
+  root: string,
+  manifest: Readonly<Record<string, unknown>>,
+  fs: WorkspaceFs,
+): ReadonlyMap<string, Readonly<Record<string, unknown>>> {
+  const manifests = new Map<string, Readonly<Record<string, unknown>>>([["", manifest]]);
+  const workspaces = manifest.workspaces;
+  if (!workspacesContained(workspaces)) return manifests;
+  const canonicalRoot = fs.realPath(root);
+  for (const member of workspaceMemberRoots(root, workspaces, fs) ?? []) {
+    const read = readManifest(member, fs);
+    if (typeof read === "object") manifests.set(lockfileLocation(canonicalRoot, member), read);
+  }
+  return manifests;
+}
+
+function lockfileLocation(canonicalRoot: string, member: string): string {
+  return relative(canonicalRoot, member).split(sep).join("/");
+}
+
+function hostShellPlanRefusal(
+  root: string,
+  manifest: Readonly<Record<string, unknown>>,
+  fs: WorkspaceFs,
+  onFailure?: DependencyBootstrapDeps["onFailure"],
+): DependencyBootstrapRefusal | undefined {
+  try {
+    const manifests = projectManifests(root, manifest, fs);
+    return hostShellRefusal({
+      manifests,
+      lockfile: rootLockfile(root, fs),
+      gypfiles: new Set(
+        [...manifests.keys()].filter(
+          (location) =>
+            optionalInspectionStat(fs, join(root, location, "binding.gyp"))?.isFile === true,
+        ),
+      ),
+      treePresent: installedTreePresent(root, fs),
+    });
+  } catch (error) {
+    reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
+    return "install-inspection-unavailable";
   }
 }
 
@@ -773,6 +973,12 @@ const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
     "a dependency source is not the approved HTTPS registry; dependency installation refused",
   "workspaces-unresolved":
     "a workspaces pattern cannot be resolved to its members; dependency installation refused",
+  "install-scripts-required":
+    "the project names an install script or builds a native addon from binding.gyp, which the governed install never runs; dependency installation refused",
+  "package-manager-unsupported":
+    "the project's dependencies belong to a package manager other than npm; dependency installation refused",
+  "lockfile-mismatch":
+    "the lockfile does not record what package.json declares; dependency installation refused",
 };
 // The egress proxy refused a destination during the install: a package in the tree reached for a
 // source other than the approved registry, which is a refusal, not a failure.
@@ -906,16 +1112,39 @@ function installOutcome(
   return state === "installed" ? { summary } : { summary, excerpt: outputExcerpt(result) };
 }
 
+// The plans that settle without running npm.
+function settledWithoutInstall(
+  plan: Exclude<DependencyBootstrapPlan, { readonly kind: "install" }>,
+): DependencyBootstrapOutcome {
+  switch (plan.kind) {
+    case "none":
+      return settled("none", "absent");
+    // Left alone: the line names a tree without this process's receipt, so a check that later
+    // fails in the shell can be read back to the person's own tree rather than to a skipped install.
+    case "foreign-tree": {
+      const left = settled("none", plan.lockfile);
+      const summary = {
+        ...left.summary,
+        completionReceipt: plan.receipt,
+        completionRecorded: plan.receipt === "changed",
+      };
+      return { ...left, summary };
+    }
+    case "current":
+      return settled("current", plan.lockfile);
+    case "refused":
+      return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason], plan.reason);
+  }
+}
+
 async function executeDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
-  if (plan.kind === "none") return settled("none", "absent");
-  if (plan.kind === "current") return settled("current", plan.lockfile);
-  if (plan.kind === "refused")
-    return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason], plan.reason);
+  if (plan.kind !== "install") return settledWithoutInstall(plan);
   const startedAt = deps.now();
   completedInstalls.delete(deps.workspace.root);
+  markInstallPending(deps.workspace.root);
   let proxy: RegistryEgressProxy;
   try {
     proxy = await (deps.startEgressProxy ?? startApprovedRegistryProxy)();
@@ -1003,7 +1232,7 @@ async function installBehindProxy(
     const result = await runCommand(
       {
         command: "npm",
-        args: dependencyInstallArgs(deps.dependencyInstallTarget),
+        args: dependencyInstallArgs(deps.dependencyInstallTarget, deps.consumer),
         cwd: undefined,
         timeoutMs: DEPENDENCY_INSTALL_LIMITS.wallTimeMs,
         signal: deps.signal ?? new AbortController().signal,
@@ -1084,6 +1313,7 @@ function admittedBootstrapPlan(
     deps.fs,
     deps.onFailure,
     deps.dependencyInstallTarget,
+    deps.consumer,
   );
 }
 
@@ -1100,13 +1330,63 @@ function foreignTargetRefusal(
     : { kind: "refused", reason: "install-target-foreign", lockfile: plan.lockfile };
 }
 
+/**
+ * The host shell's refusal of a project whose tree belongs to Yarn or pnpm and is not installed
+ * (#4522): this bootstrap installs with npm only, and the shell has no other way to that tree below
+ * Full access. A manifest that declares no dependency needs no tree and is not refused.
+ */
+export function otherManagerBootstrapRefusal(
+  deps: Pick<DependencyBootstrapDeps, "workspace" | "fs" | "consumer">,
+): DependencyBootstrapOutcome | undefined {
+  const manifest = readManifest(deps.workspace.root, deps.fs);
+  if (manifest === "absent") return undefined;
+  if (manifest !== "unreadable" && declaredDependencyCount(manifest) === 0) return undefined;
+  return refusedDependencyBootstrap(deps, "package-manager-unsupported");
+}
+
+function refusedDependencyBootstrap(
+  deps: Pick<DependencyBootstrapDeps, "workspace" | "fs" | "consumer">,
+  reason: DependencyBootstrapRefusal,
+): DependencyBootstrapOutcome {
+  completedInstalls.delete(deps.workspace.root);
+  return withConsumer(
+    settled("refused", lockfileState(deps.workspace.root, deps.fs), REFUSAL_DETAIL[reason], reason),
+    deps,
+  );
+}
+
+function withConsumer(
+  outcome: DependencyBootstrapOutcome,
+  deps: Pick<DependencyBootstrapDeps, "consumer">,
+): DependencyBootstrapOutcome {
+  return deps.consumer === "host-shell"
+    ? { ...outcome, summary: { ...outcome.summary, consumer: deps.consumer } }
+    : outcome;
+}
+
 export async function runDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
+  return withConsumer(await runPlannedDependencyBootstrap(plan, deps), deps);
+}
+
+type PlanSettledWithoutTarget = Extract<
+  DependencyBootstrapPlan,
+  { readonly kind: "none" | "foreign-tree" | "refused" }
+>;
+
+// The plans no install target can change: nothing to install, a tree left alone, a refusal.
+function settlesWithoutTarget(plan: DependencyBootstrapPlan): plan is PlanSettledWithoutTarget {
+  return plan.kind === "none" || plan.kind === "foreign-tree" || plan.kind === "refused";
+}
+
+async function runPlannedDependencyBootstrap(
+  plan: DependencyBootstrapPlan,
+  deps: DependencyBootstrapDeps,
+): Promise<DependencyBootstrapOutcome> {
   if (plan.kind === "refused") completedInstalls.delete(deps.workspace.root);
-  if (plan.kind === "none" || plan.kind === "refused")
-    return executeDependencyBootstrap(plan, deps);
+  if (settlesWithoutTarget(plan)) return executeDependencyBootstrap(plan, deps);
   let effectiveDeps: DependencyBootstrapDeps;
   try {
     effectiveDeps = await resolveBootstrapDeps(deps);
@@ -1119,7 +1399,8 @@ export async function runDependencyBootstrap(
   const receipt = admitted.kind === "current" ? "current" : priorReceipt;
   if (admitted.kind === "refused") completedInstalls.delete(deps.workspace.root);
   const outcome = await executeDependencyBootstrap(admitted, effectiveDeps);
-  if (admitted.kind === "none" || admitted.kind === "refused") return outcome;
+  if (admitted.kind === "none" || admitted.kind === "refused" || admitted.kind === "foreign-tree")
+    return outcome;
   return {
     ...outcome,
     summary: {

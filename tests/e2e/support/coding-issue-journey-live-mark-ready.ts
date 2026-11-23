@@ -16,6 +16,7 @@ import {
   journeyRefresher,
   raiseWorkbench,
 } from "./coding-issue-journey-live.js";
+import { pollUntilObserved } from "./live-poll.js";
 
 const JOURNEY_REGION_NAME = "Issue handoff";
 const REFRESH_BUTTON_NAME = "Refresh observed status";
@@ -27,7 +28,12 @@ const MARK_READY_EXECUTE_ENDPOINT = "/api/git-delivery/pr/mark-ready/execute";
 const TRANSIENT_MARK_READY_CODES: ReadonlySet<GitDeliveryExecutionErrorCode> =
   new Set<GitDeliveryExecutionErrorCode>(["network-failure", "timeout"]);
 const MARK_READY_ATTEMPTS = 3;
+const PROPOSE_OFFER_TIMEOUT_MS = 10 * 60_000;
+const MARK_READY_EXECUTE_TIMEOUT_MS = 2 * 60_000;
 const MARK_READY_RETRY_PAUSE_MS = 20_000;
+/** The longest one attempt can take: the offer wait, the execute response, and the pause after it. */
+const MARK_READY_ATTEMPT_BUDGET_MS =
+  PROPOSE_OFFER_TIMEOUT_MS + MARK_READY_EXECUTE_TIMEOUT_MS + MARK_READY_RETRY_PAUSE_MS;
 
 export interface MarkReadyVerdict {
   readonly status: string;
@@ -52,20 +58,35 @@ export async function proposeJourneyReady(page: Page): Promise<void> {
   await expect(journey).toBeVisible({ timeout: 60_000 });
   const refresh = journey.getByRole("button", { name: REFRESH_BUTTON_NAME });
   const propose = journey.getByRole("button", { name: PROPOSE_BUTTON_NAME });
-  for (let attempt = 1; ; attempt += 1) {
-    await waitForProposeReadyOffer(page, propose);
-    const verdict = await proposeReadyOnce(page, propose);
-    if (verdict.status === "succeeded") break;
-    const summary = describeMarkReadyVerdict(verdict);
-    if (attempt >= MARK_READY_ATTEMPTS || !isRetryableMarkReadyVerdict(verdict)) {
-      throw new Error(
-        `ready-for-review request ${summary} after ${String(attempt)} attempt(s); the PR stays a draft`,
+  let attempt = 0;
+  // One request per observation, MARK_READY_RETRY_PAUSE_MS apart. A verdict that must not be
+  // retried, or the last allowed attempt, ends the wait at once by throwing.
+  const succeeded = await pollUntilObserved(
+    async () => {
+      attempt += 1;
+      await waitForProposeReadyOffer(page, propose);
+      const verdict = await proposeReadyOnce(page, propose);
+      if (verdict.status === "succeeded") return true;
+      const summary = describeMarkReadyVerdict(verdict);
+      if (attempt >= MARK_READY_ATTEMPTS || !isRetryableMarkReadyVerdict(verdict)) {
+        throw new Error(
+          `ready-for-review request ${summary} after ${String(attempt)} attempt(s); the PR stays a draft`,
+        );
+      }
+      process.stderr.write(
+        `[lane] ready-for-review request ${summary}; refreshing and requesting again as the card instructs (attempt ${String(attempt)} of ${String(MARK_READY_ATTEMPTS)})\n`,
       );
-    }
-    process.stderr.write(
-      `[lane] ready-for-review request ${summary}; refreshing and requesting again as the card instructs (attempt ${String(attempt)} of ${String(MARK_READY_ATTEMPTS)})\n`,
+      return false;
+    },
+    {
+      timeoutMs: MARK_READY_ATTEMPTS * MARK_READY_ATTEMPT_BUDGET_MS,
+      intervalMs: MARK_READY_RETRY_PAUSE_MS,
+    },
+  );
+  if (!succeeded) {
+    throw new Error(
+      `ready-for-review request did not succeed within ${String(attempt)} attempt(s); the PR stays a draft`,
     );
-    await page.waitForTimeout(MARK_READY_RETRY_PAUSE_MS);
   }
   await clickWhenActionable(refresh);
   // A successfully redeemed proposal converts the observed PR from draft to ready, so the control
@@ -80,7 +101,7 @@ async function proposeReadyOnce(page: Page, propose: Locator): Promise<MarkReady
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith(MARK_READY_EXECUTE_ENDPOINT),
-    { timeout: 2 * 60_000 },
+    { timeout: MARK_READY_EXECUTE_TIMEOUT_MS },
   );
   await propose.click();
   const response = await executed;
@@ -130,27 +151,28 @@ function describeMarkReadyVerdict(verdict: MarkReadyVerdict): string {
  * Waits for GitHub's own view to catch up with the pushed head, re-reading it on a deliberate,
  * slow cadence.
  *
- * The refresh used to happen INSIDE an `expect.poll` callback, which has two consequences the lane
- * cannot afford. Playwright evaluates that callback outside its retry guard, so one occluded,
- * disabled or momentarily detached refresh click ended the flow outright -- and the button IS
- * disabled while a refresh is in flight. And with the default poll intervals it fired hundreds of
- * real `journey/refresh` calls against GitHub inside ten minutes, which is secondary-rate-limit
- * territory. The click lives outside the matcher, is only attempted when actionable, and runs at
- * the shared fifteen-second cadence (`journeyRefresher`); the offer itself is re-checked every two
- * seconds so it is seen as soon as it appears rather than up to fifteen seconds later.
+ * The refresh once was a raw click in an `expect.poll` callback at the default poll intervals,
+ * which had two consequences the lane cannot afford. Playwright does not retry an error that
+ * callback throws, so one occluded, disabled or momentarily detached refresh click ended the flow
+ * outright -- and the button IS disabled while a refresh is in flight. And the default intervals
+ * fired hundreds of real `journey/refresh` calls against GitHub inside ten minutes, which is
+ * secondary-rate-limit territory. The click is now only attempted when actionable and runs at the
+ * shared fifteen-second cadence (`journeyRefresher`), whatever the observation interval; the offer
+ * itself is re-checked every two seconds so it is seen as soon as it appears rather than up to
+ * fifteen seconds later.
  *
  * `isEnabled()` is no longer wrapped in a catch: swallowing a strict-mode or detachment error into
  * "not ready yet" reported a structural break ten minutes later as a plain availability timeout.
  */
 async function waitForProposeReadyOffer(page: Page, propose: Locator): Promise<void> {
   const refresher = journeyRefresher(page);
-  const deadline = Date.now() + 10 * 60_000;
-  for (;;) {
-    if ((await propose.count()) > 0 && (await propose.isEnabled())) return;
-    if (Date.now() > deadline) {
-      throw new Error("expected the ready-for-review control to become available");
-    }
-    await refresher.tick();
-    await page.waitForTimeout(2_000);
-  }
+  const offered = await pollUntilObserved(
+    async () => {
+      if ((await propose.count()) > 0 && (await propose.isEnabled())) return true;
+      await refresher.tick();
+      return false;
+    },
+    { timeoutMs: PROPOSE_OFFER_TIMEOUT_MS, intervalMs: 2_000 },
+  );
+  if (!offered) throw new Error("expected the ready-for-review control to become available");
 }

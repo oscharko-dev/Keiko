@@ -760,10 +760,12 @@ it.each(["off", "no-dependencies"] as const)(
 it.each([{ exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" }, { stdout: "PRIVATE_CHILD_FAILURE" }])(
   "retains the original failed bootstrap report and one body-free diagnostic: %j",
   async (change) => {
-    // Hermetic against the host's Docker state: a remote endpoint is refused as unsupported without
-    // a diagnostic, so a stopped local engine cannot add an isolation-probe diagnostic (#4068).
-    vi.stubEnv("DOCKER_HOST", "tcp://127.0.0.1:2375");
-    vi.stubEnv("DOCKER_CONTEXT", "");
+    // Hermetic against the host's isolation: the verdict is pinned, so no probe runs and cannot add
+    // a diagnostic (#4068), and the step can run, so the bootstrap is attempted (#4519).
+    const isolation = {
+      probe: { available: true, backend: "container-docker" as const },
+      durationMs: 0,
+    };
     const workspace = fixture();
     writeFileSync(
       join(workspace.root, "package.json"),
@@ -791,6 +793,7 @@ it.each([{ exitCode: 1, stderr: "PRIVATE_CHILD_FAILURE" }, { stdout: "PRIVATE_CH
       activityLog: log,
       diagnostics: { record: diagnostic },
       correlationId: "runtime-target-refused",
+      isolation,
     });
     expect(report.overallStatus).toBe("failed");
     expect(report.dependencies?.state).toBe("failed");

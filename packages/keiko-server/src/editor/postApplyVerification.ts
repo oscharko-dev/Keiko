@@ -29,13 +29,13 @@ import {
 import type { EditorPatchVerificationSummary } from "@oscharko-dev/keiko-contracts";
 import {
   executeVerificationEnforced,
-  probeNetworkIsolation,
+  probeNetworkIsolationServed,
   type NetworkIsolationProbe,
 } from "./verificationExecution.js";
 
 // Re-exported for the existing postApplyVerification tests (Issue #2211): the implementation moved to
 // verificationExecution.ts, but the import path `./postApplyVerification.js` stays stable for callers.
-export { probeNetworkIsolation };
+export { probeNetworkIsolation } from "./verificationExecution.js";
 export type { NetworkIsolationProbe };
 
 export interface PostApplyVerificationArgs {
@@ -258,14 +258,18 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
 
 // Preflight the same isolation control before any workspace write. If no targeted test would run, the
 // route may apply and report `not-run` post-apply; otherwise an unenforced host fails closed before write.
-export const defaultPostApplyVerificationPreflight: PostApplyVerificationPreflightPort = (args) => {
+// It asks the same probe the execution runs under, so a Docker that is installed and not running is
+// refused here too, before the write, instead of after it (#4519).
+export const defaultPostApplyVerificationPreflight: PostApplyVerificationPreflightPort = async (
+  args,
+) => {
   const workspace = detectWorkspaceAt(args.realRoot, args.fs);
   if (!requiresPostApplyVerificationPreflight(workspace, args.appliedTestFiles)) {
-    return Promise.resolve({ ok: true });
+    return { ok: true };
   }
-  const probe = probeNetworkIsolation(args.realRoot);
+  const probe = await probeNetworkIsolationServed(args.realRoot);
   if (probe.available) {
-    return Promise.resolve({ ok: true });
+    return { ok: true };
   }
-  return Promise.resolve({ ok: false, summary: deniedVerificationSummary(), command: "none" });
+  return { ok: false, summary: deniedVerificationSummary(), command: "none" };
 };
