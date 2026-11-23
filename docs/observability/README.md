@@ -12,6 +12,9 @@ reader engine live in `@oscharko-dev/keiko-activity-log`; server routes and diag
 argument parsing, rendering, and publication remain their composition owners
 ([ADR-0179](../adr/ADR-0179-activity-log-package-boundary.md)).
 
+What individual operations record, surface by surface, is in
+[operation-notes.md](operation-notes.md).
+
 ## Create a report in the browser
 
 Choose **Create error report** beside a failed editor load, window crash, file-tree load, or
