@@ -14,16 +14,16 @@ import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedComm
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import { ADMISSION_TIMEOUT_MS } from "./codingRuntimeRepositoryItems.js";
 
 type LaunchInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 const PREPARATION_TTL_MS = 5_000;
 // Reading the identity spawns `git` twice. On a loaded machine (an account's first browser start,
 // endpoint protection scanning every new process) that alone outlasted the five-second window, and
-// the start was refused before any run existed (#4520). The read gets repository admission's bound
-// (`codingRuntimeRepositoryItems.ts`); the one-use window opens only once the read has finished.
-// The context digest covers no repository state, so an origin changed during a long read is not
-// caught here; every later live Git boundary re-reads the identity (`verifiedCommitFacts.ts`).
-const IDENTITY_READ_TIMEOUT_MS = 20_000;
+// the start was refused before any run existed (#4520). The read gets repository admission's bound;
+// the one-use window opens only once the read has finished. The context digest covers no repository
+// state, so an origin changed during a long read is not caught here; the commit boundary re-reads
+// the identity and refuses a different one (`gitDelivery/verifiedCommitFacts.ts`).
 const GIT_RUNTIME_IDENTITY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -164,7 +164,7 @@ async function readIdentity(
   const identity = await readVerifiedRepositoryIdentity(
     {
       workspace,
-      signal: input.identityReadSignal?.() ?? AbortSignal.timeout(IDENTITY_READ_TIMEOUT_MS),
+      signal: input.identityReadSignal?.() ?? AbortSignal.timeout(ADMISSION_TIMEOUT_MS),
       onTerminated: gitDeliveryTerminationHandler(deps.execution ?? {}, runId),
     },
     sha256Hex(context.workspaceRoot),

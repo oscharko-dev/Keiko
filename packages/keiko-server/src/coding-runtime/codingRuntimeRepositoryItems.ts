@@ -70,7 +70,7 @@ const MAX_CANDIDATES: Readonly<Record<RepositoryItemKind, number>> = Object.free
 });
 const MAX_DIRECTORY_ENTRIES = 512;
 const MAX_TOTAL_BYTES = 262_144;
-const ADMISSION_TIMEOUT_MS = 20_000;
+export const ADMISSION_TIMEOUT_MS = 20_000;
 
 const ADMISSION_STATES = ["disabled", "unavailable", "empty", "completed", "failed"] as const;
 type AdmissionState = (typeof ADMISSION_STATES)[number];

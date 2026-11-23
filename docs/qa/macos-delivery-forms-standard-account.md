@@ -73,7 +73,26 @@ not read also fails it. Two kinds of change are listed in full but not attribute
 
 ## Record
 
-To be filled from the job's run on the pull request.
+Run [137786972146](https://github.com/oscharko-dev/Keiko/actions/runs/45201728976/job/137786972146) on head `7d5e199e9`, hosted `macos-15` (arm64, Darwin 24.6.0), Keiko 1.5.6, Node.js 26.13.1.
+
+- Account `keikoqa`: groups `staff`, `everyone`, `localaccounts`, `_lpoperator`, `com.apple.sharepoint.group.1`; administrator `false`; `sudo` `refused`; account mode `standard`.
+- Verdict: passed `true`, certifies `false`; deferred forms: `npm-folder`.
+
+| Form       | Checks passed | Coding run | Duration of the coding run |
+| ---------- | ------------- | ---------- | -------------------------- |
+| npm        | 8 of 8        | pass       | 6.5 s                      |
+| standalone | 8 of 8        | pass       | 20.1 s                     |
+
+- Marked download: 20374 marked entries; Gatekeeper `enabled`; desktop session `false`; start exit `0`; outcome `started-coding-run-succeeded`.
+- Footprint: 2334 entries changed after the marker; owned by the account outside its areas 0; in the three service folders 20; files of other accounts it may also write 35; by other accounts 2267; removed since 12; unreadable folders 0; vanished during the walk 6; passed `true`.
+
+The run qualified the published Keiko 1.5.6 and deferred the npm folder form, so it certifies
+nothing: that form is recorded by the publication run. The qualification script and the job are
+unchanged on later heads of the pull request.
+
+In an administrator's own desktop session on a developer Mac (Gatekeeper on, `--account any`, so
+it certifies nothing), macOS held the marked copy's Node.js before it ran and showed
+"“Keiko” Not Opened"; the start never reported health.
 
 ## What this does not prove
 

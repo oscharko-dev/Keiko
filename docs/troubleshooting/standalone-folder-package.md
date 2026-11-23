@@ -16,9 +16,8 @@ notice.
 One of these, after a double-click on `Start Keiko`:
 
 1. macOS reports that the file "cannot be opened" or "cannot be verified", or Windows shows
-   "Windows protected your PC". No Keiko window appears. Started from a terminal on macOS, the
-   start file prints nothing and does not end: macOS holds the folder's Node.js runtime before it
-   runs.
+   "Windows protected your PC". No Keiko window appears: macOS holds the folder's Node.js
+   runtime before it runs.
 2. The start window prints `Keiko is incomplete: files are missing in the folder "system".` or
    `keiko portable launch: portable setup manifest is unavailable`, then
    `Keiko could not start.`
@@ -35,7 +34,8 @@ incomplete`, then `Keiko could not start.`
 
 1. The copy carries the download mark of a browser, mail or chat program, and Keiko has no Apple
    or Microsoft signature (ADR-0121 D7). macOS with Gatekeeper on, as it ships, held such a copy in
-   a person's own desktop session; Windows stops an unsigned program that carries it. An
+   an administrator's own desktop session (a standard account's was not observed); Windows stops an
+   unsigned program that carries it. An
    organization's application control can produce the same block without any mark.
 2. The folder is not complete: the archive was extracted only in part, files were moved out of
    `system`, or an endpoint-protection product removed one. The in-place launch validates the

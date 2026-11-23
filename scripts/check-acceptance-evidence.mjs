@@ -11,6 +11,8 @@
 
 import { pathToFileURL } from "node:url";
 
+import { containsCredentialShape } from "@oscharko-dev/keiko-security";
+
 import { readJsonArgument } from "./lib/json-argument.mjs";
 
 const NAME = "check-acceptance-evidence";
@@ -54,7 +56,8 @@ function metCount(evidence) {
 // (whitespace) and anything long. The one legitimate multi-token value is a governed verification
 // line, `state step...`, which is a space-separated list of such tokens. A key that names content
 // fails whatever its value is; `dockerOnPath` and its siblings are the producer's own presence
-// signs (booleans), so `OnPath` is the one suffix that is not a path.
+// signs (booleans), so `OnPath` is the one suffix that is not a path. A closed token can still be
+// shaped like a credential (`sk-…`, a JWT), so every string also passes the credential detector.
 const CLOSED_TOKEN = /^[A-Za-z0-9._:+=-]{1,128}$/u;
 const KEY_TOKEN = /^[A-Za-z0-9._:+=-]{1,64}$/u;
 const TOKEN_LIST_POINTER = /^\/cases\/\d+\/observed\/governedVerifications\/\d+$/u;
@@ -78,6 +81,7 @@ const MAX_BODY_FREE_FAILURES = 20;
 
 function closedValue(value, pointer) {
   if (typeof value !== "string") return true;
+  if (containsCredentialShape(value)) return false;
   if (CLOSED_TOKEN.test(value)) return true;
   if (!TOKEN_LIST_POINTER.test(pointer)) return false;
   const tokens = value.split(" ");
@@ -122,11 +126,16 @@ const PRECONDITIONS = [
   ["container-runtime-present", (evidence) => presentSigns(evidence.containerRuntime).length > 0],
 ];
 
-// What the run itself said was unmet; a run that recorded nothing certifies nothing.
+const PRECONDITION_NAMES = new Set(PRECONDITIONS.map(([name]) => name));
+
+// What the run itself said was unmet; a run that recorded nothing certifies nothing. Only a known
+// name is reported as itself: any other value may carry a body, so it becomes one fixed code (the
+// body-free scan names its pointer).
 function recordedPreconditions(evidence) {
-  return Array.isArray(evidence.unmetPreconditions)
-    ? evidence.unmetPreconditions.map(String)
-    : ["unrecorded"];
+  if (!Array.isArray(evidence.unmetPreconditions)) return ["unrecorded"];
+  return evidence.unmetPreconditions.map((value) =>
+    PRECONDITION_NAMES.has(value) ? value : "precondition-unrecognized",
+  );
 }
 
 const CASE_RULES = [
@@ -157,8 +166,14 @@ export function acceptanceEvidenceFailures(evidence) {
   return failures;
 }
 
+const NOT_CLOSED = "<not-closed>";
+
+// A summary fact is printed only when it is one closed token; anything else may carry a body.
 function fact(evidence, name) {
-  return String(evidence?.[name]);
+  const value = evidence?.[name];
+  const text = String(value);
+  const closed = typeof value !== "object" && CLOSED_TOKEN.test(text);
+  return closed && !containsCredentialShape(text) ? text : NOT_CLOSED;
 }
 
 /** One body-free line per fact: closed values and counts only. */

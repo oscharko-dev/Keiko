@@ -175,6 +175,18 @@ describe("acceptanceEvidenceFailures body-free scan (#4492 AC6)", () => {
     expect(JSON.stringify(failures)).not.toMatch(/invoice|jane|VAT|hosts|second|aaaa|Users/u);
   });
 
+  // Built at run time so no credential-shaped literal sits in the repository.
+  const FILLER = "a1B2c3D4e5".repeat(4);
+  it.each([
+    ["an issuer-prefixed token", `${"gh"}p_${FILLER}`],
+    ["a provider key", `${"sk"}-proj-${FILLER}`],
+    ["a JWT", `${"ey"}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.${FILLER}`],
+  ])("fails %s although it is one closed token, never naming it", (_name, value) => {
+    const failures = acceptanceEvidenceFailures(withObserved({ state: value }));
+    expect(failures).toEqual(["body-free:/cases/0/observed/state"]);
+    expect(JSON.stringify(failures)).not.toContain(FILLER);
+  });
+
   it("fails a content-named key even when its value is a closed token", () => {
     const failures = acceptanceEvidenceFailures(withObserved({ prompt: "ok", taskPath: "ok" }));
     expect(failures).toEqual([
@@ -235,6 +247,7 @@ describe("acceptanceEvidenceSummary", () => {
 });
 
 describe("runCheck", () => {
+  const BODY_PLATFORM = "darwin on /Users/jane";
   const roots = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -276,6 +289,26 @@ describe("runCheck", () => {
     expect(runCheck(["node", "check", evidenceFile(JSON.stringify(admin))], io)).toBe(1);
     expect(lines.error).toEqual([
       "check-acceptance-evidence: FAIL does not certify the promise: administrator",
+    ]);
+  });
+
+  it("never prints a recorded precondition or fact that is not a closed value", () => {
+    const { lines, io } = capture();
+    const hostile = {
+      ...CERTIFYING,
+      platform: BODY_PLATFORM,
+      node: "26 /Users/jane/node",
+      unmetPreconditions: ["administrator", "private /Users/jane/project"],
+      certifiesPromise: false,
+    };
+    expect(runCheck(["node", "check", evidenceFile(JSON.stringify(hostile))], io)).toBe(1);
+    const printed = [...lines.log, ...lines.error].join("\n");
+    expect(printed).not.toMatch(/jane|Users|project/u);
+    expect(lines.log).toContain("check-acceptance-evidence: platform <not-closed> 24.6.0 arm64");
+    expect(lines.error).toEqual([
+      "check-acceptance-evidence: FAIL does not certify the promise: platform, administrator, " +
+        "precondition-unrecognized, body-free:/platform, body-free:/node, " +
+        "body-free:/unmetPreconditions/1",
     ]);
   });
 

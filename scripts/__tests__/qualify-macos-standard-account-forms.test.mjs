@@ -431,6 +431,17 @@ describe("the standard-account job (#4520)", () => {
     expect(check.run).toContain("--account keikoqa");
   });
 
+  // The deferral keys on the event name, which a called workflow inherits from its caller; the
+  // publication is the one caller and must never be a pull request.
+  it("is called for publication only from a manual dispatch", () => {
+    const publish = parse(read(".github/workflows/npm-folder-publish.yml"));
+    expect(Object.keys(publish.on)).toEqual(["workflow_dispatch"]);
+    const callers = Object.values(publish.jobs).filter((entry) =>
+      String(entry.uses ?? "").endsWith("npm-folder-qualify.yml"),
+    );
+    expect(callers).toHaveLength(1);
+  });
+
   it("qualifies the exact merge candidate of a pull request", () => {
     const candidate = step("Verify pull-request merge candidate consistency");
     expect(candidate.if).toBe("${{ github.event_name == 'pull_request' }}");

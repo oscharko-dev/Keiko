@@ -508,14 +508,15 @@ Each task was given through the Coding Workbench, one run at a time, and checked
 criteria under "What counts as passed". Every timeline had integrity `complete` and loss `none`.
 The record is body-free: no task text, path or model answer.
 
-| Fact              | Value                                                                      |
-| ----------------- | -------------------------------------------------------------------------- |
-| Platform          | macOS 27.0.1 (26A434), arm64                                               |
-| User class        | administrator                                                              |
-| Container runtime | none visible to Keiko (Docker installed, not on Keiko's `PATH`)            |
-| Keiko             | 1.5.6 from `dev` 35e23d068; the two reruns on PR #4537 head c7910abc5      |
-| Node.js, OpenCode | 26.13.1, 2.2.5                                                             |
-| Model             | gemma-4-31b-it through a local LiteLLM gateway, one model loaded at a time |
+| Fact              | Value                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| Platform          | macOS 27.0.1 (26A434), arm64                                                       |
+| User class        | administrator                                                                      |
+| Container runtime | none visible to Keiko (Docker installed, not on Keiko's `PATH`)                    |
+| Keiko             | 1.5.6 from `dev` 35e23d068; the two reruns on PR #4537 head c7910abc5              |
+| Node.js, OpenCode | 26.13.1, 2.2.5                                                                     |
+| Runtime package   | none installed: `dev:start` staged the dev lane's OpenCode payload for macos-arm64 |
+| Model             | gemma-4-31b-it through a local LiteLLM gateway, one model loaded at a time         |
 
 | Case | Fixture                                                    | Location         | Mode                             | Result                                                                                                                              |
 | ---- | ---------------------------------------------------------- | ---------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |

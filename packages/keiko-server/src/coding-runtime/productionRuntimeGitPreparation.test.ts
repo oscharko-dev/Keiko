@@ -249,13 +249,16 @@ describe("repository identity before runtime confirmation", () => {
       now: () => now,
       identityReadSignal: () => AbortSignal.abort(),
     });
-    const input = request();
+    // A run id of the shape the server mints, so the line keeps it as its correlation.
+    const input = { ...request(), runId: "run-identity-timeout-0001" };
     await expect(bounded.prepare(input)).rejects.toBeInstanceOf(Error);
     expect(events.at(-1)).toMatchObject({
       op: "git.runtime-identity",
+      correlationId: "run-identity-timeout-0001",
       errorKind: "internal",
-      extra: { state: "failed", runId: "run-1" },
+      extra: { state: "failed", runId: "run-identity-timeout-0001" },
     });
+    expect(events.at(-1)?.extra?.frames?.length).toBeGreaterThan(0);
     expect(() => bounded.consume(input)).toThrow("preparation-unavailable");
   });
 
