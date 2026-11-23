@@ -76,3 +76,32 @@ Editor fast-path PRs use the same four jobs to run the complete suite without co
 instrumentation. Typecheck, UI builds and native optional install smokes remain in the
 required core and cross-platform jobs. Exact Node/npm verification remains in every setup
 lane, and verified-tree reuse requires every package and script shard to have succeeded.
+
+## Pinned native helpers provisioned per checkout
+
+Moved from [`AGENTS.md`](../AGENTS.md) §2 on 2026-11-23 without content changes.
+
+**`provision:usearch` is a real prerequisite, not an optional extra.** The pinned USearch HNSW ANN
+runtime (ADR-0164; sqlite-vec was retired — it performed exhaustive KNN, not ANN) is deliberately not
+an npm dependency (upstream publishes an invalid SPDX license string that two supply-chain gates
+reject), so the exact upstream tarball is fetched and SHA-256-verified by that script instead. CI
+runs it as a setup step before every test lane. `npm test` does **not** run it for you, so on a
+fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
+and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
+on purpose: a missing runtime must never quietly mask a real ANN regression.
+
+**`provision:ripgrep` is the same pattern for the OpenCode coding runtime (#3897).** OpenCode's
+`glob` and `grep` tools and its file finder run ripgrep. Left alone, the runtime downloads it from
+GitHub on first use, which a firewalled customer and the loopback-only runtime lane forbid, and
+search then fails silently. Keiko ships the identical upstream release (15.1.0) pinned and
+SHA-256-verified in `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`: the script fetches
+the one approved archive for the host, extracts only `rg` and `LICENSE-MIT` into the gitignored
+`.ripgrep/<version>/<target>/`, and verifies both again. Portable staging copies those verified files
+to `runtime/native/rg` (`rg.exe` on Windows). The npm runtime package builder
+(`scripts/build-coding-runtime-npm-package.mjs`) stages the same verified `rg`, its `LICENSE-MIT` and a
+component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same paths, provisioning the
+TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
+`<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
+remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
+customer-shape qualification, the nightly real-binary journey, the portable stage jobs and the npm runtime
+package build do, and CI runs it as a setup step there.
