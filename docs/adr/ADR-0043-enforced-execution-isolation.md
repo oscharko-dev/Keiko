@@ -775,6 +775,13 @@ it is installed into from that registry, so a dependency only an internal reposi
 that install fail; the run installs such dependencies in its shell through the credential relay
 (ADR-0184).
 
+When this install succeeds, the refusal the model reads (`VERIFICATION_NOT_RUN`) adds one fixed
+sentence: the dependencies are now installed for its shell without install scripts, the project's
+check is to run there again, and no dependency is to be replaced, removed or reimplemented. The
+port forwards only the closed word `installed`; a current tree, a failed install and an install for
+the verifier's own steps add nothing. A real-model run that was not told this replaced a dependency
+with its own code instead of running the check again (#4530).
+
 A refused, failed or timed-out host-shell install does not replace the step results. The coding
 facade presents it as a verification failure that names the dependency failure, with one fixed
 sentence for the model per refusal reason and one for every other failure of this install, and the

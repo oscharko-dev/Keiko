@@ -2092,6 +2092,38 @@ describe("production managed worktree tools", () => {
     ).toMatchObject({ state: "not-run", steps: ["test:isolation-unavailable"] });
   });
 
+  // #4530 real-model lab (case 5): Keiko installed the shell's missing dependencies in this call,
+  // and the answer said nothing about it. The model, whose shell check had failed for want of them,
+  // replaced the dependency with its own code. The answer names the install and the next step; an
+  // install for nobody, or one for the governed steps, adds nothing.
+  it.each([
+    { consumer: "host-shell", state: "installed", told: true },
+    { consumer: "host-shell", state: "current", told: false },
+    { consumer: "verification-steps", state: "installed", told: false },
+  ] as const)(
+    "tells a run with its own shell about a $state install for $consumer: $told",
+    async ({ consumer, state, told }) => {
+      const { report } = await noBackendReport();
+      const installed: VerificationReport = {
+        ...report,
+        dependencies: { state, lockfile: "absent", exitCode: 0, durationMs: 1, consumer },
+      };
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(installed),
+        records: [],
+        log: [],
+        verificationBlocked: vi.fn(),
+        toolProfile: "native",
+      });
+      const result = await executeVerification(facade, `verification-shell-install-${state}`);
+      expect(result).toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+      const detail = (result as { readonly detail?: string }).detail ?? "";
+      expect(detail.startsWith("These verification steps did not run: test (")).toBe(true);
+      expect(detail.includes("Keiko has now installed this project's npm dependencies")).toBe(told);
+      expect(detail.includes("Do not replace, remove or reimplement a dependency")).toBe(told);
+    },
+  );
+
   // #4519: only a report whose every unrun step the shell can carry is evidence-only. A policy
   // denial beside the isolation refusal is still a blocker to report, shell or not.
   it("keeps a policy denial beside an isolation refusal a blocker for a run with its own shell", async () => {
