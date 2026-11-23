@@ -426,6 +426,33 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     expect(sweepProvesEnd(sweep)).toBe(false);
   });
 
+  it("sweeps again after a failed sweep and closes the member only after a proven end", async () => {
+    const close = vi.fn();
+    let answers = 0;
+    const membership: SandboxMembership = {
+      self: () => Promise.resolve(SELF),
+      occupied: () =>
+        (answers += 1) === 1
+          ? Promise.reject(new SandboxMembershipUnavailableError("timeout"))
+          : Promise.resolve(false),
+      members: () => Promise.resolve([]),
+      killAll: () => Promise.resolve(),
+      close,
+    };
+    const descendants = tracker(host([]), membership);
+
+    await expect(descendants.sweep()).resolves.toMatchObject({
+      outcome: "membership-unavailable",
+    });
+    expect(close).not.toHaveBeenCalled();
+    const retried = await descendants.sweep();
+
+    expect(retried).toMatchObject({ outcome: "clean" });
+    expect(retried).not.toHaveProperty("error");
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(descendants.sweep()).toBe(descendants.sweep());
+  });
+
   it("sweeps once", async () => {
     const job = process(80, ROOT_ID);
     const state = host([job], [job.uniqueId]);
