@@ -183,6 +183,15 @@ describe("paired coding history routes", () => {
     ]);
   });
 
+  it("writes no history line for a caller that is not paired yet (#4068 W9)", async () => {
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    expect(listCodingHistory(context("{}", id, false), deps).status).toBe(404);
+    expect(readCodingHistory(context("{}", id, false), deps).status).toBe(404);
+    expect((await updateCodingHistory(context('{"title":"x"}', id, false), deps)).status).toBe(404);
+    expect(sink.events.filter((event) => event.op === "coding-runtime.history")).toEqual([]);
+  });
+
   it("renames, completes and reopens the durable task", async () => {
     for (const patch of [{ title: "New title" }, { status: "completed" }, { status: "active" }]) {
       const result = await updateCodingHistory(context(JSON.stringify(patch)), deps);

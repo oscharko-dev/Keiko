@@ -378,16 +378,21 @@ export class CodingRuntimeHistory {
     return operator !== undefined && this.store.codingHistory?.get(id, operator) !== undefined;
   }
 
-  /** Records a refused history request under the request's correlation id (body-free). */
+  /**
+   * Records a refused history request under the request's correlation id (body-free). The id comes
+   * from the request path, so the line names it only when it is a task this operator owns; an
+   * unknown or malformed id is never written to the log.
+   */
   public refuse(
     correlationId: string,
     refusalKind: CodingHistoryRefusalKind,
     conversationId?: string,
   ): void {
+    const known = conversationId !== undefined && this.exists(conversationId);
     recordHistory(this.log, "refused", {
       correlationId,
       refusalKind,
-      ...(conversationId === undefined ? {} : { conversationId }),
+      ...(known ? { conversationId } : {}),
     });
   }
 

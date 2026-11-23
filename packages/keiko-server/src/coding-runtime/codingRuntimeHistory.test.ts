@@ -626,6 +626,20 @@ describe("paired coding conversation history", () => {
     },
   );
 
+  it.each(["a b/../c", "/etc/passwd", "me@example.com", "x".repeat(200), "unknown-task"])(
+    "records a refusal for the unknown id %s without the id and without event loss",
+    (unknown) => {
+      const { history, sink } = fixture();
+      history.refuse("unknown-refusal", "unavailable", unknown);
+      const lines = sink.events.filter((event) => event.correlationId === "unknown-refusal");
+      expect(lines.map((event) => [event.op, event.extra?.event])).toEqual([
+        ["coding-runtime.history", "refused"],
+      ]);
+      expect(sink.events.map((event) => event.op)).not.toContain("server-log.write-failed");
+      expect(JSON.stringify(sink.events)).not.toContain(unknown);
+    },
+  );
+
   it("keeps bounded continuation context valid JSON and marks omitted history", () => {
     const { history, id, sink } = fixture();
     store.codingHistory?.append(

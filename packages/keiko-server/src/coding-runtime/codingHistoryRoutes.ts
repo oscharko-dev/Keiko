@@ -43,7 +43,8 @@ function unavailable(
 
 export function listCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const history = deps.codingRuntimeOrchestrator?.getHistory();
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
+  // Before pairing a 404 is routine (#4068 W9) and writes no history line.
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   if (history === undefined) return unavailable(ctx);
   return {
     status: 200,
@@ -53,7 +54,8 @@ export function listCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): Route
 
 export function readCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const history = deps.codingRuntimeOrchestrator?.getHistory();
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
+  // Before pairing a 404 is routine (#4068 W9) and writes no history line.
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   const detail = history?.detail(ctx.params.id ?? "", ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
   return detail === undefined
     ? unavailable(ctx, history, ctx.params.id)
@@ -283,7 +285,8 @@ export async function updateCodingHistory(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const history = deps.codingRuntimeOrchestrator?.getHistory();
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
+  // Before pairing a 404 is routine (#4068 W9) and writes no history line.
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   const id = ctx.params.id ?? "";
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   if (history?.exists(id) !== true) return unavailable(ctx, history, id);
