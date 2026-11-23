@@ -697,6 +697,21 @@ truncated.". Counts only — never a message, path or run name. An explicit Stop
 run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
 with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
 
+`coding-runtime.history` also records a refused history request as `event=refused` under the
+request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
+`invalid-request` (400). A status or title update checks that the task exists without reading its
+messages, so completing a task records `updated` alone. Removing a project that still holds Coding
+tasks is refused with `PROJECT_HAS_CODING_TASKS` and deletes nothing, because a removed project
+would take its Coding tasks with it. A scheduled wake continues only a task that is still active;
+for a completed task it keeps waiting (#4491).
+
+`coding-runtime.reap.stage` records each step by which the runtime manager ends a run's process
+tree, under the run's correlation id: the closed `stage` (`graceful-timed-out`, `graceful-failed`,
+`forced`, `force-failed`, `recovery-required`, `recovery-mark-failed`), the closed `outcome`
+(`escalated`, `reaped`, `unproven`, `failed`) and `durationMs`; a failing step adds `frames` and
+`causeChain`. A run that needs recovery therefore names the step that left its tree unproven
+(#4491).
+
 `coding-runtime.history.export` records the human's local export of a Coding History task (Export
 JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
 `completed` or `refused` under the request's correlation. A refusal carries one closed reason
