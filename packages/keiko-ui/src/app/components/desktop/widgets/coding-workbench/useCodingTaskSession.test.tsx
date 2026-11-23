@@ -1105,6 +1105,43 @@ describe("a followed run's revision bumps refresh the task in the background", (
     expect(history.mock.calls.length).toBeLessThanOrEqual(3);
   });
 
+  it("drops a queued refresh once a task is picked from Coding History", async () => {
+    const { result, rerender } = renderHook(
+      ({ revision, selection }: { revision: number; selection: string | undefined }) =>
+        useCodingTaskSession({
+          snapshot: running(revision),
+          active: false,
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection,
+        }),
+      { initialProps: { revision: 1, selection: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    const inflight = deferred<CodingHistoryDetail>();
+    read.mockReturnValueOnce(inflight.promise);
+    rerender({ revision: 2, selection: undefined });
+    rerender({ revision: 3, selection: undefined });
+    const picked: CodingHistoryDetail = {
+      ...detail,
+      task: { ...detail.task, id: "chat-two", latestRunId: "run-two" },
+    };
+    read.mockResolvedValueOnce(picked);
+    rerender({ revision: 3, selection: "chat-two" });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    await act(async () => {
+      inflight.resolve(detail);
+      await inflight.promise;
+    });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(read.mock.calls.map(([id]: unknown[]) => id)).toEqual([
+      "chat-one",
+      "chat-one",
+      "chat-two",
+    ]);
+    expect(result.current.detail?.task.id).toBe("chat-two");
+  });
+
   it("raises no error when a background read fails", async () => {
     const { result, rerender } = renderRevisions();
     await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));

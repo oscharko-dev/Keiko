@@ -97,6 +97,12 @@ function reportFailure(error: unknown): void {
  */
 type LoadTask = (id: string, activate: boolean, followed?: "initial" | "refresh") => Promise<void>;
 
+/** A background read of the followed run's task. */
+interface QueuedRefresh {
+  readonly taskId: string;
+  readonly runId: string | undefined;
+}
+
 interface TaskLoader {
   readonly detail: CodingHistoryDetail | null;
   readonly setDetail: Dispatch<SetStateAction<CodingHistoryDetail | null>>;
@@ -659,7 +665,7 @@ function useFollowedRun(
   awaitingRun: { current: AwaitedRun },
 ): void {
   const { snapshot, active } = input;
-  const refresh = useCoalescedRefresh(load);
+  const refresh = useCoalescedRefresh(load, ignoredRun);
   // The run's identity as the window follows it; only a revision bump within it is a refresh.
   const followed = useRef<string | undefined>(undefined);
   const statusRead = snapshot !== null;
@@ -682,7 +688,7 @@ function useFollowedRun(
     const key = [id, snapshot?.runId, snapshot?.state, activeWorkspaceId, active, redemptions];
     const same = followed.current === key.join("|");
     followed.current = key.join("|");
-    if (same) refresh(id);
+    if (same) refresh({ taskId: id, runId: snapshot?.runId });
     else void load(id, false, "initial");
   }, [
     statusRead,
@@ -706,31 +712,35 @@ function useFollowedRun(
  * Background refresh of the followed task: one read in flight and at most one trailing read, so a
  * burst of revision bumps costs a bounded number of reads.
  */
-function useCoalescedRefresh(load: LoadTask): (id: string) => void {
-  const state = useRef<{ inflight: boolean; trailing: string | undefined }>({
+function useCoalescedRefresh(
+  load: LoadTask,
+  ignoredRun: { current: string | undefined },
+): (refresh: QueuedRefresh) => void {
+  const state = useRef<{ inflight: boolean; trailing: QueuedRefresh | undefined }>({
     inflight: false,
     trailing: undefined,
   });
   return useCallback(
-    (id: string): void => {
+    (refresh: QueuedRefresh): void => {
       const current = state.current;
-      if (current.inflight) {
-        current.trailing = id;
-        return;
-      }
-      current.inflight = true;
-      const run = async (target: string): Promise<void> => {
-        let next: string | undefined = target;
-        while (next !== undefined) {
-          await load(next, false, "refresh");
-          next = current.trailing;
-          current.trailing = undefined;
+      const request = (target: QueuedRefresh): void => {
+        if (current.inflight) {
+          current.trailing = target;
+          return;
         }
-        current.inflight = false;
+        current.inflight = true;
+        void load(target.taskId, false, "refresh").finally(() => {
+          current.inflight = false;
+          const next = current.trailing;
+          current.trailing = undefined;
+          // A task picked meanwhile leaves the followed run: its queued read is not replayed, or it
+          // would replace the picked task (#4491 audit).
+          if (next !== undefined && next.runId !== ignoredRun.current) request(next);
+        });
       };
-      void run(id);
+      request(refresh);
     },
-    [load],
+    [load, ignoredRun],
   );
 }
 

@@ -313,15 +313,23 @@ function HistoryItem({
   );
 }
 
+// One formatter per app locale, shared by every row (#4491 audit).
+const updatedAtFormats = new Map<string, Intl.DateTimeFormat>();
+
+function updatedAtFormat(locale: string): Intl.DateTimeFormat {
+  let format = updatedAtFormats.get(locale);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+    updatedAtFormats.set(locale, format);
+  }
+  return format;
+}
+
 function UpdatedAt({ updatedAt }: { readonly updatedAt: number }): ReactNode {
   const locale = useLocale();
   const date = new Date(updatedAt);
   if (Number.isNaN(date.getTime())) return null;
-  return (
-    <time dateTime={date.toISOString()}>
-      {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date)}
-    </time>
-  );
+  return <time dateTime={date.toISOString()}>{updatedAtFormat(locale).format(date)}</time>;
 }
 
 const EXPORT_FORMATS = [
