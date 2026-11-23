@@ -5038,8 +5038,14 @@ export class CodingRuntimeOrchestrator {
     if (!stopping.ok) return stopping;
     const settleInterruptedStart = this.interruptStartup(runId);
     const result = await this.executeEndRequest(kind, current.runId);
-    const completed = this.completeEndRequest(kind, runId, result);
-    settleInterruptedStart?.(completed);
+    // A throw while completing the end must still release the interrupted start: it waits on this
+    // promise inside the serial lane, so a promise nobody resolves would queue every later operation.
+    let completed: CodingRuntimeOrchestratorResult = this.fail("runtime-failed");
+    try {
+      completed = this.completeEndRequest(kind, runId, result);
+    } finally {
+      settleInterruptedStart?.(completed);
+    }
     return completed;
   }
 

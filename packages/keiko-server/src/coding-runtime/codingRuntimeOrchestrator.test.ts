@@ -1775,6 +1775,24 @@ describe("CodingRuntimeOrchestrator", () => {
     },
   );
 
+  it("releases a start waiting on an operator stop when completing that stop throws", async () => {
+    const f = fixture();
+    const pending = deferredRuntimeStart(f);
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    f.evidence.settle.mockImplementationOnce(() => {
+      throw new Error("evidence store unavailable");
+    });
+
+    await f.orchestrator.stop("run-1", { requestId: "run-1" }).catch(() => undefined);
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+
+    // A wedged start never settles: the test then ends at the vitest timeout.
+    expect((await started).ok).toBeDefined();
+  });
+
   it("refuses a late startup success when reconciliation cannot prove the host stopped", async () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
