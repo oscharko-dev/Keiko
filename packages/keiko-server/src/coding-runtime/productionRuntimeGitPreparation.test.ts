@@ -258,7 +258,8 @@ describe("repository identity before runtime confirmation", () => {
       errorKind: "internal",
       extra: { state: "failed", runId: "run-identity-timeout-0001" },
     });
-    expect(events.at(-1)?.extra?.frames?.length).toBeGreaterThan(0);
+    const frames = events.at(-1)?.extra?.frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
     expect(() => bounded.consume(input)).toThrow("preparation-unavailable");
   });
 
