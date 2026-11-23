@@ -4,7 +4,8 @@ An npm folder package is Keiko as one small folder that a person unzips and star
 double-click, like the [standalone folder package](standalone-folder-package.md). It carries the
 Node.js runtime and a pinned lockfile; Keiko itself arrives from the npm registry at the first
 start, into the folder's own `node_modules`. Nothing is installed on the computer and no
-administrator rights are needed. It exists for workplaces where an installation is not allowed but
+administrator rights are needed. The portable `Keiko.app` is not covered by that: its setup copies
+Keiko to `/Applications`, which needs an administrator. It exists for workplaces where an installation is not allowed but
 an npm registry, often an internal mirror, is the approved way in
 ([ADR-0121 D9](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d9--a-standalone-folder-package-runs-the-same-payload-in-place)).
 
@@ -39,10 +40,13 @@ the product release `v<version>`; see the
 ## The Download Mark
 
 A ZIP downloaded with a browser carries the operating system's download mark, and the built-in
-unzip passes it on to the start files, which carry no vendor signature. The
+unzip passes it on to every extracted file, the folder's Node.js runtime included, which carries
+no vendor signature, so a marked copy cannot be relied on: with Gatekeeper on, macOS held one in an
+administrator's own desktop session. The
 [download mark section of the folder package](standalone-folder-package.md#the-download-mark)
-applies unchanged: remove the mark from the ZIP before extracting it, or distribute the folder
-through an internal share.
+applies unchanged: distribute the folder through an internal share, or remove the mark from the
+ZIP before extracting it. What Keiko loads from the npm registry at the first start carries no
+mark.
 
 ```bash
 xattr -d com.apple.quarantine keiko-macos-arm64.npm.zip
@@ -55,7 +59,7 @@ Unblock-File .\keiko-windows-x64.npm.zip
 ## What A Person Does
 
 1. Download the ZIP for your computer, see [Which File Do I Need](#which-file-do-i-need).
-2. Remove the download mark, see [The Download Mark](#the-download-mark).
+2. If a browser downloaded it, remove the download mark, see [The Download Mark](#the-download-mark).
 3. Extract the folder, for example into Documents.
 4. Double-click `Start Keiko`. The first start loads Keiko from the registry, which can take a few
    minutes; Keiko then opens in the browser.

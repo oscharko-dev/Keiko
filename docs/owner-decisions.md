@@ -140,6 +140,9 @@ package on its own platform (`scripts/testing/qualify-npm-folder-package.mjs` on
 `macos-15-intel`, `windows-2025`) and only then publishes the exact tested ZIPs as the attested
 GitHub prerelease `npm-folder-<version>`. That prerelease is a transport, never latest, and grants
 no update trust; keep the dot before the form in the asset names.
+The form is qualified when it is published (2026-11-22): on a pull request the macOS
+standard-account forms job defers it and certifies nothing, and the publication run defers no form
+([`docs/qa/macos-delivery-forms-standard-account.md`](qa/macos-delivery-forms-standard-account.md)).
 
 ## Portable updates without an Apple Developer subscription
 

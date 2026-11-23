@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9991d561bad4cdea1616923b5652891a2aa67ca653e046146765eadf2a6fded",
+    "catalogDigest": "39cd7e54d54f46e0f8ba3a73d8151fd86c53583bd98842a9430641826e29b69b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11933,9 +11933,9 @@
         "failureClasses": ["coding-runtime-git-metadata-unproven"],
         "proofIds": ["coding-runtime.git-metadata.resolved.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:67",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:70",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:145"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:148"
         ]
       },
       {
@@ -32764,9 +32764,9 @@
         "failureClasses": ["runtime-git-identity"],
         "proofIds": ["git.runtime-identity.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:20",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:27",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:179"
+          "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:185"
         ]
       },
       {
@@ -123983,7 +123983,7 @@
     {
       "op": "coding-runtime.git-metadata.resolved",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:70",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:73",
       "package": "keiko-server"
     },
     {
@@ -125883,7 +125883,7 @@
     {
       "op": "git.runtime-identity",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:23",
+      "site": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:30",
       "package": "keiko-server"
     },
     {

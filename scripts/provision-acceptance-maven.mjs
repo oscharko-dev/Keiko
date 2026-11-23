@@ -59,6 +59,20 @@ const FIXED_VARIANT = join(
 const FIXED_TARGET = join("src", "main", "java", "com", "example", "invoice", "Invoice.java");
 const LOCK_SCHEMA_VERSION = 1;
 const BUILD_TIMEOUT_MS = 600_000;
+/**
+ * Maven Central answers a shared CI address with HTTP 429 when it is busy, and Maven's default of
+ * three retries five seconds apart gives up within half a minute. Six retries, 10 s apart times the
+ * attempt (10 s to 60 s, about three and a half minutes per artifact), outlast a short rate limit
+ * inside the build timeout. Both property families are passed: Maven Resolver 1 (Maven 3.9, the
+ * hosted runners' Maven) reads `aether.connector.http.*`, Resolver 2 (Maven 4) reads
+ * `aether.transport.http.*`, and each ignores the other's names.
+ */
+export const MAVEN_RETRY_ARGUMENTS = Object.freeze([
+  "-Daether.connector.http.retryHandler.count=6",
+  "-Daether.connector.http.retryHandler.interval=10000",
+  "-Daether.transport.http.retryHandler.count=6",
+  "-Daether.transport.http.retryHandler.interval=10000",
+]);
 
 /** A refusal of this script. It is thrown, never exited on, so cleanup in `finally` runs. */
 export class ProvisionError extends Error {}
@@ -176,7 +190,16 @@ export function buildCache(options = {}) {
     });
     runMaven(
       maven,
-      ["-B", "-s", settings, "-gs", globalSettings, `-Dmaven.repo.local=${cacheDirectory}`, "test"],
+      [
+        "-B",
+        "-s",
+        settings,
+        "-gs",
+        globalSettings,
+        `-Dmaven.repo.local=${cacheDirectory}`,
+        ...MAVEN_RETRY_ARGUMENTS,
+        "test",
+      ],
       project,
       home,
     );

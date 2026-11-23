@@ -67,3 +67,7 @@ identity — a genuinely refused state, not this entry's bug.
    still refuses), delete only `~/.keiko/portable-install-state.json` and the
    `/Applications/Keiko.app` copy, then repeat step 1 from the fresh download. Do not delete the
    rest of `~/.keiko`, which holds local product state.
+
+Without administrator rights, `Keiko.app` cannot be set up: its setup copies Keiko to
+`/Applications`. Use the npm package or a folder package instead
+([On a Mac without administrator rights](../../README.md#on-a-mac-without-administrator-rights)).

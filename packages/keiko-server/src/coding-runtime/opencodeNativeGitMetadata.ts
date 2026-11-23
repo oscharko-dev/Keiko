@@ -33,9 +33,11 @@ export interface NativeGitMetadataResolution {
 /**
  * What decides which programs and which files Keiko's own Git runs and reads. Keiko runs Git outside
  * the sandbox on the run's workspace, so a filter driver or `core.worktree` a shell child wrote here
- * would execute or read with Keiko's authority (#4271 audit, reproduced). Ordinary repository work
- * (refs, objects, the index, hooks, which Keiko's Git never runs) stays writable, and Keiko's own
- * delivery tools change this configuration from outside the sandbox.
+ * would execute or read with Keiko's authority (#4271 audit, reproduced). The hooks are the person's
+ * own Git's programs: Keiko's Git never runs them, but the person's next `git commit` would run one
+ * a shell child wrote, with the person's rights and outside the sandbox, and an untracked hook shows
+ * in no diff (#4491 G0 audit). Ordinary repository work (refs, objects, the index) stays writable,
+ * and Keiko's own delivery tools change this configuration from outside the sandbox.
  */
 const REPOSITORY_PROTECTED_METADATA = [
   "config",
@@ -45,6 +47,7 @@ const REPOSITORY_PROTECTED_METADATA = [
   "worktrees",
   "modules",
   "objects/info/alternates",
+  "hooks",
 ] as const;
 
 /**
