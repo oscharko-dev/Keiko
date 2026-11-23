@@ -12911,11 +12911,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      relayNpmLockfileRouting: {
+      relayNpmTarballRouting: {
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["always", "registry-host", "npm-default"],
+        values: ["always", "registry-host", "npm-default", "relay-url"],
       },
       relayRefusedCount: {
         type: "integer",

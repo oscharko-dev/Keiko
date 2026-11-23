@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -58,7 +59,9 @@ const MAVEN_PROJECT = fileURLToPath(
   ),
 );
 const NPM_TOKEN = "npm-registry-token-PLANTED-5521";
-const NPM_PACKAGE = "keiko-relay-fixture-pkg";
+// Scoped, and the scope names the default registry's URL, as one Nexus group for everything does.
+const NPM_PACKAGE = "@keiko-relay/fixture-pkg";
+const NPM_TARBALL = `${NPM_PACKAGE}/-/fixture-pkg-1.0.0.tgz`;
 const RUN_ID = "run-clients-1";
 
 interface Seen {
@@ -191,7 +194,7 @@ beforeAll(async () => {
   writeMavenPersonSettings(personHome, mavenSettingsXml({ url: maven.url }));
   writeFileSync(
     join(personHome, ".npmrc"),
-    `registry=${npm.url}/\n//${new URL(npm.url).host}/repository/npm-group/:_authToken=${NPM_TOKEN}\n`,
+    `registry=${npm.url}/\n@keiko-relay:registry=${npm.url}/\n//${new URL(npm.url).host}/repository/npm-group/:_authToken=${NPM_TOKEN}\n`,
   );
   const stateRoot = join(root, "run");
   mkdirSync(stateRoot, { recursive: true });
@@ -312,7 +315,7 @@ async function lockedProject(): Promise<string> {
       "": { name: "consumer", version: "1.0.0", dependencies },
       [`node_modules/${NPM_PACKAGE}`]: {
         version: "1.0.0",
-        resolved: `${scene.npm.url}/${NPM_PACKAGE}/-/${NPM_PACKAGE}-1.0.0.tgz`,
+        resolved: `${scene.npm.url}/${NPM_TARBALL}`,
         integrity: await registryIntegrity(),
       },
     },
@@ -387,6 +390,17 @@ describe.skipIf(!ENABLED)("the real Maven and npm against the repository relay (
       true,
     );
     expect(scene.npm.seen.every((request) => request.method === "GET")).toBe(true);
+    // #4491: the scope's packument came through the scope's binding, and npm moved its tarball onto
+    // the default registry's binding, under the registry's own path.
+    expect(requests[1]?.url).toMatch(/\/repository\/npm-group\/@keiko-relay\/fixture-pkg\/-\//u);
+    // The lockfile pins the person's registry, as their own npm writes it, never the relay's
+    // address, which lasts one run: a later run, a colleague and CI install from it unchanged.
+    const lock = JSON.parse(readFileSync(join(project, "package-lock.json"), "utf8")) as {
+      packages: Record<string, { resolved?: string }>;
+    };
+    expect(lock.packages[`node_modules/${NPM_PACKAGE}`]?.resolved).toBe(
+      `${scene.npm.url}/${NPM_TARBALL}`,
+    );
   }, 150_000);
 
   // #4491: a lockfile pins each tarball on the registry's own URL. Without the run's
@@ -401,11 +415,13 @@ describe.skipIf(!ENABLED)("the real Maven and npm against the repository relay (
     expect(existsSync(join(project, "node_modules", NPM_PACKAGE, "index.js"))).toBe(true);
     const requests = relayRequests(scene.server.received.slice(before));
     expect(requests.map((request) => request.url)).toEqual([
-      expect.stringMatching(/\/repository\/npm-group\/keiko-relay-fixture-pkg\/-\/[\w.-]+\.tgz$/u),
+      expect.stringMatching(
+        /\/repository\/npm-group\/@keiko-relay\/fixture-pkg\/-\/[\w.-]+\.tgz$/u,
+      ),
     ]);
     const upstream = scene.npm.seen.slice(seenBefore);
     expect(upstream.map((request) => request.url)).toEqual([
-      `/repository/npm-group/${NPM_PACKAGE}/-/${NPM_PACKAGE}-1.0.0.tgz`,
+      `/repository/npm-group/${NPM_TARBALL}`,
     ]);
     expect(upstream.every((request) => request.authorization === `Bearer ${NPM_TOKEN}`)).toBe(true);
   }, 150_000);

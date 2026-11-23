@@ -112,6 +112,13 @@ export interface RepositoryRelayTarget {
   readonly ownOrigin: string;
   /** A managed transport for the repository; the production egress when absent. */
   readonly upstream?: RepositoryRelayUpstream | undefined;
+  /**
+   * npm only: whether a packument's tarball URLs under the upstream base move onto the relay, which
+   * they do unless this is `false`. A run whose npm moves them onto the relay itself
+   * (`replace-registry-host`) leaves them on the registry's own URL, so a lockfile it writes pins
+   * the person's registry rather than the relay (#4491).
+   */
+  readonly rewritePackumentTarballs?: boolean | undefined;
 }
 
 export interface RepositoryRelayBinding extends RelayBinding {
@@ -517,13 +524,14 @@ function requestMethod(request: IncomingMessage): RepositoryRelayMethod {
 function admittedPath(
   request: IncomingMessage,
   relayId: string,
-  target: Pick<RepositoryRelayTarget, "ecosystem" | "upstreamBaseUrl">,
+  target: Pick<RepositoryRelayBoundTarget, "ecosystem" | "baseUrl">,
 ): RepositoryPathAdmission & { readonly ok: true } {
   const raw = request.url ?? "";
   if (raw.includes("?")) throw refusal("query-refused");
   const prefix = `${REPOSITORY_RELAY_PATH_PREFIX}${relayId}/`;
   if (!raw.startsWith(prefix)) throw refusal("path-invalid");
-  const basePath = new URL(target.upstreamBaseUrl).pathname.slice(1);
+  // The normalised base ends in `/`, so the base path matches only at a segment boundary.
+  const basePath = new URL(target.baseUrl).pathname.slice(1);
   const admitted = admitRepositoryPath(target.ecosystem, raw.slice(prefix.length), basePath);
   if (!admitted.ok) throw refusal(admitted.reason);
   return admitted;
@@ -836,7 +844,7 @@ async function refuseNonIdentityEncoding(upstream: Response): Promise<void> {
 }
 
 // A text file is read whole, scanned for a credential, and a packument has its tarball URLs moved
-// onto the relay; only then is anything written to the run.
+// onto the relay unless the run's npm moves them itself; only then is anything written to the run.
 async function relayText(
   upstream: Response,
   response: ServerResponse,
@@ -851,7 +859,7 @@ async function relayText(
   // The tarballs move onto the relay base the run was given, on the bound origin, never onto the
   // request's Host: a proxy in front of Keiko rewrites that header (the dev runner names the BFF's
   // port), and npm sends the run's capability only to the origin its configuration names (#4530).
-  if (path.kind === "npm-packument")
+  if (path.kind === "npm-packument" && target.rewritePackumentTarballs !== false)
     body = rewritePackument(
       body,
       target.baseUrl,

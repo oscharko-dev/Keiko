@@ -86,6 +86,7 @@ function bindOne(
   input: NativeRepositoryRelayInput,
   sources: Pick<RepositoryRelaySources, "runId" | "signal">,
   repository: ResolvedRepository,
+  rewritePackumentTarballs?: boolean,
 ): { readonly relayId: string; readonly capability: string } | undefined {
   const { runId, signal } = sources;
   return input.relay.bind({
@@ -96,6 +97,7 @@ function bindOne(
     secrets: [],
     ownOrigin: input.origin,
     ...(signal === undefined ? {} : { signal }),
+    ...(rewritePackumentTarballs === undefined ? {} : { rewritePackumentTarballs }),
   });
 }
 
@@ -156,11 +158,24 @@ function bindNpm(
   resolution: RepositoryResolution,
   refusals: NativeRelayRefusalReason[],
 ): BoundNpmRegistry[] {
+  const keyed = resolution.repositories.map((repository) => ({
+    key: npmKey(repository),
+    url: repository.url,
+    repository,
+  }));
+  const npmRoutes = npmRoutesTarballs(keyed);
+  const fallback = keyed.find((entry) => entry.key === "registry");
+  const fallbackBinding =
+    fallback === undefined ? undefined : bindOne(input, sources, fallback.repository, !npmRoutes);
+  // A default registry the relay refused leaves npm nothing to move a tarball onto: every other
+  // registry of the run keeps the relay's packument rewrite.
+  const routes = npmRoutes && fallbackBinding !== undefined;
   const bound: BoundNpmRegistry[] = [];
-  for (const repository of resolution.repositories) {
-    const binding = bindOne(input, sources, repository);
+  for (const entry of keyed) {
+    const binding =
+      entry === fallback ? fallbackBinding : bindOne(input, sources, entry.repository, !routes);
     if (binding === undefined) refusals.push("bind-refused");
-    else bound.push({ key: npmKey(repository), url: repository.url, ...binding });
+    else bound.push({ key: entry.key, url: entry.url, ...binding });
   }
   return bound;
 }
@@ -359,33 +374,64 @@ function npmLineKey(line: string): string {
   return (index < 0 ? line : line.slice(0, index)).trim().toLowerCase();
 }
 
-/** How npm routes a tarball a lockfile pins: a closed value for the admission line. */
-export const NPM_LOCKFILE_ROUTINGS = ["always", "registry-host", "npm-default"] as const;
-export type NpmLockfileRouting = (typeof NPM_LOCKFILE_ROUTINGS)[number];
+/**
+ * How a run's npm reaches the tarballs of its bound registries (#4491), a closed value for the
+ * admission line: npm moves them onto the relay itself, `always` or for the default registry's host
+ * (`registry-host`) or by its own default for the public registry (`npm-default`); or the relay moves
+ * a packument's tarball URLs onto itself (`relay-url`), when npm cannot. `npm-default` also stands
+ * for a run with no npm registry bound.
+ */
+export const NPM_TARBALL_ROUTINGS = [
+  "always",
+  "registry-host",
+  "npm-default",
+  "relay-url",
+] as const;
+export type NpmTarballRouting = (typeof NPM_TARBALL_ROUTINGS)[number];
 
 const PUBLIC_NPM_REGISTRY_HOST = "registry.npmjs.org";
 
 /**
- * The `replace-registry-host` a run's npm needs so a tarball its lockfile pins reaches the relay
- * (#4491). npm moves only `registry.npmjs.org` onto the configured registry by default, so a lockfile
- * written against the person's own registry would fetch its tarballs from that registry directly:
- * without the person's credential, and below Full access without a network. Below Full access every
- * pinned tarball moves onto the relay (`always`; the run has no other way out). With Full access only
- * the default registry's host does, so a git or public tarball keeps its own host. Undefined leaves
- * npm's default, as when the default registry is not bound or is the public one.
+ * Whether the run's npm moves the tarballs of its registries onto the relay itself (#4491): a default
+ * registry is bound and every bound registry is that one URL, as when a scope names the same Nexus
+ * group. npm moves a tarball URL only onto the default registry, so then the relay leaves each
+ * packument's tarball URLs on the person's registry, and a lockfile the run writes pins that registry
+ * as the person's own npm would, never Keiko's relay, whose address and binding last one run. A scope
+ * bound to another URL keeps the relay's packument rewrite and npm's default for the whole run: a
+ * tarball moved onto the default registry would reach the wrong binding there.
+ */
+export function npmRoutesTarballs(
+  bound: readonly { readonly key: string; readonly url: string }[],
+): boolean {
+  const registry = bound.find((entry) => entry.key === "registry");
+  return registry !== undefined && bound.every((entry) => entry.url === registry.url);
+}
+
+/**
+ * The `replace-registry-host` that moves the tarballs of a run whose npm routes them itself onto the
+ * relay: a lockfile pins each tarball on the registry's own URL, which npm by default moves only from
+ * `registry.npmjs.org`. Below Full access every registry tarball moves (`always`; the run has no other
+ * way out, and a git or URL dependency fails there anyway). With Full access only the default
+ * registry's host moves, so a git, URL or public-registry tarball keeps its own host, which Full
+ * access may reach. Undefined leaves npm's default: for the public registry, or when the relay
+ * rewrites the packuments instead.
  */
 export function npmLockfileRegistryHost(
   bound: readonly BoundNpmRegistry[],
   networkless: boolean,
 ): string | undefined {
   const registry = bound.find((entry) => entry.key === "registry");
-  if (registry === undefined) return undefined;
+  if (registry === undefined || !npmRoutesTarballs(bound)) return undefined;
   if (networkless) return "always";
   const host = new URL(registry.url).hostname;
   return host === PUBLIC_NPM_REGISTRY_HOST ? undefined : host;
 }
 
-export function npmLockfileRouting(host: string | undefined): NpmLockfileRouting {
+export function npmTarballRouting(
+  bound: readonly BoundNpmRegistry[],
+  host: string | undefined,
+): NpmTarballRouting {
+  if (bound.length > 0 && !npmRoutesTarballs(bound)) return "relay-url";
   if (host === undefined) return "npm-default";
   return host === "always" ? "always" : "registry-host";
 }

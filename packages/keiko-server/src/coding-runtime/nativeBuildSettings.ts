@@ -15,12 +15,12 @@ import {
   type NativeRelayRefusalReason,
   MAVEN_PREEMPTIVE_AUTH_PROPERTIES,
   NATIVE_RELAY_REFUSAL_REASONS,
-  NPM_LOCKFILE_ROUTINGS,
+  NPM_TARBALL_ROUTINGS,
   npmLockfileRegistryHost,
-  npmLockfileRouting,
+  npmTarballRouting,
   relayMavenSettings,
   relayNpmConfig,
-  type NpmLockfileRouting,
+  type NpmTarballRouting,
   withLoopbackNoProxy,
   type BoundRepositories,
   type NativeRepositoryRelayInput,
@@ -327,13 +327,13 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
     // The repository credential relay (#4522): present when the run was offered one.
     relayMavenBoundCount: { type: "integer", dataClass: "count", required: false },
     relayNpmBoundCount: { type: "integer", dataClass: "count", required: false },
-    // How npm routes a tarball a lockfile pins (#4491): onto the relay always, for the default
-    // registry's host only, or npm's own default.
-    relayNpmLockfileRouting: {
+    // How the run's npm reaches its registries' tarballs (#4491): npm moves them onto the relay
+    // (always, for the default registry's host, or by its own default), or the relay rewrites them.
+    relayNpmTarballRouting: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [...NPM_LOCKFILE_ROUTINGS],
+      values: [...NPM_TARBALL_ROUTINGS],
     },
     relayRefusedCount: { type: "integer", dataClass: "count", required: false },
     relayRefusalReasons: {
@@ -379,7 +379,7 @@ export interface NativeBuildSettingsInput {
 export interface NativeRelayBindingSummary {
   readonly mavenBoundCount: number;
   readonly npmBoundCount: number;
-  readonly npmLockfileRouting: NpmLockfileRouting;
+  readonly npmTarballRouting: NpmTarballRouting;
   readonly refusals: readonly string[];
 }
 
@@ -756,7 +756,7 @@ function relaySummary(
   return {
     mavenBoundCount: bound.maven.length,
     npmBoundCount: bound.npm.length,
-    npmLockfileRouting: npmLockfileRouting(lockfileHost),
+    npmTarballRouting: npmTarballRouting(bound.npm, lockfileHost),
     refusals: bound.refusals,
   };
 }
@@ -766,7 +766,7 @@ function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<strin
   return {
     relayMavenBoundCount: relay.mavenBoundCount,
     relayNpmBoundCount: relay.npmBoundCount,
-    relayNpmLockfileRouting: relay.npmLockfileRouting,
+    relayNpmTarballRouting: relay.npmTarballRouting,
     relayRefusedCount: relay.refusals.length,
     ...(relay.refusals.length === 0
       ? {}

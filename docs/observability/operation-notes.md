@@ -741,9 +741,11 @@ upstream client and server error and redirect counts, bytes, duration), under th
 correlation. The admission line `coding-runtime.native-build-settings.admitted` adds
 `relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount`, the closed
 `relayRefusalReasons` (including `id-ambiguous`, `rewrite-missed` and the informational
-`profile-inactive`) and the closed `relayNpmLockfileRouting` (`always` below Full access,
-`registry-host` at Full access, `npm-default` when the default registry is not bound or is the
-public one): how the run's npm routes a tarball its lockfile pins. Never a URL, host, path, artifact coordinate, user name or credential; a
+`profile-inactive`) and the closed `relayNpmTarballRouting`: how the run's npm reaches its
+registries' tarballs. npm moves them onto the relay itself when the default registry is bound and
+every bound registry is that URL (`always` below Full access, `registry-host` at Full access,
+`npm-default` for the public registry or when no npm registry is bound); otherwise the relay
+rewrites each packument's tarball URLs (`relay-url`). Never a URL, host, path, artifact coordinate, user name or credential; a
 credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
 never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
 user-level files are read.

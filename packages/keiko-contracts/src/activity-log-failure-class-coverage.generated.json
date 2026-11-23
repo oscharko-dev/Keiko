@@ -14534,7 +14534,7 @@
               "required": false
             },
             {
-              "name": "relayNpmLockfileRouting",
+              "name": "relayNpmTarballRouting",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
