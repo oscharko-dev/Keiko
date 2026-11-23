@@ -2360,6 +2360,15 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
+   * Whether a run is actually executing: a run that only awaits recovery acknowledgement holds the
+   * slot but executes nothing, so it never blocks completing a task in Coding History.
+   */
+  hasExecutingRun(): boolean {
+    const current = this.current();
+    return current !== undefined && current.state !== "recovery-required";
+  }
+
+  /**
    * Admits a task-workspace selection: the settled run's undo window ends first, on the serial lane
    * like the next run's start (r4368730403), because its held runtime would otherwise keep the slot
    * and refuse every switch. A staged undo is committed as at any close. A running run or an

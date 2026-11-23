@@ -321,7 +321,7 @@ function updateBlocked(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult | undefined {
-  if (deps.codingRuntimeOrchestrator?.hasLiveRun() && raw.status === "completed")
+  if (deps.codingRuntimeOrchestrator?.hasExecutingRun() && raw.status === "completed")
     return {
       status: 409,
       body: errorBody(

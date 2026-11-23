@@ -51,6 +51,7 @@ const CONFIGURED_KEY = "configured-provider-credential-0123456789";
 let deps: UiHandlerDeps;
 let history: CodingRuntimeHistory;
 const live = vi.fn(() => false);
+const executing = vi.fn(() => false);
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "coding-history-route-"));
@@ -75,9 +76,14 @@ beforeEach(() => {
   if (!paired.paired) throw new Error("Pairing failed");
   cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
   live.mockReturnValue(false);
+  executing.mockReturnValue(false);
   deps = {
     codingAppSessionChannel: channel,
-    codingRuntimeOrchestrator: { getHistory: () => history, hasLiveRun: live },
+    codingRuntimeOrchestrator: {
+      getHistory: () => history,
+      hasLiveRun: live,
+      hasExecutingRun: executing,
+    },
     env: { KEIKO_DEFAULT_API_KEY: CONFIGURED_KEY },
   } as unknown as UiHandlerDeps;
 });
@@ -165,7 +171,7 @@ describe("paired coding history routes", () => {
     expect(await updateCodingHistory(context('{"title":"x"}', "unknown"), deps)).toMatchObject({
       status: 404,
     });
-    live.mockReturnValue(true);
+    executing.mockReturnValue(true);
     expect((await updateCodingHistory(context('{"status":"completed"}'), deps)).status).toBe(409);
     expect((await updateCodingHistory(context('{"extra":true}'), deps)).status).toBe(400);
 
@@ -185,8 +191,18 @@ describe("paired coding history routes", () => {
     }
   });
 
+  it("completes a task while the current run only awaits recovery acknowledgement", async () => {
+    live.mockReturnValue(true);
+    executing.mockReturnValue(false);
+    expect(await updateCodingHistory(context('{"status":"completed"}'), deps)).toMatchObject({
+      status: 200,
+      body: { task: { id, status: "completed" } },
+    });
+  });
+
   it("blocks completion while execution is live without blocking a rename", async () => {
     live.mockReturnValue(true);
+    executing.mockReturnValue(true);
     expect(await updateCodingHistory(context('{"status":"completed"}'), deps)).toMatchObject({
       status: 409,
       body: { error: { code: "ACTIVE_RUN_CONFLICT" } },
