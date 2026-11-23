@@ -70,8 +70,9 @@ export type CodingSafeActivityEditRefusalReason =
  * package or target has no test, lint or build script; the repository may still define others), and
  * `not-run` a run whose steps were skipped, denied or cancelled, and `isolation-unavailable` a run
  * whose steps were denied because this computer has no enforcing isolation backend (no container
- * runtime), a host condition rather than a policy decision. `failed-check` is a check that ran and went red,
- * `passed` every requested check green.
+ * runtime), a host condition rather than a policy decision. `dependencies-unavailable` is a run whose
+ * dependency installation was refused or failed, so no check ran (#4522). `failed-check` is a check
+ * that ran and went red, `passed` every requested check green.
  */
 export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
   "passed",
@@ -80,6 +81,7 @@ export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
   "no-runnable-steps",
   "not-run",
   "isolation-unavailable",
+  "dependencies-unavailable",
 ] as const;
 export type CodingSafeActivityVerificationOutcome =
   (typeof CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)[number];

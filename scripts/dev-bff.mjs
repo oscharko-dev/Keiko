@@ -16,21 +16,32 @@ import {
   applyProcessWideEvidenceEnv,
   buildDevBffEnv,
   resolveDevBffStateDir,
+  resolveDevUiStaticRoot,
 } from "./lib/dev-bff-env.mjs";
 import { refreshDevBffEvidence } from "./lib/dev-bff-evidence.mjs";
 import { shutdownDevBff } from "./lib/dev-bff-shutdown.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: process.env });
-const staticRoot = join(stateDir, "static-placeholder");
 const port = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 // The heartbeat `keiko ui` uses to re-evaluate readiness and persist the loss summary.
 const EVIDENCE_HEARTBEAT_MS = 60_000;
 
-function ensureStaticPlaceholder() {
-  mkdirSync(staticRoot, { recursive: true });
-  writeFileSync(join(staticRoot, "index.html"), "<!doctype html><title>Keiko Dev BFF</title>\n");
+function ensureStaticPlaceholder(root) {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "index.html"), "<!doctype html><title>Keiko Dev BFF</title>\n");
+}
+
+// The built static export when the dev runner serves it instead of `next dev` (#4123), else a
+// placeholder: under `next dev` the runner sends every UI path to Next and none reaches this server.
+function resolveStaticRoot() {
+  try {
+    return resolveDevUiStaticRoot(process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Invalid KEIKO_DEV_UI_STATIC_ROOT.");
+    process.exit(2);
+  }
 }
 
 // Port 0 binds an ephemeral port (a hermetic test); the dev runner always passes a fixed one.
@@ -50,7 +61,9 @@ applyProcessWideEvidenceEnv(env, process.env);
 // this SAME effective `env`, so the fatal line lands in `stateDir` like everything else this
 // process writes, never wherever a bare `process.env` read would resolve to.
 installProcessGuards({ env });
-ensureStaticPlaceholder();
+const staticUiRoot = resolveStaticRoot();
+const staticRoot = staticUiRoot ?? join(stateDir, "static-placeholder");
+if (staticUiRoot === undefined) ensureStaticPlaceholder(staticRoot);
 const initialProjectPath = env.KEIKO_INITIAL_PROJECT_PATH ?? repoRoot;
 
 const handlerDeps = buildUiHandlerDeps({

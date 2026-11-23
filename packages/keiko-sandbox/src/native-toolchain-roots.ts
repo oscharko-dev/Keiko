@@ -155,6 +155,42 @@ export function nativeToolchainReadRoots(
     .slice(0, ROOTS_MAX);
 }
 
+/** How the active macOS developer directory reached the native read allowlist (#4521). */
+export type NativeDeveloperDirectoryDisposition = "app-bundle" | "directory" | "none" | "refused";
+
+export interface NativeDeveloperDirectoryRoots {
+  readonly disposition: NativeDeveloperDirectoryDisposition;
+  /** The root to open read-only, for the kernel profile only. Never logged. */
+  readonly roots: readonly string[];
+}
+
+/** Where `xcode-select` records the developer directory it chose. */
+export const NATIVE_XCODE_SELECT_LINK = "/private/var/db/xcode_select_link";
+
+const DEVELOPER_DIRECTORY_IN_BUNDLE = /^(.+\.app)\/Contents\/Developer$/u;
+
+/**
+ * The developer directory `xcode-select` chose, as one read-only root (#4521). macOS runs Git and
+ * the other developer tools from it: `/usr/bin/git` through `xcrun`, and the runtime's own Git
+ * lookup directly. A versioned or beta Xcode (`/Applications/Xcode_16.4.app`, `Xcode-beta.app`) is
+ * not the fixed `/Applications/Xcode.app` system root, so without this root Git does not start in
+ * the run and the runtime treats the opened folder as no repository: it keeps no snapshots and
+ * sees no change a shell made. An Xcode bundle opens as a whole, as the fixed root does; any other
+ * developer directory opens by itself. The same admission as a toolchain root applies.
+ */
+export function nativeDeveloperDirectoryReadRoots(
+  home: string,
+  link: string = NATIVE_XCODE_SELECT_LINK,
+): NativeDeveloperDirectoryRoots {
+  const developer = resolvedPath(link);
+  if (developer === undefined) return { disposition: "none", roots: [] };
+  const bundle = DEVELOPER_DIRECTORY_IN_BUNDLE.exec(developer)?.[1];
+  const root = bundle ?? developer;
+  if (!isInstallPrefix(root, resolvedPath(home) ?? home))
+    return { disposition: "refused", roots: [] };
+  return { disposition: bundle === undefined ? "directory" : "app-bundle", roots: [root] };
+}
+
 /** The environment names that carry an operator's explicit OpenSSL configuration (#3901 AC4). */
 export const NATIVE_OPENSSL_ENV_NAMES: readonly string[] = Object.freeze([
   "OPENSSL_CONF",

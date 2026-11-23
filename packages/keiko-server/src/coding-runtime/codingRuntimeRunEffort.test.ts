@@ -322,6 +322,47 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.verificationBlockedReason("run-a")).toBe("verification-command-denied");
   });
 
+  // #4519: a Mac without a running container runtime refuses the governed verifier, and the run's
+  // own shell check is the verification. A refusal after a failing shell check stopped every repair
+  // continuation and settled the run as blocked, although that shell could still repair and verify.
+  it("lets an evidence-only not-run check neither block repair nor count as a result", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    ledger.verification("run-a", false, "target-test", ledger.verificationRevision("run-a"));
+    ledger.verificationBlocked("run-a", "VERIFICATION_NOT_RUN", "target-test", "evidence-only");
+    ledger.verification("run-a", false, "target-test", ledger.verificationRevision("run-a"));
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    // The same refusal without the scope is still the blocker it always was.
+    ledger.verificationBlocked("run-a", "VERIFICATION_NOT_RUN", "target-test");
+    expect(ledger.verificationBlockedReason("run-a")).toBe("VERIFICATION_NOT_RUN");
+  });
+
+  it("counts a shell pass that follows an evidence-only not-run check on an unselected target", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    ledger.verificationBlocked("run-a", "VERIFICATION_NOT_RUN", "target-test", "evidence-only");
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    ledger.verificationAdmitted("run-a")?.("target-test");
+    ledger.verification("run-a", true, "target-test", ledger.verificationRevision("run-a"));
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
+  it("keeps a shell pass when an evidence-only not-run check follows it", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    ledger.verificationAdmitted("run-a")?.("target-test");
+    ledger.verification("run-a", true, "target-test", ledger.verificationRevision("run-a"));
+    ledger.verificationBlocked("run-a", "VERIFICATION_NOT_RUN", "target-test", "evidence-only");
+    ledger.verification("run-a", false, "target-test", ledger.verificationRevision("run-a"));
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
   it("fails closed to zero host counts and reports only the wall time of an unobserved run", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");

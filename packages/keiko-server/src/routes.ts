@@ -167,6 +167,8 @@ import {
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
 import { handleCodingSidecarMcpRelay } from "./coding-sidecar-mcp-relay.js";
+import { handleCodingSidecarRepositoryRelay } from "./coding-sidecar-repository-relay.js";
+import { REPOSITORY_RELAY_ROUTE } from "./repository-relay/repositoryCredentialRelay.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
@@ -649,6 +651,19 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
+  },
+  // #4522: a repository file read through the credential relay. A trailing `*path` carries the
+  // repository path, which the relay validates segment by segment against its ecosystem's grammar.
+  // The method set is the whole surface: a repository is read through the relay, never written.
+  {
+    method: "GET",
+    pattern: REPOSITORY_RELAY_ROUTE,
+    handler: handleCodingSidecarRepositoryRelay,
+  },
+  {
+    method: "HEAD",
+    pattern: REPOSITORY_RELAY_ROUTE,
+    handler: handleCodingSidecarRepositoryRelay,
   },
   // #3903 AC3: the MCP Streamable HTTP transport of a relayed remote server, per method.
   {
@@ -1846,7 +1861,7 @@ function prepareRoute(definition: RouteDefinition): PreparedRoute {
   return {
     definition,
     parts,
-    specificity: parts.filter((part) => !part.startsWith(":")).length,
+    specificity: parts.filter((part) => !part.startsWith(":") && !part.startsWith("*")).length,
   };
 }
 
@@ -1867,6 +1882,33 @@ const PREPARED_ROUTES_BY_METHOD: ReadonlyMap<string, readonly PreparedRoute[]> =
 // Matches a concrete path against prepared route parts, capturing `:name` params. Returns the captured
 // params, or undefined when the segment counts differ or a literal segment mismatches.
 function matchPatternParts(
+  patternParts: readonly string[],
+  pathParts: readonly string[],
+): Readonly<Record<string, string>> | undefined {
+  const last = patternParts.at(-1);
+  return last?.startsWith("*") === true
+    ? matchRestPattern(patternParts, pathParts, last)
+    : matchFixedPattern(patternParts, pathParts);
+}
+
+// A trailing `*name` takes the remaining segments, joined; the handler validates them (#4522).
+function matchRestPattern(
+  patternParts: readonly string[],
+  pathParts: readonly string[],
+  rest: string,
+): Readonly<Record<string, string>> | undefined {
+  const fixedCount = patternParts.length - 1;
+  if (pathParts.length < patternParts.length) return undefined;
+  const fixed = matchFixedPattern(
+    patternParts.slice(0, fixedCount),
+    pathParts.slice(0, fixedCount),
+  );
+  return fixed === undefined
+    ? undefined
+    : { ...fixed, [rest.slice(1)]: pathParts.slice(fixedCount).join("/") };
+}
+
+function matchFixedPattern(
   patternParts: readonly string[],
   pathParts: readonly string[],
 ): Readonly<Record<string, string>> | undefined {

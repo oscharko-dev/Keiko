@@ -130,6 +130,11 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
     trace: "retain-on-failure",
+    // #4123: the release build registers Keiko's shell service worker, and a page it controls after
+    // a reload no longer passes its requests through `page.route`, so a journey's mocked routes
+    // stopped answering after `page.reload()`. Under `next dev` the development worker removed
+    // itself, so no worker ever controlled a journey page; blocking registration keeps that.
+    serviceWorkers: "block",
   },
   projects: [
     {
@@ -169,16 +174,21 @@ export default defineConfig({
         KEIKO_E2E_MODEL_PORT: String(modelPort),
       },
     },
+    // #4123: the journeys run against the static export Keiko ships, which the dev runner's BFF
+    // serves, and no `next dev` starts. A Next development server stalled for five to ten seconds
+    // in the middle of a WebKit suite while it served its development chunks, so a window that
+    // asserts on its first render failed on server load rather than on product behaviour.
     {
       cwd: root,
       command:
         `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
-        "npm run build:packages && node scripts/dev-runner.mjs",
+        "npm run build:packages && npm run build:ui && node scripts/dev-runner.mjs",
       url: `http://127.0.0.1:${String(publicPort)}`,
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
         ...devServerEnv({ publicPort, bffPort, nextPort, stateDir, runtimeConfigPath }),
+        KEIKO_DEV_UI_STATIC_ROOT: join(root, "dist", "ui", "static"),
         KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET,
       },
     },

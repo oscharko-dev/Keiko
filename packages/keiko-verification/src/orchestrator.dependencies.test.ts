@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { classifyScripts } from "./detect.js";
-import { buildVerificationPlan } from "./plan.js";
+import { buildVerificationPlan, ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "./plan.js";
 import {
   runVerification,
   type VerificationDeps,
@@ -19,7 +19,8 @@ import {
   makeFakeChild,
   scriptChildClose,
 } from "./_support.js";
-import { DEPENDENCY_APPROVED_REGISTRY } from "./dependencies.js";
+import { isVerificationReport } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { DEPENDENCY_APPROVED_REGISTRY, DEPENDENCY_HOST_SHELL_ARGS } from "./dependencies.js";
 
 const roots: string[] = [];
 
@@ -248,6 +249,64 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect("dependencies" in report).toBe(false);
   });
 
+  // #4519: on a Mac without a container runtime no step can run isolated. Installing for steps that
+  // are refused anyway spent a registry read, and a failed install then named missing dependencies
+  // as the cause instead of the missing isolation.
+  it("never bootstraps dependencies when no step can run without isolation (#4519)", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const catalog = {
+      scripts: { test: "vitest run" },
+      mapping: classifyScripts({ test: "vitest run" }),
+    };
+    const plan = buildVerificationPlan(workspace, catalog, { only: ["test"] });
+
+    const spawn = sequencedSpawn([{ stdout: "added 1 package\n", exitCode: 0 }]);
+    const report = await runVerification(
+      plan,
+      testDeps(workspace, spawn.fn, {
+        dependencyBootstrap: "auto",
+        networkEnforcement: "enforce-or-fail-closed",
+        enforcedNetworkAvailable: false,
+      }),
+    );
+
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toBeUndefined();
+    expect(report.results.map((result) => result.status)).toEqual(["denied"]);
+    expect(report.results[0]?.detail).toMatch(
+      new RegExp(`^${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}`),
+    );
+  });
+
+  it("still bootstraps dependencies for a step the host can isolate (#4519)", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const catalog = {
+      scripts: { test: "vitest run" },
+      mapping: classifyScripts({ test: "vitest run" }),
+    };
+    const plan = buildVerificationPlan(workspace, catalog, { only: ["test"] });
+
+    const spawn = sequencedSpawn([
+      { stdout: "added 1 package\n", exitCode: 0 },
+      { stdout: "1 passed\n", exitCode: 0 },
+    ]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const report = await runVerification(
+      plan,
+      testDeps(workspace, npm, {
+        dependencyBootstrap: "auto",
+        networkEnforcement: "enforce-or-fail-closed",
+        enforcedNetworkAvailable: true,
+      }),
+    );
+
+    expect(spawn.calls()[0]?.args[0]).toBe("install");
+    expect(report.dependencies?.state).toBe("installed");
+  });
+
   it("forwards onStepOutput for a failing script step and stays silent for a passing one", async () => {
     const workspace = makeDependencyWorkspace({
       test: "vitest run",
@@ -400,5 +459,294 @@ describe("runVerification static measured dependency target", () => {
     expect(second.dependencies?.state).toBe("current");
     expect(second.overallStatus).toBe("passed");
     expect(spawn.calls()).toHaveLength(3);
+  });
+});
+
+// #4522: on a Mac without a container runtime no governed step can run, and the native runtime's own
+// shell runs the project's check instead. The bootstrap then installs for that shell, on this host,
+// for this host's target: no probe of the steps' execution root, `--no-save`, the same registry
+// proxy, and the steps keep their isolation reason whatever the install did.
+describe("runVerification — install for the run's own shell (#4522)", () => {
+  const HOST_SHELL: Partial<VerificationDeps> = {
+    dependencyBootstrap: "auto",
+    networkEnforcement: "enforce-or-fail-closed",
+    enforcedNetworkAvailable: false,
+    sharedHostPlatform: { os: "darwin", cpu: "arm64" },
+  };
+
+  function expectIsolationDenied(result: VerificationResult | undefined): void {
+    expect(result?.status).toBe("denied");
+    expect(result?.detail).toMatch(new RegExp(`^${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}`));
+  }
+
+  function writeFile(root: string, name: string, value: unknown): void {
+    writeFileSync(join(root, name), JSON.stringify(value), "utf8");
+  }
+
+  // The line a tree Keiko did not install leaves: nothing installed, and no receipt of this process.
+  const LEFT_ALONE = {
+    state: "none",
+    completionReceipt: "missing",
+    completionRecorded: false,
+    consumer: "host-shell",
+  };
+
+  it("installs for the host shell on this host when no governed step can run", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([{ stdout: "added 1 package\n", exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    let probes = 0;
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, npm, {
+        ...HOST_SHELL,
+        resolveDependencyInstallTarget: () => {
+          probes += 1;
+          return Promise.resolve(TARGET_RUNTIME);
+        },
+      }),
+    );
+
+    expect(probes).toBe(0);
+    expect(spawn.calls()).toHaveLength(1);
+    expect(spawn.calls()[0]?.args).toEqual([...DEPENDENCY_HOST_SHELL_ARGS]);
+    expect(report.dependencies).toMatchObject({ state: "installed", consumer: "host-shell" });
+    expect(report.results).toHaveLength(1);
+    expectIsolationDenied(report.results[0]);
+  });
+
+  it("keeps the steps' isolation reason and forwards npm's tail when the host-shell install fails", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([{ stderr: "npm ERR! code E404\n", exitCode: 1 }]);
+    const outputs: VerificationStepOutput[] = [];
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, {
+        ...HOST_SHELL,
+        onStepOutput: (output) => outputs.push(output),
+      }),
+    );
+
+    expect(report.dependencies).toMatchObject({ state: "failed", consumer: "host-shell" });
+    expectIsolationDenied(report.results[0]);
+    expect(report.overallStatus).toBe("failed");
+    expect(outputs.map((output) => output.step)).toEqual(["dependencies"]);
+    expect(outputs[0]?.excerpt).toContain("npm ERR! code E404");
+  });
+
+  it("refuses a project whose own install script the install never runs, until a tree exists", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run", postinstall: "node build.js" });
+    const refusedSpawn = sequencedSpawn([]);
+    const refused = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, refusedSpawn.fn, HOST_SHELL),
+    );
+    expect(refusedSpawn.calls()).toEqual([]);
+    expect(refused.dependencies).toMatchObject({
+      state: "refused",
+      refusalReason: "install-scripts-required",
+      consumer: "host-shell",
+    });
+    expectIsolationDenied(refused.results[0]);
+
+    // The person's own install may have run the script: a tree Keiko did not install is left alone.
+    writeInstalledTree(workspace.root);
+    const leftSpawn = sequencedSpawn([]);
+    const left = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, leftSpawn.fn, HOST_SHELL),
+    );
+    expect(leftSpawn.calls()).toEqual([]);
+    expect(left.dependencies).toMatchObject(LEFT_ALONE);
+    expect(isVerificationReport(left)).toBe(true);
+  });
+
+  // A native addon of the project itself: npm would run `node-gyp rebuild` as its install script.
+  it("refuses a project whose binding.gyp the install never builds", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    writeFileSync(join(workspace.root, "binding.gyp"), "{}", "utf8");
+    const spawn = sequencedSpawn([]);
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, HOST_SHELL),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toMatchObject({
+      state: "refused",
+      refusalReason: "install-scripts-required",
+      consumer: "host-shell",
+    });
+  });
+
+  // npm writes its hidden lockfile last in a completed install: a folder without it is no tree.
+  it("installs into an empty node_modules, which holds no tree", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    mkdirSync(join(workspace.root, "node_modules"));
+    const spawn = sequencedSpawn([{ exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, npm, HOST_SHELL),
+    );
+    expect(spawn.calls()).toHaveLength(1);
+    expect(report.dependencies).toMatchObject({ state: "installed", consumer: "host-shell" });
+  });
+
+  // A tree the shell installed through the repository credential relay (ADR-0184) names that
+  // registry, which the public-registry install would refuse as a source and a firewalled network
+  // would refuse to reach: the shell already uses it, so Keiko neither installs nor refuses.
+  it("leaves a tree it did not install alone, whatever registry it came from", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    mkdirSync(join(workspace.root, "node_modules"), { recursive: true });
+    writeFile(workspace.root, join("node_modules", ".package-lock.json"), {
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/left-pad": {
+          version: "1.0.0",
+          resolved: "http://127.0.0.1:4873/left-pad/-/left-pad-1.0.0.tgz",
+          integrity: `sha512-${"A".repeat(86)}==`,
+        },
+      },
+    });
+    const spawn = sequencedSpawn([]);
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, HOST_SHELL),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toMatchObject(LEFT_ALONE);
+    expect(isVerificationReport(report)).toBe(true);
+    expectIsolationDenied(report.results[0]);
+  });
+
+  it("refreshes a tree it installed itself once that tree is no longer current", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([{ exitCode: 0 }, { exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const deps = testDeps(workspace, npm, HOST_SHELL);
+    const first = await runVerification(dependencyTestPlan(workspace), deps);
+    const second = await runVerification(dependencyTestPlan(workspace), deps);
+    expect([first.dependencies?.state, second.dependencies?.state]).toEqual([
+      "installed",
+      "current",
+    ]);
+    const manifest = {
+      name: "demo",
+      scripts: { test: "vitest run" },
+      dependencies: { "left-pad": "1.3.0" },
+    };
+    writeFile(workspace.root, "package.json", manifest);
+    const touched = new Date(Date.now() + 60_000);
+    utimesSync(join(workspace.root, "package.json"), touched, touched);
+    const third = await runVerification(dependencyTestPlan(workspace), deps);
+    expect(third.dependencies?.state).toBe("installed");
+    expect(spawn.calls()).toHaveLength(2);
+  });
+
+  it("refuses a lockfile that no longer records what package.json declares", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    writeFile(workspace.root, "package-lock.json", {
+      name: "demo",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "demo", dependencies: { "left-pad": "1.1.0" } },
+        "node_modules/left-pad": {
+          version: "1.1.0",
+          resolved: `${DEPENDENCY_APPROVED_REGISTRY}left-pad/-/left-pad-1.1.0.tgz`,
+          integrity: `sha512-${"A".repeat(86)}==`,
+        },
+      },
+    });
+    const spawn = sequencedSpawn([]);
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, HOST_SHELL),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toMatchObject({
+      state: "refused",
+      refusalReason: "lockfile-mismatch",
+      consumer: "host-shell",
+    });
+  });
+
+  it("refuses a pnpm project without its tree and leaves one with its tree alone", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    writeFileSync(join(workspace.root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    const spawn = sequencedSpawn([]);
+    const refused = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, HOST_SHELL),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(refused.dependencies).toMatchObject({
+      state: "refused",
+      refusalReason: "package-manager-unsupported",
+      consumer: "host-shell",
+    });
+    expectIsolationDenied(refused.results[0]);
+
+    mkdirSync(join(workspace.root, "node_modules"));
+    const present = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, HOST_SHELL),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(present.dependencies).toBeUndefined();
+  });
+
+  // ADR-0043 D17: the shell is the consumer on macOS only, and only for a check the host would run
+  // but cannot isolate. Linux isolates its steps with the bubblewrap the native runtime needs, and
+  // Windows enables its own consumer with its own proof (#4496).
+  it("installs for the host shell on macOS only", async () => {
+    for (const os of ["linux", "win32"] as const) {
+      const workspace = makeDependencyWorkspace({ test: "vitest run" });
+      const spawn = sequencedSpawn([]);
+      const report = await runVerification(
+        dependencyTestPlan(workspace),
+        testDeps(workspace, spawn.fn, { ...HOST_SHELL, sharedHostPlatform: { os, cpu: "x64" } }),
+      );
+      expect(spawn.calls()).toEqual([]);
+      expect(report.dependencies).toBeUndefined();
+      expectIsolationDenied(report.results[0]);
+    }
+  });
+
+  it("installs nothing for the host shell when every step is skipped for another reason", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const plan = dependencyTestPlan(workspace);
+    const skipped: ReturnType<typeof buildVerificationPlan> = {
+      ...plan,
+      steps: plan.steps.map((step) => ({ ...step, skipReason: "no test script" })),
+    };
+    const spawn = sequencedSpawn([]);
+    const report = await runVerification(skipped, testDeps(workspace, spawn.fn, HOST_SHELL));
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toBeUndefined();
+  });
+
+  it("keeps the governed steps' measured target, and its foreign refusal, when a step can run", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const spawn = sequencedSpawn([]);
+    const report = await runVerification(
+      dependencyTestPlan(workspace),
+      testDeps(workspace, spawn.fn, {
+        ...HOST_SHELL,
+        enforcedNetworkAvailable: true,
+        resolveDependencyInstallTarget: () => Promise.resolve(TARGET_RUNTIME),
+      }),
+    );
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies?.refusalReason).toBe("install-target-foreign");
+    expect(report.dependencies?.consumer).toBeUndefined();
   });
 });

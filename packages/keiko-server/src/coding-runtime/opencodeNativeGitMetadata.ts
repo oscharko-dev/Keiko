@@ -6,6 +6,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import type { NativeDeveloperDirectoryDisposition } from "@oscharko-dev/keiko-sandbox";
 
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -84,6 +85,13 @@ const GIT_METADATA_RESOLVED_OPERATION = defineActivityLogOperation({
       values: ["managed-task", "ordinary", "unresolved"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
+    // #4521: how the macOS developer directory Git runs from reached the read allowlist.
+    developerDirectory: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["app-bundle", "directory", "none", "refused"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -130,6 +138,7 @@ export function recordNativeGitMetadataResolution(
   sink: ServerLogSink,
   runId: string,
   resolution: NativeGitMetadataResolution,
+  developerDirectory?: NativeDeveloperDirectoryDisposition,
 ): void {
   const unproven = resolution.layout === "unproven";
   sink.write(
@@ -142,6 +151,7 @@ export function recordNativeGitMetadataResolution(
         layout: resolution.layout,
         binding: resolution.binding,
         readRootCount: resolution.readRoots.length,
+        ...(developerDirectory === undefined ? {} : { developerDirectory }),
       },
     ),
   );

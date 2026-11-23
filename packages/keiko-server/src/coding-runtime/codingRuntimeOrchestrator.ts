@@ -67,6 +67,7 @@ import {
   CODING_VERIFICATION_BLOCKED_REASONS,
   type CodingVerificationBlockedReason,
   type CodingVerificationExecutedObserver,
+  type CodingVerificationNotRunScope,
   type CodingToolEditOutcome,
 } from "./codingToolFacadePorts.js";
 import {
@@ -3477,10 +3478,11 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     reason: CodingVerificationBlockedReason,
     targetDigest?: string,
+    scope?: CodingVerificationNotRunScope,
   ): void {
     const current = this.current();
     if (current?.runId === runId && EFFORT_COUNTED_STATES.has(current.state)) {
-      this.effort.verificationBlocked(runId, reason, targetDigest);
+      this.effort.verificationBlocked(runId, reason, targetDigest, scope);
     }
   }
 

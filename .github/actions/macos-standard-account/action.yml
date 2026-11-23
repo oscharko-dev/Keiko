@@ -1,0 +1,42 @@
+name: Create the macOS standard account a lane runs as
+description: >
+  The macOS promise is for a person without administrator rights (#4491). The hosted runner's
+  account is an administrator, so it only sets up: this action creates the standard account
+  `keikoqa` and gives it its own copy of the checkout and of Node.js (and, when asked, of the JDK),
+  held in its home folder as such a person would hold them. It fails when the account is an
+  administrator. A lane then runs its suites with `sudo -u keikoqa`. Shared by the coding
+  acceptance task (#4519) and the native boundary lane (#4521), so both prove the same account.
+inputs:
+  jdk:
+    description: "Also copy the runner's JDK into the account's ~/Library/Java (true or false)."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Create the standard account and give it the checkout and Node.js
+      shell: bash
+      env:
+        COPY_JDK: ${{ inputs.jdk }}
+      run: |
+        set -euo pipefail
+        password="$(openssl rand -hex 24)"
+        echo "::add-mask::${password}"
+        sudo sysadminctl -addUser keikoqa -fullName "Keiko acceptance" -shell /bin/zsh \
+          -home /Users/keikoqa -password "${password}"
+        sudo createhomedir -c -u keikoqa >/dev/null
+        node_root="$(dirname "$(dirname "$(command -v node)")")"
+        sudo ditto "${GITHUB_WORKSPACE}" /Users/keikoqa/keiko
+        sudo ditto "${node_root}" /Users/keikoqa/.local/node
+        sudo chown -R keikoqa:staff /Users/keikoqa/keiko /Users/keikoqa/.local
+        if [ "${COPY_JDK}" = "true" ]; then
+          : "${JAVA_HOME:?the runner image names no JDK}"
+          jdk_bundle="$(dirname "$(dirname "${JAVA_HOME}")")"
+          sudo ditto "${jdk_bundle}" /Users/keikoqa/Library/Java/JavaVirtualMachines/acceptance.jdk
+          sudo chown -R keikoqa:staff /Users/keikoqa/Library/Java
+        fi
+        echo "account: $(id keikoqa)"
+        if dseditgroup -o checkmember -m keikoqa admin >/dev/null 2>&1; then
+          echo "::error::the standard account is an administrator"
+          exit 1
+        fi

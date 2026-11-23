@@ -5,6 +5,7 @@ on:
     branches:
       - dev
     paths:
+      - ".github/actions/macos-standard-account/**"
       - ".github/workflows/coding-workbench-customer-shape.yml"
       - ".github/workflows/release.yml"
       - "package.json"
@@ -129,3 +130,74 @@ jobs:
       - name: Run customer-shape qualification
         timeout-minutes: 25
         run: npm run qualify:coding-workbench:customer-shape
+  repository-relay:
+    # #4530: a Coding run on macOS builds and tests a Maven and an npm project whose dependencies
+    # only a password-protected internal repository serves, in all three modes, through the real
+    # Seatbelt boundary and the repository credential relay (ADR-0184). A wrong login never passes.
+    # #4519: the whole acceptance task runs as a standard account the job creates.
+    name: Coding acceptance with a password-protected repository on macOS 15
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages
+        run: npm run build:packages
+      - name: Stage approved OpenCode dev-lane payload
+        run: npm run dev:coding-runtime:stage
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
+      - name: Show the Maven and Java the builds use
+        run: mvn -v
+      - name: Provision the acceptance Maven cache
+        run: npm run provision:acceptance-maven
+      # #4519: the promise is for a person without administrator rights on a Mac without a container
+      # runtime. The acceptance task runs as the standard account the action creates, with its own
+      # copy of the checkout, Node.js and the JDK, and the job passes only when the task's evidence
+      # certifies the promise.
+      - name: Create the standard account the acceptance task runs as
+        uses: ./.github/actions/macos-standard-account
+        with:
+          jdk: "true"
+      - name: Run the coding acceptance task as the standard account
+        run: |
+          temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
+          sudo -u keikoqa -H /usr/bin/env -i \
+            HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
+            TMPDIR="${temp}" \
+            PATH=/Users/keikoqa/.local/node/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            JAVA_HOME=/Users/keikoqa/Library/Java/JavaVirtualMachines/acceptance.jdk/Contents/Home \
+            KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1 KEIKO_OS_KEYCHAIN=off \
+            KEIKO_ACCEPTANCE_EVIDENCE_FILE=/Users/keikoqa/acceptance-evidence/evidence.json \
+            /bin/sh -s <<'ACCEPTANCE'
+          cd "$HOME/keiko" || exit 1
+          echo "groups: $(id -Gn)"
+          npx vitest run packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts \
+            --reporter=default --reporter=json --outputFile="$HOME/acceptance-report/acceptance.json"
+          tests=$?
+          node scripts/check-vitest-report-ran.mjs "$HOME/acceptance-report/acceptance.json"
+          ran=$?
+          node scripts/check-acceptance-evidence.mjs "$HOME/acceptance-evidence/evidence.json"
+          certified=$?
+          [ "$tests" -eq 0 ] && [ "$ran" -eq 0 ] && [ "$certified" -eq 0 ]
+          ACCEPTANCE
+      - name: Run the real Maven and npm clients through the relay
+        env:
+          KEIKO_REPOSITORY_RELAY_REAL_CLIENTS: "1"
+          KEIKO_OS_KEYCHAIN: "off"
+        run: |
+          npx vitest run packages/keiko-server/src/coding-runtime/nativeRepositoryRelay.clients.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/relay-clients.json"
+          node scripts/check-vitest-report-ran.mjs "$RUNNER_TEMP/relay-clients.json"

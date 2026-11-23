@@ -8,12 +8,16 @@
 // workspace's own members still install (PR #3452 review, CWE-918).
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEPENDENCY_APPROVED_REGISTRY, DEPENDENCY_INSTALL_ARGS } from "./dependencies.js";
+import {
+  DEPENDENCY_APPROVED_REGISTRY,
+  DEPENDENCY_HOST_SHELL_ARGS,
+  DEPENDENCY_INSTALL_ARGS,
+} from "./dependencies.js";
 import {
   registryEgressEnv,
   startRegistryEgressProxy,
@@ -88,18 +92,20 @@ interface Installed {
 }
 
 // Installs a fresh workspace made of `files`, each a JSON document at its relative path, and returns
-// npm's exit code and output. `env` overrides the lane's configuration for this one install.
+// npm's exit code and output. `env` overrides the lane's configuration for this one install, and
+// `args` the install's own argument vector.
 async function npmInstallTree(
   lane: Lane,
   files: Readonly<Record<string, unknown>>,
   env: NodeJS.ProcessEnv = {},
+  args: readonly string[] = DEPENDENCY_INSTALL_ARGS,
 ): Promise<Installed> {
   const workspace = mkdtempSync(join(lane.root, "workspace-"));
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(workspace, path)), { recursive: true });
     writeFileSync(join(workspace, path), JSON.stringify(content));
   }
-  const child = spawn("npm", [...DEPENDENCY_INSTALL_ARGS], {
+  const child = spawn("npm", [...args], {
     cwd: workspace,
     env: { ...lane.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
@@ -205,6 +211,46 @@ describe.skipIf(process.platform === "win32")("npm under the registry egress con
     expect(code).toBe(0);
     expect(lstatSync(join(workspace, "node_modules", "a")).isSymbolicLink()).toBe(true);
     expect(lstatSync(join(workspace, "node_modules", "b")).isSymbolicLink()).toBe(true);
+    expect(lane.proxy.counts()).toEqual(before);
+    expect(lane.dialled()).toBe(0);
+  }, 60_000);
+
+  // #4522 canary: the install for the run's own shell runs no lifecycle script, neither a package's in
+  // the tree nor the project's own, and with `--no-save` writes no lockfile the project did not have.
+  it("runs no lifecycle script and writes no lockfile for the host shell (#4522)", async () => {
+    const before = lane.proxy.counts();
+    const marker = (name: string): string => `node -e "require('fs').writeFileSync('${name}', '')"`;
+    const lifecycle = (prefix: string): Readonly<Record<string, string>> => ({
+      preinstall: marker(`${prefix}-preinstall`),
+      install: marker(`${prefix}-install`),
+      postinstall: marker(`${prefix}-postinstall`),
+      prepare: marker(`${prefix}-prepare`),
+    });
+
+    const { code, output, workspace } = await npmInstallTree(
+      lane,
+      {
+        "package.json": {
+          name: "egress-probe",
+          private: true,
+          workspaces: ["packages/*"],
+          scripts: lifecycle("root"),
+          dependencies: { a: "1.0.0" },
+        },
+        "packages/a/package.json": { name: "a", version: "1.0.0", scripts: lifecycle("member") },
+      },
+      {},
+      DEPENDENCY_HOST_SHELL_ARGS,
+    );
+
+    expect({ code, output }).toMatchObject({ code: 0 });
+    expect(lstatSync(join(workspace, "node_modules", "a")).isSymbolicLink()).toBe(true);
+    for (const stage of ["preinstall", "install", "postinstall", "prepare"]) {
+      expect(existsSync(join(workspace, `root-${stage}`))).toBe(false);
+      expect(existsSync(join(workspace, "packages", "a", `member-${stage}`))).toBe(false);
+    }
+    expect(existsSync(join(workspace, "package-lock.json"))).toBe(false);
+    expect(existsSync(join(workspace, "node_modules", ".package-lock.json"))).toBe(true);
     expect(lane.proxy.counts()).toEqual(before);
     expect(lane.dialled()).toBe(0);
   }, 60_000);

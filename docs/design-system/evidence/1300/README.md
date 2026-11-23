@@ -486,3 +486,12 @@ errors; its previously documented accent and reference-only differences remain r
 accessibility modes reported zero serious or critical violations and zero unresolved incomplete
 findings. All 108 browser captures were written without page errors. The 60 recaptured PNGs were
 committed as produced. These remain synthetic fixture proofs.
+
+## PR #4523 acceptance provisioning script — 2026-11-22
+
+The Coding acceptance task (#4492) adds the `provision:acceptance-maven` script to the root
+`package.json`, whose digest these four proofs bind. Only that input digest was updated in the
+proofs; the producers were not rerun, because no stylesheet, fixture, token, component or dependency
+changed and the captures bind nothing but those source bytes. No gate, fixture or rule was changed.
+After the merge with the held-update refresh above, the proofs bind the digest of the merged
+`package.json`, which carries both changes.

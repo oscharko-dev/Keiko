@@ -13,6 +13,7 @@ import { expectViewportModal } from "./support/modal.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 import { enterEmptyEditorBuffer, replaceEditorBuffer } from "./support/editor-chord.js";
 import { isBenignWebKitResizeObserverDelivery } from "./support/editorWorkspace.js";
+import { isBenignMonacoCancellation } from "./support/monaco-cancellation.js";
 
 const CHAT_MODEL_ID = "e2e-chat-model";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -23,12 +24,6 @@ interface ChatResponse {
     readonly id: string;
     readonly title: string;
   };
-}
-
-function isBenignMonacoCancellation(error: Error): boolean {
-  if (error.message === "Canceled: Canceled") return true;
-  if (error.message !== "Canceled") return false;
-  return /\b(monaco|inline[-\s]?completion|suggest|editor)\b/i.test(error.stack ?? "");
 }
 
 function collectPageErrors(page: Page): () => void {
