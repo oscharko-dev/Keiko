@@ -589,9 +589,9 @@ export function createOpenCodeRuntimeAdapter(
           } catch (error) {
             if (!isMonitoring()) return;
             await cancelSubscription();
-            // The projection refuses the same history on every read, so a reconnect can only fail
-            // again: the run ends now with its true cause instead of after the reconnect budget.
-            if (error instanceof OpenCodeV2HistoryError) {
+            // A permanent refusal repeats on every read of the same history, so a reconnect can only
+            // fail again: the run ends now with its true cause instead of after the reconnect budget.
+            if (error instanceof OpenCodeV2HistoryError && error.permanent) {
               recordMonitorReconnect(ports, {
                 attempt: 0,
                 outcome: "non-retryable",

@@ -212,6 +212,14 @@ export class OpenCodeV2HistoryError extends Error {
   constructor(readonly safeCode: string) {
     super("opencode-v2-history-invalid");
   }
+
+  /**
+   * True when every read of the same history is refused again. A text that no longer extends what
+   * this projection already showed depends on its own checkpoint, so a fresh read may pass.
+   */
+  get permanent(): boolean {
+    return this.safeCode !== "reason=text-prefix-invalid";
+  }
 }
 
 // The exact top-level fields each message type may carry, from the upstream `Session.Message.*`

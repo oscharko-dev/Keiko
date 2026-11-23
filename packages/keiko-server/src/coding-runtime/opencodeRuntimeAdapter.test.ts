@@ -1870,6 +1870,44 @@ describe("OpenCode runtime adapter readiness", () => {
     await adapter.close();
   });
 
+  it("reconnects after a refusal that depends on the projection's own checkpoint", async () => {
+    const harness = readinessPorts();
+    let subscriptions = 0;
+    let refusals = 0;
+    let broken = false;
+    harness.ports.readiness.subscribe = (signal): AsyncIterable<OpenCodeSyncHint> => {
+      subscriptions += 1;
+      return subscriptions === 1
+        ? finiteHints([{ id: "evt_0" }])
+        : hints([{ requiresHistoryIdentity: false }], signal);
+    };
+    const readHistory = harness.ports.readiness.history;
+    harness.ports.readiness.history = (...args): ReturnType<typeof readHistory> => {
+      if (broken) {
+        broken = false;
+        refusals += 1;
+        return Promise.reject(new OpenCodeV2HistoryError("reason=text-prefix-invalid"));
+      }
+      return readHistory(...args);
+    };
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      reconnect: clock.reconnect,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    broken = true;
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+    await vi.waitFor(() => {
+      expect(refusals).toBe(1);
+      expect(subscriptions).toBeGreaterThanOrEqual(3);
+    });
+    expect(failures).toEqual([]);
+    dispose();
+    await adapter.close();
+  });
+
   it("resets the reconnect budget after each successful live reconciliation", async () => {
     const harness = readinessPorts();
     let subscriptions = 0;

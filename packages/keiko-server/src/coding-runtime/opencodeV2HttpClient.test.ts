@@ -237,6 +237,29 @@ describe("OpenCode V2 response body release", () => {
     await expect(client.info()).rejects.toThrow();
     expect(cancelled).toBe(true);
   });
+
+  it.each([
+    ["an error status", { status: 503, headers: { "content-type": "text/event-stream" } }],
+    ["a wrong content type", { status: 200, headers: { "content-type": "application/json" } }],
+  ])("cancels the unread event-stream body of %s", async (_name, init) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const client = createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:4096",
+      password: "test-password",
+      fetch: () => Promise.resolve(new Response(body, init)),
+    });
+    const events = client.events(new AbortController().signal)[Symbol.asyncIterator]();
+    await expect(events.next()).rejects.toThrow("opencode-v2-event-unavailable");
+    expect(cancelled).toBe(true);
+  });
 });
 
 describe("OpenCode V2 local HTTP deadline", () => {

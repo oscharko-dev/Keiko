@@ -59,6 +59,7 @@ import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support
 import {
   assertWindowsWorkspaceLocation,
   createProductionOpenCodeBackend,
+  liveQuestionSignal,
   onAnotherWindowsVolume,
   recordContextTelemetry,
   windowsFilesystemGrants,
@@ -2640,4 +2641,19 @@ describe("ripgrep on the OpenCode launch", () => {
       }
     },
   );
+});
+
+describe("live question signal (#4491 audit)", () => {
+  it("counts a model request for an asked question, never for a reopened event stream", () => {
+    const observe = vi.fn();
+    const events: unknown[] = [];
+    const signal = liveQuestionSignal("run-1", "digest", { observe }, (event) => {
+      events.push(event);
+    });
+    signal("question-1");
+    signal("question-1");
+    signal(`${composition.OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX}2`);
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(2);
+  });
 });

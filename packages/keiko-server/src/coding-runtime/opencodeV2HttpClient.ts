@@ -1191,7 +1191,7 @@ async function* openEvents(
       response.headers.get("content-type")?.startsWith("text/event-stream") !== true ||
       response.body === null
     ) {
-      throw new Error("opencode-v2-event-unavailable");
+      return await refuseResponse(response, new Error("opencode-v2-event-unavailable"));
     }
     yield* readEventFrames(response.body, () => {
       timer.refresh();

@@ -319,6 +319,12 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+/**
+ * The identity a reopened event stream signals a question re-list under. It names no question the
+ * model asked, so a consumer never counts it as a model request (#4491 audit).
+ */
+export const OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX = "stream-reopened-";
+
 const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -3015,7 +3021,10 @@ function readinessV2Ports(
       if (streamCount > 1) history.freezeLiveText();
       // A form created while nobody listened has no frame left to follow: the reopened stream asks
       // the consumer to re-list the questions once, under an identity of its own.
-      if (streamCount > 1) input.onQuestionObserved?.(`stream-reopened-${String(streamCount)}`);
+      if (streamCount > 1)
+        input.onQuestionObserved?.(
+          `${OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX}${String(streamCount)}`,
+        );
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       const sessionId = fixedSessionId;

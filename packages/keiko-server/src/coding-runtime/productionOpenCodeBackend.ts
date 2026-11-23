@@ -100,6 +100,7 @@ import type { RepositoryCredentialRelay } from "../repository-relay/repositoryCr
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import {
   createOpenCodeRuntimeComposition,
+  OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX,
   type McpOAuthIssuerPort,
   type OpenCodeRuntimeCompositionInput,
 } from "./opencodeRuntimeComposition.js";
@@ -1880,7 +1881,7 @@ export function recordContextTelemetry(
  * history rows — so the content-free re-list signal originates from the composition's live
  * observation, idempotent per observed frame identity (#2386).
  */
-function liveQuestionSignal(
+export function liveQuestionSignal(
   runId: string,
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
@@ -1892,11 +1893,13 @@ function liveQuestionSignal(
   return (identity): void => {
     if (identities.values.has(identity)) return;
     rememberBoundedCorrelation(identities, identity, true);
-    evidence.observe(runId, {
-      kind: "model-request",
-      state: "running",
-      authorityDigest,
-    });
+    // A reopened stream only asks for a re-list; the model requested nothing (#4491 audit).
+    if (!identity.startsWith(OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX))
+      evidence.observe(runId, {
+        kind: "model-request",
+        state: "running",
+        authorityDigest,
+      });
     emitQuestionSignal(runId, ++questionSignalSequence, onRuntimeEvent);
   };
 }
