@@ -2421,12 +2421,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.containPausedRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
       "owner": "CodingRuntimeOrchestrator.deliveryEvidence",
       "kind": "unregistered-catch",
       "count": 1
@@ -2434,48 +2428,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
       "owner": "CodingRuntimeOrchestrator.dispatchDeliveryContinuation",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.executeEndRequest",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.issueApprovedAuthority",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.reconcileQuietly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.resolveRuntimePermission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.resumeManagerAfterTransition",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.stopExpiredPausedRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.stopForSettlement",
       "kind": "unregistered-catch",
       "count": 1
     },

@@ -1276,7 +1276,13 @@ type RuntimeLifecycleFailureReason =
   | "stale-slot-reaped"
   | "stale-slot-reap-failed"
   // A queued task settlement threw; the run is moved to recovery-required (audit 2026-10).
-  | "settlement-failed";
+  | "settlement-failed"
+  // A caught failure of the runtime manager or the permission port, recorded with its cause so a
+  // run that ends in recovery-required or a refused decision is explained by its log line.
+  | "resume-failed"
+  | "permission-resolve-failed"
+  | "approval-issue-failed"
+  | "reconcile-failed";
 
 function runtimeDiagnosticCorrelationId(runId: string): string {
   return isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
@@ -2621,7 +2627,8 @@ export class CodingRuntimeOrchestrator {
     let resumed: ReturnType<CodingRuntimeManager["resume"]>;
     try {
       resumed = this.deps.manager.resume(runId, effectiveMode);
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "resume-failed", error);
       return this.stopAfterResumeFailure(runtimePauseFailureCode("authority-resolution-failed"));
     }
     if (!resumed.ok) {
@@ -2645,8 +2652,9 @@ export class CodingRuntimeOrchestrator {
   private async containPausedRuntime(runId: string): Promise<void> {
     try {
       await this.deps.manager.stop(runId, "failed");
-    } catch {
+    } catch (error) {
       // The failed state publish already put the run in recovery-required; containment stays open.
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
     }
   }
 
@@ -2658,7 +2666,8 @@ export class CodingRuntimeOrchestrator {
       return stopped.ok
         ? this.transition(current, "failed", "authority-expired")
         : this.transition(current, "recovery-required", "recovery-required");
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "stop-failed", error);
       return this.transition(current, "recovery-required", "recovery-required");
     }
   }
@@ -2860,7 +2869,13 @@ export class CodingRuntimeOrchestrator {
     if (this.deps.permissionPort === undefined) return true;
     try {
       return await this.deps.permissionPort.resolve({ runId, requestId, decision });
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        runId,
+        "permission-resolve-failed",
+        error,
+      );
       return false;
     }
   }
@@ -2939,7 +2954,13 @@ export class CodingRuntimeOrchestrator {
         ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
         boundRevision: challenge.revision,
       });
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        current.runId,
+        "approval-issue-failed",
+        error,
+      );
       return this.stopAfterApprovalFailure(current);
     }
     if (!issued.ok) {
@@ -4072,7 +4093,8 @@ export class CodingRuntimeOrchestrator {
   ): Promise<boolean> {
     try {
       return (await this.deps.manager.stop(runId, outcome)).ok;
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
       return false;
     }
   }
@@ -4989,8 +5011,9 @@ export class CodingRuntimeOrchestrator {
   private async reconcileQuietly(runId: string): Promise<void> {
     try {
       await this.deps.manager.reconcile(runId);
-    } catch {
+    } catch (error) {
       // Recovery-required remains the only safe projection when host containment cannot be proven.
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "reconcile-failed", error);
     }
   }
 
@@ -5114,7 +5137,8 @@ export class CodingRuntimeOrchestrator {
       return kind === "stop"
         ? await this.deps.manager.stop(runId)
         : await this.deps.manager.takeover(runId);
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
       this.recordEndRequestException(runId);
       // Recovery-required remains the only safe projection when stop/takeover cannot be trusted.
       return undefined;

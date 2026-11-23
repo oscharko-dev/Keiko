@@ -10234,6 +10234,65 @@ describe("coding runtime lifecycle races", () => {
     expect(record?.errorClass).toBe("RangeError");
     expect(JSON.stringify(record)).not.toContain("snapshot store unavailable");
   });
+  it.each(["stop", "takeover"] as const)(
+    "names the cause when the manager %s throws on an operator end request",
+    async (kind) => {
+      const f = raceFixture();
+      await runningRace(f);
+      f.manager[kind === "stop" ? "stop" : "takeover"].mockRejectedValueOnce(
+        new RangeError("manager unavailable"),
+      );
+
+      await f.orchestrator[kind]("run-1", { requestId: "run-1" });
+
+      const record = f.diagnosticRecords.find(
+        (candidate) => candidate.code === "stage=lifecycle:reason=stop-failed",
+      );
+      expect(record?.errorClass).toBe("RangeError");
+      expect(JSON.stringify(record)).not.toContain("manager unavailable");
+    },
+  );
+
+  it("names the cause when the manager stop throws while settling a completed turn", async () => {
+    const f = raceFixture();
+    f.manager.stop.mockRejectedValueOnce(new RangeError("manager unavailable"));
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+
+    await f.orchestrator.start(start);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    const record = f.diagnosticRecords.find(
+      (candidate) => candidate.code === "stage=lifecycle:reason=stop-failed",
+    );
+    expect(record?.errorClass).toBe("RangeError");
+  });
+
+  it("names the cause when the permission port throws while an approval is resolved", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    await f.orchestrator.ingest(RACE_PERMISSION);
+    f.permissionPort.resolve.mockRejectedValueOnce(new RangeError("port unavailable"));
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: f.orchestrator.status().revision,
+    });
+
+    expect(
+      f.diagnosticRecords.some(
+        (candidate) =>
+          candidate.code === "stage=lifecycle:reason=permission-resolve-failed" &&
+          candidate.errorClass === "RangeError",
+      ),
+    ).toBe(true);
+  });
+
   // Audit finding 6: a failed stop at an undo window's close left the manager in recovery-required
   // with its slot taken, and every later start was refused with runtime-already-running.
   it("reaps a settled run's stale runtime slot before the next start", async () => {
