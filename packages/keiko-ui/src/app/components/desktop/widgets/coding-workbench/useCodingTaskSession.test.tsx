@@ -1422,7 +1422,29 @@ describe("completed tasks and the current task (#4491 audit)", () => {
     expect(result.current.conversationId).toBeUndefined();
   });
 
-  it("raises no error for a remembered task that is gone and forgets it", async () => {
+  it("shows the remembered task when the followed run names a task no repository remembers", async () => {
+    const third: CodingHistoryDetail = {
+      ...other,
+      task: { ...other.task, id: "chat-three", status: "completed", latestRunId: "run-three" },
+    };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? other : id === "chat-three" ? third : detail),
+    );
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: { ...snapshot("chat-three"), runId: "run-three" } });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(result.current.conversationId).toBe("chat-one");
+  });
+
+  it("raises no error for a remembered task that is gone, on every switch back", async () => {
     let gone = false;
     read.mockImplementation((id: string) =>
       id === "chat-two"
@@ -1448,9 +1470,10 @@ describe("completed tasks and the current task (#4491 audit)", () => {
     rerender(second);
     await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
     rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(readsOf("chat-one")).toBe(3));
     await act(async () => Promise.resolve());
-    expect(readsOf("chat-one")).toBe(2);
     expect(result.current.error).toBe(false);
+    expect(result.current.detail).toBeNull();
   });
 
   it("leaves the displayed task once it is completed in Coding History", async () => {

@@ -145,10 +145,11 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   latest.current = input;
   const controller = useTaskLoader(latest);
   const { detail, pending, setPending, error, setError, load } = controller;
-  const scopeTasks = useScopeTasks(latest, detail, load);
+  const scopeTasks = useScopeTasks(detail);
   useTaskUpdates(controller.setDetail);
   const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller, scopeTasks);
   useSessionSelection(input, load, newTask, ignoredRun, awaitingRun, scopeTasks);
+  useScopeRestore(latest, scopeTasks, load);
   const finish = async (): Promise<void> => {
     if (input.active || detail === null) return;
     setPending(true);
@@ -625,15 +626,12 @@ type ScopeTasks = { readonly current: Map<string, string> };
 const MAX_SCOPE_TASKS = 32;
 
 /**
- * Remembers the task a repository showed and shows it again when the window switches back to that
- * repository. The server follows one latest run for every window, so without it a run in the other
- * repository left the first one's open task unreachable outside Coding History.
+ * Remembers the task a repository showed, for `useScopeRestore` to show it again when the window
+ * switches back to that repository. The server follows one latest run for every window, so without
+ * it a run in the other repository left the first one's open task unreachable outside Coding
+ * History.
  */
-function useScopeTasks(
-  latest: { current: SessionInput },
-  detail: CodingHistoryDetail | null,
-  load: LoadTask,
-): ScopeTasks {
+function useScopeTasks(detail: CodingHistoryDetail | null): ScopeTasks {
   const scopeTasks = useRef(new Map<string, string>());
   useEffect(() => {
     if (detail === null || detail.task.status === "completed") return;
@@ -643,16 +641,27 @@ function useScopeTasks(
     const oldest = tasks.keys().next().value;
     if (tasks.size > MAX_SCOPE_TASKS && oldest !== undefined) tasks.delete(oldest);
   }, [detail]);
+  return scopeTasks;
+}
+
+/**
+ * Shows a repository's remembered task again when the window switches back to it. It runs after
+ * the selection and followed-run effects, so in one commit its read is the current one: a
+ * followed run of a task no repository remembers cannot supersede it. The read is a background
+ * one the completed guard covers, so a task completed or removed meanwhile is not shown.
+ */
+function useScopeRestore(
+  latest: { current: SessionInput },
+  scopeTasks: ScopeTasks,
+  load: LoadTask,
+): void {
   const root = latest.current.root;
   useEffect(() => {
     const current = latest.current;
     const id = root === undefined ? undefined : scopeTasks.current.get(root);
-    if (root === undefined || id === undefined || current.active || current.selection !== undefined)
-      return;
-    scopeTasks.current.delete(root);
+    if (id === undefined || current.active || current.selection !== undefined) return;
     void load(id, false, "refresh");
-  }, [root, latest, load]);
-  return scopeTasks;
+  }, [root, latest, scopeTasks, load]);
 }
 
 /** The followed task, unless this window already showed it under another repository. */
