@@ -61,6 +61,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.importNoWorkspace":
     "Open a workspace first. The task is imported into the active workspace.",
   "codingWorkbench.history.importError": "The task could not be imported. Try again.",
+  "codingWorkbench.history.completedNotice":
+    "“{title}” is completed. Your next message reopens the task and continues this conversation.",
   "codingWorkbench.history.importedNotice":
     "“{title}” was imported from a file. Your next message continues it as a new task that keeps this conversation and does not change “{title}”.",
   "codingWorkbench.history.finish": "Complete task",

@@ -49,6 +49,23 @@ interface SessionAction {
   readonly disabled: boolean;
 }
 
+// A completed task on display is complete already: its next message reopens it (#4491).
+function finishActions(
+  session: CodingTaskSession,
+  locked: boolean,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
+  if (session.detail?.task.status === "completed") return [];
+  return [
+    {
+      label: t("codingWorkbench.history.finish"),
+      icon: Icons.check,
+      run: (): void => void session.finish(),
+      disabled: locked || session.detail === null,
+    },
+  ];
+}
+
 function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const locked = active || session.pending;
@@ -68,12 +85,7 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
       disabled: locked || session.detail === null || session.fork !== null,
     },
     ...continueActions(session, locked, t),
-    {
-      label: t("codingWorkbench.history.finish"),
-      icon: Icons.check,
-      run: (): void => void session.finish(),
-      disabled: locked || session.detail === null,
-    },
+    ...finishActions(session, locked, t),
     {
       label: t("codingWorkbench.history.new"),
       icon: Icons.plus,

@@ -69,6 +69,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Öffne zuerst einen Arbeitsbereich. Die Aufgabe wird in den aktiven Arbeitsbereich importiert.",
   "codingWorkbench.history.importError":
     "Die Aufgabe konnte nicht importiert werden. Bitte erneut versuchen.",
+  "codingWorkbench.history.completedNotice":
+    "„{title}“ ist abgeschlossen. Deine nächste Nachricht öffnet die Aufgabe wieder und setzt diesen Verlauf fort.",
   "codingWorkbench.history.importedNotice":
     "„{title}“ wurde aus einer Datei importiert. Deine nächste Nachricht setzt sie als neue Aufgabe fort, die diesen Verlauf behält und „{title}“ nicht verändert.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",

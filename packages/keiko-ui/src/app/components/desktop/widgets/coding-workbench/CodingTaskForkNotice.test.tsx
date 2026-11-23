@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
+import { CodingTaskForkNotice, completedTaskTitle } from "./CodingTaskForkNotice";
+import type { CodingTaskSession } from "./useCodingTaskSession";
 
 // S03 (#3904): the notice says what the next message will do, in the person's own terms, and lets
 // them take the request back. It names the task by its title and shows nothing without a fork.
@@ -88,5 +89,50 @@ describe("CodingTaskForkNotice", () => {
       "“Repair the parser” was imported from a file. Your next message continues it as a new task",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  // A completed task opened from Coding History reopens with the next message (#4491 night walk).
+  it("says the next message reopens a completed task, and a requested fork still wins", () => {
+    const { rerender } = render(
+      <CodingTaskForkNotice fork={null} completed="Repair the parser" onCancel={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "“Repair the parser” is completed. Your next message reopens the task and continues this conversation.",
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+
+    rerender(
+      <CodingTaskForkNotice
+        fork={{ taskId: "task-7", title: "Repair the parser" }}
+        completed="Repair the parser"
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Your next message starts a new task");
+  });
+});
+
+describe("completedTaskTitle", () => {
+  function shown(
+    status: "active" | "completed",
+    fork: CodingTaskSession["fork"] = null,
+  ): CodingTaskSession {
+    return {
+      fork,
+      detail: { task: { title: "Repair the parser", status } },
+    } as unknown as CodingTaskSession;
+  }
+
+  it("names a completed task on display only while no run is active and no fork is requested", () => {
+    expect(completedTaskTitle(shown("completed"), false)).toBe("Repair the parser");
+    expect(completedTaskTitle(shown("completed"), true)).toBeUndefined();
+    expect(completedTaskTitle(shown("active"), false)).toBeUndefined();
+    expect(
+      completedTaskTitle(shown("completed", { taskId: "task-7", title: "t" }), false),
+    ).toBeUndefined();
+    expect(
+      completedTaskTitle({ fork: null, detail: null } as unknown as CodingTaskSession, false),
+    ).toBeUndefined();
   });
 });

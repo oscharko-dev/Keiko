@@ -21,7 +21,7 @@ import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
 import { CodingWorkbenchToolCheck } from "./CodingWorkbenchToolCheck";
-import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
+import { CodingTaskForkNotice, completedTaskTitle } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -2014,7 +2014,11 @@ function WorkbenchColumns({
             and leaves the control where the gesture started. */}
         <LocationBindingNotices locationState={locationState} />
         {repositorySelector}
-        <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
+        <CodingTaskForkNotice
+          fork={history.fork}
+          completed={completedTaskTitle(history, runIsActive)}
+          onCancel={history.cancelFork}
+        />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}

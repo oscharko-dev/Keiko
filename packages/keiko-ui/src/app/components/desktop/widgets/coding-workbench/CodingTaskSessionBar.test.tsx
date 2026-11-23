@@ -672,6 +672,26 @@ describe("forking from the task chrome", () => {
     expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
   });
 
+  // A completed task opened from Coding History is complete already; New task still leaves it.
+  it("offers no Complete task for a completed task on display", () => {
+    const open = sessionWith([]);
+    const detail = open.detail as NonNullable<CodingTaskSession["detail"]>;
+    const done = {
+      ...open,
+      detail: { ...detail, task: { ...detail.task, status: "completed" as const } },
+    };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={open} active={false} onHistory={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Complete task" })).toBeEnabled();
+
+    rerender(<CodingTaskSessionBar session={done} active={false} onHistory={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Complete task" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeEnabled();
+  });
+
   it("offers a fork before each user message, and only to a caller that can fork", () => {
     const assistant = {
       ...historyMessage("m-2", "run-6", "An answer"),
