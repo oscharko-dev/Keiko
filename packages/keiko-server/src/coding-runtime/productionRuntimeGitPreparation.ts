@@ -14,9 +14,16 @@ import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedComm
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import { ADMISSION_TIMEOUT_MS } from "./codingRuntimeRepositoryItems.js";
 
 type LaunchInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 const PREPARATION_TTL_MS = 5_000;
+// Reading the identity spawns `git` twice. On a loaded machine (an account's first browser start,
+// endpoint protection scanning every new process) that alone outlasted the five-second window, and
+// the start was refused before any run existed (#4520). The read gets repository admission's bound;
+// the one-use window opens only once the read has finished. The context digest covers no repository
+// state, so an origin changed during a long read is not caught here; the commit boundary re-reads
+// the identity and refuses a different one (`gitDelivery/verifiedCommitFacts.ts`).
 const GIT_RUNTIME_IDENTITY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -66,6 +73,8 @@ interface PreparationInput {
   readonly deps: PreparationDeps;
   readonly context: (request: LaunchInput) => CodingRuntimeTrustedContext;
   readonly now: () => number;
+  /** The bound of one identity read; tests inject an already-aborted signal. */
+  readonly identityReadSignal?: () => AbortSignal;
 }
 export interface RuntimeGitPreparation {
   readonly prepare: (request: LaunchInput) => Promise<void>;
@@ -90,16 +99,12 @@ class GitPreparation implements RuntimeGitPreparation {
   public readonly prepare = async (request: LaunchInput): Promise<void> => {
     this.prepared.delete(request);
     const before = this.input.context(request);
-    const expiresAtMs = this.input.now() + PREPARATION_TTL_MS;
     try {
       const repositoryIdentity =
         before.workspaceKind === "folder"
           ? undefined
-          : await readIdentity(this.input.deps, before, request.runId);
-      if (
-        this.input.now() >= expiresAtMs ||
-        contextDigest(this.input.context(request)) !== contextDigest(before)
-      )
+          : await readIdentity(this.input, before, request.runId);
+      if (contextDigest(this.input.context(request)) !== contextDigest(before))
         throw new CodingRuntimeLaunchRejectedError(
           "repository-unavailable",
           false,
@@ -109,7 +114,7 @@ class GitPreparation implements RuntimeGitPreparation {
         repositoryIdentity,
         requestDigest: requestDigest(request),
         contextDigest: contextDigest(before),
-        expiresAtMs,
+        expiresAtMs: this.input.now() + PREPARATION_TTL_MS,
       });
       logPreparation(this.input.deps, request.runId, "prepared");
     } catch (error) {
@@ -147,10 +152,11 @@ export function createRuntimeGitPreparation(input: PreparationInput): RuntimeGit
 }
 
 async function readIdentity(
-  deps: PreparationDeps,
+  input: PreparationInput,
   context: CodingRuntimeTrustedContext,
   runId: string,
 ): Promise<VerifiedRepositoryIdentity> {
+  const { deps } = input;
   const workspace = deps.resolveWorkspace(context.workspaceRoot);
   if (workspace?.root !== context.workspaceRoot) {
     throw new CodingRuntimeLaunchRejectedError("repository-unavailable", false, "workspace-root");
@@ -158,7 +164,7 @@ async function readIdentity(
   const identity = await readVerifiedRepositoryIdentity(
     {
       workspace,
-      signal: AbortSignal.timeout(PREPARATION_TTL_MS),
+      signal: input.identityReadSignal?.() ?? AbortSignal.timeout(ADMISSION_TIMEOUT_MS),
       onTerminated: gitDeliveryTerminationHandler(deps.execution ?? {}, runId),
     },
     sha256Hex(context.workspaceRoot),

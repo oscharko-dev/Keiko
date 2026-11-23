@@ -2976,10 +2976,14 @@ the sockets a run creates in its own roots stay reachable, and loopback TCP is u
 **The run cannot decide what Keiko's own Git executes (#4271).** Keiko runs Git outside the sandbox
 on the run's workspace, so repository configuration a shell child writes would run or read with
 Keiko's authority: filter drivers, `core.worktree`, `commondir`, `gitdir`, alternates. The native
-profile therefore denies writes to that metadata (`opencodeNativeGitMetadata.ts`). Refs, objects, the
-index and hooks stay writable, because Keiko's Git never runs hooks in a run's repository and the
-ordinary `git add` must keep working; Keiko's delivery tools change configuration from outside the
-sandbox. In a folder without a repository the whole `.git` name at the workspace root is denied, so
+profile therefore denies writes to that metadata (`opencodeNativeGitMetadata.ts`). It denies writes
+to `.git/hooks` as well (#4491 G0 audit, 2026-11-23): Keiko's Git never runs hooks in a run's
+repository, but the person's own next `git commit` would run one a shell child wrote, with the
+person's rights and outside the sandbox, and an untracked hook shows in no diff. Refs, objects and
+the index stay writable, because the ordinary `git add` must keep working; Keiko's delivery tools
+change configuration from outside the sandbox. A hook folder that the repository's configuration
+places inside the project (`core.hooksPath`, as husky sets it) stays writable like every project
+file; the boundary document names that limit. In a folder without a repository the whole `.git` name at the workspace root is denied, so
 a run cannot make its folder a repository: `git init` there exits with an error, and a person can do
 it before the run. A repository in a subfolder stays the run's own. Two read-lane rules cover what a
 person later opens, where the kernel rule does not reach: the local reads override every

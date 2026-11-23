@@ -218,8 +218,9 @@ describe("workflow Node toolchain parity", () => {
     // reserve-tag job (#4503), which alone holds the release-tag App token, adds one. The macOS 15
     // coding acceptance with a password-protected repository (#4530, repository-relay in
     // coding-workbench-customer-shape.yml) adds one. The macOS native boundary lane (#4521,
-    // macos-native-boundary.yml) adds one.
-    expect(withSetupNode).toHaveLength(48);
+    // macos-native-boundary.yml) adds one. The macOS delivery forms as a standard account (#4520,
+    // standard-account-forms in npm-folder-qualify.yml) adds one.
+    expect(withSetupNode).toHaveLength(49);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

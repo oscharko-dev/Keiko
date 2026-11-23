@@ -1,14 +1,66 @@
 import { Buffer } from "node:buffer";
+import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
+import {
+  apiKeyHeaderValue,
+  toolCallingConfigurationFingerprint,
+} from "../../packages/keiko-model-gateway/dist/index.js";
 // The governed tool shim renders results for the model; its owner also owns the decoder (#3873).
 import { decodeGovernedToolModelContent } from "../../packages/keiko-server/dist/coding-runtime/governedToolModelContent.js";
 
 export const CUSTOMER_SHAPE_MODEL = "gemma-4-31b-it";
 export const CUSTOMER_SHAPE_REPLY = "Synthetic Workbench reply.";
 export const CUSTOMER_SHAPE_API_KEY = "synthetic-local-key";
+
+/**
+ * Writes the gateway configuration a Keiko under qualification uses to reach this twin: one chat
+ * model whose tool calling is recorded as verified for exactly this provider shape. The key is not
+ * in the file; the server reads it from `KEIKO_DEFAULT_API_KEY` (`CUSTOMER_SHAPE_API_KEY`).
+ */
+export function writeCustomerShapeGatewayConfig(path, baseUrl) {
+  const provider = {
+    modelId: CUSTOMER_SHAPE_MODEL,
+    baseUrl,
+    apiKeyHeaderName: "x-litellm-key",
+    timeoutMs: 30_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+    apiKeySecretRef: `cred:${CUSTOMER_SHAPE_MODEL}`,
+  };
+  const config = {
+    schemaVersion: 2,
+    providers: [provider],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [
+      {
+        id: CUSTOMER_SHAPE_MODEL,
+        kind: "chat",
+        contextWindow: 32_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+        structuredOutput: true,
+        streaming: true,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        workflowEligible: true,
+        costClass: "low",
+        latencyClass: "standard",
+        throughputHint: "synthetic",
+        preferredUseCases: ["Coding"],
+        knownLimitations: [],
+      },
+    ],
+  };
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
 
 function sendJson(response, payload, status = 200) {
   response.writeHead(status, { "content-type": "application/json" });

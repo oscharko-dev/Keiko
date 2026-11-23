@@ -66,7 +66,7 @@ export function selectCheckout(session, repo, branch) {
   return selectLabCheckout((path, body) => session.request("POST", path, body), repo, branch);
 }
 
-async function startRun(session, { text, mode, model }) {
+export async function startRun(session, { text, mode, model }) {
   const started = await session.request("POST", "/api/coding-workbench/runtime/runs", {
     requestId: `lab-${randomUUID()}`,
     taskIntent: text,

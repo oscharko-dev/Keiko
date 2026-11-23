@@ -21,6 +21,7 @@ import {
   fail,
   lockFor,
   lockMismatches,
+  MAVEN_RETRY_ARGUMENTS,
   main,
   ProvisionError,
   runCli,
@@ -118,6 +119,20 @@ posix("provision-acceptance-maven build and verification", () => {
     buildCache(where);
     expect(cachedArtifacts(where.cacheDirectory)).toEqual(["org/x/x-1.jar", "org/x/x-1.pom"]);
     expect(existsSync(join(where.cacheDirectory, "com", "example", "acceptance"))).toBe(false);
+  });
+
+  it("asks Maven to outlast a short rate limit of Maven Central", () => {
+    const records = `${STUB_BUILDS}
+printf '%s\\n' "$@" > "$repo/arguments.txt"`;
+    const where = { ...workspace(), maven: stubMaven(records) };
+    buildCache(where);
+    const passed = readFileSync(join(where.cacheDirectory, "arguments.txt"), "utf8").split("\n");
+    expect(passed).toEqual(expect.arrayContaining([...MAVEN_RETRY_ARGUMENTS]));
+    // Maven 3.9 (Resolver 1) and Maven 4 (Resolver 2) each read only their own names.
+    for (const family of ["connector", "transport"]) {
+      expect(passed).toContain(`-Daether.${family}.http.retryHandler.count=6`);
+    }
+    expect(passed.at(-2)).toBe("test");
   });
 
   it("refuses a build that Maven fails, naming how it ended", () => {

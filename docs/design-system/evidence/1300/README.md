@@ -503,3 +503,12 @@ proofs; the producers were not rerun, because no stylesheet, fixture, token, com
 changed and the captures bind nothing but those source bytes. No gate, fixture or rule was changed.
 After the merge with the held-update refresh above, the proofs bind the digest of the merged
 `package.json`, which carries both changes.
+
+## Release 1.5.7 input metadata — 2026-11-23
+
+The release changes the same three of the 29 declared shared inputs (`package.json`,
+`package-lock.json` and `packages/keiko-ui/package.json`), only in their version fields (#4491),
+which no stylesheet or capture reads. Only those three input digests were updated in the four
+proofs, as for release 1.5.6; the other 26 digests are unchanged. The proofs retain their Linux
+captures, rendered CSS digest, measurements, tolerances and accessibility records; no producer was
+rerun for this metadata change.

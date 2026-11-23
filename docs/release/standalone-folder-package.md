@@ -2,7 +2,8 @@
 
 A standalone folder package is Keiko as one folder that a person unzips and starts by
 double-click. Nothing is installed: no installer, no administrator rights, no Node.js on the
-machine, nothing downloaded at start. It exists for workplaces where an installation involves
+machine, nothing downloaded at start. The portable `Keiko.app` is not covered by that: its setup
+copies Keiko to `/Applications`, which needs an administrator. It exists for workplaces where an installation involves
 corporate IT ([ADR-0121 D9](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d9--a-standalone-folder-package-runs-the-same-payload-in-place)).
 
 It is a third delivery form beside the npm package and the
@@ -159,22 +160,36 @@ where it can be protected:
 
 ## The Download Mark
 
-macOS and Windows mark every file a browser or mail program downloads, and the built-in unzip
-passes the mark to every extracted file. A marked program that carries no vendor signature is
-stopped at its first start: macOS asks for an approval in System Settings that needs an
-administrator, Windows shows "Windows protected your PC". Keiko carries no Apple or Microsoft
+macOS and Windows mark every file a browser, a mail program or a chat program downloads, and the
+built-in unzip passes the mark to every extracted file. Keiko carries no Apple or Microsoft
 signature ([ADR-0121 D7](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d7--stable-delivery-uses-protected-platform-neutral-keiko-release-trust)),
-so a marked package does not start for a person without administrator rights.
+so a marked copy cannot be relied on. With Gatekeeper on, as macOS ships, in an administrator's own
+desktop session (observed once), macOS held the first program of the folder, Keiko's own Node.js
+runtime, before it ran, showed "“Keiko” Not Opened", and Keiko did not start. A standard account
+in its own desktop session was not observed; the hosted runner's standard account has no desktop
+session, and there the marked copy ran. Windows shows "Windows protected your PC". Keiko's
+statement for people without administrator rights relies neither on a marked copy nor on an
+approval of one.
+
+What the record observed on each way a package reached the account
+([record](../qa/macos-delivery-forms-standard-account.md)):
+
+| How the copy reached the account                                     | Mark                    | Start                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A copy without the mark, as from an internal file share              | none                    | a standard account starts it, and a coding run settles `succeeded`                                                                                                                                                                                                                                                          |
+| The npm registry (the npm package, the npm folder's `node_modules`)  | none                    | the npm package: a standard account starts it, and a coding run settles `succeeded`. The npm folder form is qualified when it is published; a pull request's run defers it                                                                                                                                                  |
+| The standalone archive with a browser's mark, extracted with `ditto` | on every extracted file | An administrator in their own desktop session (Gatekeeper on): macOS holds the first program and Keiko never runs. A standard account without a desktop session (hosted runner, Gatekeeper on): the mark changes nothing, and a coding run settles `succeeded`. A standard account in its own desktop session: not observed |
 
 The package starts when the mark never reaches the person's copy:
 
 - A package the builder wrote carries no mark, whatever the source archive carried.
 - A copy taken from an internal file share, a USB drive or a software distribution system carries
   no mark.
+- A download with `curl` or an installation by npm carries no mark.
 - A package sent by e-mail, chat or an intranet web page is a download again and carries the mark.
 
-If you downloaded a ready standalone archive with a browser, remove the mark from the archive
-before you extract it:
+Whoever downloaded the archive with a browser, usually the administrator who puts it on the share,
+removes the mark from the archive before extracting or sharing it:
 
 ```bash
 xattr -d com.apple.quarantine keiko-macos-arm64.standalone.zip
@@ -184,9 +199,10 @@ xattr -d com.apple.quarantine keiko-macos-arm64.standalone.zip
 Unblock-File .\keiko-windows-x64.standalone.zip
 ```
 
-This does not bypass the operating system's check. An organization that allows only approved
-programs (AppLocker or App Control for Business on Windows, a managed allow list on macOS) blocks
-an unsigned Keiko with or without the mark, and only that organization can allow it.
+This changes that one file, not a setting of the computer: Gatekeeper and SmartScreen stay on. An
+organization that allows only approved programs (AppLocker or App Control for Business on Windows,
+a managed allow list on macOS) blocks an unsigned Keiko with or without the mark, and only that
+organization can allow it. Keiko itself never removes or bypasses the mark.
 
 ## What A Person Does
 
