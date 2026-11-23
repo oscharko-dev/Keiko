@@ -911,7 +911,7 @@ function projectGovernedFailure(
   const result = {
     ...projected("failed", reasonCode, true),
     ...governedFailureCoaching(request, reasonCode),
-    ...verificationNotRunDetail(request, reasonCode, value.notRun),
+    ...verificationNotRunDetail(request, reasonCode, value.notRun, value.shellDependencies),
     ...verificationPackageDetail(request, reasonCode, value.packageCandidates),
   };
   const verificationFailure =
@@ -1083,6 +1083,7 @@ function verificationNotRunDetail(
   request: CodingToolActionRequest,
   reasonCode: string,
   notRun: unknown,
+  shellDependencies: unknown,
 ): { readonly detail?: string } {
   if (
     request.action !== "verification" ||
@@ -1094,8 +1095,17 @@ function verificationNotRunDetail(
   if (steps.length === 0) return {};
   const shell = reasonCode === "VERIFICATION_NOT_RUN";
   const named = steps.map((step) => `${step.kind} (${notRunWords(step.reason, shell)})`);
-  return { detail: `These verification steps did not run: ${named.join(", ")}.` };
+  const installed =
+    shell && shellDependencies === "installed" ? ` ${SHELL_DEPENDENCIES_INSTALLED}` : "";
+  return { detail: `These verification steps did not run: ${named.join(", ")}.${installed}` };
 }
+
+// #4522, #4530: Keiko's installation for the run's own shell succeeded in this call. The shell's
+// earlier check failed for want of those dependencies, and a real model that was not told replaced
+// a dependency with its own code instead of running the check again. One fixed sentence, only for a
+// run with a shell (VERIFICATION_NOT_RUN); its value is the closed word the port forwards.
+const SHELL_DEPENDENCIES_INSTALLED =
+  "Keiko has now installed this project's npm dependencies for your shell, without install scripts: run the project's check in your shell again, where its result counts as the verification. Do not replace, remove or reimplement a dependency to make the check pass.";
 
 // The isolated verifier has no container runtime on this host. A run that reaches the model as
 // VERIFICATION_NOT_RUN has a shell of its own (the port names a shell-less run

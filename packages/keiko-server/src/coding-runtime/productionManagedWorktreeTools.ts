@@ -1694,6 +1694,8 @@ type VerificationPortResult =
       readonly reasonCode?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
       readonly notRun?: readonly VerificationNotRunStep[] | undefined;
+      /** Present when this call installed the dependencies of the run's own shell (#4522). */
+      readonly shellDependencies?: "installed" | undefined;
       /** The workspace-relative package folders the model has to choose between (`packageDir`). */
       readonly packageCandidates?: readonly string[] | undefined;
     };
@@ -2148,7 +2150,19 @@ function failedVerificationOutcome(
     reasonCode,
     ...(verificationFailure === undefined ? {} : { verificationFailure }),
     ...(notRun === undefined ? {} : { notRun }),
+    ...(notRun !== undefined && installedForShell(report)
+      ? { shellDependencies: "installed" }
+      : {}),
   };
+}
+
+// The bootstrap just installed the dependencies the run's own shell was missing (#4522). The model
+// saw that shell's check fail for want of them; without this fact a real model replaced the
+// dependency with its own code instead of running the check again (#4530 real-model lab, case 5).
+function installedForShell(report: VerificationReport): boolean {
+  return (
+    report.dependencies?.consumer === "host-shell" && report.dependencies.state === "installed"
+  );
 }
 
 // A refused bootstrap fails the report (ADR-0043 D17), but `install-target-foreign` refuses only

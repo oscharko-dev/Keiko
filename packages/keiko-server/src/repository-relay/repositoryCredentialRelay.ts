@@ -765,11 +765,6 @@ interface ExchangeState {
   admission?: RepositoryRelayAdmission;
 }
 
-function relayBaseFor(request: IncomingMessage, relayId: string): string {
-  const host = headerValue(request, "host") ?? "127.0.0.1";
-  return repositoryRelayBaseUrl(`http://${host}`, relayId);
-}
-
 async function relayBody(
   upstream: Response,
   response: ServerResponse,
@@ -852,11 +847,14 @@ async function relayText(
   await reserveDeclaredText(upstream, textMaxBytes, context.slot);
   let body = await readBoundedBody(upstream, textMaxBytes, responseBudget(context));
   refuseCredentialEcho(body, target.credentialForms, target.credentialByteForms);
+  // The tarballs move onto the relay base the run was given, on the bound origin, never onto the
+  // request's Host: a proxy in front of Keiko rewrites that header (the dev runner names the BFF's
+  // port), and npm sends the run's capability only to the origin its configuration names (#4530).
   if (path.kind === "npm-packument")
     body = rewritePackument(
       body,
       target.baseUrl,
-      relayBaseFor(context.request, context.relayId),
+      repositoryRelayBaseUrl(target.ownOrigin, context.relayId),
     ).body;
   response.writeHead(upstream.status, { ...headers, "content-length": String(body.length) });
   await writeChunk(response, body, responseBudget(context).stallMs ?? 0);

@@ -119,6 +119,31 @@ describe("rewritePackument (#4522)", () => {
     expect(result.body.toString()).toContain("https://elsewhere.example.test/pkg-2.0.0.tgz");
   });
 
+  // CodeRabbit on #4537: a literal prefix missed a tarball that names the same registry in another
+  // spelling, so npm fetched it without the run's capability. Scheme and host compare
+  // case-insensitively and a default port is the same origin; the path stays case-sensitive, and a
+  // dot segment cannot climb out of the registry path.
+  it.each([
+    ["an upper-case host and scheme", "HTTPS://NPM.EXAMPLE.TEST/registry/pkg/-/pkg-1.0.0.tgz"],
+    ["the explicit default port", "https://npm.example.test:443/registry/pkg/-/pkg-1.0.0.tgz"],
+  ])("moves a tarball that spells the upstream with %s", (_name, tarball) => {
+    const result = rewrite({ versions: { "1.0.0": { dist: { tarball } } } });
+    expect(result.rewritten).toBe(1);
+    expect(result.body.toString()).toContain(`${RELAY}pkg/-/pkg-1.0.0.tgz`);
+  });
+
+  it.each([
+    ["another path case", "https://npm.example.test/REGISTRY/pkg/-/pkg-1.0.0.tgz"],
+    ["a dot segment out of the path", "https://npm.example.test/registry/../other/pkg-1.0.0.tgz"],
+    ["another port", "https://npm.example.test:8443/registry/pkg/-/pkg-1.0.0.tgz"],
+    ["another scheme", "http://npm.example.test/registry/pkg/-/pkg-1.0.0.tgz"],
+    ["no URL", "registry/pkg/-/pkg-1.0.0.tgz"],
+  ])("leaves a tarball with %s alone", (_name, tarball) => {
+    const result = rewrite({ versions: { "1.0.0": { dist: { tarball } } } });
+    expect(result.rewritten).toBe(0);
+    expect(result.body.toString()).not.toContain(RELAY);
+  });
+
   it("passes a document whose versions or dist are not records through unchanged", () => {
     expect(rewrite({ name: "x" }).rewritten).toBe(0);
     expect(rewrite({ versions: ["a"] }).rewritten).toBe(0);
