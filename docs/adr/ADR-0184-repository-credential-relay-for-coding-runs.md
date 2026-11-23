@@ -102,9 +102,14 @@ authenticates the capability itself.
 - **Paths.** The path must match the layout grammar of its ecosystem: Maven artifacts, POMs,
   checksums, signatures and metadata; npm packuments and tarballs. Nothing is decoded or
   normalised, and a dot segment, an encoded slash outside a scoped npm name, an absolute URL or a
-  directory request is refused. The path kind decides how the body is read: POMs, metadata, module
-  files and checksums are text; jars and other files are binary; packuments are text; tarballs are
-  binary.
+  directory request is refused. An npm tarball path names its package exactly: everything before
+  the `-` directory is the name, so `pkg/extra/-/pkg-1.0.0.tgz` is refused. An npm tarball may also
+  arrive under the registry's own base path (`repository/npm-group/pkg/-/pkg-1.0.0.tgz` for a
+  registry at `.../repository/npm-group/`): that is how npm sends a tarball its lockfile pins once
+  `replace-registry-host` moves the pinned URL onto the relay, keeping the URL's path (#4491). Only a
+  tarball shape directly under that base path is admitted, relative to the base. The path kind
+  decides how the body is read: POMs, metadata, module files and checksums are text; jars and other
+  files are binary; packuments are text; tarballs are binary.
 - **Redirects.** At most three. A same-origin redirect keeps the credential. A cross-origin
   redirect is followed only to `https`, never to Keiko's own origin, and without the credential.
   The network rule: a public upstream may be redirected only to public addresses, a private one
@@ -175,7 +180,17 @@ to a file of the run.
 - **npm.** `registry` and each `@scope:registry` point at their relay URLs, and
   `//127.0.0.1:<port>/api/coding-sidecar/repository/<id>/:_authToken=<capability>` carries the
   capability under the exact host spelling npm derives from the relay URL. `audit=false`, because
-  the relay refuses a POST. `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run, extending
+  the relay refuses a POST, and `update-notifier=false`, because npm's update check reads npm's own
+  packument (tens of megabytes) through the relay from the person's registry on every run (#4491).
+  A lockfile pins each tarball on the registry's own URL, and npm moves only `registry.npmjs.org`
+  onto the configured registry by default, so a lockfile written against the person's registry
+  would fetch its tarballs from there directly: without the credential, and below Full access
+  without a network. When the default `registry` is bound, the config therefore also carries
+  `replace-registry-host`: `always` below Full access, where the run has no other way out, and the
+  default registry's host name at Full access, so a git or public tarball keeps its own host there.
+  A scoped registry under another base path than the default one is not covered for a lockfile:
+  its pinned tarballs arrive under the default registry's binding and are refused
+  (`path-unsupported`). `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run, extending
   the inherited list.
   The runtime's environment carries `npm_config_offline=true` below Full access, and npm reads the
   environment before its user config, so the config alone would leave a shell's `npm install` offline.
@@ -199,7 +214,8 @@ to a file of the run.
 - **Activity Log.** The `coding-runtime.native-build-settings.admitted` line gains
   `relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and `relayRefusalReasons`, a closed
   list: the resolution refusals (including the informational `profile-inactive`) plus
-  `bind-refused`, `id-missing`, `id-ambiguous` and `rewrite-missed`.
+  `bind-refused`, `id-missing`, `id-ambiguous` and `rewrite-missed`, and `relayNpmLockfileRouting`
+  (`always`, `registry-host` or `npm-default`), how npm routes a tarball a lockfile pins.
 
 ### D6 — Modes
 

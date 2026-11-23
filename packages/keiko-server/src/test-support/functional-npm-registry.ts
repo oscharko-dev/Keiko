@@ -28,10 +28,15 @@ export interface FunctionalNpmRegistryOptions {
   readonly version?: string;
   /** The package's `index.js`, a CommonJS module. */
   readonly moduleSource?: string;
+  /**
+   * The path the registry is served under, such as `/repository/npm-group` for a Nexus group;
+   * empty (the root) by default. No trailing slash.
+   */
+  readonly basePath?: string;
 }
 
 export interface FunctionalNpmRegistry {
-  /** `http://127.0.0.1:<port>`: the registry's URL, without a trailing slash. */
+  /** `http://127.0.0.1:<port>` and the base path: the registry's URL, without a trailing slash. */
   readonly url: string;
   /** Every request received, in order. */
   readonly seen: readonly FunctionalNpmRequest[];
@@ -100,9 +105,10 @@ function routeRequest(
 ): NpmAnswer {
   if (request.headers.authorization !== `Bearer ${options.token}`) return [401, {}];
   const bareName = options.packageName.split("/").at(-1) ?? options.packageName;
+  const basePath = options.basePath ?? "";
   const tarballPath = `/${options.packageName}/-/${bareName}-${version}.tgz`;
   const path = decodedPath(request.url ?? "");
-  if (path === `/${options.packageName}`) {
+  if (path === `${basePath}/${options.packageName}`) {
     const dist = {
       tarball: `${base}${tarballPath}`,
       integrity: tarball.integrity,
@@ -115,7 +121,7 @@ function routeRequest(
     });
     return [200, { "content-type": "application/json" }, body];
   }
-  if (path === tarballPath) {
+  if (path === `${basePath}${tarballPath}`) {
     return [200, { "content-type": "application/octet-stream" }, tarball.bytes];
   }
   return [404, {}];
@@ -144,7 +150,7 @@ export async function startFunctionalNpmRegistry(
     server.once("error", failed);
     server.listen(0, "127.0.0.1", ready);
   });
-  base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
+  base = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}${options.basePath ?? ""}`;
   return {
     url: base,
     seen,

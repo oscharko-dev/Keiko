@@ -15,8 +15,12 @@ import {
   type NativeRelayRefusalReason,
   MAVEN_PREEMPTIVE_AUTH_PROPERTIES,
   NATIVE_RELAY_REFUSAL_REASONS,
+  NPM_LOCKFILE_ROUTINGS,
+  npmLockfileRegistryHost,
+  npmLockfileRouting,
   relayMavenSettings,
   relayNpmConfig,
+  type NpmLockfileRouting,
   withLoopbackNoProxy,
   type BoundRepositories,
   type NativeRepositoryRelayInput,
@@ -323,6 +327,14 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
     // The repository credential relay (#4522): present when the run was offered one.
     relayMavenBoundCount: { type: "integer", dataClass: "count", required: false },
     relayNpmBoundCount: { type: "integer", dataClass: "count", required: false },
+    // How npm routes a tarball a lockfile pins (#4491): onto the relay always, for the default
+    // registry's host only, or npm's own default.
+    relayNpmLockfileRouting: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...NPM_LOCKFILE_ROUTINGS],
+    },
     relayRefusedCount: { type: "integer", dataClass: "count", required: false },
     relayRefusalReasons: {
       type: "string-array",
@@ -367,6 +379,7 @@ export interface NativeBuildSettingsInput {
 export interface NativeRelayBindingSummary {
   readonly mavenBoundCount: number;
   readonly npmBoundCount: number;
+  readonly npmLockfileRouting: NpmLockfileRouting;
   readonly refusals: readonly string[];
 }
 
@@ -486,15 +499,7 @@ export function prepareNativeBuildSettings(
     npmConfig: npm.disposition,
     gradleProperties: gradle.disposition,
     ...droppedCounts(maven, npm, gradle),
-    ...(bound === undefined
-      ? {}
-      : {
-          relay: {
-            mavenBoundCount: bound.maven.length,
-            npmBoundCount: bound.npm.length,
-            refusals: bound.refusals,
-          },
-        }),
+    ...(bound === undefined ? {} : { relay: relaySummary(bound, input.mode) }),
   };
   recordNativeBuildSettingsAdmitted(input, result);
   return result;
@@ -565,12 +570,13 @@ function relayedAdmissions(
     return { maven: sources.maven.value?.text, npm: sources.npm.value?.text, bound };
   }
   const maven = relayedMaven(sources, run, bound, relay);
+  const lockfileHost = npmLockfileRegistryHost(bound.npm, nativeBuildCacheAdmitted(input.mode));
   return {
     maven: maven.text,
     npm:
       bound.npm.length === 0
         ? sources.npm.value?.text
-        : relayNpmConfig(sources.npm.value?.text ?? "", bound.npm, relay),
+        : relayNpmConfig(sources.npm.value?.text ?? "", bound.npm, relay, lockfileHost),
     bound: {
       ...bound,
       maven: maven.bound,
@@ -742,11 +748,25 @@ function compareCodeUnits(left: string, right: string): number {
   return Number(left > right) - Number(left < right);
 }
 
+function relaySummary(
+  bound: BoundRepositories,
+  mode: string | undefined,
+): NativeRelayBindingSummary {
+  const lockfileHost = npmLockfileRegistryHost(bound.npm, nativeBuildCacheAdmitted(mode));
+  return {
+    mavenBoundCount: bound.maven.length,
+    npmBoundCount: bound.npm.length,
+    npmLockfileRouting: npmLockfileRouting(lockfileHost),
+    refusals: bound.refusals,
+  };
+}
+
 function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<string, unknown> {
   if (relay === undefined) return {};
   return {
     relayMavenBoundCount: relay.mavenBoundCount,
     relayNpmBoundCount: relay.npmBoundCount,
+    relayNpmLockfileRouting: relay.npmLockfileRouting,
     relayRefusedCount: relay.refusals.length,
     ...(relay.refusals.length === 0
       ? {}

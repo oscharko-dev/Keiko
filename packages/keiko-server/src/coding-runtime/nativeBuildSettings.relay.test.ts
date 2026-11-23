@@ -293,6 +293,7 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
     expect(refused.result.relay).toEqual({
       mavenBoundCount: 0,
       npmBoundCount: 0,
+      npmLockfileRouting: "npm-default",
       refusals: ["url-interpolated"],
     });
   });
@@ -345,6 +346,8 @@ describe("the run's npm config with the repository relay (#4522)", () => {
     expect(config).not.toContain("npm.corp.example");
     expect(lines).toContain("audit=false");
     expect(lines).not.toContain("audit=true");
+    // npm's update check would read npm's own packument through the relay on every run (#4491).
+    expect(lines).toContain("update-notifier=false");
     expect(lines).toContain("strict-ssl=true");
     expect(run.result.relay).toMatchObject({ mavenBoundCount: 0, npmBoundCount: 2 });
   });
@@ -387,6 +390,56 @@ describe("the run's npm config with the repository relay (#4522)", () => {
   });
 });
 
+// #4491 (Nexus lab): npm fetches a tarball its lockfile pins from the pinned URL and moves only
+// registry.npmjs.org onto the configured registry by default, so a lockfile written against the
+// person's own registry went around the relay: without the credential, and below Full access
+// without a network.
+describe("a tarball a lockfile pins (#4491)", () => {
+  const lines = (run: Run): string[] => run.npmConfig().split("\n");
+
+  it.each(["governed-assist", "supervised-coding"])(
+    "moves every pinned tarball onto the relay in %s",
+    (mode) => {
+      const run = prepare(person({ npm: NPMRC }), { mode });
+      expect(lines(run)).toContain("replace-registry-host=always");
+      expect(run.npmConfig()).not.toContain("npm.corp.example");
+      expect(run.result.relay?.npmLockfileRouting).toBe("always");
+      expect(run.lines[0]?.extra).toMatchObject({ relayNpmLockfileRouting: "always" });
+    },
+  );
+
+  it("moves only the default registry's host onto the relay with Full access", () => {
+    const run = prepare(person({ npm: NPMRC }), { mode: "autonomous-delivery" });
+    expect(lines(run)).toContain("replace-registry-host=npm.corp.example");
+    expect(lines(run).filter((line) => line.startsWith("replace-registry-host="))).toHaveLength(1);
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmLockfileRouting: "registry-host" });
+  });
+
+  it("writes the setting only when the default registry is bound, never the person's own", () => {
+    // The sanitizer keeps no `replace-registry-host` of the person's: only Keiko's reaches the run.
+    const own = "replace-registry-host=never\n";
+    const bound = prepare(person({ npm: `${own}${NPMRC}` }));
+    expect(lines(bound).filter((line) => line.startsWith("replace-registry-host="))).toEqual([
+      "replace-registry-host=always",
+    ]);
+    const scopedOnly = prepare(
+      person({
+        npm: `${own}@corp:registry=https://npm.corp.example/scoped/\n//npm.corp.example/scoped/:_authToken=${NPM_TOKEN}\n`,
+      }),
+    );
+    expect(scopedOnly.npmConfig()).not.toContain("replace-registry-host");
+    expect(scopedOnly.result.relay?.npmLockfileRouting).toBe("npm-default");
+  });
+
+  it("keeps npm's default for the public registry with Full access", () => {
+    const run = prepare(person({ npm: "registry=https://registry.npmjs.org/\n" }), {
+      mode: "autonomous-delivery",
+    });
+    expect(run.npmConfig()).not.toContain("replace-registry-host");
+    expect(run.result.relay?.npmLockfileRouting).toBe("npm-default");
+  });
+});
+
 describe("what stays as it was (#4522)", () => {
   it("changes nothing when no repository resolves", () => {
     const home = person({
@@ -407,7 +460,12 @@ describe("what stays as it was (#4522)", () => {
     expect(normalized(withRelay, withRelay.result.javaProperties)).toBe(
       normalized(without, without.result.javaProperties),
     );
-    expect(withRelay.result.relay).toEqual({ mavenBoundCount: 0, npmBoundCount: 0, refusals: [] });
+    expect(withRelay.result.relay).toEqual({
+      mavenBoundCount: 0,
+      npmBoundCount: 0,
+      npmLockfileRouting: "npm-default",
+      refusals: [],
+    });
   });
 
   it("changes nothing when the run is not offered a relay", () => {
@@ -522,6 +580,7 @@ describe("release and refusal (#4522)", () => {
     expect(result.relay).toEqual({
       mavenBoundCount: 0,
       npmBoundCount: 0,
+      npmLockfileRouting: "npm-default",
       refusals: ["bind-refused"],
     });
     expect(existsSync(result.env.NPM_CONFIG_USERCONFIG ?? "")).toBe(true);

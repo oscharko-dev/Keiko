@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "43d7fdae1946664b868c5c78463e23e46c5987f90d0d6b2aab91589af742ba0f",
+    "catalogDigest": "fe13465c1d94885288feea4e3d3ddc8bb7471bf85fbb176f5148770f4b330f1e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13418,6 +13418,12 @@
             "dataClass": "count",
             "required": false
           },
+          "relayNpmLockfileRouting": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["always", "registry-host", "npm-default"]
+          },
           "relayRefusedCount": {
             "type": "integer",
             "dataClass": "count",
@@ -13455,8 +13461,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:276",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:720"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:280",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:726"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -79320,6 +79326,12 @@
                   "required": false
                 },
                 {
+                  "name": "relayNpmLockfileRouting",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "relayRefusalReasons",
                   "type": "string-array",
                   "dataClass": "closed-enum",
@@ -124379,14 +124391,14 @@
     {
       "op": "coding-runtime.native-build-settings",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:413",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:426",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-build-settings.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:279",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:283",
       "package": "keiko-server"
     },
     {

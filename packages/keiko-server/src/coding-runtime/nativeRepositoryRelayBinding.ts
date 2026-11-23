@@ -54,6 +54,8 @@ export interface BoundMavenRepository {
 export interface BoundNpmRegistry {
   /** `registry`, or the lower-cased `@scope:registry` key. */
   readonly key: string;
+  /** The normalised upstream URL of the registry. */
+  readonly url: string;
   readonly relayId: string;
   readonly capability: string;
 }
@@ -158,7 +160,7 @@ function bindNpm(
   for (const repository of resolution.repositories) {
     const binding = bindOne(input, sources, repository);
     if (binding === undefined) refusals.push("bind-refused");
-    else bound.push({ key: npmKey(repository), ...binding });
+    else bound.push({ key: npmKey(repository), url: repository.url, ...binding });
   }
   return bound;
 }
@@ -357,17 +359,56 @@ function npmLineKey(line: string): string {
   return (index < 0 ? line : line.slice(0, index)).trim().toLowerCase();
 }
 
+/** How npm routes a tarball a lockfile pins: a closed value for the admission line. */
+export const NPM_LOCKFILE_ROUTINGS = ["always", "registry-host", "npm-default"] as const;
+export type NpmLockfileRouting = (typeof NPM_LOCKFILE_ROUTINGS)[number];
+
+const PUBLIC_NPM_REGISTRY_HOST = "registry.npmjs.org";
+
+/**
+ * The `replace-registry-host` a run's npm needs so a tarball its lockfile pins reaches the relay
+ * (#4491). npm moves only `registry.npmjs.org` onto the configured registry by default, so a lockfile
+ * written against the person's own registry would fetch its tarballs from that registry directly:
+ * without the person's credential, and below Full access without a network. Below Full access every
+ * pinned tarball moves onto the relay (`always`; the run has no other way out). With Full access only
+ * the default registry's host does, so a git or public tarball keeps its own host. Undefined leaves
+ * npm's default, as when the default registry is not bound or is the public one.
+ */
+export function npmLockfileRegistryHost(
+  bound: readonly BoundNpmRegistry[],
+  networkless: boolean,
+): string | undefined {
+  const registry = bound.find((entry) => entry.key === "registry");
+  if (registry === undefined) return undefined;
+  if (networkless) return "always";
+  const host = new URL(registry.url).hostname;
+  return host === PUBLIC_NPM_REGISTRY_HOST ? undefined : host;
+}
+
+export function npmLockfileRouting(host: string | undefined): NpmLockfileRouting {
+  if (host === undefined) return "npm-default";
+  return host === "always" ? "always" : "registry-host";
+}
+
 /**
  * The sanitized `.npmrc` with each bound registry on the relay and the run's capability as its
  * token under the key npm derives from the relay's address. The relay refuses a POST, so the audit
- * request is switched off.
+ * request is switched off; npm's update check is too, since it reads npm's own packument (tens of
+ * megabytes) through the relay from the person's registry on every run (#4491). `lockfileHost` is
+ * the run's `npmLockfileRegistryHost`.
  */
 export function relayNpmConfig(
   sanitizedText: string,
   bound: readonly BoundNpmRegistry[],
   input: NativeRepositoryRelayInput,
+  lockfileHost?: string,
 ): string {
-  const replaced = new Set([...bound.map((entry) => entry.key.toLowerCase()), "audit"]);
+  const lockfile = lockfileHost === undefined ? [] : [`replace-registry-host=${lockfileHost}`];
+  const replaced = new Set([
+    ...bound.map((entry) => entry.key.toLowerCase()),
+    "audit",
+    "update-notifier",
+  ]);
   const kept = sanitizedText
     .split("\n")
     .filter((line) => line.trim() !== "" && !replaced.has(npmLineKey(line)));
@@ -379,7 +420,8 @@ export function relayNpmConfig(
       `//${host}${new URL(base).pathname}:_authToken=${entry.capability}`,
     ];
   });
-  return `${[...kept, "audit=false", ...relayed].join("\n")}\n`;
+  const quiet = ["audit=false", "update-notifier=false"];
+  return `${[...kept, ...quiet, ...relayed, ...lockfile].join("\n")}\n`;
 }
 
 /** A proxy list the run's tools consult, with loopback added so the relay is never proxied. */

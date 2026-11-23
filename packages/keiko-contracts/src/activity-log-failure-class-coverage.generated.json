@@ -14534,6 +14534,12 @@
               "required": false
             },
             {
+              "name": "relayNpmLockfileRouting",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "relayRefusalReasons",
               "type": "string-array",
               "dataClass": "closed-enum",

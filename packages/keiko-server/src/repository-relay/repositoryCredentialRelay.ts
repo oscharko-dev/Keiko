@@ -517,13 +517,14 @@ function requestMethod(request: IncomingMessage): RepositoryRelayMethod {
 function admittedPath(
   request: IncomingMessage,
   relayId: string,
-  ecosystem: RepositoryEcosystem,
+  target: Pick<RepositoryRelayTarget, "ecosystem" | "upstreamBaseUrl">,
 ): RepositoryPathAdmission & { readonly ok: true } {
   const raw = request.url ?? "";
   if (raw.includes("?")) throw refusal("query-refused");
   const prefix = `${REPOSITORY_RELAY_PATH_PREFIX}${relayId}/`;
   if (!raw.startsWith(prefix)) throw refusal("path-invalid");
-  const admitted = admitRepositoryPath(ecosystem, raw.slice(prefix.length));
+  const basePath = new URL(target.upstreamBaseUrl).pathname.slice(1);
+  const admitted = admitRepositoryPath(target.ecosystem, raw.slice(prefix.length), basePath);
   if (!admitted.ok) throw refusal(admitted.reason);
   return admitted;
 }
@@ -1048,7 +1049,7 @@ async function handleRequest(
   if (stats.requests > REPOSITORY_RELAY_BINDING_MAX_REQUESTS) throw refusal("budget-exhausted");
   const method = requestMethod(request);
   state.method = method;
-  const path = admittedPath(request, relayId, admission.target.ecosystem);
+  const path = admittedPath(request, relayId, admission.target);
   const slot = await (options.gate ?? processRelayGate()).acquire(admission.target, bound.signal);
   let verdict: "denied" | "ok";
   try {
