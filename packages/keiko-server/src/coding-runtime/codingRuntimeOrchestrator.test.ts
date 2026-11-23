@@ -5355,6 +5355,25 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     );
   });
 
+  it("settles a turn that completes while the run is paused as succeeded, not recovery-required", async () => {
+    const f = fixture();
+    let finish: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    await f.orchestrator.start(start);
+    const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(paused).state).toBe("paused");
+
+    finish?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).not.toBe("paused");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+  });
+
   it("stops the paused manager when the durable resumed state cannot be published", async () => {
     const f = await runningFixture();
     await f.orchestrator.pause("run-1", { requestId: "run-1" });

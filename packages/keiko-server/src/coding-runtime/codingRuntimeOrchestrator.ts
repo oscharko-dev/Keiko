@@ -2070,15 +2070,6 @@ type DeliveryEvidence =
 type DeliveryContinuationRefusal =
   "dispatch-threw" | "dispatch-refused" | "evidence-unreadable" | "run-superseded";
 
-// A settlement target is taken only when the delivery evidence could be read and the transition to
-// it is legal; anything else asks for recovery.
-function isLegalSettlementTarget<T extends { readonly state: CodingWorkbenchRuntimeStateName }>(
-  live: CodingRuntimeSnapshot,
-  target: T | undefined,
-): target is T {
-  return target !== undefined && isLegalCodingWorkbenchRuntimeTransition(live.state, target.state);
-}
-
 interface DeliveryContinuationFields {
   readonly runId: string;
   readonly issueNumber?: number;
@@ -3745,19 +3736,61 @@ export class CodingRuntimeOrchestrator {
       this.settleCancelledTurn(live);
       return;
     }
-    if (!isLegalSettlementTarget(live, target)) {
+    this.settleReachableTarget(live, target, cause, verificationFailure);
+  }
+
+  private settleReachableTarget(
+    live: CodingRuntimeSnapshot,
+    target:
+      | {
+          readonly state: CodingWorkbenchRuntimeStateName;
+          readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+        }
+      | undefined,
+    cause: RunSettlementCause | undefined,
+    verificationFailure: VerificationFailureSettlement | undefined,
+  ): void {
+    if (target === undefined || !this.isReachableSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
+    // The runtime already stopped for this settlement, so a turn that ended while the run waited
+    // (`paused`, `awaiting-approval`) reaches its outcome through `stopping`, as a cancellation does.
+    const settling = this.enterStoppingForSettlement(live, target.state);
+    if (settling === undefined) return;
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
     this.transition(
-      live,
+      settling,
       target.state,
       target.failureCode,
       undefined,
       settledCause,
       verificationFailure?.gap,
     );
+  }
+
+  private isReachableSettlementTarget(
+    live: CodingRuntimeSnapshot,
+    target: { readonly state: CodingWorkbenchRuntimeStateName },
+  ): boolean {
+    return (
+      isLegalCodingWorkbenchRuntimeTransition(live.state, target.state) ||
+      (isLegalCodingWorkbenchRuntimeTransition(live.state, "stopping") &&
+        isLegalCodingWorkbenchRuntimeTransition("stopping", target.state))
+    );
+  }
+
+  /** Returns the snapshot the settlement continues from, or undefined once recovery was requested. */
+  private enterStoppingForSettlement(
+    live: CodingRuntimeSnapshot,
+    target: CodingWorkbenchRuntimeStateName,
+  ): CodingRuntimeSnapshot | undefined {
+    if (isLegalCodingWorkbenchRuntimeTransition(live.state, target)) return live;
+    const stopping = this.transition(live, "stopping");
+    const current = stopping.ok ? this.current() : undefined;
+    if (current?.runId === live.runId) return current;
+    if (!stopping.ok) this.transition(live, "recovery-required", "recovery-required");
+    return undefined;
   }
 
   private runtimeAgrees(
