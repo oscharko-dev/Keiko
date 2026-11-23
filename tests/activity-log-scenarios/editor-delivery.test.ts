@@ -302,6 +302,74 @@ describe("Activity Log scenario: editor-delivery", () => {
       );
     });
 
+    // #4522: on that Mac the verifier installs a missing tree for the run's own shell. A lockfile
+    // that no longer records the manifest refuses that install before npm runs; the dependencies
+    // line carries the closed reason and the shell consumer on the request's correlation, so the
+    // analyzer shows why the shell's check had no tree.
+    it("reconstructs a refused install for the run's shell to a dependency-failure trace", async () => {
+      const root = realpathSync(makeTempDir("keiko-scenario-editor-host-shell-"));
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "fixture",
+          scripts: { test: "node --version" },
+          dependencies: { semver: "7.6.3" },
+        }),
+      );
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "fixture" } } }),
+      );
+      const isolation = {
+        probe: { available: false, backend: "container-docker", engine: "refused" },
+        durationMs: 2,
+      } as const;
+      const store = createInMemoryUiStore();
+      cleanups.push(() => {
+        store.close();
+      });
+      store.createProject(root, "fixture");
+      const manager = createVerificationRunnerManager({
+        store,
+        evidenceStore: createInMemoryEvidenceStore(),
+        activityLog: processServerLogSink(),
+        isWorkspaceTrustedForPackageScripts: () => false,
+        probeIsolation: () => Promise.resolve(isolation),
+      });
+      const startedAtMs = Date.now();
+
+      const result = await manager.runToReport(
+        {
+          projectId: root,
+          kinds: ["test"],
+          correlationId: "editor-delivery-host-shell-0001",
+          sharedHostPlatform: { os: "darwin", cpu: "arm64" },
+        },
+        new AbortController().signal,
+      );
+      expect(result.report.dependencies).toMatchObject({
+        state: "refused",
+        refusalReason: "lockfile-mismatch",
+        consumer: "host-shell",
+      });
+
+      const op = "editor.verification.dependencies";
+      await expectActivityLogScenario("editor-delivery.dependency-failure", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["editor.verification.execute", op],
+      });
+      const [line] = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+      expect(
+        expectActivityLogProof("editor.verification.dependencies.emitted-line", line ?? ""),
+      ).toMatchObject({
+        correlationId: "editor-delivery-host-shell-0001",
+        state: "refused",
+        refusalReason: "lockfile-mismatch",
+        consumer: "host-shell",
+      });
+    });
+
     it("reconstructs a failed git process to a complete dependency-failure trace", async () => {
       const startedAtMs = Date.now();
       const runner: GitProcessRunner = () => Promise.resolve(failedGitResult());
