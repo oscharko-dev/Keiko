@@ -426,8 +426,9 @@ function consumesTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
 /**
  * Clears the composer's draft once the draft-consuming mutation that WAS pending settles as a
  * success (`mutation-complete` → status "idle"), and only when the draft is still the text that
- * mutation consumed: a failure (`mutation-failed` → status "error") keeps it so the operator can
- * fix and resend, and text added while the mutation was in flight (dictation) is never wiped.
+ * mutation consumed: a failure (`mutation-failed` → status "error") and a cancelled Start
+ * (`mutation-cancelled`) keep it so the operator can fix and resend, and text added while the
+ * mutation was in flight (dictation) is never wiped.
  * Without this, the draft stayed put after every completed Start, Retry or paused-run Send —
  * indistinguishable from an unsent draft, and re-submittable as a brand-new follow-up by mistake.
  */
@@ -446,7 +447,7 @@ function useClearTaskIntentOnMutationSuccess(
       return;
     }
     if (consumesTaskIntent(previous) && mutation.status === "idle") {
-      if (submittedRef.current === taskIntent) setTaskIntent("");
+      if (mutation.cancelled !== true && submittedRef.current === taskIntent) setTaskIntent("");
       submittedRef.current = null;
     }
   }, [mutation, setTaskIntent, taskIntent]);

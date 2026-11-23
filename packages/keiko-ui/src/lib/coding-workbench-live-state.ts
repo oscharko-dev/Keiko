@@ -134,6 +134,11 @@ export interface CodingWorkbenchMutationState {
    * longer exists. A snapshot that merely repeats the revision proves nothing and keeps the alert.
    */
   readonly failedAgainst?: { readonly runId: string | null; readonly revision: number };
+  /**
+   * The person cancelled the pending Start: the mutation is idle again without having succeeded,
+   * so nothing that reads "pending → idle" as success (clearing the composer draft) may act on it.
+   */
+  readonly cancelled?: true;
 }
 
 export interface CodingWorkbenchRuntimeState {
@@ -216,6 +221,7 @@ export type CodingWorkbenchRuntimeStateAction =
       readonly requestId: string;
     }
   | { readonly kind: "mutation-complete" }
+  | { readonly kind: "mutation-cancelled" }
   | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
   | { readonly kind: "events-reset" }
@@ -237,6 +243,8 @@ const IDLE_MUTATION: CodingWorkbenchMutationState = {
   requestId: null,
   error: null,
 };
+
+const CANCELLED_MUTATION: CodingWorkbenchMutationState = { ...IDLE_MUTATION, cancelled: true };
 
 export function createInitialCodingWorkbenchRuntimeState(
   requestedMode: CodingWorkbenchMode = "supervised-coding",
@@ -720,6 +728,8 @@ const runtimeActionHandlers = {
     }),
   "mutation-complete": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: IDLE_MUTATION }),
+  "mutation-cancelled": (state): CodingWorkbenchRuntimeState =>
+    projectReadiness({ ...state, mutation: CANCELLED_MUTATION }),
   "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,

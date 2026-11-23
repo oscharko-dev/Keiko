@@ -1385,6 +1385,35 @@ describe("CodingWorkbenchWindow", () => {
     expect(taskInput).toHaveValue("");
   });
 
+  // A cancelled Start returns the mutation to idle without succeeding: the person's text stays so
+  // they can change and resend it.
+  it("keeps the composer draft when the person cancels a pending Start", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "idle", kind: null, requestId: null, error: null, cancelled: true },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(taskInput).toHaveValue("Investigate the failing test");
+  });
+
   it("restores the unsent task text after a reload while Start was pending (#4271)", async () => {
     const user = userEvent.setup();
     const liveActions = actions();
