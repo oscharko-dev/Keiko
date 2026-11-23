@@ -325,13 +325,36 @@ describe("nodeWorkspaceFs", () => {
     );
   });
 
+  // Both tests below need a rewrite that demonstrably moved the change time, and no platform lets
+  // userland set `ctime` to make that happen in one step. NTFS stamps it from a coarse clock
+  // granule, so a single rewrite frequently lands in the granule the fixture was created in and
+  // leaves `ctimeNs` exactly where it was — measured here as unchanged in 25 of 50 rewrites, which
+  // is what turned the Windows leg red once #4432 put this suite on it. Rewriting until the clock
+  // moves keeps the precondition falsifiable on every platform, where branching the assertion on
+  // `process.platform` would instead drop the change-time term on the one host that reuses it.
+  function rewriteUntilChangeTimeMoves(
+    file: string,
+    before: WorkspaceStat,
+    rewrite: () => void,
+  ): WorkspaceStat {
+    // Bounded, so a host that reports no change time at all fails the assertion below rather than
+    // spinning here. One granule costs a handful of iterations.
+    for (let attempt = 0; attempt < 1_000; attempt += 1) {
+      rewrite();
+      const observed = nodeWorkspaceFs.stat(file);
+      if (observed.ctimeNs !== before.ctimeNs) return observed;
+    }
+    return nodeWorkspaceFs.stat(file);
+  }
+
   it("does not move when the file's content and every timestamp move", () => {
     const { file } = workspaceFixture();
     const before = nodeWorkspaceFs.stat(file);
 
-    writeFileSync(file, "rewritten with a different length", "utf8");
-    utimesSync(file, new Date(0), new Date(0));
-    const after = nodeWorkspaceFs.stat(file);
+    const after = rewriteUntilChangeTimeMoves(file, before, () => {
+      writeFileSync(file, "rewritten with a different length", "utf8");
+      utimesSync(file, new Date(0), new Date(0));
+    });
 
     // The rewrite has to have actually moved the fields an identity must not be built from,
     // otherwise this passes for the wrong reason.
@@ -352,17 +375,15 @@ describe("nodeWorkspaceFs", () => {
     // nothing further to prove on this host.
     if (before.birthtimeNs === undefined) return;
 
-    writeFileSync(file, "rewritten in place", "utf8");
     // A LATER timestamp on purpose: on macOS (APFS keeps the creation time at or before the
     // modification time) a utimes to a time before the file was created moves the creation time
     // back with it — to the epoch here, which the producer then reports as absent. Measured in
     // review; the guard under test is the in-place rewrite, not that platform rule.
-    utimesSync(file, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
-    const rewritten = nodeWorkspaceFs.stat(file);
-    // NTFS stamps the change time from the system clock tick (about 15.6 ms), so a rewrite inside
-    // one tick keeps it; the modification time the utimes above moved still shows the rewrite.
-    if (process.platform === "win32") expect(rewritten.mtimeNs).not.toBe(before.mtimeNs);
-    else expect(rewritten.ctimeNs).not.toBe(before.ctimeNs);
+    const rewritten = rewriteUntilChangeTimeMoves(file, before, () => {
+      writeFileSync(file, "rewritten in place", "utf8");
+      utimesSync(file, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    });
+    expect(rewritten.ctimeNs).not.toBe(before.ctimeNs);
     expect(rewritten.birthtimeNs).toBe(before.birthtimeNs);
 
     // NTFS file-name tunneling hands a file recreated under the same name within 15 seconds the
