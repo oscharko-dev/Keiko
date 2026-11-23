@@ -52,6 +52,7 @@ import {
 import { awaitIndependentQualificationReview } from "./coding-issue-journey-independent-review.js";
 import { observeQualificationFlowAuthority } from "./coding-issue-journey-live-authority.js";
 import { proposeJourneyReady } from "./coding-issue-journey-live-mark-ready.js";
+import { pollUntilObserved } from "./live-poll.js";
 import {
   type DeliveredPullRequest,
   openGovernedGitWindow,
@@ -526,19 +527,20 @@ async function controlledBaseIsBehind(page: Page, sync: Locator): Promise<boolea
     throw new Error("the sync control states no synchronization verdict to read");
   }
   const verdictNode = page.locator(`[id="${describedBy}"]`);
-  const deadline = Date.now() + 60_000;
-  for (;;) {
-    const text = ((await verdictNode.textContent()) ?? "").trim();
-    const verdict = classifySyncVerdict(text);
-    if (verdict === "current") return false;
-    if (verdict === "behind") return true;
-    if (Date.now() > deadline) {
-      throw new Error(
-        `the sync control never settled on a synchronization verdict (observed: ${text === "" ? "nothing" : text})`,
-      );
-    }
-    await page.waitForTimeout(500);
+  let text = "";
+  const settled = await pollUntilObserved(
+    async () => {
+      text = ((await verdictNode.textContent()) ?? "").trim();
+      return classifySyncVerdict(text) !== "pending";
+    },
+    { timeoutMs: 60_000, intervalMs: 500 },
+  );
+  if (!settled) {
+    throw new Error(
+      `the sync control never settled on a synchronization verdict (observed: ${text === "" ? "nothing" : text})`,
+    );
   }
+  return classifySyncVerdict(text) === "behind";
 }
 
 /**
@@ -553,24 +555,29 @@ async function controlledBaseIsBehind(page: Page, sync: Locator): Promise<boolea
  */
 async function previewUntilMergeable(page: Page, card: Locator): Promise<void> {
   const readiness = card.getByTestId("gm-readiness");
-  const deadline = Date.now() + 10 * 60_000;
-  for (;;) {
-    const previewed = page.waitForResponse(
-      (response) =>
-        response.request().method() === "POST" &&
-        response.url().endsWith("/api/git-delivery/merge/preview"),
-      { timeout: 120_000 },
-    );
-    await card.getByRole("button", { name: "Preview", exact: true }).click();
-    const response = await previewed;
-    expect(response.ok(), `merge preview failed with HTTP ${String(response.status())}`).toBe(true);
-    if (((await readiness.textContent()) ?? "").includes("Mergeable: yes")) return;
-    if (Date.now() > deadline) {
-      throw new Error(
-        `the governed merge card never reported the pull request mergeable: ${(await readiness.textContent()) ?? ""}`,
+  // One preview per observation, fifteen seconds apart: the cadence an operator re-previews at,
+  // and the one that keeps this lane clear of GitHub's secondary rate limit.
+  const mergeable = await pollUntilObserved(
+    async () => {
+      const previewed = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response.url().endsWith("/api/git-delivery/merge/preview"),
+        { timeout: 120_000 },
       );
-    }
-    await page.waitForTimeout(15_000);
+      await card.getByRole("button", { name: "Preview", exact: true }).click();
+      const response = await previewed;
+      expect(response.ok(), `merge preview failed with HTTP ${String(response.status())}`).toBe(
+        true,
+      );
+      return ((await readiness.textContent()) ?? "").includes("Mergeable: yes");
+    },
+    { timeoutMs: 10 * 60_000, intervalMs: 15_000 },
+  );
+  if (!mergeable) {
+    throw new Error(
+      `the governed merge card never reported the pull request mergeable: ${(await readiness.textContent()) ?? ""}`,
+    );
   }
 }
 

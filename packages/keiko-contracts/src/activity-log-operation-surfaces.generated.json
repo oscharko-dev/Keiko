@@ -206,6 +206,7 @@
   "coding-runtime.remote-skills.admitted": "tools-workflows",
   "coding-runtime.repository-instructions.context": "tools-workflows",
   "coding-runtime.repository-items.admitted": "tools-workflows",
+  "coding-runtime.repository-relay": "tools-workflows",
   "coding-runtime.repository-rerank": "tools-workflows",
   "coding-runtime.revert.applied": "tools-workflows",
   "coding-runtime.revert.dispatch-failed": "tools-workflows",

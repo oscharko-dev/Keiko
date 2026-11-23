@@ -1,0 +1,10 @@
+{
+  "name": "keiko-acceptance-invoice",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coding Workbench acceptance fixture without dependencies (#4492)",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/record-check.js && node --test"
+  }
+}

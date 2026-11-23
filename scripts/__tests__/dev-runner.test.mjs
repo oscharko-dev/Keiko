@@ -31,6 +31,7 @@ import {
   checkNextPortFree,
   copyHeadersSafely,
   createMicrophoneAllowanceController,
+  devServiceWorkerSource,
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
@@ -44,7 +45,9 @@ import {
   createRestartBudget,
   restartNextChildWithRetry,
   resolveConfiguredNextBundler,
+  resolveConfiguredStaticUiRoot,
   resolveNextBundler,
+  routeTargetPort,
   upstreamAllowsSameOriginMicrophone,
   upstreamFailureDiagnostic,
   writeAtomicUtf8File,
@@ -770,6 +773,66 @@ describe("resolveNextBundler", () => {
       "Invalid KEIKO_DEV_NEXT_BUNDLER: wepback. Use auto, turbopack, or webpack.",
     );
     expect(exit).toHaveBeenCalledWith(2);
+  });
+});
+
+// #4123: the browser suites serve the built static export through the BFF and start no `next dev`.
+describe("static UI export mode", () => {
+  const ports = { bffPort: 1984, nextPort: 3000 };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends every UI path to the BFF when it serves the static export", () => {
+    for (const path of ["/", "/_next/static/chunks/app/page.js", "/fonts/a.woff2", "/api/health"]) {
+      expect(routeTargetPort(path, { ...ports, staticUi: true })).toBe(1984);
+    }
+  });
+
+  it("keeps the UI on next dev and the API on the BFF without a static export", () => {
+    expect(routeTargetPort("/", { ...ports, staticUi: false })).toBe(3000);
+    expect(routeTargetPort("/_next/static/chunks/app/page.js", { ...ports, staticUi: false })).toBe(
+      3000,
+    );
+    expect(routeTargetPort("/api/health", { ...ports, staticUi: false })).toBe(1984);
+    expect(routeTargetPort("/api", { ...ports, staticUi: false })).toBe(1984);
+    expect(routeTargetPort("/apiary", { ...ports, staticUi: false })).toBe(3000);
+  });
+
+  // The static export registers /sw.js on every load; the development worker unregisters itself
+  // and reloads every window, which would reload that page forever.
+  it("gives the static export a worker that neither reloads windows nor controls fetches", () => {
+    const worker = devServiceWorkerSource(true);
+    expect(worker).not.toContain("unregister");
+    expect(worker).not.toContain("navigate");
+    expect(worker).not.toContain("clients");
+    expect(worker).not.toContain('"fetch"');
+    expect(worker).toContain("keiko-shell-");
+  });
+
+  it("keeps the cleanup worker for next dev", () => {
+    const worker = devServiceWorkerSource(false);
+    expect(worker).toContain("self.registration.unregister()");
+    expect(worker).toContain("client.navigate(client.url)");
+  });
+
+  it("reports an unusable static root and exits with status 2", () => {
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("exit");
+    });
+
+    expect(() => resolveConfiguredStaticUiRoot({ KEIKO_DEV_UI_STATIC_ROOT: "dist/ui" })).toThrow(
+      "exit",
+    );
+    expect(reportError).toHaveBeenCalledWith("KEIKO_DEV_UI_STATIC_ROOT must be an absolute path.");
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  it("starts without a static root when none is configured", () => {
+    expect(resolveConfiguredStaticUiRoot({})).toBeUndefined();
+    expect(resolveConfiguredStaticUiRoot({ KEIKO_DEV_UI_STATIC_ROOT: "" })).toBeUndefined();
   });
 });
 

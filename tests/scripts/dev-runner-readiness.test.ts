@@ -1,6 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -334,6 +335,72 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
         PUBLIC_READY_TIMEOUT_MS,
         "public proxy did not recover after the Next.js child port changed",
       );
+    },
+    DEV_RUNNER_TEST_TIMEOUT_MS,
+  );
+
+  // #4123: a `next dev` that stalls while it serves its chunks failed WebKit smoke journeys. With a
+  // static export the runner starts no Next.js process and the BFF serves the shipped files.
+  it(
+    "serves a static UI export through the BFF and starts no Next.js process",
+    async () => {
+      if (defaultDevUiIsRunning()) {
+        return;
+      }
+
+      stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-"));
+      const exportRoot = join(stateDir, "export");
+      const chunkDir = join(exportRoot, "_next", "static", "chunks");
+      mkdirSync(chunkDir, { recursive: true });
+      writeFileSync(join(exportRoot, "index.html"), "<!doctype html><title>Keiko</title>\n");
+      const chunk = "globalThis.keikoStaticExportProbe = true;\n";
+      writeFileSync(join(chunkDir, "probe.js"), chunk);
+      const stateFile = join(stateDir, "dev-ui.pid.json");
+      const publicPort = await freePort();
+      const bffPort = await freePort();
+      const nextPort = await freePort();
+
+      child = spawn(process.execPath, [RUNNER], {
+        cwd: REPO_ROOT,
+        detached: true,
+        env: {
+          ...process.env,
+          KEIKO_DEV_UI_PORT: String(publicPort),
+          KEIKO_DEV_BFF_PORT: String(bffPort),
+          KEIKO_DEV_NEXT_PORT: String(nextPort),
+          KEIKO_DEV_PID_FILE: stateFile,
+          KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
+          KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1",
+          KEIKO_DEV_UI_STATIC_ROOT: exportRoot,
+          KEIKO_STATE_DIR: stateDir,
+          NODE_ENV: "test",
+        },
+        stdio: "ignore",
+      });
+
+      await waitFor(
+        async () => statusOf(publicPort),
+        (status) => status === 200,
+        PUBLIC_READY_TIMEOUT_MS,
+        "public proxy did not become ready on the static export",
+      );
+      const served = await fetch(
+        `http://127.0.0.1:${String(publicPort)}/_next/static/chunks/probe.js`,
+        { cache: "no-store" },
+      );
+      expect(served.status).toBe(200);
+      expect(await served.text()).toBe(chunk);
+      const worker = await fetch(`http://127.0.0.1:${String(publicPort)}/sw.js`, {
+        cache: "no-store",
+      });
+      expect(await worker.text()).not.toContain("unregister");
+      expect(readRunnerState(stateFile).children).toHaveLength(1);
+      const nextPortProbe = await listenOnPort(nextPort);
+      await new Promise<void>((resolvePromise) => {
+        nextPortProbe.close(() => {
+          resolvePromise();
+        });
+      });
     },
     DEV_RUNNER_TEST_TIMEOUT_MS,
   );

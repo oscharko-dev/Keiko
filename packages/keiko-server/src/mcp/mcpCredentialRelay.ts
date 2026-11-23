@@ -1,4 +1,3 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -21,29 +20,28 @@ import {
   type ActivityActionLine,
   type ActivityCountFields,
 } from "../activity-line-fields.js";
+import { RelayCapabilityStore, relayCredentialSpellings } from "../relay/relayCapabilityStore.js";
 
 /**
  * Static credentials of a remote MCP server (#3903 AC3), kept out of the runtime. A registry entry
  * names, for each header the server expects, a `KEIKO_MCP_SECRET_*` variable of Keiko's own
- * environment; the run never receives that value. Its binding addresses this relay on Keiko's
+ * environment; Keiko never hands that value to the run. Its binding addresses this relay on Keiko's
  * attested loopback origin instead of the server, with a capability minted for the one run and the
  * one server. The relay authenticates that capability, adds the credential headers and forwards the
  * request to exactly the registered URL through Keiko's egress (no redirect, loopback and private
  * targets refused). A leaked capability reaches only that server for that run's lifetime, through
- * Keiko; the credential itself cannot leave Keiko through the run. A server that answers with the
- * credential it received has it replaced in the response before the run reads it.
+ * Keiko. On macOS a value exported into the environment that starts Keiko stays readable to a run's
+ * shell (ADR-0137 D10). A credential echoed in a response is replaced before the run reads it.
  */
 export const MCP_RELAY_ROUTE = "/api/coding-sidecar/mcp/:relayId";
 export const MCP_RELAY_PATH_PREFIX = "/api/coding-sidecar/mcp/";
 export const MCP_RELAY_CAPABILITY_HEADER = "x-keiko-mcp-relay";
 export const MCP_RELAY_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 export const MCP_RELAY_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
-const MAX_BINDINGS = 256;
 const SECRET_VALUE = /^[\x20-\x7E]{1,8192}$/u;
 // A shorter credential could not be told apart from ordinary text in a response, and its base64
 // form would match unrelated encoded data, so the relay could not keep its promise to replace it.
 export const MCP_SECRET_MIN_CHARS = 16;
-const RELAY_ID = /^[A-Za-z0-9_-]{22}$/u;
 
 // Headers of the MCP Streamable HTTP transport that pass in each direction; nothing else does.
 const FORWARDED_REQUEST_HEADERS = [
@@ -90,85 +88,33 @@ export interface McpCredentialRelay {
   releaseRun(runId: string): void;
 }
 
-interface StoredBinding {
-  readonly capabilityHash: Buffer;
-  readonly target: McpRelayTarget;
-  readonly controller: AbortController;
-  readonly detach: () => void;
-}
-
-function capabilityHash(capability: string): Buffer {
-  return createHash("sha256").update(capability, "utf8").digest();
-}
-
-/** Revoked capabilities remembered so a late request can be told why it was refused. */
-const MAX_REVOKED_BINDINGS = 1024;
-
 class InMemoryMcpCredentialRelay implements McpCredentialRelay {
-  private readonly bindings = new Map<string, StoredBinding>();
-  private readonly revoked = new Map<string, Buffer>();
-
-  private remember(relayId: string, stored: StoredBinding): void {
-    this.revoked.set(relayId, stored.capabilityHash);
-    if (this.revoked.size > MAX_REVOKED_BINDINGS) {
-      const [oldest] = this.revoked.keys();
-      if (oldest !== undefined) this.revoked.delete(oldest);
-    }
-  }
-
-  public wasRevoked(relayId: string, capability: string | undefined): boolean {
-    const hash = this.revoked.get(relayId);
-    return (
-      hash !== undefined &&
-      capability !== undefined &&
-      timingSafeEqual(hash, capabilityHash(capability))
-    );
-  }
-
-  public bind(target: McpRelayTarget): McpRelayBinding | undefined {
-    if (this.bindings.size >= MAX_BINDINGS || target.signal?.aborted === true) return undefined;
-    const relayId = randomBytes(16).toString("base64url");
-    const capability = randomBytes(32).toString("base64url");
-    const controller = new AbortController();
-    const revoke = (): void => {
-      controller.abort();
-      const stored = this.bindings.get(relayId);
-      if (stored !== undefined) this.remember(relayId, stored);
-      this.bindings.delete(relayId);
-    };
-    target.signal?.addEventListener("abort", revoke, { once: true });
-    this.bindings.set(relayId, {
-      capabilityHash: capabilityHash(capability),
-      target: Object.freeze({
+  private readonly store = new RelayCapabilityStore<McpRelayTarget>({
+    freeze: (target): McpRelayTarget =>
+      Object.freeze({
         ...target,
         headers: Object.freeze({ ...target.headers }),
         secrets: Object.freeze([...target.secrets]),
       }),
-      controller,
-      detach: () => target.signal?.removeEventListener("abort", revoke),
-    });
-    return { relayId, capability };
+  });
+
+  public wasRevoked(relayId: string, capability: string | undefined): boolean {
+    return this.store.wasRevoked(relayId, capability);
+  }
+
+  public bind(target: McpRelayTarget): McpRelayBinding | undefined {
+    return this.store.bind(target);
   }
 
   public authenticate(
     relayId: string,
     capability: string | undefined,
   ): McpRelayAdmission | undefined {
-    if (!RELAY_ID.test(relayId) || capability === undefined) return undefined;
-    const stored = this.bindings.get(relayId);
-    if (stored === undefined) return undefined;
-    if (!timingSafeEqual(stored.capabilityHash, capabilityHash(capability))) return undefined;
-    return { target: stored.target, signal: stored.controller.signal };
+    return this.store.authenticate(relayId, capability);
   }
 
   public releaseRun(runId: string): void {
-    for (const [relayId, stored] of this.bindings) {
-      if (stored.target.runId !== runId) continue;
-      stored.controller.abort();
-      stored.detach();
-      this.remember(relayId, stored);
-      this.bindings.delete(relayId);
-    }
+    this.store.releaseRun(runId);
   }
 }
 
@@ -448,23 +394,7 @@ async function admittedResponseHeaders(
 // in any spelling a JSON parser, URL decoder or browser restores (createSecretSpellingStreamRedactor),
 // and inside base64 or base64url text.
 function credentialForms(target: McpRelayTarget): readonly string[] {
-  const values = [...Object.values(target.headers), ...target.secrets];
-  return [...new Set([...values, ...values.flatMap(base64Cores)])];
-}
-
-// The characters every base64 text holding `value` contains, at each of the three byte alignments:
-// the characters that depend on a neighbouring byte at either end are left out. An admitted
-// credential has at least MCP_SECRET_MIN_CHARS characters, so each core has at least 20.
-function base64Cores(value: string): readonly string[] {
-  const bytes = Buffer.from(value, "utf8");
-  return [0, 1, 2].flatMap((offset) => {
-    // base64url carries no padding; the standard alphabet differs only in two characters.
-    const encoded = Buffer.concat([Buffer.alloc(offset), bytes]).toString("base64url");
-    const head = [0, 2, 3][offset] ?? 0;
-    const tail = (offset + bytes.length) % 3 === 0 ? 0 : 1;
-    const core = encoded.slice(head, encoded.length - tail);
-    return [core.replaceAll("-", "+").replaceAll("_", "/"), core];
-  });
+  return relayCredentialSpellings([...Object.values(target.headers), ...target.secrets]);
 }
 
 async function writeChunk(response: ServerResponse, text: string): Promise<void> {

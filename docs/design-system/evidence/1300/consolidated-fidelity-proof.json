@@ -68,7 +68,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "6508df1f4863a5b3d5097dd3605a6ed07f78478812a8a2601c0b33ad024fe6cb"
+      "sha256": "f700ecff42b7f1e2233825d71f797638a151fb94d7d4dce9958fedcbba187f77"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",

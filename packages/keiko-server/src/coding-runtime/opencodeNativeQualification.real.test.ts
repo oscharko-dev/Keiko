@@ -26,6 +26,8 @@ import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/
 import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
+  nativeHomeDeniedReadRoots,
+  nativeDeveloperDirectoryReadRoots,
   nativeToolchainReadRoots,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
@@ -61,7 +63,7 @@ import {
   openCodeNativeMcpAdmission,
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
   createOpenCodeNativeToolAdvertisement,
@@ -261,6 +263,14 @@ interface Governance {
   readonly externalRoots?: readonly string[] | undefined;
 }
 
+/**
+ * The composition derives this from the run's verified version (#4359); this suite asserts that the
+ * binary is the pinned one. Without it a Code Mode program in Ask for approval reached the policy
+ * with nothing to review and was refused, which production never does.
+ */
+const CODE_MODE_NESTED_EFFECTS_DECIDED =
+  openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects === true;
+
 /** Keiko's own native policy answers every ask the generated hook sends. */
 async function startFacade(governance: Governance): Promise<FacadeStub> {
   const decisions: PolicyDecision[] = [];
@@ -278,6 +288,7 @@ async function startFacade(governance: Governance): Promise<FacadeStub> {
         ...(governance.externalRoots === undefined
           ? {}
           : { externalRoots: governance.externalRoots }),
+        codeModeNestedEffectsDecided: CODE_MODE_NESTED_EFFECTS_DECIDED,
       });
       decisions.push({
         permission: request.permission,
@@ -396,9 +407,12 @@ function toolchainReadRoots(
     ),
     ...(options.toolchainPath === undefined ? [] : [options.toolchainPath]),
   ];
-  return paths.length === 0
-    ? {}
-    : { toolchainReadRoots: nativeToolchainReadRoots(paths.join(":"), homedir()) };
+  // As production does (#4521): the developer directory `xcode-select` chose, where Git runs from.
+  const roots = [
+    ...(paths.length === 0 ? [] : nativeToolchainReadRoots(paths.join(":"), homedir())),
+    ...nativeDeveloperDirectoryReadRoots(homedir()).roots,
+  ];
+  return roots.length === 0 ? {} : { toolchainReadRoots: roots };
 }
 
 /** Renames the one model alias of a configuration document, leaving the rest untouched. */
@@ -516,6 +530,9 @@ function launch(
       workspaceAccess: "read-write",
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
+      // As production denies them (`nativeDeniedReadRoots`): the credential locations of the
+      // account's home, whatever the shell runs (#4521).
+      deniedReadRoots: nativeHomeDeniedReadRoots(homedir()),
       protectedWriteRoots: [
         openCodeConfigDirectory(fixture.state),
         ...resolveNativeGitMetadata(fixture.workspace, undefined).protectedWriteRoots,
@@ -828,6 +845,233 @@ async function settledIdle(run: Run): Promise<void> {
   await expect
     .poll(async () => Object.keys(await run.client.active()).length, { timeout: 20_000 })
     .toBe(0);
+}
+
+// ─── the host boundary as a shell sees it (#4521) ──────────────────────────────────────────────
+
+const ALL_MODES: readonly Mode[] = ["governed-assist", "supervised-coding", "autonomous-delivery"];
+
+/** `name=0`, `name=refused` (any other exit status) or `name=absent` for each step a probe echoed. */
+function exitVerdicts(result: string, names: readonly string[]): string {
+  return names
+    .map((name) => {
+      const status = new RegExp(`${name}=(\\d+)`, "u").exec(result)?.[1];
+      if (status === undefined) return `${name}=absent`;
+      return `${name}=${status === "0" ? "0" : "refused"}`;
+    })
+    .join(" ");
+}
+
+// #4521: one connection per destination class, as a shell child reports it. A refusal before any
+// packet is `refused`; a connection the kernel let out that nobody answered is `sent`.
+const NETWORK_PROBE = `const net = require("node:net");
+const dns = require("node:dns");
+const outcome = (code) => (code === "EPERM" || code === "EACCES" ? "refused" : "sent");
+const connect = (name, host, port) =>
+  new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    socket.setTimeout(2500);
+    socket.on("connect", () => { socket.destroy(); resolve(name + "=connected"); });
+    socket.on("error", (error) => resolve(name + "=" + outcome(error.code)));
+    socket.on("timeout", () => { socket.destroy(); resolve(name + "=sent"); });
+  });
+const lookup = () =>
+  new Promise((resolve) =>
+    dns.lookup("example.com", (error) => resolve(error ? "dns=refused" : "dns=resolved")),
+  );
+(async () => {
+  const facts = [
+    await connect("public", "192.0.2.1", 80),
+    await connect("lan", "10.255.255.1", 80),
+    await lookup(),
+    await connect("loopback", "127.0.0.1", Number(process.argv[2])),
+  ];
+  console.log(facts.join(" "));
+})();
+`;
+
+// #4521: what a shell child of a run may change and read, as a script file runs it, so the paths
+// stay out of the command line the policy reads and the kernel alone decides. `../` is the
+// fixture's root beside the opened folder.
+const CONTAINMENT_PROBE = [
+  'echo inside > inside.txt 2>/dev/null; echo "inside=$?"',
+  'echo outside > ../outside-write.txt 2>/dev/null; echo "outside=$?"',
+  'cat .env > /dev/null 2>&1; echo "dotenv=$?"',
+  'cat .env.local > /dev/null 2>&1; echo "dotenv_local=$?"',
+  `cat ${FIXTURE_FILE} > /dev/null 2>&1; echo "control=$?"`,
+  "",
+].join("\n");
+
+interface AccountCredentialCanaries {
+  readonly secret: string;
+  /** The canary files, each in a credential location of the account's home. */
+  readonly files: readonly string[];
+  /** A path in the account's home outside every credential location, never created by the run. */
+  readonly homeWrite: string;
+}
+
+// Credential locations of the account's home (`nativeHomeDeniedReadRoots`): an SSH folder, a cloud
+// credential folder and Git's stored credentials. Only what this function creates is removed.
+async function withAccountCredentialCanaries(
+  body: (canaries: AccountCredentialCanaries) => Promise<void>,
+): Promise<void> {
+  const home = homedir();
+  const id = randomUUID();
+  const secret = `credential-canary-${id}`;
+  const created: string[] = [];
+  const files = [
+    join(home, ".ssh", `keiko-canary-${id}`),
+    join(home, ".aws", `keiko-canary-${id}`),
+  ];
+  const gitCredentials = join(home, ".git-credentials");
+  if (existsSync(gitCredentials)) throw new Error("account-canary-git-credentials-exist");
+  try {
+    for (const file of files) {
+      if (!existsSync(dirname(file))) {
+        mkdirSync(dirname(file), { mode: 0o700 });
+        created.push(dirname(file));
+      }
+      writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+      created.push(file);
+    }
+    writeFileSync(gitCredentials, `https://keiko:${secret}@git.invalid\n`, { mode: 0o600 });
+    created.push(gitCredentials);
+    await body({
+      secret,
+      files: [...files, gitCredentials],
+      homeWrite: join(home, `keiko-outside-${id}.txt`),
+    });
+  } finally {
+    rmSync(join(home, `keiko-outside-${id}.txt`), { force: true });
+    for (const path of created.reverse()) rmSync(path, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Set only on a throwaway account (the macOS boundary lane, #4521): the proofs below then create
+ * canaries in the account's own Keychain folder and credential folders, and remove them again.
+ */
+const ACCOUNT_CANARIES = process.env.KEIKO_NATIVE_ACCOUNT_CANARIES === "1";
+const SECURITY = "/usr/bin/security";
+
+interface CanaryKeychain {
+  readonly path: string;
+  readonly service: string;
+  readonly secret: string;
+}
+
+function security(args: readonly string[]): string {
+  return execFileSync(SECURITY, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/** The account's keychain search list, in the form `security list-keychains -s` takes back. */
+function keychainSearchList(): readonly string[] {
+  return security(["list-keychains", "-d", "user"])
+    .split("\n")
+    .map((line) => line.trim().replace(/^"(.*)"$/u, "$1"))
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * A throwaway keychain file in `folder` holding one generic password that any program of this
+ * account may read (`-A`), so neither its creation nor the control read asks anything. The login
+ * keychain is never opened, and the search list is restored at once: only a command naming the file
+ * reaches it.
+ */
+async function withCanaryKeychain(
+  folder: string,
+  body: (canary: CanaryKeychain) => Promise<void>,
+): Promise<void> {
+  mkdirSync(folder, { recursive: true });
+  const canary: CanaryKeychain = {
+    path: join(realpathSync(folder), `keiko-canary-${randomUUID()}.keychain-db`),
+    service: `keiko-canary-${randomUUID()}`,
+    secret: `canary-${randomUUID()}`,
+  };
+  const unlock = randomUUID();
+  const searchList = keychainSearchList();
+  try {
+    security(["create-keychain", "-p", unlock, canary.path]);
+    security(["list-keychains", "-d", "user", "-s", ...searchList]);
+    security(["unlock-keychain", "-p", unlock, canary.path]);
+    security([
+      ...["add-generic-password", "-a", "keiko-qualification", "-s", canary.service],
+      ...["-w", canary.secret, "-A", canary.path],
+    ]);
+    await body(canary);
+  } finally {
+    spawnSync(SECURITY, ["delete-keychain", canary.path], { stdio: "ignore" });
+    spawnSync(SECURITY, ["list-keychains", "-d", "user", "-s", ...searchList], { stdio: "ignore" });
+    rmSync(canary.path, { force: true });
+  }
+}
+
+/** The shell command that asks the Security services for the canary's secret. */
+function findCanary(canary: CanaryKeychain): string {
+  return `/usr/bin/security find-generic-password -s ${canary.service} -w '${canary.path}' > /dev/null`;
+}
+
+function readCanaryItem(canary: CanaryKeychain): string {
+  return security(["find-generic-password", "-s", canary.service, "-w", canary.path]).trim();
+}
+
+type GitRoute = "add" | "direct" | "script" | "plumbing";
+
+const GIT_IDENTITY = "-c user.name=Keiko -c user.email=keiko@example.invalid";
+/** The script file the `script` route runs: the same commit the `direct` route types. */
+const GIT_SCRIPT = `git ${GIT_IDENTITY} commit -q --allow-empty -m script\n`;
+const GIT_ROUTES: readonly (readonly [GitRoute, string])[] = [
+  ["add", 'echo tracked > tracked.txt && git add tracked.txt; echo "exit=$?"'],
+  ["direct", `git ${GIT_IDENTITY} commit -q --allow-empty -m direct; echo "exit=$?"`],
+  ["script", 'sh ./deliver.sh; echo "exit=$?"'],
+  [
+    "plumbing",
+    `c=$(git ${GIT_IDENTITY} commit-tree "$(git write-tree)" -m plumbing) && printf '%s\\n' "$c" > .git/refs/heads/plumbed; echo "exit=$?"`,
+  ],
+];
+
+/** The repository as an unconfined Git of the same account reads it. */
+function fixtureGitOutput(fixture: Fixture, args: readonly string[]): readonly string[] {
+  const git = resolveDarwinGitExecutable();
+  const result = spawnSync(git.path, ["-C", fixture.workspace, ...args], {
+    encoding: "utf8",
+    env: {
+      HOME: fixture.state,
+      PATH: dirname(git.path),
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+    },
+  });
+  return result.stdout.split("\n").filter((line) => line.length > 0);
+}
+
+/** Whether the route's effect reached the repository: the staged file, or a commit by subject. */
+function gitRouteLanded(fixture: Fixture, route: GitRoute): boolean {
+  if (route === "add")
+    return fixtureGitOutput(fixture, ["diff", "--cached", "--name-only"]).includes("tracked.txt");
+  return fixtureGitOutput(fixture, ["log", "--all", "--format=%s"]).includes(route);
+}
+
+function strongestEffect(decisions: readonly PolicyDecision[]): string {
+  for (const effect of ["deny", "ask", "allow"] as const)
+    if (decisions.some((decision) => decision.effect === effect)) return effect;
+  return "none";
+}
+
+/** Each route's policy decision, exit status and effect on the repository, in one run. */
+async function gitRouteOutcomes(run: Run): Promise<Readonly<Record<GitRoute, string>>> {
+  const outcomes: Record<string, string> = {};
+  for (const [route, command] of GIT_ROUTES) {
+    const before = run.facade.decisions.length;
+    const result = await scriptedTurn(run, shell(command));
+    const effect = strongestEffect(run.facade.decisions.slice(before));
+    const landed = gitRouteLanded(run.fixture, route) ? "landed" : "absent";
+    outcomes[route] = `${effect} ${exitVerdicts(result, ["exit"])} ${landed}`;
+  }
+  return outcomes as Readonly<Record<GitRoute, string>>;
 }
 
 // ─── the producer's tool registry ──────────────────────────────────────────────────────────────
@@ -1570,22 +1814,276 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // The producer runs a model's `bash` call as its `shell` tool when no tool has that name, so the
   // alias must reach the same mode decision as an ordinary `shell` call.
   it.skipIf(skip)(
-    // The keychain service shares this rule; the backend test pins its names. No test runs `security`.
-    "keeps the person's clipboard out of a shell's reach, at Full access too",
+    "keeps the person's clipboard out of a shell's reach, to read and to write, in every mode",
     async () => {
-      await withRun({ mode: "autonomous-delivery" }, async (run) => {
-        for (const command of [
-          // A pasteboard nothing uses: this test never reads what the person copied.
-          "/usr/bin/pbpaste -pboard ruler > /dev/null",
-        ]) {
-          const result = await scriptedTurn(run, shell(`${command}; echo "exit=$?"`));
-          expect(result, command).not.toContain("exit=0");
-        }
-        // Positive control: the same shell runs an ordinary program.
-        expect(await scriptedTurn(run, shell('/usr/bin/true; echo "exit=$?"'))).toContain("exit=0");
+      // A pasteboard nothing uses: this test never reads or replaces what the person copied. The
+      // positive control is this process: it copies a canary to the same pasteboard and reads it
+      // back, and the canary is still there after every mode's shell tried to replace it.
+      const canary = `clipboard-canary-${randomUUID()}`;
+      const pasted = (): string =>
+        execFileSync("/usr/bin/pbpaste", ["-pboard", "ruler"], { encoding: "utf8" });
+      execFileSync("/usr/bin/pbcopy", ["-pboard", "ruler"], { input: canary });
+      expect(pasted()).toBe(canary);
+      const probe = [
+        '/usr/bin/pbpaste -pboard ruler > /dev/null; echo "read=$?"',
+        'echo canary | /usr/bin/pbcopy -pboard ruler; echo "write=$?"',
+        '/usr/bin/true; echo "control=$?"',
+      ].join("; ");
+      const measured: Record<string, string> = {};
+      for (const mode of ALL_MODES) {
+        await withRun({ mode, egress: openCodeNativeEgress(mode) }, async (run) => {
+          const result = await scriptedTurn(run, shell(probe));
+          measured[mode] = exitVerdicts(result, ["read", "write", "control"]);
+        });
+      }
+      const refused = "read=refused write=refused control=0";
+      expect(measured).toEqual({
+        "governed-assist": refused,
+        "supervised-coding": refused,
+        "autonomous-delivery": refused,
+      });
+      expect(pasted()).toBe(canary);
+    },
+    240_000,
+  );
+
+  // #4521: the kernel keeps a shell child's writes inside the opened folder and its `.env` files
+  // unreadable, even inside the folder. The positive control is this process: it writes beside the
+  // folder and reads the same files.
+  it.skipIf(skip)(
+    "keeps a shell's writes inside the opened folder and its .env files unreadable, in every mode",
+    async () => {
+      const canary = `dotenv-canary-${randomUUID()}`;
+      const measured: Record<string, string> = {};
+      for (const mode of ALL_MODES) {
+        await withRun(
+          {
+            mode,
+            egress: openCodeNativeEgress(mode),
+            files: {
+              [FIXTURE_FILE]: "native qualification fixture\n",
+              ".env": `TOKEN=${canary}\n`,
+              ".env.local": `TOKEN=${canary}\n`,
+              "contain.sh": CONTAINMENT_PROBE,
+            },
+          },
+          async (run) => {
+            const outside = join(run.fixture.root, "outside-write.txt");
+            writeFileSync(join(run.fixture.root, "outside-control.txt"), "control\n");
+            expect(readFileSync(join(run.fixture.workspace, ".env"), "utf8")).toContain(canary);
+            const result = await scriptedTurn(run, shell("sh ./contain.sh"));
+            expect(result).not.toContain(canary);
+            expect(existsSync(outside)).toBe(false);
+            measured[mode] = exitVerdicts(result, [
+              "inside",
+              "outside",
+              "dotenv",
+              "dotenv_local",
+              "control",
+            ]);
+          },
+        );
+      }
+      const contained = "inside=0 outside=refused dotenv=refused dotenv_local=refused control=0";
+      expect(measured).toEqual({
+        "governed-assist": contained,
+        "supervised-coding": contained,
+        "autonomous-delivery": contained,
       });
     },
-    120_000,
+    240_000,
+  );
+
+  // #4521: the account's credential folders and Git's stored credentials, and its home outside
+  // them, as a shell child of a run sees them. They are throwaway canaries of the lane's account.
+  it.skipIf(skip || !ACCOUNT_CANARIES)(
+    "keeps the account's credential files and its home out of a shell's reach in every mode, while the account reads and writes them",
+    async () => {
+      await withAccountCredentialCanaries(async (canaries) => {
+        // Positive control: an unconfined process of the same account reads each file and writes
+        // into the home.
+        for (const file of canaries.files)
+          expect(readFileSync(file, "utf8")).toContain(canaries.secret);
+        writeFileSync(canaries.homeWrite, "control\n");
+        rmSync(canaries.homeWrite);
+        const [ssh, cloud, git] = canaries.files.map((file) => `'${file}'`);
+        const probe = [
+          `cat ${String(ssh)} > /dev/null 2>&1; echo "ssh=$?"`,
+          `cat ${String(cloud)} > /dev/null 2>&1; echo "cloud=$?"`,
+          `cat ${String(git)} > /dev/null 2>&1; echo "git=$?"`,
+          `echo outside > '${canaries.homeWrite}' 2>/dev/null; echo "home_write=$?"`,
+          '/usr/bin/true; echo "control=$?"',
+          "",
+        ].join("\n");
+        const measured: Record<string, string> = {};
+        for (const mode of ALL_MODES) {
+          await withRun(
+            {
+              mode,
+              egress: openCodeNativeEgress(mode),
+              files: { [FIXTURE_FILE]: "native qualification fixture\n", "account.sh": probe },
+            },
+            async (run) => {
+              const result = await scriptedTurn(run, shell("sh ./account.sh"));
+              expect(result).not.toContain(canaries.secret);
+              expect(existsSync(canaries.homeWrite)).toBe(false);
+              measured[mode] = exitVerdicts(result, [
+                "ssh",
+                "cloud",
+                "git",
+                "home_write",
+                "control",
+              ]);
+            },
+          );
+        }
+        const refused = "ssh=refused cloud=refused git=refused home_write=refused control=0";
+        expect(measured).toEqual({
+          "governed-assist": refused,
+          "supervised-coding": refused,
+          "autonomous-delivery": refused,
+        });
+      });
+    },
+    240_000,
+  );
+
+  // #4521: the network a shell child of a real run reaches, by mode. 192.0.2.1 (TEST-NET-1, RFC 5737)
+  // and 10.255.255.1 (a private address) are never answered, so at Full access, the positive
+  // control, the packets leave and nobody replies; below it the kernel refuses the connection
+  // (EPERM) before any packet. The name is resolved through the system resolver. Loopback, where a
+  // project's own servers and Keiko's own services live, stays open in every mode.
+  it.skipIf(skip)(
+    "refuses public, local-network and name-resolution connections from a shell below Full access before any traffic, and keeps loopback open",
+    async () => {
+      const loopback = await startStub((_stub, _recorded, response) => response.end("ok"));
+      try {
+        const measured: Record<string, string> = {};
+        for (const mode of ALL_MODES) {
+          await withRun(
+            {
+              mode,
+              egress: openCodeNativeEgress(mode),
+              toolchainPath: dirname(process.execPath),
+              files: { [FIXTURE_FILE]: "native qualification fixture\n", "net.cjs": NETWORK_PROBE },
+            },
+            async (run) => {
+              const result = await scriptedTurn(
+                run,
+                shell(`node net.cjs ${String(loopback.port)}`),
+              );
+              measured[mode] =
+                /public=\S+ lan=\S+ dns=\S+ loopback=\S+/u.exec(result)?.[0] ?? result;
+            },
+          );
+        }
+        const refused = "public=refused lan=refused dns=refused loopback=connected";
+        expect(measured).toEqual({
+          "governed-assist": refused,
+          "supervised-coding": refused,
+          "autonomous-delivery": "public=sent lan=sent dns=resolved loopback=connected",
+        });
+      } finally {
+        await closeStub(loopback);
+      }
+    },
+    240_000,
+  );
+
+  // #4521: the same Seatbelt rule closes the Security services, and the kernel denies the folder
+  // the login keychain lives in. One canary lives there, beside the login keychain; a second one
+  // lies in a folder the shell may read, so only the closed services keep its items and their
+  // names away. Both are throwaway files, so only the lane that sets the switch creates them.
+  it.skipIf(skip || !ACCOUNT_CANARIES)(
+    "keeps a Keychain item out of a shell's reach in every mode, while the account itself reads it",
+    async () => {
+      const home = join(homedir(), "Library", "Keychains");
+      await withCanaryKeychain(home, async (stored) => {
+        await withCanaryKeychain(tmpdir(), async (elsewhere) => {
+          // Positive control: an unconfined process of the same account reads both items and
+          // lists both item names.
+          expect(readCanaryItem(stored)).toBe(stored.secret);
+          expect(readCanaryItem(elsewhere)).toBe(elsewhere.secret);
+          expect(security(["dump-keychain", stored.path])).toContain(stored.service);
+          expect(security(["dump-keychain", elsewhere.path])).toContain(elsewhere.service);
+          // `dump-keychain` exits 0 even when it read nothing, so an item name counts as given
+          // away only when the canary's service name is in what it printed.
+          const names = (canary: CanaryKeychain, step: string): string =>
+            `/usr/bin/security dump-keychain '${canary.path}' 2>/dev/null | grep -q -F '${canary.service}'; echo "${step}=$?"`;
+          const probe = [
+            `${findCanary(stored)}; echo "stored-read=$?"`,
+            names(stored, "stored-names"),
+            `${findCanary(elsewhere)}; echo "elsewhere-read=$?"`,
+            names(elsewhere, "elsewhere-names"),
+            '/usr/bin/true; echo "control=$?"',
+          ].join("; ");
+          const steps = [
+            ...["stored-read", "stored-names", "elsewhere-read"],
+            ...["elsewhere-names", "control"],
+          ];
+          const measured: Record<string, string> = {};
+          for (const mode of ALL_MODES) {
+            await withRun({ mode, egress: openCodeNativeEgress(mode) }, async (run) => {
+              const result = await scriptedTurn(run, shell(probe));
+              for (const secret of [stored.secret, elsewhere.secret])
+                expect(result, mode).not.toContain(secret);
+              measured[mode] = exitVerdicts(result, steps);
+            });
+          }
+          const refused = [
+            "stored-read=refused stored-names=refused elsewhere-read=refused",
+            "elsewhere-names=refused control=0",
+          ].join(" ");
+          expect(measured).toEqual({
+            "governed-assist": refused,
+            "supervised-coding": refused,
+            "autonomous-delivery": refused,
+          });
+        });
+      });
+    },
+    240_000,
+  );
+
+  // #4521: what each Git route does to the history of a folder the person opened themself, in every
+  // mode, with every ask approved as a person would. Keiko's policy refuses a delivery command it
+  // reads in the shell line; a script file and low-level Git it does not read, so the kernel, which
+  // keeps refs, objects and the index writable here, decides. A Keiko-managed task worktree keeps
+  // its Git directory read-only instead (productionOpenCodeBackend.functional.test.ts, #3902).
+  it.skipIf(skip)(
+    "records each Git route a shell can take to the history of an opened folder, in every mode",
+    async () => {
+      const measured: Record<string, Readonly<Record<GitRoute, string>>> = {};
+      for (const mode of ALL_MODES) {
+        await withRun(
+          {
+            mode,
+            egress: openCodeNativeEgress(mode),
+            files: { [FIXTURE_FILE]: "native qualification fixture\n", "deliver.sh": GIT_SCRIPT },
+          },
+          async (run) => {
+            measured[mode] = await gitRouteOutcomes(run);
+          },
+        );
+      }
+      const asked = {
+        add: "ask exit=0 landed",
+        direct: "deny exit=absent absent",
+        script: "ask exit=0 landed",
+        plumbing: "ask exit=0 landed",
+      };
+      expect(measured).toEqual({
+        "governed-assist": asked,
+        "supervised-coding": asked,
+        "autonomous-delivery": {
+          add: "allow exit=0 landed",
+          direct: "deny exit=absent absent",
+          script: "allow exit=0 landed",
+          plumbing: "allow exit=0 landed",
+        },
+      });
+    },
+    360_000,
   );
 
   it.skipIf(skip)(
@@ -1649,6 +2147,50 @@ describe("pinned native OpenCode plan tool (T19)", () => {
       });
     },
     120_000,
+  );
+
+  // A recorded limit, not a defence (ADR-0137 D10, ADR-0184, #4521 owns the kernel rule): an
+  // environment credential of a repository (`${env.NAME}`, `${NAME}`) is resolved from Keiko's own
+  // process environment, which Node cannot scrub from the exec environment. macOS answers
+  // KERN_PROCARGS2 for any process of the same user and no Seatbelt rule gates it, so the model's
+  // shell reads it. The stand-in is the Node binary Keiko runs on, idle, started with the variable.
+  it.skipIf(skip)(
+    "pins the KERN_PROCARGS2 limit: a run's shell reads another same-user process's exec environment, in every mode",
+    async () => {
+      const sentinel = `sentinel-${randomUUID()}`;
+      const keikoStandIn = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], {
+        env: { PATH: process.env.PATH ?? "", KEIKO_QUAL_REGISTRY_TOKEN: sentinel },
+        stdio: "ignore",
+      });
+      try {
+        const pid = keikoStandIn.pid;
+        if (pid === undefined) throw new Error("fixture-stand-in-not-started");
+        // Reads only the stand-in's exec environment and reports a closed verdict, never the value.
+        // The control searches the same environment for a value it never carried, so a reader that
+        // matched anything could not pass.
+        const search = (value: string, label: string): string =>
+          `/usr/bin/perl -e '${READ_PROCESS_ARGUMENTS}' ${String(pid)} | /usr/bin/grep -a -q -F ${value} && echo "${label}=yes" || echo "${label}=no"`;
+        const probe = `${search(sentinel, "visible")}; ${search(`absent-${randomUUID()}`, "control")}`;
+        const modes = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+        const measured: Record<string, string> = {};
+        for (const mode of modes) {
+          await withRun({ mode }, async (run) => {
+            const result = await scriptedTurn(run, shell(probe));
+            const visible = /visible=(yes|no)/u.exec(result)?.[0] ?? "no-verdict";
+            const control = /control=(yes|no)/u.exec(result)?.[0] ?? "no-verdict";
+            measured[mode] = `${visible} ${control}`;
+          });
+        }
+        expect(measured).toEqual({
+          "governed-assist": "visible=yes control=no",
+          "supervised-coding": "visible=yes control=no",
+          "autonomous-delivery": "visible=yes control=no",
+        });
+      } finally {
+        if (keikoStandIn.pid !== undefined) killProcess(keikoStandIn.pid);
+      }
+    },
+    240_000,
   );
 
   it.skipIf(skip)(

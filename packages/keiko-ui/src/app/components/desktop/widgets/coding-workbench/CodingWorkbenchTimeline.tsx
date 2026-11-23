@@ -1086,7 +1086,11 @@ function ToolRow({
 // happened instead of "Failed". A check that ran and went red keeps the failed badge.
 type UnrunVerificationOutcome = Extract<
   CodingSafeActivityVerificationOutcome,
-  "waiting-for-trust" | "no-runnable-steps" | "not-run" | "isolation-unavailable"
+  | "waiting-for-trust"
+  | "no-runnable-steps"
+  | "not-run"
+  | "isolation-unavailable"
+  | "dependencies-unavailable"
 >;
 //
 // And for a governed Git step (lab T37, #4271): the facade answers a refused commit, stage or branch
@@ -1101,6 +1105,7 @@ const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOut
   "no-runnable-steps",
   "not-run",
   "isolation-unavailable",
+  "dependencies-unavailable",
 ]);
 
 // The cards that open to the reason they ended as they did, rather than staying a one-line row.
@@ -1112,6 +1117,7 @@ const OPEN_WITH_REASON_STATES: ReadonlySet<ShownToolState> = new Set([
   "no-runnable-steps",
   "not-run",
   "isolation-unavailable",
+  "dependencies-unavailable",
   "not-done",
   "waiting-for-approval",
 ]);

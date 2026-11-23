@@ -19,6 +19,11 @@ into `dev` at `37b1ee9d0c6308b1a59eef3470aa47036fb8362b`, the fetched base of th
 All W1–W15 acceptance groups remain open. Individual component results below do not close their
 broader Workbench acceptance group.
 
+Epic [#4491](https://github.com/oscharko-dev/Keiko/issues/4491) measures every platform with one
+[acceptance task](coding-acceptance-task.md) (#4492): repair a failing test and verify it with the
+project's own tests. Its macOS baseline is recorded there. The Windows half runs after the macOS
+gate.
+
 ## Evidence pins released on 2026-11-02
 
 The helper-source approval pin and the D12 editor evidence are no longer blockers of this branch.

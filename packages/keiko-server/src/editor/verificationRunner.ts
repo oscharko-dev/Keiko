@@ -36,6 +36,7 @@ import {
   detectScripts,
   planDirectTargetedTests,
   planPackageTargetedTests,
+  resolveStepNetwork,
   resolveVerificationPackage,
   type VerificationPackage,
   type VerificationStepOutput,
@@ -54,10 +55,16 @@ import {
 } from "./verification-run-evidence.js";
 import {
   executeVerificationEnforced,
+  VERIFICATION_NETWORK_ENFORCEMENT,
   type ExecuteVerificationArgs,
   type ExecuteVerificationResult,
+  type NetworkIsolationProbe,
+  type TimedNetworkIsolationProbe,
 } from "./verificationExecution.js";
-import { VERIFICATION_DEPENDENCY_REFUSAL_REASONS } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  VERIFICATION_DEPENDENCY_CONSUMERS,
+  VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   VERIFICATION_COMPLETION_FIELD_CONTRACTS,
   VERIFICATION_DEPENDENCY_STATE_VALUES,
@@ -252,6 +259,14 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
       required: false,
       values: VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
     },
+    // Who the tree was installed for (#4522): `host-shell` is the native runtime's own shell on this
+    // host. Absent is the governed verifier's own steps, as on every line before it.
+    consumer: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: VERIFICATION_DEPENDENCY_CONSUMERS,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -282,6 +297,19 @@ function isScriptBackedKind(kind: VerificationKind): boolean {
 // not pre-mark as skipped (no such script, or a package this verifier cannot install for).
 function runsPackageScript(step: VerificationPlan["steps"][number]): boolean {
   return isScriptBackedKind(step.kind) && step.skipReason === undefined;
+}
+
+// Whether the step can execute on a host whose isolation verdict is `isolationAvailable` (#4519).
+// Unknown (no probe taken before trust) counts as able, so trust is asked exactly as before.
+function stepRunsHere(
+  step: VerificationPlan["steps"][number],
+  isolationAvailable: boolean | undefined,
+): boolean {
+  if (isolationAvailable === undefined) return true;
+  return (
+    resolveStepNetwork(step.limits, VERIFICATION_NETWORK_ENFORCEMENT, isolationAvailable).kind ===
+    "run"
+  );
 }
 
 // ─── Public types ─────────────────────────────────────────────────────────────────
@@ -388,6 +416,13 @@ export interface VerificationRunnerManagerOptions {
   readonly now?: (() => number) | undefined;
   // Injectable execution port; tests supply a deterministic report/probe without spawning.
   readonly execute?: VerificationExecutePort | undefined;
+  // #4519: the isolation probe an agent run takes BEFORE it asks for package-script trust. A host
+  // that can isolate no script step has nothing to allow, so the run asks for no decision and runs
+  // under that very verdict, its steps refused as isolation unavailable. Absent, trust is asked
+  // first and the execution probes for itself, as before.
+  readonly probeIsolation?:
+    | ((cwd: string, correlationId: string | undefined) => Promise<TimedNetworkIsolationProbe>)
+    | undefined;
   readonly maxConcurrentRuns?: number | undefined;
   // Issue #2211 fix-up (Epic #2092): the audit-evidence trail, mirroring buildCommandRunner's
   // store/evidence/live-redactor construction pattern. Optional (like CommandRunnerManagerOptions)
@@ -474,6 +509,8 @@ interface PreparedVerificationRun {
   readonly plan: VerificationPlan;
   // The workspace whose test framework the run reports: the nested package's when it has one.
   readonly runnerWorkspace: WorkspaceInfo;
+  // The probe the script-trust decision was made on, when one was taken before it (#4519).
+  readonly isolation?: TimedNetworkIsolationProbe | undefined;
 }
 
 interface AgentExecution {
@@ -489,6 +526,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly runAdmittedManifest: (canonicalRoot: string) => boolean;
   private readonly now: () => number;
   private readonly executePort: VerificationExecutePort;
+  private readonly probeIsolation: VerificationRunnerManagerOptions["probeIsolation"];
   private readonly maxConcurrentRuns: number;
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
@@ -506,6 +544,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.runAdmittedManifest = opts.isWorktreeManifestRunAdmitted ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
     this.executePort = opts.execute ?? executeVerificationEnforced;
+    this.probeIsolation = opts.probeIsolation;
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
     this.evidenceStore = opts.evidenceStore;
     this.redactor = opts.redactor ?? ((input: string): string => input);
@@ -578,7 +617,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationRunOutcome> => {
-    const { resolved, plan, runnerWorkspace: workspace } = this.prepare(input);
+    // Without a probe the run is prepared and registered synchronously, exactly as before.
+    const {
+      resolved,
+      plan,
+      runnerWorkspace: workspace,
+      isolation,
+    } = this.probeIsolation === undefined ? this.prepare(input) : await this.prepareAgentRun(input);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -597,12 +642,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { execution, failureOutput } = await this.executeAgentPlan(
-        plan,
-        resolved,
-        entry,
-        input.sharedHostPlatform,
-      );
+      const { execution, failureOutput } = await this.executeAgentPlan(plan, resolved, entry, {
+        sharedHostPlatform: input.sharedHostPlatform,
+        isolation,
+      });
       const { report } = execution;
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
@@ -659,12 +702,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     plan: VerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
-    sharedHostPlatform: VerificationRunInput["sharedHostPlatform"],
+    host: {
+      readonly sharedHostPlatform: VerificationRunInput["sharedHostPlatform"];
+      readonly isolation: TimedNetworkIsolationProbe | undefined;
+    },
   ): Promise<AgentExecution> {
     const failureOutput: VerificationStepOutput[] = [];
+    const { sharedHostPlatform, isolation } = host;
     const execution = await this.executePort({
       ...this.buildExecuteArgs(plan, resolved, entry),
       ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
+      ...(isolation === undefined ? {} : { isolation }),
       onStepOutput: (output): void => {
         if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
       },
@@ -672,17 +720,50 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     return { execution, failureOutput };
   }
 
-  private prepare(input: VerificationRunInput): PreparedVerificationRun {
-    let workspace: WorkspaceInfo | undefined;
+  // The agent path probes the host's isolation before it asks for package-script trust, when the
+  // manager has a probe (#4519): the probe needs the resolved root, and the trust rule its verdict.
+  private async prepareAgentRun(input: VerificationRunInput): Promise<PreparedVerificationRun> {
+    const probe = this.probeIsolation;
+    if (probe === undefined) return this.prepare(input);
+    let probed: Parameters<typeof this.prepare>[1];
     try {
       const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
+      probed = { resolved, isolation: await probe(resolved.workspace.root, input.correlationId) };
+    } catch (error) {
+      // A probe that cannot answer is a runner failure on the same line as any other.
+      this.recordRunnerFailure(undefined, input.correlationId, error);
+      throw error;
+    }
+    return this.prepare(input, probed);
+  }
+
+  private prepare(
+    input: VerificationRunInput,
+    probed?: {
+      readonly resolved: ResolvedVerificationWorkspace;
+      readonly isolation: TimedNetworkIsolationProbe;
+    },
+  ): PreparedVerificationRun {
+    let workspace: WorkspaceInfo | undefined;
+    const isolationAvailable = probed?.isolation.probe.available;
+    try {
+      const resolved =
+        probed?.resolved ?? this.resolveWorkspace(input.projectId, input.correlationId);
       workspace = resolved.workspace;
-      const { plan, trust, runnerWorkspace } = this.buildPlan(resolved, input);
+      const { plan, trust, runnerWorkspace } = this.buildPlan(resolved, input, isolationAvailable);
       workspace = runnerWorkspace;
-      this.recordRunnerSelection(runnerWorkspace, input.correlationId, plan, trust);
+      this.recordRunnerSelection(runnerWorkspace, input.correlationId, plan, {
+        trust,
+        isolation: probed?.isolation.probe,
+      });
       this.assertRunnable(plan);
-      this.assertWorkspaceTrustAtEffect(resolved, plan, input.autonomyMode);
-      return { resolved, plan, runnerWorkspace };
+      this.assertWorkspaceTrustForSteps(
+        resolved,
+        plan.steps,
+        input.autonomyMode,
+        isolationAvailable,
+      );
+      return { resolved, plan, runnerWorkspace, isolation: probed?.isolation };
     } catch (error) {
       this.recordRunnerFailure(workspace, input.correlationId, error);
       throw error;
@@ -728,6 +809,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private buildPlan(
     resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
+    isolationAvailable: boolean | undefined,
   ): {
     readonly plan: VerificationPlan;
     readonly trust: ScriptTrustAdmission | undefined;
@@ -738,7 +820,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const pkg = this.resolvePackage(workspace, input, fs);
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
     const scriptSteps = this.scriptSteps(workspace, scriptKinds, fs, pkg);
-    const trust = this.assertWorkspaceTrustForSteps(resolved, scriptSteps, input.autonomyMode);
+    const trust = this.assertWorkspaceTrustForSteps(
+      resolved,
+      scriptSteps,
+      input.autonomyMode,
+      isolationAvailable,
+    );
     const steps = [...scriptSteps, ...this.targetedSteps(workspace, input, fs, pkg)];
     return {
       plan: {
@@ -780,20 +867,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   }
 
-  private assertWorkspaceTrustAtEffect(
-    resolved: ResolvedVerificationWorkspace,
-    plan: VerificationPlan,
-    autonomyMode: CodingWorkbenchMode | undefined,
-  ): void {
-    this.assertWorkspaceTrustForSteps(resolved, plan.steps, autonomyMode);
-  }
-
+  // Asked at plan time and again at effect. A host whose isolation verdict refuses every script
+  // step has nothing to allow (#4519): the steps are refused before they spawn, whatever is decided.
   private assertWorkspaceTrustForSteps(
     resolved: ResolvedVerificationWorkspace,
     steps: VerificationPlan["steps"],
     autonomyMode: CodingWorkbenchMode | undefined,
+    isolationAvailable?: boolean,
   ): ScriptTrustAdmission | undefined {
-    if (!steps.some(runsPackageScript)) return undefined;
+    const runnable = (step: VerificationPlan["steps"][number]): boolean =>
+      runsPackageScript(step) && stepRunsHere(step, isolationAvailable);
+    if (!steps.some(runnable)) return undefined;
     const decision = this.scriptTrust(resolved, autonomyMode);
     if (decision.trusted) {
       return {
@@ -915,8 +999,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo,
     correlationId: string | undefined,
     plan: VerificationPlan,
-    trust: ScriptTrustAdmission | undefined,
+    admission: {
+      readonly trust: ScriptTrustAdmission | undefined;
+      // The probe taken before trust was asked (#4519); absent when none was.
+      readonly isolation: NetworkIsolationProbe | undefined;
+    },
   ): void {
+    const { trust, isolation } = admission;
     this.activityLog.write(
       activityLogEvent(
         EDITOR_VERIFICATION_EXECUTE_OPERATION,
@@ -931,6 +1020,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           ...(trust?.manifestDigest === undefined
             ? {}
             : { trustManifestDigest: trust.manifestDigest }),
+          ...(isolation === undefined ? {} : { isolationAvailable: isolation.available }),
+          ...(isolation?.engine === undefined ? {} : { isolationEngine: isolation.engine }),
         },
       ),
     );
@@ -970,6 +1061,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           ...(dependencies.refusalReason === undefined
             ? {}
             : { refusalReason: dependencies.refusalReason }),
+          ...(dependencies.consumer === undefined ? {} : { consumer: dependencies.consumer }),
         },
       ),
     );

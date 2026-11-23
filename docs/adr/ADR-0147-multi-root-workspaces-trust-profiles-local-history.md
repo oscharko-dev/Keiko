@@ -55,9 +55,14 @@ verification runner's enforced egress isolation and sandbox (ADR-0043), the depe
 `supervised-coding` and every caller that supplies no mode (the command runner, the editor routes)
 keep the operator's explicit decision exactly as before. Trust is also asked only once the plan holds
 a script step that would run: a repository without a script for the requested verifier, or a package
-this verifier cannot install for, has nothing to allow and never pauses a run. The runner's selection
-line (`editor.verification.execute`, `state: "selected"`) names the basis and, for
-`autonomous-envelope`, the `package.json` digest it answered for (`trustManifestDigest`).
+this verifier cannot install for, has nothing to allow and never pauses a run. The same holds for a
+host that can isolate no script step (a Mac without a running container runtime, #4519): a coding
+run probes the host's isolation before it asks, asks for no decision when no answer could let a step
+run, and executes under that very verdict, so a backend started meanwhile cannot run a script nobody
+allowed. The runner's selection line (`editor.verification.execute`, `state: "selected"`) names the
+basis and, for `autonomous-envelope`, the `package.json` digest it answered for
+(`trustManifestDigest`); after such a probe it also records `isolationAvailable` and, for a
+local Docker engine, its closed `isolationEngine` answer.
 
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on

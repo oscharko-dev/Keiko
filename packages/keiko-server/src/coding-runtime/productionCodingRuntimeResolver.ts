@@ -1821,11 +1821,12 @@ function runObservers(
     onRuntimeEvent: options.onRuntimeEvent,
     verificationRevision: (): number | undefined =>
       options.editOutcomes.current?.verificationRevision?.(options.minted.authorityRef.runId),
-    verificationBlocked: (reason, targetDigest): void =>
+    verificationBlocked: (reason, targetDigest, scope): void =>
       options.editOutcomes.current?.verificationBlocked?.(
         options.minted.authorityRef.runId,
         reason,
         targetDigest,
+        scope,
       ),
     verificationAdmitted: () =>
       options.editOutcomes.current?.verificationAdmitted?.(options.minted.authorityRef.runId),

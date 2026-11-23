@@ -1,0 +1,13 @@
+{
+  "name": "keiko-acceptance-release",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coding Workbench acceptance fixture whose test needs an installed dependency (#4492)",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/record-check.js && node --test"
+  },
+  "dependencies": {
+    "semver": "^7.6.0"
+  }
+}

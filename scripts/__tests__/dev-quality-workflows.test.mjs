@@ -861,7 +861,11 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
     expect(aggregateJob).not.toContain("RUNTIME_QUALIFICATION_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
-    expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+    // The two result states are named once (SonarCloud S1192) and every comparison uses the name,
+    // so the fail-closed check still compares against exactly `success`.
+    expect(aggregateJob).toContain('readonly SUCCESS="success" SKIPPED="skipped"');
+    expect(aggregateJob).toContain('if [ "$result" != "$SUCCESS" ]');
+    expect(aggregateJob).not.toMatch(/(?:!=|=) "(?:success|skipped)"/u);
   });
 
   it("allows the build skip only for editor fast-path pull requests", () => {

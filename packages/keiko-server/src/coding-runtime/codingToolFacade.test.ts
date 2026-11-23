@@ -2386,6 +2386,126 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
     });
   });
 
+  function dependencyFailure(
+    state: "refused" | "failed" | "timed-out",
+    consumer: "host-shell" | "verification-steps" | undefined,
+    refusalReason?:
+      "install-scripts-required" | "package-manager-unsupported" | "lockfile-mismatch",
+  ): Record<string, unknown> {
+    return {
+      outcome: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      verificationFailure: {
+        summary: `dependency installation ${state}; no verification step ran`,
+        locations: [],
+        truncated: false,
+        dependencies: {
+          state,
+          lockfile: "absent",
+          exitCode: null,
+          durationMs: 4,
+          detail: "dependency installation did not complete",
+          ...(refusalReason === undefined ? {} : { refusalReason }),
+          ...(consumer === undefined ? {} : { consumer }),
+        },
+      },
+    };
+  }
+
+  // #4522: a refused or failed installation for the run's own shell fails the report, but no check
+  // ran; the card says so. A red step keeps "failed-check", and a summary the facade withholds
+  // claims nothing more.
+  it.each([
+    ["refused", "install-scripts-required"],
+    ["failed", undefined],
+    ["timed-out", undefined],
+  ] as const)(
+    "presents a %s installation for the run's shell as dependencies-unavailable",
+    async (state, refusalReason) => {
+      await expect(
+        presented(dependencyFailure(state, "host-shell", refusalReason)),
+      ).resolves.toEqual({ verificationOutcome: "dependencies-unavailable" });
+    },
+  );
+
+  // ADR-0043 D17: the governed verifier's own installation keeps the outcome it had before #4522.
+  it.each([["verification-steps"], [undefined]] as const)(
+    "keeps failed-check for a failed installation for the verifier's own steps (consumer %s)",
+    async (consumer) => {
+      await expect(presented(dependencyFailure("failed", consumer))).resolves.toEqual({
+        verificationOutcome: "failed-check",
+      });
+    },
+  );
+
+  // #4522 AC4: the model reads one fixed sentence per refusal of the installation for its shell,
+  // and the general one for any other failure of it; the verifier's own installation adds none.
+  async function modelResult(delegateOutcome: Record<string, unknown>): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    return createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+  }
+
+  it.each([
+    ["install-scripts-required", /names an install script/u],
+    ["package-manager-unsupported", /belong to Yarn or pnpm/u],
+    ["lockfile-mismatch", /lockfile no longer records what package\.json declares/u],
+  ] as const)(
+    "tells the model why its shell's installation was refused: %s",
+    async (reason, words) => {
+      const result = await modelResult(dependencyFailure("refused", "host-shell", reason));
+      expect(result).toMatchObject({ status: "failed", reasonCode: "VERIFICATION_FAILED" });
+      const guidance = (result as { readonly guidance?: unknown }).guidance;
+      expect(guidance).toMatch(words);
+      expect(guidance).toMatch(/Nothing was verified/u);
+    },
+  );
+
+  it("tells the model the general sentence for any other failure of its shell's installation", async () => {
+    const result = await modelResult(dependencyFailure("timed-out", "host-shell"));
+    expect((result as { readonly guidance?: unknown }).guidance).toMatch(
+      /could not install this project's dependencies, so nothing was verified/u,
+    );
+  });
+
+  it.each([["verification-steps"], [undefined]] as const)(
+    "adds no sentence to the verifier's own failed installation (consumer %s)",
+    async (consumer) => {
+      const result = await modelResult(dependencyFailure("failed", consumer));
+      expect(result).toMatchObject({ status: "failed", reasonCode: "VERIFICATION_FAILED" });
+      expect(result).not.toHaveProperty("guidance");
+    },
+  );
+
+  it("keeps failed-check for a red step and for a dependency summary it withholds", async () => {
+    await expect(
+      presented({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: {
+          summary: "test failed (exit 1)",
+          locations: [],
+          truncated: false,
+        },
+      }),
+    ).resolves.toEqual({ verificationOutcome: "failed-check" });
+    await expect(
+      presented({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_FAILED",
+        verificationFailure: {
+          summary: "dependency installation refused; no verification step ran",
+          locations: [],
+          truncated: false,
+          dependencies: { state: "refused", lockfile: "absent", consumer: "elsewhere" },
+        },
+      }),
+    ).resolves.toEqual({ verificationOutcome: "failed-check" });
+  });
+
   it("presents a completed verification as passed, with or without commit proof", async () => {
     const passed = { status: "passed", completed: ["test", "lint"] };
     await expect(presented({ outcome: "completed", verification: passed })).resolves.toEqual({

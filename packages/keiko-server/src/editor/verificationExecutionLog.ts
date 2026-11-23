@@ -36,7 +36,11 @@ import type {
 import type { ActivityLogFieldContract } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { SANDBOX_BACKENDS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { NetworkEnforcementMode } from "@oscharko-dev/keiko-verification";
-import type { ExecuteVerificationResult } from "./verificationExecution.js";
+import {
+  DOCKER_ENGINE_ANSWER_VALUES,
+  type DockerEngineAnswer,
+  type ExecuteVerificationResult,
+} from "./verificationExecution.js";
 
 // The registry's closed vocabularies. `as const satisfies` rejects a value the production type does
 // not have; the call site that hands a production value to `activityLogEvent` rejects a production
@@ -118,6 +122,14 @@ export const VERIFICATION_COMPLETION_FIELD_CONTRACTS = {
     values: ISOLATION_BACKEND_VALUES,
   },
   isolationAvailable: { type: "boolean", dataClass: "closed-enum", required: false },
+  // How a local Docker engine answered the probe's ping (#4519): a stopped engine that left its
+  // socket behind is `refused`, one that is still starting `rejected` or `unanswered`.
+  isolationEngine: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: DOCKER_ENGINE_ANSWER_VALUES,
+  },
   networkEnforcement: {
     type: "string",
     dataClass: "closed-enum",
@@ -149,6 +161,7 @@ interface VerificationCompletionLogFields {
   readonly buildDurationMs?: number;
   readonly isolationBackend?: SandboxBackend | "unknown";
   readonly isolationAvailable?: boolean;
+  readonly isolationEngine?: DockerEngineAnswer;
   readonly networkEnforcement?: NetworkEnforcementMode;
   readonly dependencyBootstrap?: VerificationDependencyState;
 }
@@ -260,6 +273,7 @@ function isolationFields(execution: ExecuteVerificationResult): VerificationComp
   return {
     isolationBackend: isolationBackendOf(execution.probe.backend),
     isolationAvailable: execution.probe.available,
+    ...(execution.probe.engine === undefined ? {} : { isolationEngine: execution.probe.engine }),
     ...(execution.networkEnforcement === undefined
       ? {}
       : { networkEnforcement: execution.networkEnforcement }),

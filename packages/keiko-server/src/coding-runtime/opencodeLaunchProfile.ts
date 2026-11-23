@@ -322,6 +322,10 @@ function launchEnvironment(
     TMPDIR: join(input.stateRoot, "tmp"),
     TEMP: join(input.stateRoot, "tmp"),
     TMP: join(input.stateRoot, "tmp"),
+    // `xcrun` keeps its lookup cache in the account's shared temporary directory, whatever TMPDIR
+    // says, and the native profile refuses a write there: every `git` of a shell then begins with
+    // "couldn't create cache file" (#4521). Its own variable keeps the cache in the run's tmp.
+    xcrun_db: join(input.stateRoot, "tmp", "xcrun_db"),
     OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
     // Repository configuration is data until the operator admits its executable effects
     // (#3903). The pinned runtime offers no per-item admission: its project layer discovers

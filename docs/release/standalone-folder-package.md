@@ -208,7 +208,8 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 - **Windows Coding needs no service.** The runtime supervisor in the package confines each run
   itself, as the signed-in user, without an administrator, a UAC prompt or an installed service
   (ADR-0043 D21), so the folder form needs no setup step and the Workbench offers no Repair. The
-  governed verification step still needs Docker or Podman, as on macOS. On macOS the Coding
+  governed verification step still needs Docker or Podman on Windows; on macOS a run verifies its
+  change with the project's own check in its sandboxed shell and needs neither. On macOS the Coding
   Workbench runs with the evaluation runtime of an unsigned build.
 - **One Keiko per computer account.** Keiko listens on loopback port 1983. A second Keiko of the
   same account, or another program on that port, makes the start end with a message that names the

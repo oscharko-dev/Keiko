@@ -15,13 +15,21 @@ test("window chunk @smoke — a chunk request that never answers offers a reload
   page,
 }) => {
   let lost = 0;
-  await page.route(/ChatHistoryPanel/u, async (route) => {
-    if (lost === 0) {
+  // The journeys run against the release build, whose chunk files carry hashed names (#4123); a
+  // development bundler names the module in the file name instead. The Chat History window's chunk
+  // is the one that names the panel in its URL or registers the panel's export.
+  await page.route(/\/_next\/static\/chunks\/[^?#]+\.js(?:[?#]|$)/u, async (route) => {
+    if (lost === 0 && route.request().url().includes("ChatHistoryPanel")) {
       // Never answered, as in the incident: the request stays pending and no error event fires.
       lost += 1;
       return;
     }
-    await route.continue();
+    const response = await route.fetch();
+    if (lost === 0 && (await response.text()).includes('["ChatHistoryPanel",')) {
+      lost += 1;
+      return;
+    }
+    await route.fulfill({ response });
   });
 
   await openChatComposer(page);

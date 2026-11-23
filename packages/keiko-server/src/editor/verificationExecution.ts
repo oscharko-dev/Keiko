@@ -19,6 +19,7 @@ import {
   LocalDockerEndpointUnavailableError,
 } from "@oscharko-dev/keiko-sandbox";
 import { createHash } from "node:crypto";
+import { request } from "node:http";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -100,15 +101,19 @@ function workspaceAdmission(
 export interface NetworkIsolationProbe {
   readonly available: boolean;
   readonly backend: string;
+  // How the local Docker engine answered, when the backend is one and the run asked it (#4519).
+  readonly engine?: DockerEngineAnswer | undefined;
 }
 
-function localDockerAvailable(
+// The local Docker endpoint the run would use, or undefined when none is usable.
+function localDockerHost(
   cwd: string,
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string | undefined,
-): boolean {
+): string | undefined {
   try {
-    return resolveLocalDockerEndpoint(process.env, cwd).kind === "available";
+    const endpoint = resolveLocalDockerEndpoint(process.env, cwd);
+    return endpoint.kind === "available" ? endpoint.host : undefined;
   } catch (error) {
     if (!(error instanceof LocalDockerEndpointUnavailableError)) throw error;
     emitServerDiagnostic(
@@ -121,8 +126,59 @@ function localDockerAvailable(
         redact: () => "docker-local-context-unavailable",
       }),
     );
-    return false;
+    return undefined;
   }
+}
+
+const LOCAL_DOCKER_PING_TIMEOUT_MS = 2_000;
+
+/** How a local Docker engine answered the verifier's ping (#4519); closed values only. */
+export const DOCKER_ENGINE_ANSWER_VALUES = [
+  "answered",
+  "refused",
+  "unanswered",
+  "rejected",
+] as const;
+export type DockerEngineAnswer = (typeof DOCKER_ENGINE_ANSWER_VALUES)[number];
+
+/**
+ * How a local Docker engine answers its API's `GET /_ping` (#4519). `answered` (HTTP 200) is the
+ * only running engine. `refused` is a connection that failed, such as a socket file a crashed or
+ * stopped engine left behind: the file still stats as a socket, so only a request tells the two
+ * apart. `unanswered` is no response within the timeout, and `rejected` any other response, such
+ * as a socket whose engine is still starting. A Windows named pipe is already proven served when it
+ * resolves (a pipe nobody serves does not exist), so it is not asked again.
+ */
+export function localDockerEngineAnswer(
+  host: string,
+  timeoutMs: number = LOCAL_DOCKER_PING_TIMEOUT_MS,
+): Promise<DockerEngineAnswer> {
+  if (host.startsWith("npipe://")) return Promise.resolve("answered");
+  if (!host.startsWith("unix://")) return Promise.resolve("refused");
+  return new Promise((resolve) => {
+    const ping = request({
+      socketPath: host.slice("unix://".length),
+      path: "/_ping",
+      agent: false,
+      timeout: timeoutMs,
+    });
+    ping.on("response", (response) => {
+      // The answer is taken from the status alone; a body cut short afterwards changes nothing.
+      response.on("error", () => {
+        resolve("rejected");
+      });
+      response.resume();
+      resolve(response.statusCode === 200 ? "answered" : "rejected");
+    });
+    ping.on("timeout", () => {
+      resolve("unanswered");
+      ping.destroy();
+    });
+    ping.on("error", () => {
+      resolve("refused");
+    });
+    ping.end();
+  });
 }
 
 // Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
@@ -144,9 +200,44 @@ export function probeNetworkIsolation(
       decision.attestation.networkEnforced &&
       decision.attestation.filesystemEnforced &&
       (decision.attestation.backend !== "container-docker" ||
-        localDockerAvailable(cwd, diagnostics, correlationId)),
+        localDockerHost(cwd, diagnostics, correlationId) !== undefined),
     backend: decision.attestation.backend,
   };
+}
+
+/**
+ * The probe a verification run executes under: `probeNetworkIsolation`, and for a local Docker
+ * engine also whether that engine answers its ping (#4519). A Docker that is installed and not running is no
+ * enforcing backend, so its steps are refused as isolation unavailable instead of failing inside the
+ * Docker client as if the project's own check had failed.
+ */
+export async function probeNetworkIsolationServed(
+  cwd: string,
+  diagnostics?: ServerDiagnosticSink,
+  correlationId?: string,
+): Promise<NetworkIsolationProbe> {
+  const probe = probeNetworkIsolation(cwd, diagnostics, correlationId);
+  if (!probe.available || probe.backend !== "container-docker") return probe;
+  const host = localDockerHost(cwd, diagnostics, correlationId);
+  if (host === undefined) return { ...probe, available: false };
+  const engine = await localDockerEngineAnswer(host);
+  return { ...probe, available: engine === "answered", engine };
+}
+
+/** An isolation probe and its own wall time, in whole milliseconds. */
+export interface TimedNetworkIsolationProbe {
+  readonly probe: NetworkIsolationProbe;
+  readonly durationMs: number;
+}
+
+export async function timedNetworkIsolationProbe(
+  cwd: string,
+  diagnostics?: ServerDiagnosticSink,
+  correlationId?: string,
+): Promise<TimedNetworkIsolationProbe> {
+  const startedAtMs = Date.now();
+  const probe = await probeNetworkIsolationServed(cwd, diagnostics, correlationId);
+  return { probe, durationMs: Math.max(0, Date.now() - startedAtMs) };
 }
 
 export interface ExecuteVerificationArgs {
@@ -178,13 +269,18 @@ export interface ExecuteVerificationArgs {
   // as it happens; never part of the persisted report.
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
   readonly onTargetedProjectFailure?: VerificationDeps["onTargetedProjectFailure"];
+  // An isolation probe the caller already took (#4519). The run then executes under the verdict its
+  // script-trust decision was made on: a run admitted without trust because no step could be
+  // isolated never runs a step that a backend started meanwhile would admit. Absent, the run
+  // probes the host itself.
+  readonly isolation?: TimedNetworkIsolationProbe | undefined;
 }
 
 // The egress policy every verification run executes under: a step that needs an enforced
 // `network: "none"` boundary runs only where the probe found a backend, and is denied before
 // spawning where it did not. It never degrades to an inherited network. One constant, so the policy
 // the orchestrator receives and the policy the run reports cannot differ (F14, #3873).
-const VERIFICATION_NETWORK_ENFORCEMENT =
+export const VERIFICATION_NETWORK_ENFORCEMENT =
   "enforce-or-fail-closed" as const satisfies NetworkEnforcementMode;
 
 export interface ExecuteVerificationResult {
@@ -291,13 +387,13 @@ export async function executeVerificationEnforced(
 async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
-  const probeStartedAtMs = Date.now();
-  const probe = probeNetworkIsolation(
-    args.probeCwd ?? args.workspace.root,
-    args.diagnostics,
-    args.correlationId,
-  );
-  const probeDurationMs = Math.max(0, Date.now() - probeStartedAtMs);
+  const { probe, durationMs: probeDurationMs } =
+    args.isolation ??
+    (await timedNetworkIsolationProbe(
+      args.probeCwd ?? args.workspace.root,
+      args.diagnostics,
+      args.correlationId,
+    ));
   const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,

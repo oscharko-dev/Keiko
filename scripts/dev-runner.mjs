@@ -18,6 +18,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
+import { resolveDevUiStaticRoot } from "./lib/dev-bff-env.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
@@ -60,6 +61,22 @@ export function resolveConfiguredNextBundler(preference) {
 }
 
 let nextBundler = resolveConfiguredNextBundler(nextBundlerPreference);
+
+// #4123: the browser suites serve the prebuilt static export through the dev BFF and start no
+// `next dev`. A Next development server compiles and serves multi-megabyte development chunks from
+// one event loop; on a loaded CI runner that loop stalled for five to ten seconds in the middle of a
+// suite (a WebKit trace: a 750 KB window chunk took 10.5 s, while the BFF answered every API call
+// within milliseconds), which no assertion budget absorbs. Development keeps `next dev`.
+export function resolveConfiguredStaticUiRoot(env) {
+  try {
+    return resolveDevUiStaticRoot(env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Invalid KEIKO_DEV_UI_STATIC_ROOT.");
+    process.exit(2);
+  }
+}
+
+const staticUiRoot = resolveConfiguredStaticUiRoot(process.env);
 let server;
 let bffCodeWatch;
 let shuttingDown = false;
@@ -112,6 +129,30 @@ self.addEventListener("activate", (event) => {
   })());
 });
 `.trimStart();
+
+// The static export registers `/sw.js` on every load. The development worker above unregisters
+// itself and reloads every window, so serving it to that bundle would reload the page forever.
+// This worker caches nothing and handles no fetch: the page is never controlled, as under
+// `next dev`, and a shell cache an earlier packaged run left on this origin is removed.
+const staticUiServiceWorker = `
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    if (typeof caches === "undefined") return;
+    const names = await caches.keys();
+    await Promise.all(
+      names.filter((name) => name.startsWith("keiko-shell-")).map((name) => caches.delete(name)),
+    );
+  })());
+});
+`.trimStart();
+
+export function devServiceWorkerSource(staticUi) {
+  return staticUi ? staticUiServiceWorker : devServiceWorker;
+}
 
 export function publicBrowserUrl(port) {
   return `http://${publicBrowserHost}:${String(port)}`;
@@ -606,7 +647,8 @@ async function readinessProbe() {
     microphoneAllowance.observe(observedRevision, api.allowSameOriginMicrophone);
     if (api.result !== "ok") return `api: ${api.result}`;
 
-    const ui = await fetchOk(`http://${host}:${String(nextPort)}/`, async (response) => {
+    const uiPort = staticUiRoot === undefined ? nextPort : bffPort;
+    const ui = await fetchOk(`http://${host}:${String(uiPort)}/`, async (response) => {
       const contentType = response.headers.get("content-type") ?? "";
       const body = await response.text();
       return contentType.includes("text/html") && body.includes("Keiko");
@@ -642,7 +684,7 @@ async function waitForPublicReadiness() {
         consecutiveReadyProbes = 0;
         writeState({ ready: false, starting: lastError });
       }
-      await sleep(500);
+      await sleep(500); // NOSONAR javascript:S9382 -- each readiness probe depends on the previous answer.
     }
   } finally {
     readinessCheckRunning = false;
@@ -1211,8 +1253,15 @@ function proxyUpgrade(req, socket, head, targetPort) {
   socket.on("error", destroyTunnel);
 }
 
+// The API always goes to the BFF; the UI goes to `next dev`, or to the BFF when it serves the
+// static export (#4123).
+export function routeTargetPort(pathname, ports) {
+  const api = pathname.startsWith("/api/") || pathname === "/api";
+  return api || ports.staticUi ? ports.bffPort : ports.nextPort;
+}
+
 function targetPortFor(pathname) {
-  return pathname.startsWith("/api/") || pathname === "/api" ? bffPort : nextPort;
+  return routeTargetPort(pathname, { staticUi: staticUiRoot !== undefined, bffPort, nextPort });
 }
 
 function serveDevServiceWorker(res) {
@@ -1220,7 +1269,7 @@ function serveDevServiceWorker(res) {
     "cache-control": "no-store",
     "content-type": "text/javascript; charset=utf-8",
   });
-  res.end(devServiceWorker);
+  res.end(devServiceWorkerSource(staticUiRoot !== undefined));
 }
 
 function serveStarting(res) {
@@ -1255,7 +1304,8 @@ const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("de
 if (invokedDirectly) {
   // PREFLIGHT: fail fast if next dev is already running on the configured port.
   const [portFree, publicPortFree, lockInfo] = await Promise.all([
-    checkNextPortFree(host, nextPort),
+    // No Next.js process starts when the BFF serves the static export (#4123).
+    staticUiRoot === undefined ? checkNextPortFree(host, nextPort) : true,
     // The public port had NO bind-time check: dev-start's probe runs before the
     // (long) build, so two concurrent `dev:start`s could both pass it and the
     // loser only failed ~60s later with an opaque health timeout. Checking here,
@@ -1294,7 +1344,8 @@ if (invokedDirectly) {
   if (!skipPackageWatchForTest) startPackageBuildWatch();
   if (bffCodeWatchEnabled(process.env)) startBffCodeWatch();
   startBff();
-  startNext();
+  if (staticUiRoot === undefined) startNext();
+  else console.log("[dev] serving the prebuilt static UI export through the BFF (no next dev)");
 
   server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);

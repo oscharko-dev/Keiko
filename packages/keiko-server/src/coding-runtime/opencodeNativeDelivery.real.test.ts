@@ -43,7 +43,7 @@ import {
   hasExactOpenCodeVisibleToolContract,
 } from "./opencodeToolSchemas.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
@@ -234,6 +234,9 @@ function answerPolicy(facade: FacadeStub, body: unknown, response: ServerRespons
     planRoot: facade.planRoot,
     request,
     nowMs: Date.now(),
+    // As the composition derives it from the run's verified version (#4359).
+    codeModeNestedEffectsDecided:
+      openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects === true,
   });
   facade.decisions.push(decision);
   // An `ask` would wait for the operator in production; the fixture records it and lets it pass
@@ -768,43 +771,45 @@ describe("pinned native OpenCode Git delivery tools", () => {
   );
 
   it.skipIf(skip)(
-    "still refuses a shell Git write in the real policy and points the model to the delivery tools",
+    "still refuses a shell Git write in the real policy, in every mode, and points the model to the delivery tools",
     async () => {
-      await withRun({ mode: "supervised-coding" }, async (run) => {
-        for (const command of [
-          'git commit --allow-empty -m "shell commit"',
-          "git push origin HEAD",
-          "gh pr create --fill",
-        ]) {
-          const result = await scriptedTurn(
+      // #4521: the published delivery sentence names every mode, Full access included.
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"] as const)
+        await withRun({ mode }, async (run) => {
+          for (const command of [
+            'git commit --allow-empty -m "shell commit"',
+            "git push origin HEAD",
+            "gh pr create --fill",
+          ]) {
+            const result = await scriptedTurn(
+              run,
+              { name: "shell", arguments: { command, description: "Deliver the change" } },
+              "Run the command.",
+            );
+            expect(result).toContain(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE);
+          }
+          // Nothing ran: the repository has no commit, and no delivery request reached the facade.
+          expect(workspaceGit(run.fixture, "rev-parse", "--verify", "HEAD").status).not.toBe(0);
+          expect(existsSync(join(run.fixture.workspace, ".git", "COMMIT_EDITMSG"))).toBe(false);
+          expect(
+            run.facade.decisions.filter(
+              (decision) => decision.effect === "deny" && decision.reason === "delivery-reserved",
+            ),
+          ).toHaveLength(3);
+          expect(
+            run.facade.requests.filter((r) => object(r.body)?.action !== "native-policy"),
+          ).toEqual([]);
+          // The read-only form of the same program stays available.
+          const status = await scriptedTurn(
             run,
-            { name: "shell", arguments: { command, description: "Deliver the change" } },
-            "Run the command.",
+            { name: "shell", arguments: { command: "git status --short", description: "Status" } },
+            "Show the status.",
           );
-          expect(result).toContain(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE);
-        }
-        // Nothing ran: the repository has no commit, and no delivery request reached the facade.
-        expect(workspaceGit(run.fixture, "rev-parse", "--verify", "HEAD").status).not.toBe(0);
-        expect(existsSync(join(run.fixture.workspace, ".git", "COMMIT_EDITMSG"))).toBe(false);
-        expect(
-          run.facade.decisions.filter(
-            (decision) => decision.effect === "deny" && decision.reason === "delivery-reserved",
-          ),
-        ).toHaveLength(3);
-        expect(
-          run.facade.requests.filter((r) => object(r.body)?.action !== "native-policy"),
-        ).toEqual([]);
-        // The read-only form of the same program stays available.
-        const status = await scriptedTurn(
-          run,
-          { name: "shell", arguments: { command: "git status --short", description: "Status" } },
-          "Show the status.",
-        );
-        expect(status).toContain(FIXTURE_FILE);
-        expect(status).not.toContain("Keiko refused");
-      });
+          expect(status).toContain(FIXTURE_FILE);
+          expect(status).not.toContain("Keiko refused");
+        });
     },
-    180_000,
+    360_000,
   );
 
   it.skipIf(skip)(

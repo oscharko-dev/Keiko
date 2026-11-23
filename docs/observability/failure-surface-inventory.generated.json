@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4e41ae2659667c2bd9b7c0928043a5ec97891a189fd9fcb6e8d56b8245af845a"
+    "catalogDigest": "08db99d48eac12422beef1b369937b618633c835efbfb5e575cb42b8bcb9d0a1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 723,
-    "proofCount": 747,
-    "resolvedProofCount": 747,
-    "failureClassCount": 415,
+    "operationCount": 724,
+    "proofCount": 748,
+    "resolvedProofCount": 748,
+    "failureClassCount": 416,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -469,6 +469,7 @@
         "coding-runtime.remote-skills.admitted",
         "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-items.admitted",
+        "coding-runtime.repository-relay",
         "coding-runtime.repository-rerank",
         "coding-runtime.revert.applied",
         "coding-runtime.revert.dispatch-failed",
@@ -1016,6 +1017,7 @@
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
+    "coding-runtime-repository-relay": ["tools-workflows.dependency-failure"],
     "coding-runtime-jira-pod": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
     "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
@@ -1912,6 +1914,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
     ],
     "coding-runtime.native-build-settings.admitted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/nativeBuildSettings.relay.test.ts",
       "packages/keiko-server/src/coding-runtime/nativeBuildSettings.test.ts"
     ],
     "coding-runtime.native-certificates.admitted.emitted-line": [
@@ -1999,6 +2002,9 @@
     ],
     "coding-runtime.repository-items.admitted.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.test.ts"
+    ],
+    "coding-runtime.repository-relay.emitted-line": [
+      "packages/keiko-server/src/repository-relay/repositoryCredentialRelay.test.ts"
     ],
     "coding-runtime.repository-rerank.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"

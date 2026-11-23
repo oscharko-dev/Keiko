@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  nativeDeveloperDirectoryReadRoots,
   nativeHomeDeniedReadRoots,
   nativeOpenSslNodeOptions,
   nativeOpenSslReadRoots,
@@ -184,6 +185,53 @@ describe("nativeToolchainReadRoots", () => {
 });
 
 // #3901 AC4: an operator's explicit OpenSSL configuration opens read-only, under the toolchain rule.
+// #4521: a versioned Xcode is the developer directory `xcode-select` chose, and Git runs from it.
+describe("nativeDeveloperDirectoryReadRoots", () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const directory of created.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
+
+  function selected(developer: string): { readonly root: string; readonly link: string } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-developer-dir-")));
+    created.push(root);
+    mkdirSync(join(root, developer), { recursive: true });
+    symlinkSync(join(root, developer), join(root, "xcode_select_link"));
+    return { root, link: join(root, "xcode_select_link") };
+  }
+
+  it("opens the whole bundle of a versioned Xcode the link selects", () => {
+    const { root, link } = selected("Applications/Xcode_16.4.app/Contents/Developer");
+    expect(nativeDeveloperDirectoryReadRoots(join(root, "home"), link)).toEqual({
+      disposition: "app-bundle",
+      roots: [join(root, "Applications", "Xcode_16.4.app")],
+    });
+  });
+
+  it("opens a developer directory outside a bundle by itself", () => {
+    const { root, link } = selected("Library/Developer/CommandLineTools");
+    expect(nativeDeveloperDirectoryReadRoots(join(root, "home"), link)).toEqual({
+      disposition: "directory",
+      roots: [join(root, "Library", "Developer", "CommandLineTools")],
+    });
+  });
+
+  it("opens nothing without a selection, and never the home or a credential store", () => {
+    const { root, link } = selected("home/Library/Keychains/Xcode.app/Contents/Developer");
+    expect(nativeDeveloperDirectoryReadRoots(join(root, "home"), link)).toEqual({
+      disposition: "refused",
+      roots: [],
+    });
+    rmSync(link);
+    symlinkSync(join(root, "home"), link);
+    expect(nativeDeveloperDirectoryReadRoots(join(root, "home"), link).disposition).toBe("refused");
+    expect(nativeDeveloperDirectoryReadRoots(join(root, "home"), join(root, "absent"))).toEqual({
+      disposition: "none",
+      roots: [],
+    });
+  });
+});
+
 describe("nativeOpenSslReadRoots", () => {
   const created: string[] = [];
   afterEach(() => {

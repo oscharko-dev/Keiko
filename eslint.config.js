@@ -91,6 +91,9 @@ export default defineConfig(
       // The nested-monorepo baseline of the same lab (#4271, T37 to T41): a polyglot Maven and npm
       // workspace whose plain JavaScript the lab runs and edits in a scratch copy; data, not product.
       "tests/fixtures/coding-workbench-lab/polyglot-mono/**",
+      // The acceptance-task projects (#4492): plain Node projects a Coding run repairs and tests in
+      // a scratch copy, one with a deliberate defect; data the acceptance test copies, not product.
+      "tests/fixtures/coding-acceptance/**",
       // Design-system evidence reproduction harnesses (e.g. the #1293 computed-value equivalence
       // harness): standalone Node + Playwright scripts that mix Node and in-browser (page.evaluate)
       // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,

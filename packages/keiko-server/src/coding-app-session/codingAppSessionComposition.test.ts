@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -111,13 +111,22 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
 
   it("no production source imports the CI pairing fake (_support), so it is unreachable", () => {
     const srcRoot = join(import.meta.dirname, "..");
+    // `src/test-support/` holds shared pipeline fixtures that pair through the fake. They are
+    // exempt only while the package build excludes that tree, and a production source that
+    // imports one of them reaches the fake through it, so it counts as an offender as well.
+    expect(packageBuildExcludes()).toContain("src/test-support/**");
     const offenders = readdirSync(srcRoot, { recursive: true, encoding: "utf8" })
       .filter(
-        (rel) => rel.endsWith(".ts") && !rel.endsWith(".test.ts") && !rel.endsWith("_support.ts"),
+        (rel) =>
+          rel.endsWith(".ts") &&
+          !rel.endsWith(".test.ts") &&
+          !rel.endsWith("_support.ts") &&
+          !rel.startsWith(`test-support${sep}`),
       )
-      .filter((rel) =>
-        importsCodingAppSessionSupport(rel, readFileSync(join(srcRoot, rel), "utf8")),
-      );
+      .filter((rel) => {
+        const content = readFileSync(join(srcRoot, rel), "utf8");
+        return importsCodingAppSessionSupport(rel, content) || importsTestSupport(content);
+      });
     expect(offenders).toEqual([]);
   });
 });
@@ -135,6 +144,19 @@ function routeCtx(cookie?: string): RouteContext {
     params: {},
     url: new URL("http://127.0.0.1/"),
   };
+}
+
+function packageBuildExcludes(): readonly string[] {
+  const tsconfig = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "..", "tsconfig.json"), "utf8"),
+  ) as { readonly exclude?: readonly string[] };
+  return tsconfig.exclude ?? [];
+}
+
+function importsTestSupport(content: string): boolean {
+  return [...content.matchAll(/from\s+["']([^"']+)["']/g)].some((match) =>
+    /(^|\/)test-support\//u.test(match[1] ?? ""),
+  );
 }
 
 function importsCodingAppSessionSupport(relPath: string, content: string): boolean {

@@ -63,6 +63,12 @@ monotonic semantics fixed by
   capability-availability clarification: a surface still needs an implemented execution path
   before a given mode's `allowed` verdict can act.)
 
+In every mode a native Coding run reads dependencies from the Maven and npm repositories the person
+configured, through Keiko's repository credential relay (owner decision 2026-11-22, ADR-0184 D6).
+Below Full access it is the one path to those repositories, beside the read-only Maven cache, and
+gives the run no network route of its own: Keiko makes the read. The build command keeps its mode's
+disposition; the relay read itself needs no approval.
+
 **Coding Workbench availability (owner decision, 2026-09-27):** a normal installation offers all
 three modes without extra configuration; its Coding ceiling defaults to `autonomous-delivery`.
 The selected mode defaults to **Ask for approval**, and a saved human mode selection remains a
@@ -1204,6 +1210,22 @@ carries one closed reason (`unauthenticated`, `unavailable`, `no-workspace`, `in
 cause chain), a completion the source, message, omitted, skipped and redacted-message counts and the
 byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
 title or path ever enters the line (ADR-0137 D4).
+
+`coding-runtime.repository-relay` records Keiko's repository credential relay (#4522, ADR-0184): a
+native run reads the Maven and npm repositories the person configured through a per-run, read-only
+capability on the attested loopback origin and never holds a credential Keiko read from a file. A
+credential Keiko takes from its own environment stays readable to a macOS shell (ADR-0184 D2). The
+line records `bind`
+(`bound` or `refused` with a closed `reason`), a refused or `failed` request, and one `settled`
+summary per binding when its run is released (request, relayed, refused, failed, cancelled,
+upstream client and server error and redirect counts, bytes, duration), under the run's
+correlation. The admission line `coding-runtime.native-build-settings.admitted` adds
+`relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and the closed
+`relayRefusalReasons` (including `id-ambiguous`, `rewrite-missed` and the informational
+`profile-inactive`). Never a URL, host, path, artifact coordinate, user name or credential; a
+credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
+never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
+user-level files are read.
 
 `coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and `coding-runtime.schedule.lease`
 record scheduled continuations (#4271, ADR-0137): a schedule a native run's model created wakes its

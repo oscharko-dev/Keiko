@@ -278,7 +278,8 @@ function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
       | "waiting-for-trust"
       | "no-runnable-steps"
       | "not-run"
-      | "isolation-unavailable",
+      | "isolation-unavailable"
+      | "dependencies-unavailable",
   ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
     callId,
     tool: "keiko_verification",
@@ -291,6 +292,7 @@ function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
     call("verify-empty", "failed", "no-runnable-steps"),
     call("verify-skipped", "failed", "not-run"),
     call("verify-no-isolation", "failed", "isolation-unavailable"),
+    call("verify-no-dependencies", "failed", "dependencies-unavailable"),
     call("verify-red", "failed", "failed-check"),
     call("verify-green", "succeeded", "passed"),
   ];
@@ -447,11 +449,24 @@ describe("CodingWorkbenchTimeline", () => {
     expect(noIsolation.querySelector('[data-state="isolation-unavailable"]')).toHaveTextContent(
       "Cannot run here",
     );
-    expect(noIsolation).toHaveTextContent("has no container runtime (Docker or Podman)");
+    expect(noIsolation).toHaveTextContent(
+      "container runtime (Docker or Podman), and none is running",
+    );
     expect(noIsolation).toHaveTextContent("The change is kept");
     expect(noIsolation).toHaveTextContent("run the check again, or check the change yourself");
 
-    for (const unrun of [trust, empty, skipped, noIsolation]) {
+    // #4522: a refused or failed dependency installation ran no check; never "Failed".
+    const noDependencies = card("dependencies-unavailable");
+    expect(noDependencies.open).toBe(true);
+    expect(
+      noDependencies.querySelector('[data-state="dependencies-unavailable"]'),
+    ).toHaveTextContent("Dependencies missing");
+    expect(noDependencies).toHaveTextContent(
+      "Keiko could not install the project's dependencies, so no check ran",
+    );
+    expect(noDependencies).toHaveTextContent("Install the dependencies in the project folder");
+
+    for (const unrun of [trust, empty, skipped, noIsolation, noDependencies]) {
       expect(unrun).not.toHaveTextContent("Failed");
       expect(unrun).not.toHaveTextContent("reported an error");
       expect(unrun.querySelector('[data-state="failed"]')).toBeNull();
@@ -639,13 +654,20 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("failed")).toContain("Fehlgeschlagen");
       expect(text("succeeded")).toContain("bestanden");
       expect(text("isolation-unavailable")).toContain("Hier nicht möglich");
-      expect(text("isolation-unavailable")).toContain("keine Container-Laufzeit");
+      expect(text("isolation-unavailable")).toContain(
+        "Container-Laufzeit (Docker oder Podman) aus, und keine läuft",
+      );
       expect(text("isolation-unavailable")).toContain("Deine Änderung bleibt erhalten");
+      expect(text("dependencies-unavailable")).toContain("Abhängigkeiten fehlen");
+      expect(text("dependencies-unavailable")).toContain(
+        "Keiko konnte die Abhängigkeiten des Projekts nicht installieren",
+      );
       for (const state of [
         "waiting-for-trust",
         "no-runnable-steps",
         "not-run",
         "isolation-unavailable",
+        "dependencies-unavailable",
       ]) {
         expect(text(state)).not.toContain("Fehlgeschlagen");
       }

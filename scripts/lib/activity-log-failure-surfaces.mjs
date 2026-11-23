@@ -108,6 +108,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "coding-runtime", surface: "tools-workflows" },
   // The operator's MCP server registry (#3903): admitted MCP tools are governed tool surfaces.
   { owner: "keiko-server", emitterPrefix: "mcp", surface: "tools-workflows" },
+  // The repository credential relay (#4522): a native run's governed Maven and npm reads.
+  { owner: "keiko-server", emitterPrefix: "repository-relay", surface: "tools-workflows" },
   {
     owner: "keiko-server",
     emitterPrefix: "coding-runtime.productionDraftDeliveryDependencies",
