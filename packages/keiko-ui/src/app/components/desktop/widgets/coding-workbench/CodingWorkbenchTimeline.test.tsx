@@ -2867,6 +2867,37 @@ describe("Timeline — error report on a failed run", () => {
     expect(create).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
   });
 
+  it("offers the report on a non-status event whose detail is the internal-error sentence", () => {
+    const redacted: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      runId: RUN_ID,
+      eventKind: "failure-redacted",
+      failureCode: "runtime-failed",
+    };
+    render(
+      <Timeline
+        events={[redacted]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+  });
+
+  it("shows no report on a turn failure that names its own mapped cause", () => {
+    const turn: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      runId: RUN_ID,
+      eventKind: "failure-redacted",
+      failureCode: "provider-failed",
+    };
+    const { container } = render(
+      <Timeline events={[turn]} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
+    );
+    expect(container.querySelector('[data-timeline-kind="event"]')).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+
   it.each(["succeeded", "cancelled"] as const)("shows no error report on a %s run", (state) => {
     renderSettled(state);
     expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();

@@ -5,6 +5,7 @@ import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bf
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { SupportReportButton } from "../../SupportReportButton";
 import {
   CodingWorkbenchRepositorySelector,
@@ -3081,6 +3082,10 @@ function RecoveryPanel({
       {acknowledged && intentEmpty ? (
         <p className={styles.summary}>{t("codingWorkbench.recovery.retryHint")}</p>
       ) : null}
+      <SupportReportButton
+        correlationId={isActivityLogCorrelationId(snapshot.runId) ? snapshot.runId : undefined}
+        errorKey={`coding-run-${snapshot.runId}`}
+      />
     </section>
   );
 }

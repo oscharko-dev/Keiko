@@ -13,6 +13,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import * as reportApi from "@/lib/support-report-api";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -3705,7 +3706,7 @@ describe("CodingWorkbenchWindow", () => {
   // control left. Every recovery state names a way forward: acknowledge, retry with a description
   // or leave with a new task, and nothing is sent again by itself.
   describe("the way out of Recovery required (F30)", () => {
-    const recoveryState = (acknowledged: boolean): ReturnType<typeof liveState> =>
+    const recoveryState = (acknowledged: boolean, runId = "run-1"): ReturnType<typeof liveState> =>
       liveState({
         canStart: acknowledged,
         canRetry: acknowledged,
@@ -3714,7 +3715,7 @@ describe("CodingWorkbenchWindow", () => {
           error: null,
           value: snapshot({
             state: "recovery-required",
-            runId: "run-1",
+            runId,
             failureCode: "recovery-required",
             ...(acknowledged ? { recoveryAcknowledged: true } : {}),
           }),
@@ -3724,6 +3725,22 @@ describe("CodingWorkbenchWindow", () => {
     it("says plainly that Keiko does not know whether the change went through", () => {
       renderWorkbench(recoveryState(false));
       expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
+    });
+
+    it("offers the error report for the run that needs recovery", async () => {
+      const runId = "run-272120967981827964065820685403290179367";
+      const create = vi
+        .spyOn(reportApi, "createSupportReport")
+        .mockResolvedValue({ fileName: "report.json.gz", reportJson: "{}" });
+      vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+        href: "blob:run-report",
+        dispose: vi.fn(),
+      });
+      renderWorkbench(recoveryState(false, runId));
+      fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+      await screen.findByRole("link", { name: "Download report" });
+      expect(create).toHaveBeenCalledWith(runId, expect.any(AbortSignal));
+      expect(await axe(document.body)).toHaveNoViolations();
     });
 
     it("offers a new task before the recovery is acknowledged", async () => {

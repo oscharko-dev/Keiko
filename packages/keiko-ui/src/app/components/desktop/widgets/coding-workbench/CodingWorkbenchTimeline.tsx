@@ -41,7 +41,7 @@ import {
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
-import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
+import { eventDetail, eventOffersErrorReport, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
@@ -1415,7 +1415,7 @@ function RunFailureReport({
 }: {
   readonly event: CodingWorkbenchRuntimeSseEvent;
 }): ReactNode {
-  if (event.kind !== "status" || event.state !== "failed") return null;
+  if (!eventOffersErrorReport(event)) return null;
   const correlationId = isActivityLogCorrelationId(event.runId) ? event.runId : undefined;
   return (
     <p className={styles.timelineDetail} data-run-failure-report="">

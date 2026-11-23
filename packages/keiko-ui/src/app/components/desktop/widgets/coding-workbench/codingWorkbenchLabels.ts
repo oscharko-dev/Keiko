@@ -476,8 +476,33 @@ function eventFailureDetail(
 ): string {
   const turnFailure = turnFailureDetail(event, t);
   if (turnFailure.length > 0) return turnFailure;
-  if (event.failureCode === undefined) return "";
-  return t(RUN_FAILURE_MESSAGES.get(event.failureCode) ?? "codingWorkbench.event.failure.generic");
+  const key = runFailureMessageKey(event);
+  return key === undefined ? "" : t(key);
+}
+
+function runFailureMessageKey(
+  event: CodingWorkbenchRuntimeSseEvent,
+): CodingWorkbenchMessageKey | undefined {
+  if (event.failureCode === undefined) return undefined;
+  return RUN_FAILURE_MESSAGES.get(event.failureCode) ?? "codingWorkbench.event.failure.generic";
+}
+
+const identityTranslate: CodingWorkbenchTranslate = (key) => key;
+
+/**
+ * True exactly when the card tells the person to create an error report: a run that settled
+ * `failed`, or an event whose detail is the internal-error or generic failure sentence. The
+ * timeline renders the report action from this one predicate, so those sentences never point to an
+ * action that is not there.
+ */
+export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): boolean {
+  if (event.kind === "status" && event.state === "failed") return true;
+  if (turnFailureDetail(event, identityTranslate).length > 0) return false;
+  const key = runFailureMessageKey(event);
+  return (
+    key === "codingWorkbench.event.failure.runtime" ||
+    key === "codingWorkbench.event.failure.generic"
+  );
 }
 
 function turnFailureDetail(
