@@ -65,7 +65,13 @@ describe("parseFormsArgs", () => {
       expectMarked: "record",
       account: "standard",
       repository: "oscharko-dev/Keiko",
+      forms: [...FORMS],
     });
+  });
+
+  it("leaves out one deferred form", () => {
+    const argv = ["--version", "1.5.6", "--out-dir", "out", "--defer-form", "npm-folder"];
+    expect(parseFormsArgs(argv, "26.13.1").forms).toEqual(["npm", "standalone"]);
   });
 
   it("refuses a malformed or missing value", () => {
@@ -77,6 +83,7 @@ describe("parseFormsArgs", () => {
       ["--version", "1.5.6", "--out-dir", "out", "--expect-marked", "maybe"],
       ["--version", "1.5.6", "--out-dir", "out", "--account", "admin"],
       ["--version", "1.5.6", "--out-dir", "out", "--unknown", "x"],
+      ["--version", "1.5.6", "--out-dir", "out", "--defer-form", "keiko-app"],
     ];
     for (const argv of refused) expect(() => parseFormsArgs(argv, "26.13.1")).toThrow(FormsRefusal);
   });
@@ -198,6 +205,28 @@ describe("buildFormsEvidence", () => {
       runner,
     });
     expect(evidence).toMatchObject({ passed: true, certifies: true, version: "1.5.6" });
+  });
+
+  it("passes a run that deferred a form, names it and certifies nothing", () => {
+    const options = { ...OPTIONS, forms: ["npm", "standalone"] };
+    const forms = passedForms().filter((entry) => entry.form !== "npm-folder");
+    const evidence = buildFormsEvidence({
+      options,
+      account: STANDARD,
+      forms,
+      marked: MARKED,
+      runner,
+    });
+    expect(evidence).toMatchObject({
+      passed: true,
+      certifies: false,
+      formsDeferred: ["npm-folder"],
+    });
+    // A form that ran and failed still fails the run, deferral or not.
+    const failed = forms.map((entry) => ({ ...entry, passed: entry.form !== "npm" }));
+    expect(
+      buildFormsEvidence({ options, account: STANDARD, forms: failed, marked: MARKED, runner }),
+    ).toMatchObject({ passed: false, certifies: false });
   });
 
   it("never certifies a rehearsal under --account any, even of a standard account", () => {
@@ -371,7 +400,7 @@ describe("the standard-account job (#4520)", () => {
     const names = job.steps.map((entry) => entry.name);
     const created = names.indexOf("Create the standard account the forms are installed as");
     const marked = names.indexOf("Mark the moment before the standard account acts");
-    const forms = names.indexOf("Install and start the three forms as the standard account");
+    const forms = names.indexOf("Install and start the forms as the standard account");
     const footprint = names.indexOf(
       "Check that nothing outside the account's own folders was created or changed",
     );
@@ -380,12 +409,18 @@ describe("the standard-account job (#4520)", () => {
       [...[created, marked, forms, footprint]].sort((a, b) => a - b),
     );
     expect(job.steps[created].uses).toBe("./.github/actions/macos-standard-account");
-    const run = step("Install and start the three forms as the standard account").run;
+    const run = step("Install and start the forms as the standard account").run;
     expect(run).toContain("sudo -u keikoqa -H /usr/bin/env -i");
     expect(run).toContain("CI=true");
     expect(run).toContain(`${DISPOSABLE_ACCOUNT_VARIABLE}=1`);
     expect(run).toContain("node scripts/testing/qualify-macos-standard-account-forms.mjs");
     expect(run).not.toContain("--account any");
+    // Only a pull request defers the npm folder form; the publication run qualifies all three.
+    expect(
+      step("Install and start the forms as the standard account").env.KEIKO_QUALIFY_DEFER,
+    ).toBe("${{ github.event_name == 'pull_request' && 'npm-folder' || '' }}");
+    expect(run).toContain('${KEIKO_QUALIFY_DEFER:+--defer-form "$KEIKO_QUALIFY_DEFER"}');
+    expect(run).not.toMatch(/--defer-form npm-folder/u);
     const check = step(
       "Check that nothing outside the account's own folders was created or changed",
     );

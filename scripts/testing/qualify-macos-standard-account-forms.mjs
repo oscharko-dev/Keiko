@@ -124,7 +124,7 @@ const EXPECTATIONS = Object.freeze(["record", ...MARKED_OUTCOMES]);
 const USAGE = `Usage (as the account under proof, on a Mac):
   node scripts/testing/qualify-macos-standard-account-forms.mjs --version X.Y.Z --out-dir DIR
        [--node-version X.Y.Z] [--expect-marked OUTCOME] [--account standard|any]
-       [--repository OWNER/NAME]
+       [--defer-form FORM] [--repository OWNER/NAME]
 
   --version        the published Keiko version whose forms are qualified
   --out-dir        keeps the evidence file (keiko-macos-standard-account-forms.json)
@@ -132,6 +132,8 @@ const USAGE = `Usage (as the account under proof, on a Mac):
   --expect-marked  record (default) | ${MARKED_OUTCOMES.join(" | ")}
   --account        standard (default): certify only as a standard account without sudo;
                    any: a rehearsal under another account, which certifies nothing
+  --defer-form     ${FORMS.join(" | ")}: leave that form out; the evidence names it as deferred
+                   and certifies nothing
 `;
 
 export class FormsRefusal extends Error {}
@@ -148,6 +150,7 @@ export function parseFormsArgs(argv, nodeVersion = process.versions.node) {
     "--node-version": "nodeVersion",
     "--expect-marked": "expectMarked",
     "--account": "account",
+    "--defer-form": "deferForm",
     "--repository": "repository",
   };
   const options = {
@@ -162,7 +165,10 @@ export function parseFormsArgs(argv, nodeVersion = process.versions.node) {
   if (!VERSION_PATTERN.test(String(options.nodeVersion))) refuse("--node-version must be x.y.z");
   if (!EXPECTATIONS.includes(options.expectMarked)) refuse("--expect-marked is not an outcome");
   if (!ACCOUNTS.includes(options.account)) refuse("--account must be standard or any");
-  return options;
+  if (options.deferForm !== undefined && !FORMS.includes(options.deferForm)) {
+    refuse("--defer-form is not a form");
+  }
+  return { ...options, forms: FORMS.filter((form) => form !== options.deferForm) };
 }
 
 /** The documented lines with this run's Node.js version, architecture and Keiko version. */
@@ -270,15 +276,21 @@ function markedMatches(marked, expectMarked) {
 /**
  * The body-free evidence: closed values, counts, digests and durations. A pinned marked outcome
  * holds only in the account's desktop session; `record` records whatever the start showed. Only a
- * run under `--account standard` certifies; a rehearsal under another account never does.
+ * run of all three forms under `--account standard` certifies; a rehearsal under another account,
+ * or a run that deferred a form, never does.
  */
 export function buildFormsEvidence({ options, account, forms, marked, runner }) {
-  const formsPassed = FORMS.every((form) =>
+  const qualified = options.forms ?? FORMS;
+  const deferred = FORMS.filter((form) => !qualified.includes(form));
+  const formsPassed = qualified.every((form) =>
     forms.some((entry) => entry.form === form && formPassed(entry)),
   );
   const passed = formsPassed && markedMatches(marked, options.expectMarked);
-  const standard =
-    options.account === "standard" && !account.administrator && account.sudo === "refused";
+  const certifiable =
+    deferred.length === 0 &&
+    options.account === "standard" &&
+    !account.administrator &&
+    account.sudo === "refused";
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     kind: EVIDENCE_KIND,
@@ -288,7 +300,8 @@ export function buildFormsEvidence({ options, account, forms, marked, runner }) 
     account,
     runner,
     passed,
-    certifies: passed && standard,
+    certifies: passed && certifiable,
+    formsDeferred: deferred,
     forms,
     markedDownload: marked ?? null,
   };
@@ -689,7 +702,7 @@ function runnerIdentity() {
 
 async function runForms(context) {
   const forms = [];
-  for (const name of FORMS) forms.push(await qualifyForm(name, context));
+  for (const name of context.options.forms) forms.push(await qualifyForm(name, context));
   const marked = await qualifyMarkedDownload(context).catch((error) => {
     console.log(`marked-download: FAIL ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -770,6 +783,15 @@ async function runFormsQualification(options) {
   }
 }
 
+function formsVerdict(evidence) {
+  if (evidence.certifies) return "CERTIFIED";
+  if (!evidence.passed) return "FAIL";
+  const deferred = evidence.formsDeferred;
+  return deferred.length > 0
+    ? `PASS (not certified: ${deferred.join(", ")} deferred)`
+    : "PASS (not certified)";
+}
+
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
@@ -781,13 +803,10 @@ async function main(argv) {
     const outDir = resolve(options.outDir);
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, `${EVIDENCE_KIND}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
-    const verdict = evidence.certifies
-      ? "CERTIFIED"
-      : evidence.passed
-        ? "PASS (not certified)"
-        : "FAIL";
-    console.log(`${verdict} macOS delivery forms ${options.version}`);
-    return evidence.passed && (evidence.certifies || options.account === "any") ? 0 : 1;
+    console.log(`${formsVerdict(evidence)} macOS delivery forms ${options.version}`);
+    // A standard-account run never gets here as an administrator: runFormsQualification refuses it.
+    const uncertifiedPass = options.account === "any" || evidence.formsDeferred.length > 0;
+    return evidence.passed && (evidence.certifies || uncertifiedPass) ? 0 : 1;
   } catch (error) {
     if (!(error instanceof FormsRefusal)) throw error;
     console.error(`FAIL qualify-macos-standard-account-forms: ${error.message}`);

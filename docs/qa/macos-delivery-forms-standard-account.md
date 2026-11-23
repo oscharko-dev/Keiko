@@ -35,6 +35,14 @@ start that reports the running instance, stop, no process of the form left, and 
 form's folder carrying the download mark. A form whose checks stop before the coding run does not
 pass.
 
+On a pull request the job defers the npm folder form to the publication run (owner decision
+2026-11-22): the form is qualified when it is published. The job installs the published version,
+and Keiko 1.5.6 refuses that form's first coding run on the hosted runner, because reading the
+repository's identity outlasted five seconds while the account's first browser started. The next
+release gives that read its own bound (#4520). A run that defers a form names it in
+`formsDeferred`, passes only when every form it ran passed, and certifies nothing. The publication
+run (`npm-folder-publish.yml`) defers no form.
+
 Then a copy of the standalone archive gets the mark a browser writes (`com.apple.quarantine`) and
 is extracted with `ditto`, which carries the mark to every extracted file. The record names how
 many entries carry it, whether Gatekeeper assesses programs on that Mac (`spctl --status`), whether

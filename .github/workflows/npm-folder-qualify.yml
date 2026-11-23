@@ -183,8 +183,9 @@ jobs:
   standard-account-forms:
     # #4520: a person without administrator rights installs and starts each macOS delivery form.
     # The forms run as the standard account the action creates, which may not use sudo; the job
-    # passes only when the evidence certifies that and every form passed, and when nothing outside
-    # the account's home and its per-user folder was created or changed.
+    # passes only when every form it ran passed, the evidence certifies the account (or names the
+    # form a pull request defers), and nothing outside the account's home and its per-user folder
+    # was created or changed.
     name: macOS delivery forms as a standard account
     needs: resolve
     if: needs.resolve.outputs.publishable == 'true'
@@ -222,21 +223,28 @@ jobs:
           mkdir -p "$RUNNER_TEMP/standard-account-evidence"
           touch "$RUNNER_TEMP/footprint.marker"
           sleep 1
-      - name: Install and start the three forms as the standard account
+      # On a pull request the npm folder form is deferred to release time (owner decision
+      # 2026-11-22): the released 1.5.6 refuses its first coding run on this runner (the
+      # repository-identity read outlasts 5 s while the account's first browser starts), repaired
+      # by #4543 for the next release. The evidence names the deferred form and certifies nothing;
+      # the publication run (npm-folder-publish.yml) qualifies all three forms.
+      - name: Install and start the forms as the standard account
         env:
           KEIKO_QUALIFY_VERSION: ${{ needs.resolve.outputs.version }}
+          KEIKO_QUALIFY_DEFER: ${{ github.event_name == 'pull_request' && 'npm-folder' || '' }}
         run: |
           temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
           sudo -u keikoqa -H /usr/bin/env -i \
             HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
             TMPDIR="${temp}" KEIKO_QUALIFY_DISPOSABLE_ACCOUNT=1 \
             PATH=/Users/keikoqa/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-            KEIKO_QUALIFY_VERSION="${KEIKO_QUALIFY_VERSION}" \
+            KEIKO_QUALIFY_VERSION="${KEIKO_QUALIFY_VERSION}" KEIKO_QUALIFY_DEFER="${KEIKO_QUALIFY_DEFER}" \
             /bin/sh -s <<'FORMS'
           cd "$HOME/keiko" || exit 1
           echo "groups: $(id -Gn)"
           node scripts/testing/qualify-macos-standard-account-forms.mjs \
-            --version "$KEIKO_QUALIFY_VERSION" --out-dir "$HOME/forms-evidence"
+            --version "$KEIKO_QUALIFY_VERSION" --out-dir "$HOME/forms-evidence" \
+            ${KEIKO_QUALIFY_DEFER:+--defer-form "$KEIKO_QUALIFY_DEFER"}
           FORMS
       - name: Check that nothing outside the account's own folders was created or changed
         if: ${{ !cancelled() }}
