@@ -964,6 +964,10 @@ const HOST_SHELL_DEPENDENCY_GUIDANCE: Readonly<
     "Keiko did not install this project's dependencies: they belong to Yarn or pnpm, and Keiko installs npm dependencies only. Nothing was verified. Do not retry keiko_verification unchanged and do not convert the project to npm; tell the person that the change is applied but not verified and that the dependencies need the project's own package manager.",
   "lockfile-mismatch":
     "Keiko did not install this project's dependencies: the lockfile no longer records what package.json declares, and Keiko installs only what the lockfile records. Nothing was verified. Do not retry keiko_verification unchanged and do not edit package.json or the lockfile only to make the installation pass; tell the person that the change is applied but not verified and that the lockfile is out of date with package.json.",
+  // #4491 Nexus lab: the general sentence told the model to stop, although a registry the person
+  // configured for npm answers its shell through the repository credential relay (ADR-0184).
+  "unapproved-source":
+    "Keiko did not install this project's dependencies: Keiko's own installation reads only the public npm registry, and this project names another source, such as the person's own registry or a git or URL dependency. Nothing was verified yet. Do not retry keiko_verification unchanged. Keiko relays a registry the person configured for npm on this computer to your shell, so install the dependencies there with the project's own command (npm ci when a lockfile is present, otherwise npm install) and run the project's tests in your shell. If that installation fails too, do not work around it; tell the person that the change is applied but not verified and name the reason.",
 };
 const HOST_SHELL_DEPENDENCY_FALLBACK_GUIDANCE =
   "Keiko could not install this project's dependencies, so nothing was verified; the dependency summary names the state and, for a refusal, its reason. Do not retry keiko_verification unchanged; report this blocker with its reason and say that the change is applied but not verified.";

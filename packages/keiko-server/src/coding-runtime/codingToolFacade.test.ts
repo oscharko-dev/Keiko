@@ -2390,7 +2390,10 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
     state: "refused" | "failed" | "timed-out",
     consumer: "host-shell" | "verification-steps" | undefined,
     refusalReason?:
-      "install-scripts-required" | "package-manager-unsupported" | "lockfile-mismatch",
+      | "install-scripts-required"
+      | "package-manager-unsupported"
+      | "lockfile-mismatch"
+      | "unapproved-source",
   ): Record<string, unknown> {
     return {
       outcome: "failed",
@@ -2453,6 +2456,11 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
     ["install-scripts-required", /names an install script/u],
     ["package-manager-unsupported", /belong to Yarn or pnpm/u],
     ["lockfile-mismatch", /lockfile no longer records what package\.json declares/u],
+    // #4491: the person's own registry answers the shell through the relay, so the shell installs.
+    [
+      "unapproved-source",
+      /install the dependencies there with the project's own command.*If that installation fails too, do not work around it/u,
+    ],
   ] as const)(
     "tells the model why its shell's installation was refused: %s",
     async (reason, words) => {
@@ -2461,6 +2469,7 @@ describe("CodingToolFacade verification presentation (#3579)", () => {
       const guidance = (result as { readonly guidance?: unknown }).guidance;
       expect(guidance).toMatch(words);
       expect(guidance).toMatch(/Nothing was verified/u);
+      expect(guidance).toMatch(/Do not retry keiko_verification unchanged/u);
     },
   );
 
