@@ -102,6 +102,7 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
         "no-runnable-steps",
         "not-run",
         "isolation-unavailable",
+        "dependencies-unavailable",
       ],
     },
     // A Git step that was refused or did not complete is a failure fact; one still waiting on the

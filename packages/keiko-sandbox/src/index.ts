@@ -26,7 +26,10 @@ export {
   nativeBuildInheritedEnvNames,
   nativeBuildToolReadRoots,
   nativeBuildWrapperReadRoots,
+  nativeDeveloperDirectoryReadRoots,
   type NativeBuildCertificateFiles,
+  type NativeDeveloperDirectoryDisposition,
+  type NativeDeveloperDirectoryRoots,
 } from "./native-toolchain-roots.js";
 export {
   NATIVE_LINKED_FILES_MAX,

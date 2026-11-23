@@ -180,6 +180,14 @@ export const CODING_VERIFICATION_BLOCKED_REASONS = [
 ] as const;
 export type CodingVerificationBlockedReason = (typeof CODING_VERIFICATION_BLOCKED_REASONS)[number];
 
+/**
+ * How a target-scoped `VERIFICATION_NOT_RUN` bears on the run. `blocks-repair` (the default) makes
+ * it a blocker to report while its target still fails. `evidence-only` marks a check that ran no
+ * step as no evidence either way and blocks nothing: a run with its own shell verifies that target
+ * there, so the continuation still sends the model back to repair it (#4519).
+ */
+export type CodingVerificationNotRunScope = "blocks-repair" | "evidence-only";
+
 /** Captured at actual admission; called only after an executed check remains authorized. */
 export type CodingVerificationExecutedObserver = (targetDigest: string) => void;
 
@@ -191,7 +199,12 @@ export type CodingRuntimeEditOutcomeObserver = ((
   /** Same ledger revision, read synchronously at an admitted verifier's start. */
   readonly verificationRevision?: ((runId: string) => number | undefined) | undefined;
   readonly verificationBlocked?:
-    | ((runId: string, reason: CodingVerificationBlockedReason, targetDigest?: string) => void)
+    | ((
+        runId: string,
+        reason: CodingVerificationBlockedReason,
+        targetDigest?: string,
+        scope?: CodingVerificationNotRunScope,
+      ) => void)
     | undefined;
   readonly verificationAdmitted?:
     ((runId: string) => CodingVerificationExecutedObserver | undefined) | undefined;

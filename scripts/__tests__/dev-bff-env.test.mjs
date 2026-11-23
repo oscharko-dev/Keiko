@@ -10,6 +10,7 @@ import {
   applyProcessWideEvidenceEnv,
   buildDevBffEnv,
   resolveDevBffStateDir,
+  resolveDevUiStaticRoot,
 } from "../lib/dev-bff-env.mjs";
 
 // NEVER touch the real repository `.env`/`.keiko` — every fixture below is its own temp "repo".
@@ -39,6 +40,41 @@ describe("resolveDevBffStateDir", () => {
     const explicit = join(repoRoot, "elsewhere");
     const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: { KEIKO_STATE_DIR: explicit } });
     expect(stateDir).toBe(explicit);
+  });
+});
+
+// #4123: the browser suites serve the built static export instead of `next dev`.
+describe("resolveDevUiStaticRoot", () => {
+  it("serves no static export when the variable is unset or empty", () => {
+    expect(resolveDevUiStaticRoot({})).toBeUndefined();
+    expect(resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: "" })).toBeUndefined();
+  });
+
+  it("returns an absolute export folder that holds an index.html", () => {
+    const root = tempRepoRoot();
+    writeFileSync(join(root, "index.html"), "<!doctype html><title>Keiko</title>\n");
+
+    expect(resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: `${root}/./` })).toBe(root);
+  });
+
+  it("fails closed on a relative path", () => {
+    expect(() => resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: "dist/ui/static" })).toThrow(
+      TypeError,
+    );
+  });
+
+  it("fails closed on a missing or partial build", () => {
+    const root = tempRepoRoot();
+    expect(() => resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: root })).toThrow(
+      /no index\.html/u,
+    );
+    mkdirSync(join(root, "index.html"));
+    expect(() => resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: root })).toThrow(
+      /no index\.html/u,
+    );
+    expect(() =>
+      resolveDevUiStaticRoot({ KEIKO_DEV_UI_STATIC_ROOT: join(root, "missing") }),
+    ).toThrow(/no index\.html/u);
   });
 });
 

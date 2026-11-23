@@ -11,7 +11,10 @@
 // fails closed and NEVER spawns, and the report never claims enforcement it did not actually apply.
 
 import { mkdtemp, rm, realpath, writeFile, readFile, access, mkdir } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { lstatSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -30,6 +33,8 @@ import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   executeVerificationEnforced,
   probeNetworkIsolation,
+  localDockerEngineAnswer,
+  probeNetworkIsolationServed,
   verificationDependencyFailureHandler,
   verificationTerminationHandler,
   type NetworkIsolationProbe,
@@ -37,6 +42,30 @@ import {
 
 function note(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+function listenOn(server: NetServer, path: string): Promise<void> {
+  return new Promise((resolve) => {
+    server.listen(path, resolve);
+  });
+}
+
+function closeServer(server: NetServer): Promise<void> {
+  return new Promise((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+}
+
+/** A socket file whose process exited without closing it: the file stays, nobody serves it. */
+function leaveStaleSocket(socket: string): void {
+  const listener =
+    "require('node:net').createServer().listen(process.argv.at(-1), () => process.exit(0));";
+  const result = spawnSync(process.execPath, ["-e", listener, socket], { timeout: 10_000 });
+  if (result.status !== 0 || !lstatSync(socket).isSocket()) {
+    throw new Error("fixture-precondition-stale-socket");
+  }
 }
 
 async function proveOutsideWriteWithoutConfinement(root: string, outside: string): Promise<void> {
@@ -229,6 +258,94 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  // #4519: a Docker that crashed or was stopped can leave its socket file behind. The file still
+  // stats as a socket, so the probe read a stopped engine as an enforcing backend and the step then
+  // failed inside the Docker client as if the project's own check had failed.
+  it.skipIf(process.platform === "win32")(
+    "reads a leftover Docker socket as unavailable and an engine that answers its ping as available (#4519)",
+    async () => {
+      const parent = await realpath(await mkdtemp(join(tmpdir(), "keiko-docker-served-")));
+      const root = join(parent, "workspace");
+      const stale = join(parent, "stale.sock");
+      const live = join(parent, "live.sock");
+      const engine = createHttpServer((request, response) => {
+        response.statusCode = request.url === "/_ping" ? 200 : 404;
+        response.end("OK");
+      });
+      const availability = vi.spyOn(sandbox, "probeBackends").mockReturnValue({
+        bubblewrap: false,
+        unshare: false,
+        seatbelt: false,
+        docker: true,
+        podman: false,
+      });
+      try {
+        await mkdir(root);
+        leaveStaleSocket(stale);
+        await listenOn(engine, live);
+        vi.stubEnv("DOCKER_CONTEXT", "");
+        vi.stubEnv("DOCKER_HOST", `unix://${stale}`);
+        // The socket file alone still reads as a running engine to the synchronous probe.
+        expect(probeNetworkIsolation(root)).toEqual({
+          available: true,
+          backend: "container-docker",
+        });
+        expect(await probeNetworkIsolationServed(root)).toEqual({
+          available: false,
+          backend: "container-docker",
+          engine: "refused",
+        });
+        vi.stubEnv("DOCKER_HOST", `unix://${live}`);
+        expect(await probeNetworkIsolationServed(root)).toEqual({
+          available: true,
+          backend: "container-docker",
+          engine: "answered",
+        });
+      } finally {
+        availability.mockRestore();
+        vi.unstubAllEnvs();
+        await closeServer(engine);
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "counts only an engine that answers its ping, never one that is starting or silent (#4519)",
+    async () => {
+      const parent = await realpath(await mkdtemp(join(tmpdir(), "keiko-docker-ping-")));
+      const starting = createHttpServer((_request, response) => {
+        response.statusCode = 500;
+        response.end();
+      });
+      const held: Socket[] = [];
+      const silent = createServer((socket) => {
+        held.push(socket);
+      });
+      try {
+        await listenOn(starting, join(parent, "starting.sock"));
+        await listenOn(silent, join(parent, "silent.sock"));
+        expect(await localDockerEngineAnswer(`unix://${join(parent, "starting.sock")}`)).toBe(
+          "rejected",
+        );
+        expect(await localDockerEngineAnswer(`unix://${join(parent, "silent.sock")}`, 200)).toBe(
+          "unanswered",
+        );
+        expect(await localDockerEngineAnswer(`unix://${join(parent, "missing.sock")}`)).toBe(
+          "refused",
+        );
+        // A named pipe that resolved is already served; a remote endpoint never is.
+        expect(await localDockerEngineAnswer("npipe:////./pipe/docker_engine")).toBe("answered");
+        expect(await localDockerEngineAnswer("tcp://127.0.0.1:2375")).toBe("refused");
+      } finally {
+        for (const socket of held) socket.destroy();
+        await closeServer(starting);
+        await closeServer(silent);
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("probeNetworkIsolation reports a real backend label and availability for this host", () => {
     const probe = probeNetworkIsolation(process.cwd());

@@ -22,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   DEPENDENCY_APPROVED_REGISTRY,
+  DEPENDENCY_HOST_SHELL_ARGS,
   DEPENDENCY_INSTALL_ARGS,
   planDependencyBootstrap,
   runDependencyBootstrap,
@@ -1675,6 +1676,181 @@ describe("dependency bootstrap for a workspace shared with a host-native runtime
     );
     expect(result.summary.state).toBe("refused");
     expect(rec.calls()).toEqual([]);
+  });
+});
+
+// #4522: an install for the native runtime's own shell runs on this host, for this host's target. Its
+// receipt is bound to that target like every other, so it never makes a container-target tree
+// current, and a container-target receipt never makes the shell's tree current.
+describe("dependency bootstrap for the run's own shell", () => {
+  it("installs with --no-save and names its consumer, with no measured target", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, rec.fn), consumer: "host-shell" },
+    );
+    expect(result.summary).toMatchObject({ state: "installed", consumer: "host-shell" });
+    expect(isVerificationDependencySummary(result.summary)).toBe(true);
+    expect(rec.calls()[0]?.args).toEqual([...DEPENDENCY_HOST_SHELL_ARGS]);
+  });
+
+  it("keeps the governed steps' install and report unchanged", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, rec.fn), consumer: "verification-steps" },
+    );
+    expect("consumer" in result.summary).toBe(false);
+    expect(rec.calls()[0]?.args).toEqual([...DEPENDENCY_INSTALL_ARGS]);
+  });
+
+  it("binds the shell's tree to this host, apart from a container target's", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      { ...bootstrapDepsFor(root, rec.fn), consumer: "host-shell" },
+    );
+    const plan = (target?: ReturnType<typeof installTarget>): string =>
+      planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, target, "host-shell")
+        .kind;
+    expect(plan()).toBe("current");
+    expect(plan(installTarget())).toBe("install");
+  });
+
+  const shellPlan = (root: string): unknown =>
+    planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, undefined, "host-shell");
+
+  async function shellBootstrap(
+    root: string,
+    plan: Parameters<typeof runDependencyBootstrap>[0],
+    exitCode = 0,
+  ): Promise<Awaited<ReturnType<typeof runDependencyBootstrap>>> {
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode });
+    return runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      consumer: "host-shell",
+    });
+  }
+
+  it("leaves a tree it did not install alone, in a summary the contract admits", async () => {
+    const root = installedTargetFixture();
+    const plan = planDependencyBootstrap(
+      workspaceAt(root),
+      nodeWorkspaceFs,
+      undefined,
+      undefined,
+      "host-shell",
+    );
+    expect(plan).toEqual({ kind: "foreign-tree", lockfile: "absent", receipt: "missing" });
+    const outcome = await shellBootstrap(root, plan);
+    expect(outcome.summary).toMatchObject({
+      state: "none",
+      completionReceipt: "missing",
+      completionRecorded: false,
+      consumer: "host-shell",
+    });
+    expect(isVerificationDependencySummary(outcome.summary)).toBe(true);
+  });
+
+  // npm may write its hidden lockfile before an install fails: that tree stays this process's.
+  it("installs again where its own install failed after npm wrote the hidden lockfile", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeInstalledTree(root);
+    const failed = await shellBootstrap(root, { kind: "install", lockfile: "absent" }, 1);
+    expect(failed.summary.state).toBe("failed");
+    expect(shellPlan(root)).toEqual({ kind: "install", lockfile: "absent" });
+  });
+
+  // A tree older than its manifest is not one npm finished for it, whoever installed it, so a
+  // receipt lost to a restart cannot keep a changed project from being installed.
+  it("installs into a tree older than its manifest", () => {
+    const root = installedTargetFixture();
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(root, "node_modules", ".package-lock.json"), past, past);
+    expect(shellPlan(root)).toEqual({ kind: "install", lockfile: "absent" });
+  });
+
+  // The shell writes caches into node_modules itself; npm rewriting the tree makes it the shell's.
+  it("keeps its install current across the shell's caches and leaves npm's rewrite alone", async () => {
+    const root = installedTargetFixture();
+    await shellBootstrap(root, { kind: "install", lockfile: "absent" });
+    expect(shellPlan(root)).toMatchObject({ kind: "current" });
+    mkdirSync(join(root, "node_modules", ".vite"));
+    writeFileSync(join(root, "node_modules", ".vite", "deps.json"), "{}", "utf8");
+    expect(shellPlan(root)).toMatchObject({ kind: "current" });
+
+    writeInstalledTree(root, { "node_modules/left-pad": registryEntry("left-pad"), x: {} });
+    const plan = planDependencyBootstrap(
+      workspaceAt(root),
+      nodeWorkspaceFs,
+      undefined,
+      undefined,
+      "host-shell",
+    );
+    expect(plan).toEqual({ kind: "foreign-tree", lockfile: "absent", receipt: "changed" });
+    const outcome = await shellBootstrap(root, plan);
+    expect(outcome.summary).toMatchObject({
+      state: "none",
+      completionReceipt: "changed",
+      completionRecorded: true,
+    });
+    expect(isVerificationDependencySummary(outcome.summary)).toBe(true);
+  });
+
+  it("refuses its own closed reasons only for the host shell", () => {
+    const root = tempRoot();
+    writeManifest(root, {
+      dependencies: { "left-pad": "1.0.0" },
+      scripts: { postinstall: "node build.js" },
+    });
+    const kind = (consumer?: "host-shell"): unknown =>
+      planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, undefined, undefined, consumer);
+    expect(kind("host-shell")).toMatchObject({
+      kind: "refused",
+      reason: "install-scripts-required",
+    });
+    expect(kind()).toMatchObject({ kind: "install" });
+  });
+
+  it("compares a workspace member's lockfile entry by its location", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { a: "1.0.0" }, workspaces: ["packages/*"] });
+    mkdirSync(join(root, "packages", "a"), { recursive: true });
+    const member = { name: "a", version: "1.0.0", dependencies: { "left-pad": "1.0.0" } };
+    writeFileSync(join(root, "packages", "a", "package.json"), JSON.stringify(member));
+    const lockfile = (memberDependencies: Readonly<Record<string, string>>): void => {
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "": { dependencies: { a: "1.0.0" }, workspaces: ["packages/*"] },
+            "packages/a": { name: "a", version: "1.0.0", dependencies: memberDependencies },
+            "node_modules/a": { resolved: "packages/a", link: true },
+          },
+        }),
+      );
+    };
+    const plan = (): unknown =>
+      planDependencyBootstrap(
+        workspaceAt(root),
+        nodeWorkspaceFs,
+        undefined,
+        undefined,
+        "host-shell",
+      );
+    lockfile({ "left-pad": "1.0.0" });
+    expect(plan()).toMatchObject({ kind: "install" });
+    lockfile({ "left-pad": "1.3.0" });
+    expect(plan()).toMatchObject({ kind: "refused", reason: "lockfile-mismatch" });
   });
 });
 

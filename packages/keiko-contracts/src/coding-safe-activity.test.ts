@@ -153,6 +153,7 @@ describe("coding safe-activity contract", () => {
       "no-runnable-steps",
       "not-run",
       "isolation-unavailable",
+      "dependencies-unavailable",
     ]);
     const feed = availableFeed();
     if (feed.availability !== "available") throw new Error("expected available fixture");

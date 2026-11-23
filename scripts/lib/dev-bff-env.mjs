@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 
 // The dev BFF's effective environment and state directory, shared by the process itself and by its
 // tests so the exact same merge/default logic backs both (#3557 review findings 1 and 2 — the
@@ -51,6 +51,28 @@ function loadLocalKeikoEnv(repoRoot, env) {
     merged[key] = parseEnvValue(line.slice(equals + 1));
   }
   return merged;
+}
+
+/**
+ * The prebuilt static UI export (`npm run build:ui`, `dist/ui/static`) the dev runner and its BFF
+ * serve in place of `next dev`, or undefined when the variable is unset or empty (#4123). The
+ * end-to-end harness sets it, so browser journeys run against the bundle Keiko ships rather than
+ * against a development server that compiles and serves multi-megabyte chunks from one event loop.
+ * Both processes read it from their own `process.env`, never from a repository `.env`, so they
+ * cannot disagree about which server answers the UI. A relative path, or a folder without an
+ * `index.html`, fails closed: a browser suite must never start against a missing or partial build.
+ */
+export function resolveDevUiStaticRoot(processEnv) {
+  const configured = processEnv.KEIKO_DEV_UI_STATIC_ROOT;
+  if (configured === undefined || configured === "") return undefined;
+  if (!isAbsolute(configured)) {
+    throw new TypeError("KEIKO_DEV_UI_STATIC_ROOT must be an absolute path.");
+  }
+  const root = resolve(configured);
+  if (statSync(join(root, "index.html"), { throwIfNoEntry: false })?.isFile() !== true) {
+    throw new Error("KEIKO_DEV_UI_STATIC_ROOT holds no index.html; run `npm run build:ui` first.");
+  }
+  return root;
 }
 
 /**

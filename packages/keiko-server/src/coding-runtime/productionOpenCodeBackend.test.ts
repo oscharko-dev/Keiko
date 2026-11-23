@@ -32,6 +32,7 @@ import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
 import {
   createRuntimeGatewayConfinement,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  nativeDeveloperDirectoryReadRoots,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
@@ -44,6 +45,7 @@ import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import type { CodingJiraPods } from "./codingJiraPodMcp.js";
 import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import { createRepositoryCredentialRelay } from "../repository-relay/repositoryCredentialRelay.js";
 import {
   devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
@@ -92,6 +94,11 @@ const UNVERIFIED_RIPGREP: OpenCodeRipgrepResolution = {
   layout: "none",
   reason: "missing",
 };
+
+/** The developer directory a macOS launch on this host opens, from the production resolver. */
+function hostDeveloperRoots(): readonly string[] {
+  return nativeDeveloperDirectoryReadRoots(homedir()).roots;
+}
 
 function verifiedRipgrep(directory: string): OpenCodeRipgrepResolution {
   return {
@@ -1025,6 +1032,45 @@ describe("production OpenCode backend composition", () => {
       contextUsage.recordProviderSample(input.request.runId, sample);
       expect(fits(tools, result)).toBe(true);
       await run.dispose?.();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  // #4522: the native composition is handed the repository relay on the gateway's attested origin,
+  // with the environment its `${env.NAME}` placeholders read; a run offered none is handed none.
+  it("hands the native composition the repository relay on the gateway's origin, or none", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-relay-compose-")));
+    try {
+      const relay = createRepositoryCredentialRelay({ activityLog: () => undefined });
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      const processEnv = { REPO_USER: "builder" };
+      const offered = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        repositoryRelay: relay,
+        processEnv,
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay).toEqual({
+        relay,
+        origin: "http://127.0.0.1:1983",
+        env: processEnv,
+      });
+      await offered.dispose?.();
+      // Without an environment of its own the run's placeholders read the process's.
+      const inherited = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        repositoryRelay: relay,
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay?.env).toBe(process.env);
+      await inherited.dispose?.();
+      const unoffered = createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+      }).createRun(runInput(root));
+      expect(compose.mock.calls.at(-1)?.[0].repositoryRelay).toBeUndefined();
+      await unoffered.dispose?.();
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -2525,7 +2571,8 @@ describe("ripgrep on the OpenCode launch", () => {
         expect(
           buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
         ).toBe(directory);
-        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The developer directory Git runs from follows the host's selection (#4521).
+        expect(result.toolchainReadRoots).toEqual([directory, ...hostDeveloperRoots()]);
         // The launch also records where the workspace's Git metadata lives (#3897 review) and the
         // hard links its scan found (PR #4064 review, none here).
         expect(result.events.map((event) => event.op)).toEqual([
@@ -2568,7 +2615,7 @@ describe("ripgrep on the OpenCode launch", () => {
         });
         expect(absent.processEnv).toEqual(CONTENT_ENV);
         expect(absent.ripgrepVerified).toBe(false);
-        expect(absent.toolchainReadRoots).toEqual([]);
+        expect(absent.toolchainReadRoots).toEqual(hostDeveloperRoots());
         expect(absent.events[0]).toMatchObject({
           level: "warn",
           extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { API_ROUTES } from "../routes.js";
 import {
   API_ROUTE_LITERAL_SEGMENTS,
+  REST_ROUTE_HEADS,
   UI_ASSET_ROOT_SEGMENTS,
   redactRoutePath,
 } from "./route-template.js";
@@ -23,10 +24,15 @@ function declaredLiteralSegments(): ReadonlySet<string> {
   const literals = new Set<string>();
   for (const route of API_ROUTES) {
     for (const segment of route.pattern.split("/")) {
-      if (segment !== "" && !segment.startsWith(":")) literals.add(segment);
+      if (segment !== "" && !isParameterSegment(segment)) literals.add(segment);
     }
   }
   return literals;
+}
+
+// `:name` is one parameter segment, `*name` a rest segment of one or more.
+function isParameterSegment(segment: string): boolean {
+  return segment.startsWith(":") || segment.startsWith("*");
 }
 
 function sorted(values: Iterable<string>): readonly string[] {
@@ -58,7 +64,7 @@ describe("route literal vocabulary", () => {
   it("carries no route parameter name as a literal", () => {
     for (const route of API_ROUTES) {
       for (const segment of route.pattern.split("/")) {
-        if (!segment.startsWith(":")) continue;
+        if (!isParameterSegment(segment)) continue;
         expect(API_ROUTE_LITERAL_SEGMENTS.has(segment.slice(1))).toBe(false);
       }
     }
@@ -70,14 +76,52 @@ describe("route literal vocabulary", () => {
     for (const route of API_ROUTES) {
       const filled = route.pattern
         .split("/")
-        .map((segment) => (segment.startsWith(":") ? "Acme-Q3-Financials" : segment))
+        .map((segment) => (isParameterSegment(segment) ? "Acme-Q3-Financials" : segment))
         .join("/");
       const reduced = redactRoutePath(filled, CAP);
       expect(reduced, route.pattern).toBeDefined();
       expect(reduced, route.pattern).not.toContain("Acme");
-      const template = route.pattern.replaceAll(/:[A-Za-z0-9_]+/g, "{id}");
+      const template = route.pattern.replaceAll(/[:*][A-Za-z0-9_]+/g, "{id}");
       expect(reduced?.replaceAll(/\{[0-9a-f]{16}\}/g, "{id}"), route.pattern).toBe(template);
     }
+  });
+});
+
+describe("redactRoutePath for a rest route", () => {
+  const RELAY = "/api/coding-sidecar/repository/AbCdEfGhIjKlMnOpQrStUv";
+
+  // #4522: the relay's `*path` carries artifact coordinates a customer chose. No spelling of one may
+  // reach the request line, whatever its depth.
+  it.each([
+    `${RELAY}/com/acme-internal/payroll-core/1.0.0/payroll-core-1.0.0.jar`,
+    `${RELAY}/@acme-internal%2fpayroll`,
+    `${RELAY}/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p`,
+    `${RELAY}/left-pad`,
+  ])("reduces %s to the template and no path text", (path) => {
+    const reduced = redactRoutePath(path, CAP);
+    expect(reduced).toBe("/api/coding-sidecar/repository/{id}/{id}");
+    expect(reduced).not.toMatch(/acme|payroll|left-pad|AbCdEf/u);
+  });
+
+  it("knows the head of every declared rest route", () => {
+    for (const route of API_ROUTES) {
+      const parts = route.pattern.split("/").slice(1);
+      const rest = parts.findIndex((part) => part.startsWith("*"));
+      if (rest === -1) continue;
+      const head = parts.slice(0, rest - 1);
+      expect(
+        REST_ROUTE_HEADS.some((known) => known.join("/") === head.join("/")),
+        route.pattern,
+      ).toBe(true);
+    }
+  });
+
+  it("declines a traversal segment inside the rest segment", () => {
+    expect(redactRoutePath(`${RELAY}/a/../b`, CAP)).toBeUndefined();
+  });
+
+  it("keeps a relay id with no rest segment a single elided parameter", () => {
+    expect(redactRoutePath(RELAY, CAP)).toBe("/api/coding-sidecar/repository/{id}");
   });
 });
 

@@ -95,6 +95,14 @@ export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
   "KEIKO_CODING_WORKSPACE_ROOT",
 ] as const);
 
+/**
+ * Set in the run's environment only when an npm registry of the person is bound to Keiko's
+ * repository credential relay (ADR-0184). It lifts npm's offline setting for a shell below Full
+ * access, because the run's npm config then names only the relay; the `KEIKO_` strip keeps the
+ * marker itself out of every shell.
+ */
+export const OPENCODE_NATIVE_NPM_RELAY_ENV = "KEIKO_NATIVE_NPM_RELAY";
+
 const DENY_MESSAGE =
   "Keiko refused this action: its policy service did not answer. Continue with another step.";
 const OVERSIZED_MESSAGE =
@@ -140,6 +148,13 @@ function mcpMutationSource(): readonly string[] {
   ];
 }
 
+function modeFlagsSource(): readonly string[] {
+  return [
+    "const fullAccess = process.env.KEIKO_CODING_MODE === 'autonomous-delivery';",
+    `const npmRelayBound = process.env.${OPENCODE_NATIVE_NPM_RELAY_ENV} === 'bound';`,
+  ];
+}
+
 function pluginConstantsSource(programReviewed: boolean): readonly string[] {
   return [
     `const ACTION = ${JSON.stringify(OPENCODE_NATIVE_POLICY_ACTION)};`,
@@ -156,7 +171,7 @@ function pluginConstantsSource(programReviewed: boolean): readonly string[] {
     "const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
-    "const fullAccess = process.env.KEIKO_CODING_MODE === 'autonomous-delivery';",
+    ...modeFlagsSource(),
     ...patchBytesSource(),
     ...managementSource(),
     "function searchPath(event) {",
@@ -284,8 +299,9 @@ function pluginBodySource(): readonly string[] {
     "      for (const name of Object.keys(event.env ?? {})) {",
     '        if (ENV_DENYLIST.has(name) || name.startsWith("KEIKO_")) delete event.env[name];',
     "      }",
-    "      // The runtime's own package manager stays offline; at Full access a shell may reach registries.",
-    "      if (fullAccess && event.env) delete event.env.npm_config_offline;",
+    "      // The runtime's own package manager stays offline; a shell may reach registries at Full access",
+    "      // or, below it, only the relay that a bound npm registry of the person names.",
+    "      if ((fullAccess || npmRelayBound) && event.env) delete event.env.npm_config_offline;",
     "    });",
     "    // Code Mode stays available. The producer asserts no permission for a Code Mode program",
     "    // (`execute`) nor for the nested management tools that change state, so the same policy",

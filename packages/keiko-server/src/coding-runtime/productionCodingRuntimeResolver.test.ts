@@ -626,11 +626,13 @@ describe("production coding runtime resolver", () => {
     expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
     expect(editOutcomeCapture.revisions[0]?.()).toBe(5);
     expect(readRevision).toHaveBeenCalledExactlyOnceWith(request.runId);
-    editOutcomeCapture.blocked[0]?.("NO_RUNNABLE_STEPS", "a".repeat(64));
+    // #4519: the scope of a not-run check reaches the run's ledger unchanged.
+    editOutcomeCapture.blocked[0]?.("VERIFICATION_NOT_RUN", "a".repeat(64), "evidence-only");
     expect(blocked).toHaveBeenCalledExactlyOnceWith(
       request.runId,
-      "NO_RUNNABLE_STEPS",
+      "VERIFICATION_NOT_RUN",
       "a".repeat(64),
+      "evidence-only",
     );
     expect(editOutcomeCapture.admitted[0]?.()).toBe(completed);
     expect(admitted).toHaveBeenCalledExactlyOnceWith(request.runId);

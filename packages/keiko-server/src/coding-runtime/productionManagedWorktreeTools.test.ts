@@ -1659,6 +1659,7 @@ describe("production managed worktree tools", () => {
       expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
         "VERIFICATION_NOT_RUN",
         codingVerificationTargetDigest("test"),
+        "blocks-repair",
       );
       expect(executed).not.toHaveBeenCalled();
     },
@@ -2068,16 +2069,18 @@ describe("production managed worktree tools", () => {
       status: "failed",
       reasonCode: "VERIFICATION_NOT_RUN",
       detail:
-        "These verification steps did not run: test (the isolated verifier has no container runtime (Docker or Podman) on this computer; run this check in your own shell).",
+        "These verification steps did not run: test (the isolated verifier has no running container runtime (Docker or Podman) on this computer; run this check in your own shell).",
     });
     expect(result).toHaveProperty("guidance", expect.stringContaining("in your shell") as unknown);
     expect(codingToolVerificationPresentation(result)).not.toEqual({
       verificationOutcome: "isolation-unavailable",
     });
     expect(verificationBlocked).toHaveBeenCalledTimes(1);
+    // #4519: the check that ran no step is no evidence either way and blocks no repair.
     expect(verificationBlocked).toHaveBeenCalledWith(
       "VERIFICATION_NOT_RUN",
       expect.any(String) as unknown,
+      "evidence-only",
     );
     expect(spawn).not.toHaveBeenCalled();
     const observed = log.find((entry) => entry.op === "coding-runtime.verification");
@@ -2087,6 +2090,32 @@ describe("production managed worktree tools", () => {
         formatActivityLogProofLine(observed ?? {}),
       ),
     ).toMatchObject({ state: "not-run", steps: ["test:isolation-unavailable"] });
+  });
+
+  // #4519: only a report whose every unrun step the shell can carry is evidence-only. A policy
+  // denial beside the isolation refusal is still a blocker to report, shell or not.
+  it("keeps a policy denial beside an isolation refusal a blocker for a run with its own shell", async () => {
+    const { report } = await noBackendReport();
+    const [refused] = report.results;
+    if (refused === undefined) throw new TypeError("fixture result missing");
+    const mixed: VerificationReport = {
+      ...report,
+      results: [refused, { ...refused, kind: "lint", detail: "denied by policy" }],
+      counts: { ...report.counts, denied: 2 },
+    };
+    const verificationBlocked = vi.fn();
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(mixed),
+      records: [],
+      verificationBlocked,
+      toolProfile: "native",
+    });
+    await executeVerification(facade, "verification-mixed-isolation-denial");
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+      "VERIFICATION_NOT_RUN",
+      expect.any(String) as unknown,
+      "blocks-repair",
+    );
   });
 
   it("reports real no-backend verification as denied without claiming a check failed (#4413)", async () => {
@@ -2116,7 +2145,7 @@ describe("production managed worktree tools", () => {
       status: "failed",
       reasonCode: "VERIFICATION_ISOLATION_UNAVAILABLE",
       detail:
-        "These verification steps did not run: test (this computer has no container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
+        "These verification steps did not run: test (this computer has no running container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
     });
     expect(result).not.toHaveProperty("verificationFailure");
     expect(codingToolVerificationPresentation(result)).toEqual({
@@ -2125,6 +2154,7 @@ describe("production managed worktree tools", () => {
     expect(verificationBlocked).toHaveBeenCalledWith(
       "VERIFICATION_NOT_RUN",
       expect.any(String) as unknown,
+      "blocks-repair",
     );
     expect(verificationBlocked).toHaveBeenLastCalledWith("VERIFICATION_ISOLATION_UNAVAILABLE");
     expect(events.find((entry) => entry.kind === "verification-summarized")).toMatchObject({

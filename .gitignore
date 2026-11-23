@@ -208,6 +208,9 @@ tests/memory-eval/scorecard.json
 # Checksum-verified ripgrep runtime for local/CI verification and portable staging
 # (scripts/provision-ripgrep.mjs).
 .ripgrep/
+# Maven cache of the Coding acceptance task's internal-repository project
+# (scripts/provision-acceptance-maven.mjs, #4492).
+.acceptance-maven/
 # Original Jira OpenAPI bytes fetched and digest-verified on demand; never redistributed.
 .jira-api-sources/
 

@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
+import { isBenignMonacoCancellation } from "./support/monaco-cancellation.js";
 
 const EVIDENCE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -194,12 +195,6 @@ interface EvidenceManifest {
 }
 
 const tempProjects: string[] = [];
-
-function isBenignMonacoCancellation(error: Error): boolean {
-  if (error.message === "Canceled: Canceled") return true;
-  if (error.message !== "Canceled") return false;
-  return /\b(monaco|inline[-\s]?completion|suggest|editor)\b/iu.test(error.stack ?? "");
-}
 
 function isExpectedTaskWorkspaceProbeDenial(message: string): boolean {
   return message.includes("status of 403") && message.includes("/api/task-workspaces?root=");

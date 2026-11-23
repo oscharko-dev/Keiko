@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
+import { createRepositoryCredentialRelay } from "../repository-relay/repositoryCredentialRelay.js";
 import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
   expectActivityLogProof,
@@ -435,6 +436,20 @@ describe("production OpenCode activation", () => {
     const backendInput = create.mock.calls.at(-1)?.[0];
     expect(backendInput?.repositoryItemsEnabled).toBe(expected);
     expect(backendInput?.secureWorkspaceTextRead).toBe(result.ports?.secureWorkspaceTextRead);
+  });
+
+  // #4522: the repository relay of the deps graph reaches the backend that binds a run to it.
+  it("hands the backend the repository relay when the assembly has one, and none otherwise", () => {
+    const staged = devLaneFixture();
+    const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
+    const relay = createRepositoryCredentialRelay({ activityLog: () => undefined });
+    resolveProductionOpenCodeActivation({
+      ...activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }),
+      repositoryRelay: relay,
+    });
+    expect(create.mock.calls.at(-1)?.[0].repositoryRelay).toBe(relay);
+    resolveProductionOpenCodeActivation(activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }));
+    expect(create.mock.calls.at(-1)?.[0].repositoryRelay).toBeUndefined();
   });
 
   // #3903 AC2: the operator's plugin registry is read from Keiko's own state directory, at each

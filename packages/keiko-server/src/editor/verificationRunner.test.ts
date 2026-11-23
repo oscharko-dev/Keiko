@@ -35,6 +35,7 @@ import {
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { isVerificationDependencySummary } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/index.js";
@@ -683,6 +684,46 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(manager.inFlightCount()).toBe(0);
   });
 
+  // #4519: on a Mac without a running container runtime no script step can run isolated. Asking the
+  // person to allow package scripts then held the run for the whole decision window although no
+  // answer could let a step run, and told the model never to run the scripts another way.
+  it("asks for no script trust when this host can isolate no step, and runs under that verdict (#4519)", async () => {
+    const events: ServerLogEvent[] = [];
+    const pinned: unknown[] = [];
+    const isolation = { probe: { available: false, backend: "container-docker" }, durationMs: 3 };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: async (args): Promise<ExecuteVerificationResult> => {
+        pinned.push(args.isolation);
+        return Promise.resolve({ report: report(["typecheck"]), probe: isolation.probe });
+      },
+      isWorkspaceTrustedForPackageScripts: () => false,
+      probeIsolation: async () => Promise.resolve(isolation),
+    });
+
+    await manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal);
+
+    expect(pinned).toEqual([isolation]);
+    const selected = events.find((event) => event.extra?.state === "selected");
+    expect(selected?.extra).toMatchObject({ isolationAvailable: false });
+    expect(selected?.extra).not.toHaveProperty("trustBasis");
+  });
+
+  it("still asks for script trust when this host can isolate the step (#4519)", async () => {
+    const port = fakePort(report(["typecheck"]));
+    const manager = makeManager({
+      execute: port.port,
+      isWorkspaceTrustedForPackageScripts: () => false,
+      probeIsolation: async () =>
+        Promise.resolve({ probe: { available: true, backend: "container-docker" }, durationMs: 1 }),
+    });
+
+    await expect(
+      manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal),
+    ).rejects.toMatchObject({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 });
+    expect(port.calls).toBe(0);
+  });
+
   it("does NOT gate targeted-test on workspace trust (parity with post-apply)", async () => {
     const port = fakePort(report(["targeted-test"]));
     const manager = makeManager({
@@ -1116,6 +1157,86 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
       formatActivityLogProofLine(dependencyLines[0] ?? {}),
     );
     expect(proven).toMatchObject({ state: "installed", lockfile: "created" });
+  });
+
+  // #4522: an install for the native runtime's own shell names that consumer and its closed refusal,
+  // so the timeline tells it from the governed steps' own install.
+  it("names the host-shell consumer and its refusal on the dependencies line", async () => {
+    const events: ServerLogEvent[] = [];
+    const hostShell: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "refused",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 3,
+        detail: "the lockfile does not record what package.json declares",
+        refusalReason: "lockfile-mismatch",
+        consumer: "host-shell",
+      },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(hostShell).port,
+    });
+
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts", correlationId: "deps-shell" }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    expect(line).toMatchObject({
+      correlationId: "deps-shell",
+      extra: { state: "refused", refusalReason: "lockfile-mismatch", consumer: "host-shell" },
+    });
+    const proven = expectActivityLogProof(
+      "editor.verification.dependencies.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ consumer: "host-shell", refusalReason: "lockfile-mismatch" });
+    expect(JSON.stringify(line)).not.toContain("package.json declares");
+  });
+
+  // #4522: a tree Keiko did not install is left alone, and the timeline says so: nothing installed,
+  // no receipt of this process, for the run's own shell.
+  it("records a tree it left alone for the host shell without a receipt", async () => {
+    const events: ServerLogEvent[] = [];
+    const leftAlone: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "none",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        completionReceipt: "missing",
+        completionRecorded: false,
+        consumer: "host-shell",
+      },
+    };
+    // The summary the orchestrator emits for this tree, which the run-completed event validates.
+    expect(isVerificationDependencySummary(leftAlone.dependencies)).toBe(true);
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(leftAlone).port,
+    });
+
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts", correlationId: "deps-left" }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    const proven = expectActivityLogProof(
+      "editor.verification.dependencies.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({
+      state: "none",
+      completionReceipt: "missing",
+      completionRecorded: false,
+      consumer: "host-shell",
+    });
   });
 
   it("carries the install's registry egress counts on the dependencies line", async () => {

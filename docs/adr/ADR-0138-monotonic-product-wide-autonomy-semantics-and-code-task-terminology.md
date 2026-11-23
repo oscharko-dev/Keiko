@@ -77,6 +77,14 @@ that data, not its home (ADR-0129 D5 unchanged). The user-facing meanings are:
   unattended inside the validated Authority Envelope; delivery remains separately governed, with
   the narrow Code-task commit/push/draft-PR policy path specified in D3 item 5 below.
 
+**Owner amendment, 2026-11-22 (#4530):** in every mode, a native Coding run reads dependencies from
+the Maven and npm repositories the person configured through Keiko's repository credential relay
+([ADR-0184](ADR-0184-repository-credential-relay-for-coding-runs.md) D6). Below Full access this is
+the one path to those repositories, beside the person's read-only Maven cache. It adds no
+`internet` effect: the policy classifies the command that resolves dependencies, which keeps the
+disposition the matrix gives it, and not the relay request, which goes to Keiko's attested loopback
+origin and needs no approval of its own.
+
 ### D2 — One total, monotonic effect matrix
 
 The complete mode/resource/risk matrix is replaced by the following total table. Effects remain

@@ -161,6 +161,7 @@ describe("the closed verification outcome on the rendering record (#3579)", () =
         "no-runnable-steps",
         "not-run",
         "isolation-unavailable",
+        "dependencies-unavailable",
       ],
     });
 
@@ -183,6 +184,7 @@ describe("the closed verification outcome on the rendering record (#3579)", () =
       .map((selected) => selected.parsed.correlationId)
       .sort();
     expect(retained).toEqual([
+      "run-dependencies-unavailable",
       "run-failed-check",
       "run-isolation-unavailable",
       "run-no-runnable-steps",
