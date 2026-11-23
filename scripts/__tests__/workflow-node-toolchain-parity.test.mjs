@@ -217,8 +217,9 @@ describe("workflow Node toolchain parity", () => {
     // isolated smoke matrix (P5), split out of the ui job, adds one. The npm folder publisher's
     // reserve-tag job (#4503), which alone holds the release-tag App token, adds one. The macOS 15
     // coding acceptance with a password-protected repository (#4530, repository-relay in
-    // coding-workbench-customer-shape.yml) adds one.
-    expect(withSetupNode).toHaveLength(47);
+    // coding-workbench-customer-shape.yml) adds one. The macOS native boundary lane (#4521,
+    // macos-native-boundary.yml) adds one.
+    expect(withSetupNode).toHaveLength(48);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {
