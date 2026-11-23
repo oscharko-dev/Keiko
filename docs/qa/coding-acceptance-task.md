@@ -476,18 +476,36 @@ the stopped engine's client. Two repairs made them pass; each case failed before
   continuation. In a run with its own shell such a refusal is now no evidence and no blocker
   (`evidence-only`, ADR-0137).
 
+## Missing npm dependencies installed for the run's shell, 2026-11-23
+
+A managed task worktree is a fresh checkout without `node_modules`, and below Full access the run's
+shell reaches no public registry, so `with-dependency` in a managed worktree was the expected red
+row above. Since #4522, Keiko's verifier installs a missing tree for the run's own shell on a Mac
+where it cannot isolate the project's check (ADR-0043 D17): from the approved public registry,
+without install scripts, with an empty `HOME` and `--no-save`. The shell then runs the check
+itself.
+
+Scripted form, d33b5ab82, Apple silicon Mac, an empty `HOME`, no `docker` or `podman` on `PATH`:
+all 30 cases passed in 263 s, including the cases below.
+
+| Case                                        | Folders and modes                                       | Outcome                                                              |
+| ------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------- |
+| missing dependencies, Keiko installs        | managed worktree and own folder, all three modes        | `succeeded`; real install from the public registry                   |
+| missing dependencies, install refused       | managed worktree, Supervised, stale `package-lock.json` | not verified; `lockfile-mismatch`, nothing installed                 |
+| missing dependencies, verifier never called | managed worktree, Supervised                            | `failed`; nothing installed, the negative control stays red          |
+| a tree Keiko did not install                | managed worktree, Supervised, governed verifier refused | `succeeded`; the tree is left alone, no failed installation reported |
+
+The hosted standard-account job runs the same set on this head; its evidence decides.
+
 ## What this baseline does not prove yet
 
 These points stay open:
 
 - **Delivery forms.** The standard-account run above covers this checkout. The three delivery
   forms as a standard user belong to [#4520](https://github.com/oscharko-dev/Keiko/issues/4520).
-- **Dependencies in a managed worktree.** The last row is the expected baseline. A managed task
-  worktree is a fresh checkout without `node_modules`, and below Full access the run's shell has no
-  registry. The relay reaches the person's configured registries (npm) and mirrors (Maven); that row
-  stays an expected failure here because the fixture's npm project has no registry behind it
-  ([#4522](https://github.com/oscharko-dev/Keiko/issues/4522)). With a configured registry the npm
-  cases above pass in a managed worktree in every mode.
+- **Dependencies from an internal registry only.** Keiko's install for the shell reaches the public
+  registry only. A project whose dependencies only an internal registry serves installs them in the
+  run's shell through the repository credential relay, as the npm cases above do in every mode.
 - **CI as a gate.** The job runs on every pull request to `dev` that touches the server, and on
   dispatch. It is not yet a required check: that belongs to
   [#4521](https://github.com/oscharko-dev/Keiko/issues/4521).
