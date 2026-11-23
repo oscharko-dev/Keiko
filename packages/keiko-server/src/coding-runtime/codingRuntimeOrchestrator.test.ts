@@ -7952,6 +7952,40 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it.each([
+    [
+      "a failure-redacted event",
+      {
+        kind: "failure-redacted",
+        failureCode: "runtime-failed",
+        failureSummary: "runtime-failed",
+        retryable: true,
+      },
+    ],
+    ["a runtime-stopped event", { kind: "runtime-stopped" }],
+  ] as const)("settles %s under the closed cause the terminal facts name", async (_name, event) => {
+    const { f } = settledWith("failed", terminalFacts(undefined, true));
+    f.taskDispatcher.dispatch.mockReset();
+    f.taskDispatcher.dispatch.mockResolvedValue({
+      ok: true,
+      completion: new Promise<"failed">(() => undefined),
+    });
+    await f.orchestrator.start(start);
+
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-terminal",
+      runId: RUN_ID,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      ...event,
+    });
+
+    expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+      state: "failed",
+      failureCode: "envelope-duration-exhausted",
+    });
+  });
+
+  it.each([
     ["stream-incomplete", "provider-unavailable", "unavailable"],
     ["output-exhausted", "output-exhausted-repeated", "unavailable"],
     ["provider-failed", "model-turn-failed", "unavailable"],

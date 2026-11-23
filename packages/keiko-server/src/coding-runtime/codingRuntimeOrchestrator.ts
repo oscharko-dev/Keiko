@@ -2975,6 +2975,7 @@ export class CodingRuntimeOrchestrator {
   private async stopAfterIssueFailure(
     current: CodingRuntimeSnapshot,
     failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
+    cause?: RunSettlementCause,
   ): Promise<CodingRuntimeOrchestratorResult> {
     let stopped = false;
     try {
@@ -2988,7 +2989,7 @@ export class CodingRuntimeOrchestrator {
     const live = this.current();
     if (live?.runId !== current.runId) return this.settledResult(current.runId);
     return stopped
-      ? this.transition(live, "failed", failureCode)
+      ? this.transition(live, "failed", failureCode, undefined, cause)
       : this.transition(live, "recovery-required", "recovery-required");
   }
 
@@ -3090,19 +3091,26 @@ export class CodingRuntimeOrchestrator {
     }
     const recovery = await this.ingestRecoveryEvent(current, event);
     if (recovery !== undefined) return recovery;
-    if (event.kind === "failure-redacted") {
-      recordRuntimeLifecycleFailure(
-        this.deps.diagnostics,
-        current.runId,
-        "failure-redacted",
-        undefined,
-        event,
-      );
-      return this.stopAfterIssueFailure(current, "runtime-failed");
-    }
+    if (event.kind === "failure-redacted") return this.ingestFailureRedacted(current, event);
     this.observeVerificationSummary(current, event);
     const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
+  }
+
+  private ingestFailureRedacted(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    recordRuntimeLifecycleFailure(
+      this.deps.diagnostics,
+      current.runId,
+      "failure-redacted",
+      undefined,
+      event,
+    );
+    // Read before the stop, as a settled failure does: the facts describe the call that ended it.
+    const cause = this.terminalFailure(current.runId, "failed");
+    return this.stopAfterIssueFailure(current, cause?.failureCode ?? "runtime-failed", cause);
   }
 
   private async ingestRecoveryEvent(
@@ -3270,7 +3278,14 @@ export class CodingRuntimeOrchestrator {
       return this.transition(current, "cancelled");
     }
     recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "runtime-stopped-live");
-    return this.transition(current, "failed", "runtime-failed");
+    const cause = this.terminalFailure(current.runId, "failed");
+    return this.transition(
+      current,
+      "failed",
+      cause?.failureCode ?? "runtime-failed",
+      undefined,
+      cause,
+    );
   }
 
   private async ingestPermissionRequested(
