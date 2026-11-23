@@ -1,4 +1,4 @@
-# Public API surface — 1.5.6
+# Public API surface — 1.5.7
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -111,6 +111,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.5.7: CLI entrypoints, root exports and UI stores are unchanged. On macOS a coding run reads
+  the person's Maven and npm repositories through Keiko's repository relay (ADR-0184), and its
+  shell can no longer write an opened repository's `.git/hooks` (#4491).
 - 1.5.6: CLI entrypoints, root exports and UI stores are unchanged. A second `keiko start` while
   Keiko runs leaves a live, verified instance running when its health answers late (#4504).
 - 1.5.5: CLI entrypoints, root exports and UI stores are unchanged; the Windows coding-runtime
