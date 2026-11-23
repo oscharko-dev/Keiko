@@ -124632,7 +124632,7 @@
     {
       "op": "coding-runtime.sse-fanout",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeEventHub.ts:605",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeEventHub.ts:613",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

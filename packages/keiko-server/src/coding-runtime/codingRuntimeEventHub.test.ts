@@ -527,6 +527,20 @@ describe("CodingRuntimeEventHub", () => {
     ).toBe(true);
   });
 
+  it("admits the terminal fact after containment frames filled the replay buffer", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 2 });
+    expect(hub.publish(recovery("run-a", 1)).ok).toBe(true);
+    expect(hub.publish(recovery("run-a", 2)).ok).toBe(true);
+
+    expect(hub.publish(terminal("run-a", 3)).ok).toBe(true);
+
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events.length).toBeLessThanOrEqual(2);
+    expect(replay.events.some((event) => event.state === "succeeded")).toBe(true);
+  });
+
   // KEIKO-0796: makeCapacity()'s reservation heuristic (`sum(existing critical bytes) +
   // incoming.bytes * 2 > maxBytes`) is exact only when critical events are comparably sized. This
   // pins the boundary the heuristic is exact for: two same-sized critical (non-containment) events

@@ -395,7 +395,7 @@ export class CodingRuntimeEventHub {
     )
       return false;
     while (run.events.length >= this.maxEvents || run.bytes + incoming.bytes > this.maxBytes) {
-      const lossyIndex = run.events.findIndex(({ critical }) => !critical);
+      const lossyIndex = evictionIndex(run, incoming);
       if (lossyIndex < 0) return false;
       const removed = run.events.splice(lossyIndex, 1)[0];
       if (removed === undefined) return false;
@@ -431,6 +431,14 @@ export class CodingRuntimeEventHub {
     for (const subscriber of run.subscribers) close(subscriber);
     run.subscribers.clear();
   }
+}
+
+// A terminal frame always fits: once no ordinary frame is left to evict, it displaces the oldest
+// retained non-terminal frame, so a subscriber that reconnects still learns how the run ended.
+function evictionIndex(run: RunBuffer, incoming: RetainedEvent): number {
+  const lossy = run.events.findIndex(({ critical }) => !critical);
+  if (lossy >= 0 || !isTerminal(incoming.event)) return lossy;
+  return run.events.findIndex(({ event }) => !isTerminal(event));
 }
 
 function validateReplayCursor(
