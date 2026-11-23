@@ -32,6 +32,7 @@ import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
 import {
   createRuntimeGatewayConfinement,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  nativeDeveloperDirectoryReadRoots,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
@@ -93,6 +94,11 @@ const UNVERIFIED_RIPGREP: OpenCodeRipgrepResolution = {
   layout: "none",
   reason: "missing",
 };
+
+/** The developer directory a macOS launch on this host opens, from the production resolver. */
+function hostDeveloperRoots(): readonly string[] {
+  return nativeDeveloperDirectoryReadRoots(homedir()).roots;
+}
 
 function verifiedRipgrep(directory: string): OpenCodeRipgrepResolution {
   return {
@@ -2565,7 +2571,8 @@ describe("ripgrep on the OpenCode launch", () => {
         expect(
           buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
         ).toBe(directory);
-        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The developer directory Git runs from follows the host's selection (#4521).
+        expect(result.toolchainReadRoots).toEqual([directory, ...hostDeveloperRoots()]);
         // The launch also records where the workspace's Git metadata lives (#3897 review) and the
         // hard links its scan found (PR #4064 review, none here).
         expect(result.events.map((event) => event.op)).toEqual([
@@ -2608,7 +2615,7 @@ describe("ripgrep on the OpenCode launch", () => {
         });
         expect(absent.processEnv).toEqual(CONTENT_ENV);
         expect(absent.ripgrepVerified).toBe(false);
-        expect(absent.toolchainReadRoots).toEqual([]);
+        expect(absent.toolchainReadRoots).toEqual(hostDeveloperRoots());
         expect(absent.events[0]).toMatchObject({
           level: "warn",
           extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },

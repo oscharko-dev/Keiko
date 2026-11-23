@@ -4,6 +4,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -1060,6 +1061,42 @@ function connectProbe(host: string, port: number): string {
   ].join("");
 }
 
+// #4521: a test suite's own server, served and fetched by one process on an ephemeral port.
+const SELF_SERVED_FETCH = [
+  "const http = require('node:http');",
+  "const server = http.createServer((q, r) => r.end('ok'));",
+  "const done = (fact) => { process.stdout.write(fact); server.close(); };",
+  "server.on('error', (e) => done('LISTEN:' + e.code));",
+  "server.listen(0, '127.0.0.1', () => {",
+  "  const q = http.get({ host: '127.0.0.1', port: server.address().port, timeout: 2500 }, (r) => {",
+  "    r.resume(); r.on('end', () => done('SERVED'));",
+  "  });",
+  "  q.on('error', (e) => done('BLOCKED:' + e.code));",
+  "  q.on('timeout', () => { q.destroy(); done('TIMEOUT'); });",
+  "});",
+].join("\n");
+
+// #4521: a dev server one process starts, called by a second process of the same tree.
+const SECOND_PROCESS_FETCH = [
+  "const { spawn, spawnSync } = require('node:child_process');",
+  "const serve = \"const s = require('node:http').createServer((q, r) => r.end('ok'));\" +",
+  "  \"s.on('error', (e) => { process.stdout.write('LISTEN:' + e.code + '\\\\n'); process.exit(0); });\" +",
+  "  \"s.listen(0, '127.0.0.1', () => process.stdout.write(String(s.address().port) + '\\\\n'));\";",
+  "const server = spawn(process.execPath, ['-e', serve], { stdio: ['ignore', 'pipe', 'ignore'] });",
+  "let line = '';",
+  "server.stdout.on('data', (chunk) => {",
+  "  line += chunk; if (!line.includes('\\n')) return;",
+  "  const answer = line.trim();",
+  "  if (answer.startsWith('LISTEN:')) { process.stdout.write(answer); server.kill(); return; }",
+  "  const fetch = \"const q = require('node:http').get({ host: '127.0.0.1', port: \" + answer +",
+  "    \", timeout: 2500 }, (r) => { r.resume(); r.on('end', () => process.stdout.write('SERVED')); });\" +",
+  "    \"q.on('error', (e) => process.stdout.write('BLOCKED:' + e.code));\" +",
+  "    \"q.on('timeout', () => { q.destroy(); process.stdout.write('TIMEOUT'); });\";",
+  "  process.stdout.write(spawnSync(process.execPath, ['-e', fetch], { encoding: 'utf8' }).stdout);",
+  "  server.kill();",
+  "});",
+].join("\n");
+
 function connectUnixProbe(path: string): string {
   return [
     "const net = require('node:net');",
@@ -1395,6 +1432,51 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
     },
   );
 
+  // #4521: an Xcode bundle's `xcrun` shims (`/usr/bin/git` among them) refuse to run until they
+  // read the accepted license version. The native profile opens that one file and nothing else in
+  // `/Library/Preferences`; the test process reads both files unconfined.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: reads the Xcode license record and no other system preference",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-license-proof-")));
+      const workspaceRoot = join(root, "workspace");
+      const privateStateRoot = join(root, "state");
+      for (const directory of [workspaceRoot, privateStateRoot])
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const license = "/Library/Preferences/com.apple.dt.Xcode.plist";
+      const sibling = "/Library/Preferences/.GlobalPreferences.plist";
+      const read = (command: string): string =>
+        `if ${command} >/dev/null 2>&1; then echo read; else echo refused; fi`;
+      const script = [`cat ${license}`, `cat ${sibling}`, "ls /Library/Preferences"]
+        .map((command) => read(command))
+        .map((line) => `printf '%s ' "$(${line})"`)
+        .join("; ");
+      const policy = createRuntimeGatewayConfinement({
+        ...input,
+        profile: "keiko-native",
+        filesystem: {
+          workspaceRoot,
+          workspaceAccess: "read-write",
+          privateStateRoot,
+          runtimeReadRoot: "/bin",
+        },
+      });
+      const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/bin/sh", ["-c", script]);
+      try {
+        expect(readFileSync(sibling).length).toBeGreaterThan(0);
+        expect(readdirSync("/Library/Preferences").length).toBeGreaterThan(0);
+        const licensed = existsSync(license) ? "read" : "refused";
+        if (licensed === "read") expect(readFileSync(license).length).toBeGreaterThan(0);
+        const result = run(wrapped.command, wrapped.args, { HOME: privateStateRoot }, root);
+        expect(result.status).toBe(0);
+        // Listing the directory is refused like reading any other file in it.
+        expect(result.stdout.trim()).toBe(`${licensed} refused refused`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   // Finding A (#3897): the native profile is a kernel READ allowlist. The probes run as a shell
   // child, an interpreter and a descendant, because the product's permission policy vets
   // `cat .env` and never routes a shell operand through the native read tool.
@@ -1668,6 +1750,42 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       }
     },
     20_000,
+  );
+
+  // #4521, the loopback decision. Below Full access the native profile keeps every loopback port
+  // open, so a run's shell also reaches whatever another program on this machine serves there, a
+  // local forwarding proxy included (the test above). Narrowing loopback to Keiko's own ports is the
+  // rule the mapped profile already enforces; measured here on the two shapes a project's own
+  // checks take: a test suite that serves and fetches in one process, and a dev server one process
+  // of the run starts and a second one calls. Both run natively and both break under the narrowed
+  // rule, so loopback stays open and the published text names what follows from it.
+  it.skipIf(!canProveOnThisHost)(
+    "loopback decision: a project's own local servers work natively and break under a Keiko-ports-only rule",
+    () => {
+      const tree = createNativeProofTree();
+      const narrowed = createRuntimeGatewayConfinement(input);
+      const measured: string[] = [];
+      try {
+        for (const workload of [SELF_SERVED_FETCH, SECOND_PROCESS_FETCH]) {
+          expect(run(process.execPath, ["-e", workload]).stdout).toBe("SERVED");
+          for (const egress of ["loopback-only", "inherited"] as const)
+            expect(runNative(tree, nativeConfinement(tree, egress), workload).stdout).toBe(
+              "SERVED",
+            );
+          const wrapped = buildRuntimeGatewaySeatbeltCommand(narrowed, process.execPath, [
+            "-e",
+            workload,
+          ]);
+          const broken = run(wrapped.command, wrapped.args).stdout;
+          expect(broken).toMatch(/^(LISTEN|BLOCKED):E[A-Z]+$|^TIMEOUT$/u);
+          measured.push(broken);
+        }
+        note(`loopback decision (#4521): native SERVED, Keiko ports only ${measured.join(", ")}`);
+      } finally {
+        tree.cleanup();
+      }
+    },
+    30_000,
   );
 
   // The destination is 192.0.2.1 (RFC 5737 TEST-NET-1): routable in form, answered by nobody. The

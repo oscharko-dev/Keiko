@@ -91,12 +91,22 @@ const NATIVE_SYSTEM_READ_ROOTS = [
 // `/etc`, `/var` and `/tmp` are symlinks into `/private`; resolving a path through them (the
 // resolver reads `/etc/hosts`) needs the link itself, and nothing beneath it.
 const NATIVE_SYMLINK_READS = ["/etc", "/var", "/tmp"] as const;
+// The Xcode license record (#4521). `/usr/bin/git` and every other `xcrun` shim of an Xcode bundle
+// refuse to run until they read the accepted license version that `xcodebuild -license` writes
+// here; the file holds that record only. The rest of `/Library/Preferences` stays unreadable.
+const NATIVE_SYSTEM_READ_FILES = ["/Library/Preferences/com.apple.dt.Xcode.plist"] as const;
 const NATIVE_DEVICE_READS = [
   "/dev/null",
   "/dev/zero",
   "/dev/random",
   "/dev/urandom",
   "/dev/tty",
+] as const;
+const NATIVE_READ_LITERALS = [
+  ...READ_LITERALS,
+  ...NATIVE_SYMLINK_READS,
+  ...NATIVE_SYSTEM_READ_FILES,
+  ...NATIVE_DEVICE_READS,
 ] as const;
 const NATIVE_TOOLCHAIN_ROOTS_MAX = 64;
 const NATIVE_DENIED_READ_ROOTS_MAX = 64;
@@ -385,7 +395,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
   return (
     "(deny file-read* file-write*)" +
     `(allow file-read* ${pathFilters("subpath", [...reads, ...own])} ` +
-    `${pathFilters("literal", [...READ_LITERALS, ...NATIVE_SYMLINK_READS, ...NATIVE_DEVICE_READS])} ` +
+    `${pathFilters("literal", NATIVE_READ_LITERALS)} ` +
     '(regex #"^/dev/(ttys[0-9]+|fd/[0-9]+)$"))' +
     // Path resolution stats every ancestor of every admitted root (realpath, Git's repository
     // discovery); the ancestors expose their metadata only, never their entries or siblings.

@@ -2330,7 +2330,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `~/.local/state/gh`, `~/.cargo/credentials.toml`); an executable in it that is a symbolic link
   into a bin directory of a real install prefix additionally admits that prefix. The home
   directory, an ancestor of it and any directory that contains or sits inside a denied location
-  are never roots. The
+  are never roots. The developer directory `xcode-select` chose (`/var/db/xcode_select_link`) is a
+  toolchain root under the same rule (`nativeDeveloperDirectoryReadRoots`, #4521): macOS runs Git
+  from it, through `/usr/bin/git` and in the runtime's own Git lookup, so a versioned or beta Xcode
+  (`/Applications/Xcode_16.4.app`) opens as a whole bundle like the fixed `/Applications/Xcode.app`
+  system root. Without it Git did not start in the run, the runtime treated the opened folder as no
+  repository, kept no snapshots and saw no change a shell made, so such a run required no check and
+  offered no undo. `coding-runtime.git-metadata.resolved` records the closed `developerDirectory`
+  disposition (`app-bundle`, `directory`, `none`, `refused`). An Xcode bundle's `xcrun` shims
+  refuse to run until they read the accepted license version in
+  `/Library/Preferences/com.apple.dt.Xcode.plist`, the one file of that directory the profile
+  opens; `xcrun_db` in the launch environment keeps `xcrun`'s cache in the run's `tmp`, because
+  `xcrun` ignores `TMPDIR`. The
   shared system temporary directories are not admitted: another process's file there is as
   unrelated to the task as any file outside the workspace. Writes are limited to the workspace and
   the private state, except the run's OpenCode configuration directory
@@ -2446,7 +2457,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   reach a second destination or reuse an ssh-agent or container socket; at Full access
   (`autonomous-delivery`) egress is inherited and stays bounded by the accepted Authority Envelope
   and the per-action policy. An absent disposition means loopback-only (fail closed); the
-  disposition is part of the policy digest. The child inherits the launcher's allowlisted
+  disposition is part of the policy digest. Loopback stays open as a whole below Full access
+  (decision 2026-11-22, #4521): narrowing it to Keiko's own ports, the rule the mapped profile
+  enforces, breaks a project's own checks. A test suite that serves and fetches on an ephemeral port
+  and a dev server a second process of the run calls both run natively and are refused `EPERM` under
+  that rule (`runtime-gateway.test.ts`, "loopback decision"). What follows is published as a limit:
+  below Full access a run's shell can reach any port a program on this machine serves on loopback,
+  a local forwarding proxy included. The child inherits the launcher's allowlisted
   environment (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the
   agent's shell finds the project's toolchains the way it does standalone; the mapped profiles
   still inherit nothing. An operator's explicit OpenSSL and FIPS configuration is kept as a

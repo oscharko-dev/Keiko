@@ -1,0 +1,90 @@
+name: macOS native boundary
+
+# #4521: every statement Keiko publishes about the macOS coding sandbox is proven against the real
+# kernel from the shell of a run of the pinned runtime, and a regression of that boundary turns this
+# lane red. It runs on a pull request that touches the boundary, every night, and before every
+# release: release.yml calls it, and the npm publish needs it to succeed. A skipped test certifies
+# nothing, so `check-vitest-report-ran.mjs` fails the lane on any skip.
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/actions/macos-standard-account/**"
+      - ".github/workflows/macos-native-boundary.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "packages/keiko-contracts/**"
+      - "packages/keiko-sandbox/**"
+      - "packages/keiko-server/src/coding-runtime/**"
+      - "scripts/check-vitest-report-ran.mjs"
+      - "scripts/stage-dev-coding-runtime.mjs"
+  schedule:
+    - cron: "40 4 * * *"
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions: {}
+
+jobs:
+  native-boundary:
+    name: macOS native boundary from the model's shell
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages
+        run: npm run build:packages
+      - name: Stage approved OpenCode dev-lane payload
+        run: npm run dev:coding-runtime:stage
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
+      - name: Create the standard account the proofs run as
+        uses: ./.github/actions/macos-standard-account
+      # The kernel proofs of `runtime-gateway.test.ts`, then the shell of real runs of the pinned
+      # runtime: under the native profile with Keiko's own policy (qualification, delivery) and on
+      # the production path through the dev-lane process backend, which every macOS delivery form
+      # uses (functional). The account canaries (a throwaway keychain, credential files) belong to the
+      # standard account the job created.
+      # Two functional tests prove the governed container verifier, which this Mac without a
+      # container runtime refuses by design; they are not boundary proofs and are left out by name.
+      # The report check judges exactly the tests the filter selected, so a skip among them fails.
+      - name: Run the boundary proofs as the standard account
+        run: |
+          temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
+          payload=/Users/keikoqa/keiko/.portable-sidecar-payloads/macos-arm64/opencode-compatible
+          sudo -u keikoqa -H /usr/bin/env -i \
+            HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
+            TMPDIR="${temp}" \
+            PATH=/Users/keikoqa/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            KEIKO_OPENCODE_REAL_BINARY="${payload}/payload/bin/opencode" \
+            KEIKO_OPENCODE_REAL_RESOURCE_ROOT="${payload}" \
+            KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1 KEIKO_NATIVE_ACCOUNT_CANARIES=1 KEIKO_OS_KEYCHAIN=off \
+            /bin/sh -s <<'BOUNDARY'
+          cd "$HOME/keiko" || exit 1
+          echo "groups: $(id -Gn)"
+          selected='^(?!.*(?:drives the managed OpenCode composition end to end|drives the staged real OpenCode artifact))'
+          npx vitest run -t "$selected" \
+            packages/keiko-sandbox/src/runtime-gateway.test.ts \
+            packages/keiko-server/src/coding-runtime/opencodeNativeQualification.real.test.ts \
+            packages/keiko-server/src/coding-runtime/opencodeNativeDelivery.real.test.ts \
+            packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional.test.ts \
+            --reporter=default --reporter=json --outputFile="$HOME/boundary-report/boundary.json"
+          tests=$?
+          node scripts/check-vitest-report-ran.mjs "$HOME/boundary-report/boundary.json" --select "$selected"
+          ran=$?
+          [ "$tests" -eq 0 ] && [ "$ran" -eq 0 ]
+          BOUNDARY

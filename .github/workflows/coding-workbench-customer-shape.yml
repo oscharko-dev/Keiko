@@ -5,6 +5,7 @@ on:
     branches:
       - dev
     paths:
+      - ".github/actions/macos-standard-account/**"
       - ".github/workflows/coding-workbench-customer-shape.yml"
       - ".github/workflows/release.yml"
       - "package.json"
@@ -163,29 +164,13 @@ jobs:
       - name: Provision the acceptance Maven cache
         run: npm run provision:acceptance-maven
       # #4519: the promise is for a person without administrator rights on a Mac without a container
-      # runtime. The runner's account is an administrator, so it only sets up: it creates a standard
-      # account and gives it its own copy of the checkout, Node.js and the JDK, held in its home folder
-      # as such a person would hold them. The acceptance task then runs as that account, and the job
-      # passes only when the task's evidence certifies the promise.
+      # runtime. The acceptance task runs as the standard account the action creates, with its own
+      # copy of the checkout, Node.js and the JDK, and the job passes only when the task's evidence
+      # certifies the promise.
       - name: Create the standard account the acceptance task runs as
-        run: |
-          password="$(openssl rand -hex 24)"
-          echo "::add-mask::${password}"
-          sudo sysadminctl -addUser keikoqa -fullName "Keiko acceptance" -shell /bin/zsh \
-            -home /Users/keikoqa -password "${password}"
-          sudo createhomedir -c -u keikoqa >/dev/null
-          : "${JAVA_HOME:?the runner image names no JDK}"
-          node_root="$(dirname "$(dirname "$(command -v node)")")"
-          jdk_bundle="$(dirname "$(dirname "${JAVA_HOME}")")"
-          sudo ditto "${GITHUB_WORKSPACE}" /Users/keikoqa/keiko
-          sudo ditto "${node_root}" /Users/keikoqa/.local/node
-          sudo ditto "${jdk_bundle}" /Users/keikoqa/Library/Java/JavaVirtualMachines/acceptance.jdk
-          sudo chown -R keikoqa:staff /Users/keikoqa/keiko /Users/keikoqa/.local /Users/keikoqa/Library/Java
-          echo "account: $(id keikoqa)"
-          if dseditgroup -o checkmember -m keikoqa admin >/dev/null 2>&1; then
-            echo "::error::the acceptance account is an administrator"
-            exit 1
-          fi
+        uses: ./.github/actions/macos-standard-account
+        with:
+          jdk: "true"
       - name: Run the coding acceptance task as the standard account
         run: |
           temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"

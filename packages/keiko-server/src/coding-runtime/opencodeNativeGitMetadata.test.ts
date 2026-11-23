@@ -167,14 +167,22 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
     expect(resolveNativeGitMetadata(workspace, undefined).layout).toBe("unproven");
   });
 
-  function recorded(layout: "linked-worktree" | "unproven"): readonly ServerLogEvent[] {
+  function recorded(
+    layout: "linked-worktree" | "unproven",
+    developerDirectory?: "app-bundle",
+  ): readonly ServerLogEvent[] {
     const events: ServerLogEvent[] = [];
-    recordNativeGitMetadataResolution({ write: (event) => events.push(event) }, "run-git-0001", {
-      layout,
-      binding: "managed-task",
-      readRoots: layout === "linked-worktree" ? [join(root, "PRIVATE_REPOSITORY", ".git")] : [],
-      protectedWriteRoots: [join(root, "PRIVATE_REPOSITORY", ".git", "config")],
-    });
+    recordNativeGitMetadataResolution(
+      { write: (event) => events.push(event) },
+      "run-git-0001",
+      {
+        layout,
+        binding: "managed-task",
+        readRoots: layout === "linked-worktree" ? [join(root, "PRIVATE_REPOSITORY", ".git")] : [],
+        protectedWriteRoots: [join(root, "PRIVATE_REPOSITORY", ".git", "config")],
+      },
+      developerDirectory,
+    );
     return events;
   }
 
@@ -202,6 +210,15 @@ describe("native Git metadata of the task workspace (#3897 review)", () => {
         readRootCount: 1,
       });
       expect(JSON.stringify(line)).not.toContain("PRIVATE_REPOSITORY");
+      // #4521: the developer directory Git runs from is recorded as a closed value, never a path.
+      const [withDeveloper] = recorded("linked-worktree", "app-bundle");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.git-metadata.resolved.emitted-line",
+          formatActivityLogProofLine(withDeveloper ?? {}),
+        ),
+      ).toMatchObject({ developerDirectory: "app-bundle" });
+      expect(line).not.toHaveProperty("developerDirectory");
     },
   );
 });

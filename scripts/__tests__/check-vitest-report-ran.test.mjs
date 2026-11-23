@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCheck, vitestReportVerdict } from "../check-vitest-report-ran.mjs";
+import {
+  runCheck,
+  selectedReportVerdict,
+  vitestReportVerdict,
+} from "../check-vitest-report-ran.mjs";
 
 const RAN = { success: true, numPassedTests: 17, numFailedTests: 0, numPendingTests: 0 };
 
@@ -34,6 +38,48 @@ describe("vitestReportVerdict (#4530)", () => {
     expect(vitestReportVerdict({ ...RAN, success: false }).ok).toBe(false);
     expect(vitestReportVerdict(null).ok).toBe(false);
     expect(vitestReportVerdict({ success: true, numPassedTests: "17" }).reason).toBe("no test ran");
+  });
+});
+
+// #4521: vitest reports a test that `-t` left out as skipped, like one whose gate was not met.
+function reportOf(...results) {
+  return {
+    success: true,
+    testResults: [
+      { assertionResults: results.map(([fullName, status]) => ({ fullName, status })) },
+    ],
+  };
+}
+
+describe("selectedReportVerdict (#4521)", () => {
+  const BOUNDARY = /boundary/u;
+
+  it("judges only the selected tests, so the ones a name filter left out do not count", () => {
+    const report = reportOf(
+      ["boundary a", "passed"],
+      ["boundary b", "passed"],
+      ["other", "skipped"],
+    );
+    expect(selectedReportVerdict(report, BOUNDARY)).toEqual({
+      ok: true,
+      reason: "2 selected passed, none skipped",
+    });
+  });
+
+  it("refuses a selected test that was skipped, failed or never ran", () => {
+    expect(
+      selectedReportVerdict(
+        reportOf(["boundary a", "passed"], ["boundary b", "skipped"]),
+        BOUNDARY,
+      ),
+    ).toEqual({ ok: false, reason: "1 selected tests were skipped" });
+    const failed = { ...reportOf(["boundary a", "failed"]), success: false };
+    expect(selectedReportVerdict(failed, BOUNDARY).ok).toBe(false);
+    expect(selectedReportVerdict(reportOf(["other", "passed"]), BOUNDARY)).toEqual({
+      ok: false,
+      reason: "no selected test ran",
+    });
+    expect(selectedReportVerdict(null, BOUNDARY).ok).toBe(false);
   });
 });
 
@@ -70,6 +116,20 @@ describe("runCheck", () => {
     const skipped = { ...RAN, numPassedTests: 0, numPendingTests: 3 };
     expect(runCheck(["node", "check", report(JSON.stringify(skipped))], io)).toBe(1);
     expect(lines.error).toEqual(["check-vitest-report-ran: FAIL 3 tests were skipped"]);
+  });
+
+  it("judges the selected tests with --select and refuses an invalid pattern", () => {
+    const { lines, io } = capture();
+    const file = report(JSON.stringify(reportOf(["boundary a", "passed"], ["other", "skipped"])));
+    expect(runCheck(["node", "check", file, "--select", "boundary"], io)).toBe(0);
+    expect(runCheck(["node", "check", file], io)).toBe(1);
+    expect(runCheck(["node", "check", file, "--select", "("], io)).toBe(2);
+    expect(runCheck(["node", "check", file, "--select"], io)).toBe(2);
+    expect(lines.log).toEqual(["check-vitest-report-ran: PASS 1 selected passed, none skipped"]);
+    expect(lines.error[0]).toBe("check-vitest-report-ran: FAIL no test ran");
+    expect(lines.error[1]).toMatch(
+      /^check-vitest-report-ran: FAIL --select needs a valid pattern/u,
+    );
   });
 
   it("fails on an unreadable report and without an argument", () => {

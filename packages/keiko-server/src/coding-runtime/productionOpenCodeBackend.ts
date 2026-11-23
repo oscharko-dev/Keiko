@@ -31,10 +31,12 @@ import {
   nativeBuildCacheReadRoots,
   nativeBuildToolReadRoots,
   nativeBuildWrapperReadRoots,
+  nativeDeveloperDirectoryReadRoots,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
   planWindowsGatewayRuntimeSandbox,
   type LongLivedRuntimeSandboxAttestation,
+  type NativeDeveloperDirectoryDisposition,
   type RuntimeGatewayEgress,
   type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
@@ -1660,19 +1662,29 @@ function gatewayFilesystem(
       workspaceAccess: native ? "read-write" : "read-only",
       privateStateRoot,
       runtimeReadRoot: realpathSync(join(portable.installRoot, portable.sidecar.payloadRootPath)),
-      ...(native
-        ? {
-            deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
-            toolchainReadRoots: nativeSupportReadRoots(input, run),
-            ...nativeGitMetadataRoots(input, run, privateStateRoot),
-            ...externalReadRootsField(input, run, macos),
-            ...linkedFilesField(input, run, macos),
-            ...certificateReadFilesField(input, run, macos),
-            // The plan agent's private notes take no link that could name a workspace file.
-            linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
-          }
-        : {}),
+      ...(native ? nativeFilesystemFields(input, run, privateStateRoot, macos) : {}),
     },
+  };
+}
+
+/** What the native profile reads and protects beyond the workspace and the private state. */
+function nativeFilesystemFields(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  privateStateRoot: string,
+  macos: boolean,
+): Partial<RuntimeGatewayFilesystem> {
+  // #4521: Git runs from the developer directory `xcode-select` chose, a versioned Xcode included.
+  const developer = macos ? nativeDeveloperDirectoryReadRoots(homedir()) : undefined;
+  return {
+    deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+    toolchainReadRoots: [...nativeSupportReadRoots(input, run), ...(developer?.roots ?? [])],
+    ...nativeGitMetadataRoots(input, run, privateStateRoot, developer?.disposition),
+    ...externalReadRootsField(input, run, macos),
+    ...linkedFilesField(input, run, macos),
+    ...certificateReadFilesField(input, run, macos),
+    // The plan agent's private notes take no link that could name a workspace file.
+    linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
   };
 }
 
@@ -1748,6 +1760,7 @@ function nativeGitMetadataRoots(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   privateStateRoot: string,
+  developerDirectory: NativeDeveloperDirectoryDisposition | undefined,
 ): {
   readonly gitMetadataReadRoots?: readonly string[];
   readonly protectedWriteRoots: readonly string[];
@@ -1760,6 +1773,7 @@ function nativeGitMetadataRoots(
     input.activityLog ?? processServerLogSink(),
     run.minted.authorityRef.runId,
     resolution,
+    developerDirectory,
   );
   return {
     ...(resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots }),

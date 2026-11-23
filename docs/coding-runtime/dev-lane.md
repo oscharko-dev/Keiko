@@ -14,10 +14,12 @@ Decision record: [ADR-0140](../adr/ADR-0140-macos-dev-lane-activation-of-the-man
 The lane carries the evidence class **`functional-not-platform-qualified`**. It is a functional
 activation, not a platform qualification:
 
-- **Platform-specific supervision, no platform qualification.** On macOS the dev-lane backend
-  terminates a fresh POSIX process group best-effort; a descendant that leaves the group survives
-  unobserved, and tree exit is proven only for the direct child. Windows uses the native Job Object
-  supervisor staged with the runtime. Neither development path claims a release qualification.
+- **Platform-specific supervision, no platform qualification.** On macOS the dev-lane backend ends
+  the runtime's process group and then every remaining process of the run's Seatbelt sandbox
+  instance, including a descendant that left the group or started a new session; the sandbox
+  membership proves the end, `coding-runtime.descendants.swept` records it, and an end it cannot
+  prove is recorded as unproven (ADR-0163 D9, #4521). Windows uses the native Job Object supervisor
+  staged with the runtime. Neither development path claims a release qualification.
 - **A Windows checkout needs no service.** The runtime supervisor confines every Windows launch
   itself, as the signed-in standard user in an AppContainer without network capability, reaching
   only the attested loopback ports through a named-pipe relay (ADR-0043 D21). There is no gateway

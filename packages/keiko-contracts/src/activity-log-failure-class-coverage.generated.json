@@ -13377,6 +13377,12 @@
               "required": true
             },
             {
+              "name": "developerDirectory",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "layout",
               "type": "string",
               "dataClass": "closed-enum",

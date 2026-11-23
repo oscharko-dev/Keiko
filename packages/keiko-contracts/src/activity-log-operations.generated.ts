@@ -11455,6 +11455,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      developerDirectory: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["app-bundle", "directory", "none", "refused"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",

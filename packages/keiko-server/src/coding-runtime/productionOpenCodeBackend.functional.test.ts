@@ -1,7 +1,16 @@
 import { execFileSync, spawn } from "node:child_process";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1190,6 +1199,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
     }, 240_000);
 
     it("reaps a service that dies during startup, refuses that start, and starts the next one", async () => {
+      const log = recordActivityLog();
       const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
       fixture.script.mode = "lifecycle-continue";
       const pipeline = await bootDiscoveryPipeline(fixture);
@@ -1200,10 +1210,20 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         startBody("lifecycle-startup-failure"),
       );
       const service = await killed;
-      const body = (await refused.json()) as { readonly state?: string };
-      expect(refused.status === 200 && body.state === "running").toBe(false);
+      const text = await refused.text();
+      // The start is refused by the service's death, never by missing authority (#4521).
+      expect(refused.status, text).not.toBe(403);
+      expect(refused.status === 200 && text.includes('"state":"running"')).toBe(false);
       await expectServiceTreeReaped(service);
-      const runId = await startRun(pipeline, startBody("lifecycle-after-startup-failure"));
+      const cookie = await pipelineSessionCookie(pipeline.baseUrl);
+      const runId = await startRun(
+        pipeline,
+        startBody("lifecycle-after-startup-failure"),
+        () =>
+          `\nfirst start ${String(refused.status)} ${text}${appSessionLines(log)}` +
+          `\nsession ${sessionStanding(pipeline, cookie)}${warningLines(log)}` +
+          startScopeFacts(pipeline),
+      );
       const next = onlyService();
       await stopRun(pipeline.baseUrl, runId);
       await expectServiceTreeReaped(next);
@@ -1264,10 +1284,14 @@ async function startLifecycleRun(
   return { fixture, pipeline, runId, service: onlyService(), log };
 }
 
-async function startRun(pipeline: FunctionalPipeline, body: unknown): Promise<string> {
+async function startRun(
+  pipeline: FunctionalPipeline,
+  body: unknown,
+  explain: () => string = () => "",
+): Promise<string> {
   const started = await post(pipeline.baseUrl, "/api/coding-workbench/runtime/runs", body);
   const text = await started.clone().text();
-  expect(started.status, text).toBe(200);
+  expect(started.status, `${text}${explain()}`).toBe(200);
   const run = (await started.json()) as { readonly runId: string; readonly state: string };
   expect(run.state, text).toBe("running");
   return run.runId;
@@ -1310,6 +1334,60 @@ function sweepLines(
   );
 }
 
+// The settlement and sweep lines of a run, body-free, to say why it did not succeed.
+function settledLines(log: BufferedServerLogSink, runId: string): string {
+  const lines = log.events.flatMap((event) =>
+    (event.correlationId === runId || event.extra?.runId === runId) &&
+    (/\.settled$|descendants|undo-window|revert|native-step/u.test(event.op) ||
+      event.level !== "info")
+      ? [`${event.op} ${JSON.stringify(event.extra ?? {})}`]
+      : [],
+  );
+  return `\n${lines.join("\n")}`;
+}
+
+// What the pipeline's session registry knows about the cookie its transport presents.
+function sessionStanding(pipeline: FunctionalPipeline, cookie: string): string {
+  const channel = pipeline.deps.codingAppSessionChannel;
+  return JSON.stringify({
+    standing: channel?.proofStanding?.(cookie.slice(cookie.indexOf("=") + 1)) ?? "no-channel",
+    sessionCount: channel?.sessionCount() ?? "no-channel",
+  });
+}
+
+// What a start's scope resolves from, and the pipeline's diagnostics, to say why it was refused.
+function startScopeFacts(pipeline: FunctionalPipeline): string {
+  let active: string;
+  try {
+    active = pipeline.deps.workspaceLifecycle?.getActive() === undefined ? "none" : "active";
+  } catch (error) {
+    const code = (error as { readonly code?: unknown }).code;
+    active = `threw ${error instanceof Error ? error.name : "value"} ${String(code)}`;
+  }
+  const diagnostics = pipeline.diagnostics.map((record) => JSON.stringify(record).slice(0, 400));
+  return `\nactive ${active}\ndiagnostics\n${diagnostics.slice(-12).join("\n")}`;
+}
+
+// The warn and error lines of a test, body-free, to say which owner refused a start.
+function warningLines(log: BufferedServerLogSink): string {
+  const lines = log.events.flatMap((event) =>
+    event.level === "warn" || event.level === "error"
+      ? [`${event.level} ${event.op} ${JSON.stringify(event.extra ?? {})}`.slice(0, 400)]
+      : [],
+  );
+  return `\n${lines.join("\n")}`;
+}
+
+// The app-session lines of a test, body-free, to say why a mutation lost its authority.
+function appSessionLines(log: BufferedServerLogSink): string {
+  const lines = log.events.flatMap((event) =>
+    event.op.startsWith("coding-app-session.")
+      ? [`${event.op} ${JSON.stringify(event.extra ?? {})}`]
+      : [],
+  );
+  return `\n${lines.join("\n")}`;
+}
+
 function settledStates(log: BufferedServerLogSink, runId: string): readonly unknown[] {
   return log.events.flatMap((event) =>
     event.op === "coding-runtime.run.settled" && event.extra?.runId === runId
@@ -1335,11 +1413,19 @@ function processTable(): readonly ProcessRow[] {
     });
 }
 
-/** The original services this server process owns right now. */
+/**
+ * The original services this server process owns right now: the runtime itself, once its launch
+ * wrapper exec'd it. Before that, `sandbox-exec` and the shell that starts the run's sandbox member
+ * carry the same arguments; ending one of them before the member exists is another case, whose end
+ * Keiko cannot prove (#4521).
+ */
 function services(): readonly ProcessRow[] {
-  return processTable().filter(
-    (row) => row.ppid === process.pid && row.command.includes(SERVICE_COMMAND),
-  );
+  return processTable().filter((row) => row.ppid === process.pid && isService(row.command));
+}
+
+function isService(command: string): boolean {
+  const at = command.indexOf(SERVICE_COMMAND);
+  return at >= 0 && !command.slice(0, at).includes(" ");
 }
 
 function onlyService(): ProcessRow {
@@ -1519,33 +1605,352 @@ async function probeBoundary(
   operatorEnv: (opensslConf: string) => Readonly<Record<string, string>>,
   opensslDirectory = "openssl",
 ): Promise<BoundaryProbe> {
-  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
-  writeFileSync(join(fixture.workspace, ".env"), "API_KEY=DOTENV_CANARY_3901\n");
-  writeFileSync(join(fixture.workspace, "probe.sh"), PROBE_SCRIPT, { mode: 0o755 });
-  const openssl = join(fixture.root, opensslDirectory);
+  let opensslConf = "";
+  const probe = await startShellProbe({
+    script: PROBE_SCRIPT,
+    prepare: (fixture) => {
+      writeFileSync(join(fixture.workspace, ".env"), "API_KEY=DOTENV_CANARY_3901\n");
+      opensslConf = writeOpensslConfiguration(fixture, opensslDirectory);
+    },
+    args: (fixture) =>
+      `${String(process.pid)} '${join(fixture.root, "bff-state", "ui-db", "keiko.config.json")}'`,
+    operatorEnv: () => operatorEnv(opensslConf),
+  });
+  await stopRun(probe.pipeline.baseUrl, probe.runId);
+  const transcript = probe.transcripts.join("\n");
+  return { facts: probeFacts(probe.transcripts), transcript, opensslConf };
+}
+
+function writeOpensslConfiguration(fixture: FunctionalWorkspaceFixture, directory: string): string {
+  const openssl = join(fixture.root, directory);
   mkdirSync(openssl, { recursive: true });
   const opensslConf = join(openssl, "openssl.cnf");
   writeFileSync(opensslConf, "openssl_conf = openssl_init\n[openssl_init]\n");
-  const state = join(fixture.root, "bff-state", "ui-db", "keiko.config.json");
+  return opensslConf;
+}
+
+interface ShellProbeInput {
+  readonly script: string;
+  readonly args: (fixture: FunctionalWorkspaceFixture) => string;
+  readonly operatorEnv: () => Readonly<Record<string, string>>;
+  readonly prepare?: (fixture: FunctionalWorkspaceFixture) => void;
+  /**
+   * Called once, when the gateway receives the probe's output and before the model answers it,
+   * with the run's runtime still alive.
+   */
+  readonly onProbeOutput?: (live: LiveProbeRun) => void;
+}
+
+/** The run a probe's output belongs to, while its runtime is alive. */
+interface LiveProbeRun {
+  readonly fixture: FunctionalWorkspaceFixture;
+  readonly pipeline: () => FunctionalPipeline;
+  readonly runId: Promise<string>;
+}
+
+interface ShellProbeRun {
+  readonly fixture: FunctionalWorkspaceFixture;
+  readonly workspace: string;
+  readonly pipeline: FunctionalPipeline;
+  readonly runId: string;
+  readonly transcripts: readonly string[];
+}
+
+/** A Full-access run on the production path whose model runs `sh ./probe.sh <args>` once. */
+async function startShellProbe(input: ShellProbeInput): Promise<ShellProbeRun> {
+  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+  writeFileSync(join(fixture.workspace, "probe.sh"), input.script, { mode: 0o755 });
+  input.prepare?.(fixture);
   fixture.script.mode = "probe";
-  fixture.script.probeCommand = `sh ./probe.sh ${String(process.pid)} '${state}'`;
+  fixture.script.probeCommand = `sh ./probe.sh ${input.args(fixture)}`;
   const transcripts: string[] = [];
-  const pipeline = await bootDiscoveryPipeline(
+  let started: (runId: string) => void = () => undefined;
+  const live: LiveProbeRun = {
+    fixture,
+    pipeline: () => pipeline,
+    runId: new Promise<string>((resolve) => {
+      started = resolve;
+    }),
+  };
+  const pipeline: FunctionalPipeline = await bootDiscoveryPipeline(
     fixture,
     (request) => {
-      transcripts.push(JSON.stringify(request.messages));
+      const transcript = JSON.stringify(request.messages);
+      if (transcript.includes("probe.done=1") && !transcripts.join("\n").includes("probe.done=1"))
+        input.onProbeOutput?.(live);
+      transcripts.push(transcript);
     },
-    operatorEnv(opensslConf),
+    input.operatorEnv(),
   );
   const runId = await startRun(pipeline, startBody("boundary-probe"));
+  started(runId);
   await vi.waitFor(
     () => {
       expect(transcripts.join("\n")).toContain("probe.done=1");
     },
     { timeout: 60_000, interval: 200 },
   );
-  await stopRun(pipeline.baseUrl, runId);
-  return { facts: probeFacts(transcripts), transcript: transcripts.join("\n"), opensslConf };
+  return { fixture, workspace: fixture.workspace, pipeline, runId, transcripts };
+}
+
+// #4521: the credentials a launch's environment could carry, as the run's shell sees them. The
+// launch composes its environment from an allowlist that does not depend on the mode
+// (`nativeInheritedEnvAllowlist`), so Full access, the widest mode, stands for all three.
+const ENV_PROBE_SCRIPT = `#!/bin/sh
+canary="$1"
+echo "probe.canary_lines=$(env | grep -c -F "$canary")"
+echo "probe.secrets=$(env | grep -c -E '^(OPENCODE_SERVER_PASSWORD|KEIKO_MODEL_GATEWAY_CAPABILITY|KEIKO_TOOL_FACADE_CAPABILITY|OPENCODE_CONFIG_CONTENT)=')"
+echo probe.done=1
+`;
+
+/** Host variables whose names say they carry a credential; each holds the canary. */
+const PLANTED_SECRET_NAMES = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "AZURE_OPENAI_API_KEY",
+  "KEIKO_GATEWAY_TOKEN",
+  "GITHUB_TOKEN",
+  "NPM_TOKEN",
+  "MAVEN_PASSWORD",
+] as const;
+
+/** A process's exec environment as any process of the same account reads it (KERN_PROCARGS2). */
+function processEnvironment(pid: number): string {
+  return execFileSync("/bin/ps", ["-E", "-ww", "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+}
+
+// #4521: processes a command takes out of the shell's process group and out of the service's tree
+// by four different routes: SIGHUP ignored as nohup does, a double fork, a new session and a file
+// watcher. Each command line carries its marker. macOS's own nohup also detaches from the launchd
+// console session; the probe records its exit, and a nohup process that does run (3899.45) must
+// be gone after the run like the others. With `change` the probe leaves a changed file, so the
+// settled run keeps its runtime for the undo window; with `none` it leaves the folder as it found
+// it, and the runtime ends when the run settles.
+const ESCAPE_MARKERS = ["3899.41", "3899.42", "3899.43", "3899.44"] as const;
+const NOHUP_MARKER = "3899.45";
+const ESCAPE_PROBE_SCRIPT = `#!/bin/sh
+nohup sleep 3899.45 </dev/null >/dev/null 2>nohup.err &
+nohup_pid=$!
+sleep 1
+if kill -0 "$nohup_pid" 2>/dev/null; then echo probe.nohup=running; else wait "$nohup_pid"; echo "probe.nohup=$?"; fi
+sh -c 'trap "" HUP; exec sleep 3899.41' </dev/null >/dev/null 2>&1 &
+sh -c '(sleep 3899.42 </dev/null >/dev/null 2>&1 &)'
+perl -MPOSIX -e 'fork and exit; POSIX::setsid(); open STDIN, "<", "/dev/null"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null"; exec "sleep", "3899.43"'
+node -e 'require("node:fs").watch(".", () => {}); setInterval(() => {}, 1e9)' 3899.44 </dev/null >/dev/null 2>watcher.err &
+if [ "$1" = change ]; then
+  printf 'changed by the probe\\n' > probe-change.txt
+  echo "probe.git=$(command -v git || echo none)"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1; echo "probe.git_repo=$?"
+else
+  sleep 1
+  tr -c 'a-zA-Z0-9:.' '_' < nohup.err | head -c 400 | sed 's/^/probe.nohup_err=/'; echo
+  tr -c 'a-zA-Z0-9:.' '_' < watcher.err | head -c 400 | sed 's/^/probe.watcher_err=/'; echo
+  rm -f nohup.err watcher.err
+fi
+echo probe.done=1
+`;
+
+function killIfAlive(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+/** The markers of the escaped processes alive in `rows`, in the order of `ESCAPE_MARKERS`. */
+function escapedMarkers(rows: readonly ProcessRow[]): readonly string[] {
+  return ESCAPE_MARKERS.filter((marker) => rows.some((row) => row.command.includes(marker)));
+}
+
+function escapedProcesses(): readonly ProcessRow[] {
+  return processTable().filter((row) =>
+    [...ESCAPE_MARKERS, NOHUP_MARKER].some((marker) => row.command.includes(marker)),
+  );
+}
+
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "model credentials and the processes a run leaves, on the production path on macOS (#4521)",
+  () => {
+    it("keeps provider keys planted in secret-named host variables out of the runtime and its shell", async () => {
+      const canary = `planted-${randomUUID()}`;
+      let opensslConf = "";
+      // Read while the runtime sends the model the probe's output, so it is alive: a run that
+      // changed no file stops its runtime when it settles.
+      let runtimes: readonly string[] = [];
+      const probe = await startShellProbe({
+        script: ENV_PROBE_SCRIPT,
+        args: () => canary,
+        // Positive control: the operator's OpenSSL configuration reaches the run, and its path
+        // carries the canary, so a probe that could not see the canary would fail here.
+        prepare: (fixture) => {
+          opensslConf = writeOpensslConfiguration(fixture, canary);
+        },
+        operatorEnv: () => ({
+          ...Object.fromEntries(PLANTED_SECRET_NAMES.map((name) => [name, canary])),
+          HTTPS_PROXY: `http://keiko:${canary}@proxy.invalid:3128`,
+          OPENSSL_CONF: opensslConf,
+          NODE_OPTIONS: "--openssl-shared-config",
+        }),
+        onProbeOutput: () => {
+          try {
+            runtimes = services().map((row) => processEnvironment(row.pid));
+          } catch (error) {
+            // A failure here must fail the test below, not the model call it observes.
+            runtimes = [`unreadable: ${String(error)}`];
+          }
+        },
+      });
+      expect(probeFacts(probe.transcripts)).toEqual({ canary_lines: "1", secrets: "0" });
+      // The runtime's exec environment, read the way any process of this account can: the reader
+      // sees it (the control), and no planted value is in it.
+      expect(runtimes).toHaveLength(1);
+      const [runtime = ""] = runtimes;
+      expect(runtime).toMatch(/\sPATH=\//u);
+      expect(runtime).not.toContain(canary);
+    }, 180_000);
+
+    it("ends what a shell took out of the run's tree when a run that changed nothing settles: SIGHUP ignored, a double fork, a new session and a file watcher", async () => {
+      const log = recordActivityLog();
+      try {
+        const probe = await startEscapeProbe("none");
+        // A run that changed no file offers no undo: its runtime ends when it settles, and every
+        // process of its tree with it.
+        await vi.waitFor(
+          () => {
+            expect(escapedProcesses(), settledLines(log, probe.runId)).toEqual([]);
+          },
+          { timeout: 60_000, interval: 200 },
+        );
+        await vi.waitFor(() => {
+          expect(sweepLines(log, probe.runId), settledLines(log, probe.runId)).toEqual([
+            expect.objectContaining({ outcome: "reaped" }),
+          ]);
+        });
+        expect(
+          settledStates(log, probe.runId),
+          `${JSON.stringify(probeFacts(probe.transcripts))} ${probe.midTurnRevert}` +
+            settledLines(log, probe.runId),
+        ).toEqual(["succeeded"]);
+      } finally {
+        for (const row of escapedProcesses()) killIfAlive(row.pid);
+      }
+    }, 180_000);
+
+    it("ends what a shell took out of the run's tree when a held runtime ends with the next run: SIGHUP ignored, a double fork, a new session and a file watcher", async () => {
+      const log = recordActivityLog();
+      try {
+        const probe = await startEscapeProbe("change");
+        // The run settles on its own when its turn ends. Its shell changed a file that no edit
+        // settlement reported and ran no check, so the run's step change calls for one (#3901)
+        // and the run ends failed (verification-not-evidenced).
+        await vi.waitFor(
+          () => {
+            expect(settledStates(log, probe.runId), settledLines(log, probe.runId)).toHaveLength(1);
+          },
+          { timeout: 60_000, interval: 200 },
+        );
+        expect(
+          settledStates(log, probe.runId),
+          `${JSON.stringify(probeFacts(probe.transcripts))} ${probe.midTurnRevert}` +
+            settledLines(log, probe.runId),
+        ).toEqual(["failed"]);
+        // A settled run that changed files keeps its runtime for the undo window (#3904 AC3, 30
+        // minutes), and what its shell started runs on with it.
+        expect(
+          escapedMarkers(escapedProcesses()),
+          `${probe.midTurnRevert}${settledLines(log, probe.runId)}`,
+        ).toEqual([...ESCAPE_MARKERS]);
+        expect(sweepLines(log, probe.runId)).toEqual([]);
+        // The next run closes that window. The runtime ends, and every process of its tree with it.
+        probe.fixture.script.mode = "lifecycle-continue";
+        const next = await startRun(probe.pipeline, startBody("boundary-probe-next"));
+        await vi.waitFor(
+          () => {
+            expect(escapedProcesses(), settledLines(log, probe.runId)).toEqual([]);
+          },
+          { timeout: 20_000, interval: 200 },
+        );
+        await vi.waitFor(() => {
+          expect(sweepLines(log, probe.runId)).toEqual([
+            expect.objectContaining({ outcome: "reaped" }),
+          ]);
+        });
+        await stopRun(probe.pipeline.baseUrl, next);
+      } finally {
+        for (const row of escapedProcesses()) killIfAlive(row.pid);
+      }
+    }, 180_000);
+  },
+);
+
+/**
+ * Runs the escape probe and checks its positive control: when the shell returned, all four
+ * escaped processes ran, each adopted by launchd, and nohup either refused or runs.
+ */
+async function startEscapeProbe(change: "change" | "none"): Promise<EscapeProbeRun> {
+  let escaped: readonly ProcessRow[] = [];
+  let midTurn: Promise<string> = Promise.resolve("unobserved");
+  let snapshotLog = "";
+  const probe = await startShellProbe({
+    script: ESCAPE_PROBE_SCRIPT,
+    args: () => change,
+    operatorEnv: () => ({}),
+    onProbeOutput: (live) => {
+      escaped = escapedProcesses();
+      snapshotLog = runtimeGitLines(live.fixture.root);
+      // What the run's newest turn changed, as the undo window reads it, while the turn runs.
+      midTurn = live.runId
+        .then((runId) => live.pipeline().orchestrator.revertState(runId))
+        .then(
+          (state) => `revert-state ${JSON.stringify(state ?? "none")}`,
+          (error: unknown) => `revert-state unreadable: ${String(error)}`,
+        );
+    },
+  });
+  const facts = probeFacts(probe.transcripts);
+  const diagnosis = [
+    JSON.stringify(facts),
+    ...["watcher.err", "nohup.err"]
+      .map((name) => join(probe.workspace, name))
+      .filter((path) => existsSync(path))
+      .map((path) => readFileSync(path, "utf8")),
+  ].join("\n");
+  expect(escapedMarkers(escaped), diagnosis).toEqual([...ESCAPE_MARKERS]);
+  const owned = escaped.filter((row) => !row.command.includes(NOHUP_MARKER));
+  expect(owned.map((row) => row.ppid)).toEqual([1, 1, 1, 1]);
+  // nohup either refused with a nonzero exit or runs, and then it must end with the runtime.
+  const nohupRunning = escaped.some((row) => row.command.includes(NOHUP_MARKER));
+  expect(facts.nohup === "running" ? nohupRunning : facts.nohup !== "0", diagnosis).toBe(true);
+  return { ...probe, midTurnRevert: `${await midTurn}${snapshotLog}` };
+}
+
+/** The runtime's own log lines under `root` about its Git and snapshots, for a failure message. */
+function runtimeGitLines(root: string): string {
+  const logs = readdirSync(root, { recursive: true, encoding: "utf8" }).filter((path) =>
+    /opencode\/log\/[^/]+\.log$/u.test(path),
+  );
+  const lines = logs.flatMap((path) =>
+    readFileSync(join(root, path), "utf8")
+      .split("\n")
+      .filter((line) => /snapshot|vcs|level=(?:ERROR|WARN)|command=\S*git /iu.test(line))
+      .map((line) =>
+        line
+          .replaceAll(realpathSync(root), "<root>")
+          .replaceAll(root, "<root>")
+          .replaceAll(/[A-Za-z0-9_-]{24,}/gu, "<r>")
+          .replace(/^timestamp=\S+ /u, "")
+          .slice(0, 360),
+      ),
+  );
+  return `\nruntime logs ${String(logs.length)}\n${lines.slice(-40).join("\n")}`;
+}
+
+interface EscapeProbeRun extends ShellProbeRun {
+  /** The undo window's view of the newest turn, read while the turn ran. */
+  readonly midTurnRevert: string;
 }
 
 function sha256(value: string): string {
@@ -1575,6 +1980,11 @@ run show git show --stat HEAD
 run blame git blame -- src/example.ts
 run add git add -- src/example.ts
 run restore_staged git restore --staged -- src/example.ts
+clean() { head -c 400 | tr -c 'a-zA-Z0-9:/_-' '_'; }
+echo "gitdiag.select=$(xcode-select -p 2>&1 | clean)"
+echo "gitdiag.find=$(xcrun --find git 2>&1 | clean)"
+echo "gitdiag.version=$(git --version 2>&1 | clean)"
+echo "gitdiag.status_err=$(git status --porcelain 2>&1 >/dev/null | clean)"
 echo git.done=1
 `;
 
@@ -1612,7 +2022,10 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           (match) => [match[1] ?? "", match[2] ?? ""] as const,
         ),
       );
-      expect(facts).toEqual({
+      const diagnosis = [...transcript.matchAll(/gitdiag\.[a-z_]+=[A-Za-z0-9:/_-]*/gu)]
+        .map((match) => match[0])
+        .join("\n");
+      expect(facts, diagnosis).toEqual({
         status: "ok",
         diff: "changed",
         log: "ok",

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c0e2b9e55ddee9de2185bdbe5eb947dc850838371c6431f912ef588f60fe6a79",
+    "catalogDigest": "cd4ecf736ca4a40e8e063dcaae471320e899b36ba6ab3d602f617b7732bc311e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11913,6 +11913,12 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "developerDirectory": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["app-bundle", "directory", "none", "refused"]
           }
         },
         "causal": "correlation",
@@ -11927,9 +11933,9 @@
         "failureClasses": ["coding-runtime-git-metadata-unproven"],
         "proofIds": ["coding-runtime.git-metadata.resolved.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:66",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:67",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:136"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:145"
         ]
       },
       {
@@ -78005,6 +78011,12 @@
                   "required": true
                 },
                 {
+                  "name": "developerDirectory",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "layout",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -123954,7 +123966,7 @@
     {
       "op": "coding-runtime.git-metadata.resolved",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:69",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeGitMetadata.ts:70",
       "package": "keiko-server"
     },
     {
