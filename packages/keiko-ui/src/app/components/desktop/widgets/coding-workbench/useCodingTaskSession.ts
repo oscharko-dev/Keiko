@@ -7,7 +7,10 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  CodingHistoryDetail,
+  CodingHistoryTask,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
@@ -131,6 +134,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const controller = useTaskLoader(latest);
   const { detail, pending, setPending, error, setError, load } = controller;
   const scopeTasks = useScopeTasks(latest, detail, load);
+  useTaskUpdates(controller.setDetail);
   const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller, scopeTasks);
   useSessionSelection(input, load, newTask, ignoredRun, awaitingRun, scopeTasks);
   const finish = async (): Promise<void> => {
@@ -556,6 +560,38 @@ function useHistoryScope(
     }
   }, [root, workspaceId, latest, setDetail]);
   return tracker;
+}
+
+/**
+ * Shows a rename or status change of the displayed task made elsewhere (Coding History) at once.
+ * The event carries the server's updated record, so nothing is read again (#4491).
+ */
+function useTaskUpdates(setDetail: TaskLoader["setDetail"]): void {
+  useEffect(() => {
+    const apply = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      const task: unknown = event.detail;
+      setDetail((current) =>
+        current !== null && sameTask(task, current.task) ? { ...current, task } : current,
+      );
+    };
+    window.addEventListener(CODING_HISTORY_CHANGED, apply);
+    return (): void => {
+      window.removeEventListener(CODING_HISTORY_CHANGED, apply);
+    };
+  }, [setDetail]);
+}
+
+// `updateCodingTask` sends the server's record of the task; a plain history change carries none.
+function sameTask(value: unknown, task: CodingHistoryTask): value is CodingHistoryTask {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    value.id === task.id &&
+    "title" in value &&
+    typeof value.title === "string"
+  );
 }
 
 /** The task each repository showed last in this window, bounded; in memory only (#4491). */

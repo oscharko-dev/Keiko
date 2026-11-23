@@ -1273,3 +1273,36 @@ describe("switching back to a repository shows its open task (#4491)", () => {
     expect(result.current.detail).toBeNull();
   });
 });
+
+describe("an update of the displayed task (#4491)", () => {
+  it("shows a rename made in Coding History without reading the task again", async () => {
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.detail?.task.title).toBe("Inspect"));
+    read.mockClear();
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", {
+          detail: { ...detail.task, title: "Renamed" },
+        }),
+      );
+    });
+    expect(result.current.detail?.task.title).toBe("Renamed");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", {
+          detail: { ...detail.task, id: "chat-other", title: "Other" },
+        }),
+      );
+    });
+    expect(result.current.detail?.task.title).toBe("Renamed");
+    expect(read).not.toHaveBeenCalled();
+  });
+});
