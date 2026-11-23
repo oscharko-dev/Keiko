@@ -2083,6 +2083,47 @@ describe("coding-sidecar gateway", () => {
     expect(frames[4]).toBe("[DONE]");
   });
 
+  it.each(["error", "content_filter"] as const)(
+    "does not record an answer that finished with %s as an answered model call",
+    async (finishReason) => {
+      for (const streamed of [false, true]) {
+        const record = vi.fn();
+        const normalized: NormalizedResponse = {
+          ...assistantResponse("azure-coding-model"),
+          content: "Partial.",
+          finishReason,
+        };
+        const runId = `run-non-serving-${finishReason}-${String(streamed)}`;
+        const response = mockResponse({ captureBody: true });
+        const deps = {
+          ...runtimeGatewayDeps(
+            () => ({ ok: true, binding: { runId } }),
+            () => vi.fn(() => Promise.resolve(normalized)),
+            createOpenCodeGatewayReadinessRegistry(),
+            (): (() => AsyncIterable<GatewayStreamChunk>) =>
+              (): AsyncIterable<GatewayStreamChunk> =>
+                streamedResponse(normalized),
+          ),
+          codingSidecarGatewayEvidenceAggregator: { record },
+        } as UiHandlerDeps;
+        await handleCodingSidecarGatewayChatCompletions(
+          {
+            ...authenticatedContext({
+              model: "coding",
+              ...(streamed ? { stream: true } : {}),
+              messages: [{ role: "user", content: "answer" }],
+              tools: modelVisibleTools(),
+            }),
+            res: response.res,
+          },
+          deps,
+        );
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(record).toHaveBeenCalledWith(expect.objectContaining({ runId, outcome: "failed" }));
+      }
+    },
+  );
+
   it("retains positive completion usage when a streamed proxy answer has no usage", async () => {
     const sink = captureServerLog("info");
     const response = mockResponse({ captureBody: true });
@@ -3039,6 +3080,63 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  it("treats a route-deadline abort of a buffered turn as a failed model call, not a cancellation", async () => {
+    const sink = captureServerLog("info");
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
+    const record = vi.fn();
+    const chat = vi.fn(
+      (request: GatewayRequest): Promise<NormalizedResponse> =>
+        new Promise((_resolve, reject) => {
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("deadline"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-deadline-failure" } }),
+        () => chat,
+      ),
+      config: deadlineConfig,
+      codingSidecarGatewayEvidenceAggregator: { record },
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "deadline" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      expect(result).toMatchObject({ status: 503 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+      ).toMatchObject({ runId: "run-deadline-failure", failureCode: "stream-incomplete" });
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-deadline-failure", outcome: "failed" }),
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("rejects buffered responses that exceed completion-token or UTF-8 output bounds", async () => {
     const oversizedArguments = { secretLikePayload: "x".repeat(800) };
     const responses: readonly NormalizedResponse[] = [
@@ -3582,6 +3680,71 @@ describe("coding-sidecar gateway", () => {
       expect(response.res.writableEnded).toBe(true);
       expect(response.body()).toContain('"finish_reason":"error"');
       expect(response.body()).toContain("data: [DONE]");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("treats a route-deadline abort of a stalled stream as a failed model call, not a cancellation", async () => {
+    const sink = captureServerLog("info");
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
+    const record = vi.fn();
+    const stalled = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      await new Promise<void>((resolve) => {
+        request.cancellationSignal?.addEventListener(
+          "abort",
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      yield* [] as GatewayStreamChunk[];
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stall" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-deadline-failure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+            stalled(request),
+      ),
+      config: deadlineConfig,
+      codingSidecarGatewayEvidenceAggregator: { record },
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    try {
+      await expect(handleCodingSidecarGatewayChatCompletions(context, deps)).resolves.toBe(
+        STREAMING,
+      );
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+      ).toMatchObject({ runId: "run-stream-deadline-failure", failureCode: "stream-incomplete" });
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-stream-deadline-failure", outcome: "failed" }),
+      );
     } finally {
       timeoutSpy.mockRestore();
     }

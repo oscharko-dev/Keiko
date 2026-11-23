@@ -2056,6 +2056,8 @@ interface GatewayOutcomeMetrics {
   readonly reasoningWithheld?: true;
   /** On an accepted answer, whether it renewed the model's chat readiness (#3907 AC3). */
   readonly readinessRenewal?: "renewed" | "not-renewable";
+  /** On an accepted answer, how the model finished: only a serving finish counts as answered. */
+  readonly finishReason?: NormalizedResponse["finishReason"];
 }
 
 const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
@@ -2110,7 +2112,8 @@ function recordGatewayOutcome(
   repair: RepairEvidence,
 ): void {
   const { completionTokens, outputBytes } = metrics;
-  if (outcome === "accepted") providerUnavailableWindows.delete(runId);
+  const answered = outcome === "accepted" && isServingFinish(metrics.finishReason);
+  if (answered) providerUnavailableWindows.delete(runId);
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
@@ -2136,15 +2139,47 @@ function recordGatewayOutcome(
     ),
   );
   if (outcome === "output-limit") reportGatewayOutputCut(ctx, deps, runId, repair);
+  recordGatewayEvidence(deps, runId, cancellation, { outcome, answered, metrics });
+}
+
+function recordGatewayEvidence(
+  deps: UiHandlerDeps,
+  runId: string,
+  cancellation: GatewayRequestCancellation,
+  turn: {
+    readonly outcome: CodingSidecarGatewayRunOutcome;
+    readonly answered: boolean;
+    readonly metrics: GatewayOutcomeMetrics;
+  },
+): void {
+  const { completionTokens, outputBytes } = turn.metrics;
   try {
     void Promise.resolve(
-      evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
+      evidenceAggregator(deps)?.record({
+        runId,
+        outcome: evidenceOutcome(turn.outcome, turn.answered, cancellation),
+        completionTokens,
+        outputBytes,
+      }),
     ).catch(() => {
       emitGatewayEvidenceAggregationDiagnostic(deps, runId);
     });
   } catch {
     emitGatewayEvidenceAggregationDiagnostic(deps, runId);
   }
+}
+
+// What the run's evidence records for a turn: an accepted answer that did not finish as the model
+// serving it (an error or content-filter finish) and an abort the route itself caused are failed
+// model calls, so neither supersedes an earlier failure as an answer.
+function evidenceOutcome(
+  outcome: CodingSidecarGatewayRunOutcome,
+  answered: boolean,
+  cancellation: GatewayRequestCancellation,
+): CodingSidecarGatewayRunOutcome {
+  if (outcome === "accepted") return answered ? "accepted" : "failed";
+  if (outcome === "cancelled" && isGatewayFailureAbort(cancellation)) return "failed";
+  return outcome;
 }
 
 // A call the gateway cut at its output bound is a failed model call with cause `output-exhausted`
@@ -3822,8 +3857,9 @@ function settleFailedGatewayChat(
       ? gatewayTurnFailureCode(error)
       : "turn-rejected";
   const runtimeRetry = runtimeRetryForRun(runId, error, failureCode, cancelled);
-  const turnFailureRecorded =
-    !cancelled && reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
+  const turnFailureRecorded = cancelled
+    ? reportGatewayAbortFailure(ctx, deps, runId, cancellation, error)
+    : reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded, cancellation);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
@@ -3953,6 +3989,10 @@ const SERVING_FINISH_REASONS: ReadonlySet<NormalizedResponse["finishReason"]> = 
   NormalizedResponse["finishReason"]
 >(["stop", "tool_calls", "length"]);
 
+function isServingFinish(finishReason: NormalizedResponse["finishReason"] | undefined): boolean {
+  return finishReason !== undefined && SERVING_FINISH_REASONS.has(finishReason);
+}
+
 function answeredReadiness(
   deps: UiHandlerDeps,
   modelAlias: string,
@@ -3961,8 +4001,7 @@ function answeredReadiness(
   finishReason: NormalizedResponse["finishReason"] | undefined,
 ): Pick<GatewayOutcomeMetrics, "readinessRenewal"> {
   if (outcome !== "accepted") return {};
-  if (finishReason === undefined || !SERVING_FINISH_REASONS.has(finishReason))
-    return { readinessRenewal: "not-renewable" };
+  if (!isServingFinish(finishReason)) return { readinessRenewal: "not-renewable" };
   return {
     readinessRenewal: renewConversationReadinessFromAnswer(deps, modelAlias, answeredConfig),
   };
@@ -3987,6 +4026,7 @@ function bufferedOutcomeRecorder(
         forwardedReasoningBytes: 0,
         ...metrics,
         ...delivery,
+        finishReason: response.finishReason,
         ...answeredReadiness(
           deps,
           dispatch.modelAlias,
@@ -4242,6 +4282,7 @@ function recordSessionOutcome(
       reasoningFrames: metrics.reasoningFrames,
       forwardedReasoningBytes: metrics.forwardedReasoningBytes,
       ...(limit === undefined ? {} : { limit }),
+      ...(finishReason === undefined ? {} : { finishReason }),
       ...answeredReadiness(deps, session.modelId, session.answeredConfig, outcome, finishReason),
     },
     repair,
@@ -4268,6 +4309,8 @@ function settleAbortedStream(session: GatewayStreamSession, repair: RepairEviden
   const cause = session.cancellation.cause();
   if (cause === "route-deadline" || cause === "run-stopped") writeSessionTerminal(session, "error");
   recordSessionOutcome(session, "cancelled", repair);
+  const { ctx, deps, runId, cancellation } = session;
+  reportGatewayAbortFailure(ctx, deps, runId, cancellation, cancellation.signal.reason);
 }
 
 async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
@@ -4636,6 +4679,31 @@ function isUserInitiatedCancellation(cancellation: GatewayRequestCancellation): 
   if (!cancellation.signal.aborted) return false;
   const cause = cancellation.cause();
   return cause === "client-disconnect" || cause === "run-stopped";
+}
+
+// A route-deadline or backpressure abort is the turn failing, not a person cancelling it: the
+// runtime retries the 503 / error finish the abort produces, so the failure must reach the run's
+// turn-failed line and its evidence like any other failed model call.
+function isGatewayFailureAbort(cancellation: GatewayRequestCancellation): boolean {
+  if (!cancellation.signal.aborted) return false;
+  const cause = cancellation.cause();
+  return cause === "route-deadline" || cause === "backpressure-killed";
+}
+
+function reportGatewayAbortFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  cancellation: GatewayRequestCancellation,
+  error: unknown,
+): boolean {
+  if (!isGatewayFailureAbort(cancellation)) return false;
+  const failureCode: CodingWorkbenchTurnFailureCode = "stream-incomplete";
+  return reportGatewayTurnFailure(ctx, deps, runId, {
+    failureCode,
+    runtimeRetry: runtimeRetryFor(error, failureCode),
+    error,
+  });
 }
 
 function isGatewayRequestCancelled(signal: AbortSignal): boolean {
