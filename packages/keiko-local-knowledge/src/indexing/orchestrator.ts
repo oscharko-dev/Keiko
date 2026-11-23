@@ -769,7 +769,7 @@ async function prepareChunksToEmbed(
   const rows = selectChunkProjections(state, documentId);
   const chunks: ChunkToEmbed[] = [];
   for (const row of rows) {
-    chunks.push(await contextualizedChunkToEmbed(state, documentId, row, sourceText));
+    chunks.push(await contextualizedChunkToEmbed(state, documentId, row, sourceText)); // NOSONAR typescript:S9382 -- one metered context-model call per chunk, each followed by its synchronous write; a fan-out would issue a document's calls at once
   }
   const degraded = state.options.store._internal.db
     .prepare(

@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import {
   isValidScopePath,
   type RetrievalQuery,
@@ -280,6 +281,9 @@ const FILE_WORKSPACE_INDEX_ENVELOPE_VERSION = 2;
 const FILE_WORKSPACE_INDEX_LOCATOR_SALT = "keiko-workspace-index:file-locator-salt:v2";
 const FILE_WORKSPACE_INDEX_LOCATOR_INFO = "keiko-workspace-index:scope-locator:v2";
 const FILE_WORKSPACE_INDEX_GENERATION_INFO = "keiko-workspace-index:key-generation:v2";
+// Snapshot prune candidates are independent metadata probes, so they run in a bounded fan-out at
+// the same width the Files tree classifier uses for directory entries, rather than one at a time.
+const SNAPSHOT_PRUNE_PROBE_CONCURRENCY = 32;
 const FILE_WORKSPACE_INDEX_TEMP_MAX_AGE_MS = 15 * 60 * 1000;
 const FILE_WORKSPACE_INDEX_TEMP_PRESSURE_MIN_AGE_MS = 30 * 1000;
 const FILE_WORKSPACE_INDEX_MAX_TEMP_FILES = 32;
@@ -1597,13 +1601,19 @@ async function listSnapshotPruneCandidates(
   } catch {
     return [];
   }
-  const candidates: SnapshotPruneCandidate[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSafeWorkspaceIndexSegment(entry.name)) continue;
-    const candidate = await inspectSnapshotPruneCandidate(runtimeDir, entry.name);
-    if (candidate !== undefined) candidates.push(candidate);
-  }
-  return candidates;
+  const segments = entries
+    .filter((entry) => entry.isFile() && isSafeWorkspaceIndexSegment(entry.name))
+    .map((entry) => entry.name);
+  // Each probe only lstats its own segment: no shared budget, no ordering, and the retention
+  // comparison below sorts the result, so the order-preserving pool keeps the previous listing.
+  const inspected = await mapWithConcurrency(
+    segments,
+    SNAPSHOT_PRUNE_PROBE_CONCURRENCY,
+    (segment) => inspectSnapshotPruneCandidate(runtimeDir, segment),
+  );
+  return inspected.filter(
+    (candidate): candidate is SnapshotPruneCandidate => candidate !== undefined,
+  );
 }
 
 async function removePruneCandidates(
@@ -1615,7 +1625,12 @@ async function removePruneCandidates(
   for (const candidate of candidates) {
     assertWorkspaceIndexGenerationActive(config);
     if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) return;
-    if (!(await removeExactSnapshotFile(candidate))) {
+    // Irreversible removals, each behind the generation and directory guard re-checked above.
+    if (
+      !(await /* NOSONAR typescript:S9382 -- removals stop at the first identity change. */ removeExactSnapshotFile(
+        candidate,
+      ))
+    ) {
       throw new Error("workspace index prune candidate identity changed");
     }
   }
