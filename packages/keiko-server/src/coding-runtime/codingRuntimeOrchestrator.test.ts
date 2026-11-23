@@ -9053,6 +9053,11 @@ describe("verification truth at task settlement", () => {
         verificationGap: "check-failed",
       });
     });
+    expect(
+      log.records.find(
+        (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+      )?.errorKind,
+    ).toBe("validation-failed");
     const refused = requireLoggedEvent(
       log.records.find(
         (event) =>

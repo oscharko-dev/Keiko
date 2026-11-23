@@ -1860,6 +1860,7 @@ function settlementErrorKind(
   // A change the run itself left without a passing check is its verification verdict, not a Keiko
   // fault. A check a person or the host blocked keeps its classification above and below.
   if (
+    state === "failed" &&
     cause === undefined &&
     verificationBlockedReason === undefined &&
     verificationGap !== undefined
