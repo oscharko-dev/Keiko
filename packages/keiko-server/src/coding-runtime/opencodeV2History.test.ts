@@ -5,6 +5,7 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import {
+  OPENCODE_V2_TEXT_PREFIX_INVALID,
   createOpenCodeV2HistoryProjection,
   OPENCODE_V2_STEP_CHANGE_FILES_MAX,
   OpenCodeV2HistoryError,
@@ -3061,5 +3062,13 @@ describe("OpenCode V2 history window", () => {
     // Once the checkpoint is committed, a complete read captures the conversation as before.
     projection.project("ses_window", messages, events.at(-1)?.sequence);
     expect(captureMessages).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenCode V2 history refusals (#4491 audit)", () => {
+  it("treats only the checkpoint-dependent text refusal as one a fresh read may pass", () => {
+    expect(new OpenCodeV2HistoryError(OPENCODE_V2_TEXT_PREFIX_INVALID).permanent).toBe(false);
+    for (const code of ["reason=event-unknown:type=unsupported", "reason=argument-bound:x"])
+      expect(new OpenCodeV2HistoryError(code).permanent).toBe(true);
   });
 });

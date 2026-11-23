@@ -558,6 +558,39 @@ describe("dev-lane runtime process backend", () => {
     }
   });
 
+  it("hands a failed descendant sweep to the caller instead of leaving it unhandled", async () => {
+    const fixture = stageFixture();
+    const child = fakeChild(4712);
+    const failure = new Error("descendant-sweep-failed");
+    // One sweep per tree, as the tracker memoizes it: the exit starts it, the reap awaits it.
+    const swept = Promise.reject(failure);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      spawnRuntime: () => child,
+      killProcessGroup: () => undefined,
+      trackDescendants: (options) =>
+        Object.assign(
+          new RuntimeDescendantTracker({
+            ...options,
+            membership: {
+              self: (): Promise<SandboxMemberSelf> => new Promise(() => undefined),
+              occupied: (): Promise<boolean> => Promise.resolve(true),
+              members: (): Promise<readonly SandboxMember[]> => Promise.resolve([]),
+              killAll: (): Promise<void> => Promise.resolve(),
+              close: (): void => undefined,
+            },
+          }),
+          { sweep: (): Promise<never> => swept },
+        ),
+    });
+    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    child.settle(0);
+
+    await expect(backend.reconcileTreeExit(tree)).rejects.toBe(failure);
+  });
+
   it("records stdin port errors without pretending that the live child was reaped", async () => {
     const fixture = stageFixture();
     const stdin = new PassThrough();

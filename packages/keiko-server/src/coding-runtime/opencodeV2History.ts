@@ -208,6 +208,9 @@ function settledReadMode(
   if (planned === "tail") return "anchor-lost";
   return planned ?? "full";
 }
+/** The one refusal that depends on the projection's own checkpoint, so a fresh read may pass. */
+export const OPENCODE_V2_TEXT_PREFIX_INVALID = "reason=text-prefix-invalid";
+
 export class OpenCodeV2HistoryError extends Error {
   constructor(readonly safeCode: string) {
     super("opencode-v2-history-invalid");
@@ -218,7 +221,7 @@ export class OpenCodeV2HistoryError extends Error {
    * this projection already showed depends on its own checkpoint, so a fresh read may pass.
    */
   get permanent(): boolean {
-    return this.safeCode !== "reason=text-prefix-invalid";
+    return this.safeCode !== OPENCODE_V2_TEXT_PREFIX_INVALID;
   }
 }
 
@@ -1309,7 +1312,7 @@ function incrementalSignal(
   const offset = previous?.textLength;
   if (text === undefined || offset === undefined) return item.signal;
   if (offset > text.length || digest([item.key, text.slice(0, offset)]) !== previous?.digest)
-    throw new OpenCodeV2HistoryError("reason=text-prefix-invalid");
+    throw new OpenCodeV2HistoryError(OPENCODE_V2_TEXT_PREFIX_INVALID);
   const growing = growingTextSignal(item);
   return growing === undefined ? item.signal : { ...growing, text: text.slice(offset) };
 }

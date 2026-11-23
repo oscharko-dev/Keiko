@@ -458,7 +458,7 @@ function sweepWithin(
   if (tree.descendants === undefined) return Promise.resolve("untracked");
   if (!tree.exited) return Promise.resolve(undefined);
   const sweep = tree.descendants.sweep();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const timeout = setTimeout(
       () => {
         resolve(undefined);
@@ -466,10 +466,17 @@ function sweepWithin(
       Math.max(0, remainingMs),
     );
     timeout.unref();
-    void sweep.then((result) => {
-      clearTimeout(timeout);
-      resolve(result);
-    });
+    // A failed sweep reaches the caller, whose reap stage records it, as an awaited sweep did.
+    sweep.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error("descendant-sweep-failed"));
+      },
+    );
   });
 }
 

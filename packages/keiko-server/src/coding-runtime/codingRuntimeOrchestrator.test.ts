@@ -1791,7 +1791,8 @@ describe("CodingRuntimeOrchestrator", () => {
     pending.resolve({ ok: true, status: "ready", runId: "run-1" });
 
     // A wedged start never settles: the test then ends at the vitest timeout.
-    expect((await started).ok).toBeDefined();
+    // The stop wins: the released start reports the run the operator cancelled.
+    expect(await started).toMatchObject({ ok: true, snapshot: { state: "cancelled" } });
   });
 
   it("refuses a late startup success when reconciliation cannot prove the host stopped", async () => {

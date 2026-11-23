@@ -7,7 +7,7 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
-import { OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import { OPENCODE_V2_TEXT_PREFIX_INVALID, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { OpenCodeV2HttpStatusError } from "./opencodeV2HttpClient.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
@@ -1886,7 +1886,7 @@ describe("OpenCode runtime adapter readiness", () => {
       if (broken) {
         broken = false;
         refusals += 1;
-        return Promise.reject(new OpenCodeV2HistoryError("reason=text-prefix-invalid"));
+        return Promise.reject(new OpenCodeV2HistoryError(OPENCODE_V2_TEXT_PREFIX_INVALID));
       }
       return readHistory(...args);
     };
