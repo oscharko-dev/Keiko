@@ -3013,6 +3013,9 @@ function readinessV2Ports(
       // the model never wrote in that order. Each such part shows what it has until the history
       // shows it complete (#3873 review, PR #3876).
       if (streamCount > 1) history.freezeLiveText();
+      // A form created while nobody listened has no frame left to follow: the reopened stream asks
+      // the consumer to re-list the questions once, under an identity of its own.
+      if (streamCount > 1) input.onQuestionObserved?.(`stream-reopened-${String(streamCount)}`);
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       const sessionId = fixedSessionId;

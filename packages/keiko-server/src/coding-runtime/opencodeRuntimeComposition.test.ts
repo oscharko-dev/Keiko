@@ -2382,6 +2382,31 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  it("signals a question re-list when the event stream reconnects, once per reopened stream", async () => {
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const questionObservations: string[] = [];
+    const fixture = await startBridgeFixture(facade, undefined, {
+      onSseStart: (controller): void => {
+        streams.push(controller);
+      },
+      questionObservations,
+    });
+    try {
+      // The first stream has no gap behind it, so it signals nothing on its own.
+      expect(questionObservations).toEqual([]);
+      streams[0]?.close();
+      await vi.waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
+      // A form created while nobody listened has no frame to follow: the reopened stream asks for a re-list.
+      await vi.waitFor(() => {
+        expect(questionObservations).toEqual(["stream-reopened-2"]);
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("reuses the fixed V2 session when the event stream reconnects", async () => {
     const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sessionCreateCalls: string[] = [];
