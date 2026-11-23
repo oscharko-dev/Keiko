@@ -464,8 +464,9 @@ model call until a later call of the run is answered, with the gateway's own fac
 could not serve that call. In that order, the run settles `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
 again), `output-limit-reached` (the gateway itself ended the call at its output bound, a reasoning or
-answer stream past its byte bound or a finished answer past the budget, so no repair preceded it; the
-cut is kept as the run's last failed call and never counts as an answer), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
+answer stream past its byte bound or a finished answer past the budget, so no repair preceded it; a
+finished answer that still exceeds the budget after the gateway's repair ran is the model exhausting
+its output again and settles `output-exhausted-repeated`; the cut is kept as the run's last failed call and never counts as an answer), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
 failed turn's own frame names), and `runtime-failed` (the runtime crashed or failed internally) only
 when no such cause is on record. `provider-unavailable` is the provider that could not be reached,
 stopped answering, or stayed down: the gateway's `stream-incomplete` (a timeout, a refused or

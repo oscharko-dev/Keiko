@@ -2135,7 +2135,7 @@ function recordGatewayOutcome(
       },
     ),
   );
-  if (outcome === "output-limit") reportGatewayOutputCut(ctx, deps, runId);
+  if (outcome === "output-limit") reportGatewayOutputCut(ctx, deps, runId, repair);
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
@@ -2150,12 +2150,20 @@ function recordGatewayOutcome(
 // A call the gateway cut at its output bound is a failed model call with cause `output-exhausted`
 // for the run: the run's settlement names it, and no later bookkeeping may count it as answered.
 // `recordGatewayOutcome` is the one place every cut (reasoning or answer, streamed or buffered)
-// passes through, so the frame is published once per cut.
-function reportGatewayOutputCut(ctx: RouteContext, deps: UiHandlerDeps, runId: string): void {
+// passes through, so the frame is published once per cut. The cut is the gateway's own only when no
+// steered repair preceded it: a finished answer that still exceeds the budget after a repair ran is
+// the model exhausting its output again, which the run settles as `output-exhausted-repeated`. A
+// line written before the call settled (a cut stream) cannot know of a repair and keeps the mark.
+function reportGatewayOutputCut(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  repair: RepairEvidence,
+): void {
   reportGatewayTurnFailure(ctx, deps, runId, {
     failureCode: "output-exhausted",
     runtimeRetry: "refused",
-    gatewayCut: true,
+    gatewayCut: !repair.settled || repair.outcome === undefined,
   });
 }
 

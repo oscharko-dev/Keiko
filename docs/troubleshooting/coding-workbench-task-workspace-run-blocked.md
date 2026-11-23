@@ -752,7 +752,8 @@ F9; runs `run-65084062444586162471229658028402064666` and
   cut at its output bound (a reasoning or answer stream past its byte bound, or a finished answer past
   the budget; its `coding-sidecar.gateway.outcome` line carries `outcome: output-limit` and `limit`)
   is also kept as the run's last failed model call, published as an `output-exhausted` turn failure,
-  and settles `output-limit-reached`; no repair ran first. Every other cause,
+  and settles `output-limit-reached`; no repair ran first (a finished answer that still exceeds the
+  budget after the gateway's repair ran settles `output-exhausted-repeated`). Every other cause,
   including a `provider-failed` without that fact (a 4xx rejection, a refused credential, a
   configuration or egress refusal), settles `model-turn-failed`.
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
