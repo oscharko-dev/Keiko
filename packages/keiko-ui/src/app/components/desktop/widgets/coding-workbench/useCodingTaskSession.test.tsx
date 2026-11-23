@@ -1065,3 +1065,58 @@ describe("history activation settlement", () => {
     );
   });
 });
+
+describe("a followed run's revision bumps refresh the task in the background", () => {
+  function running(revision: number): CodingWorkbenchRuntimeSnapshot {
+    return { ...snapshot("chat-one"), state: "running", revision };
+  }
+
+  function renderRevisions(): {
+    readonly result: { readonly current: ReturnType<typeof useCodingTaskSession> };
+    readonly rerender: (props: { revision: number }) => void;
+  } {
+    return renderHook(
+      ({ revision }: { revision: number }) =>
+        useCodingTaskSession({
+          snapshot: running(revision),
+          active: true,
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: undefined,
+        }),
+      { initialProps: { revision: 1 } },
+    );
+  }
+
+  it("never shows the loading state again and reads a bounded number of times", async () => {
+    const { result, rerender } = renderRevisions();
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    const pendingStates: boolean[] = [];
+    const history = vi.fn();
+    window.addEventListener("keiko:coding-history-changed", history);
+    for (let revision = 2; revision <= 21; revision += 1) {
+      rerender({ revision });
+      pendingStates.push(result.current.pending);
+    }
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    window.removeEventListener("keiko:coding-history-changed", history);
+    expect(pendingStates).not.toContain(true);
+    expect(read.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(history.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it("raises no error when a background read fails", async () => {
+    const { result, rerender } = renderRevisions();
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    read.mockRejectedValue(new Error("temporarily unavailable"));
+    const history = vi.fn();
+    window.addEventListener("keiko:coding-history-changed", history);
+    rerender({ revision: 2 });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reportClientDiagnostic).toHaveBeenCalled());
+    window.removeEventListener("keiko:coding-history-changed", history);
+    expect(result.current.error).toBe(false);
+    expect(result.current.detail?.task.id).toBe("chat-one");
+    expect(history).not.toHaveBeenCalled();
+  });
+});

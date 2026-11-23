@@ -90,6 +90,13 @@ function reportFailure(error: unknown): void {
   });
 }
 
+/**
+ * Reads a task. `followed` marks a read of the run the window follows: "refresh" is a background
+ * read that never raises the loading or error state, "initial" is the first read of a followed
+ * run. Both announce a changed history only after the read succeeded.
+ */
+type LoadTask = (id: string, activate: boolean, followed?: "initial" | "refresh") => Promise<void>;
+
 interface TaskLoader {
   readonly detail: CodingHistoryDetail | null;
   readonly setDetail: Dispatch<SetStateAction<CodingHistoryDetail | null>>;
@@ -98,7 +105,7 @@ interface TaskLoader {
   readonly error: boolean;
   readonly setError: (value: boolean) => void;
   readonly sequence: { current: number };
-  readonly load: (id: string, activate: boolean) => Promise<void>;
+  readonly load: LoadTask;
 }
 
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
@@ -311,42 +318,30 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const sequence = useRef(0);
   const scopeRevision = useHistoryScope(latest, detail, setDetail, sequence);
   const load = useCallback(
-    async (id: string, activate: boolean): Promise<void> => {
+    async (id: string, activate: boolean, followed?: "initial" | "refresh"): Promise<void> => {
       const seq = ++sequence.current;
       const operation = historyLoad(id, scopeRevision.current.scope);
+      const background = followed === "refresh";
       // A failed read for another task must never leave the previous task's conversation id
       // attached to the composer. A refresh of the same task may retain its visible history.
       setDetail((current) => (current?.task.id === id ? current : null));
-      setPending(true);
-      setError(false);
+      if (!background) {
+        setPending(true);
+        setError(false);
+      }
       try {
         const result = await fetchCodingTask(id, operation.correlationId);
-        if (seq !== sequence.current) return;
-        if (historyLoadCancelled(operation, scopeRevision.current.scope)) return;
-        const activated = await activateHistoryTask(
-          result,
+        const accepted = await acceptTaskRead(result, activate, operation, {
           latest,
-          activate,
-          operation,
-          scopeRevision.current.scope,
-        );
-        if (seq !== sequence.current) return;
-        if (activationSuperseded(result, latest.current, operation, scopeRevision.current.scope))
-          return;
-        if (!activated) {
-          setDetail(null);
-          return;
-        }
-        scopeRevision.current.accepted = operation;
-        setDetail(result);
+          scopeRevision,
+          setDetail,
+          isCurrent: () => seq === sequence.current,
+        });
+        if (accepted && followed !== undefined)
+          window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
       } catch (cause) {
-        if (seq !== sequence.current) return;
-        if (operation.scope.id !== scopeRevision.current.scope.id)
-          reportScopeChange(operation, scopeRevision.current.scope, "activation-cancelled");
-        else {
-          reportFailure(cause);
-          setError(true);
-        }
+        if (seq === sequence.current)
+          reportLoadFailure(cause, operation, scopeRevision.current.scope, background, setError);
       } finally {
         if (seq === sequence.current) setPending(false);
       }
@@ -354,6 +349,57 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
     [latest, scopeRevision],
   );
   return { detail, setDetail, pending, setPending, error, setError, load, sequence };
+}
+
+interface TaskReadContext {
+  readonly latest: { current: SessionInput };
+  readonly scopeRevision: { current: HistoryScopeState };
+  readonly setDetail: TaskLoader["setDetail"];
+  readonly isCurrent: () => boolean;
+}
+
+/** Shows a read task when it is still the current read of the current scope; says whether it did. */
+async function acceptTaskRead(
+  result: CodingHistoryDetail,
+  activate: boolean,
+  operation: HistoryLoad,
+  context: TaskReadContext,
+): Promise<boolean> {
+  const { latest, scopeRevision, setDetail, isCurrent } = context;
+  if (!isCurrent() || historyLoadCancelled(operation, scopeRevision.current.scope)) return false;
+  const activated = await activateHistoryTask(
+    result,
+    latest,
+    activate,
+    operation,
+    scopeRevision.current.scope,
+  );
+  if (!isCurrent()) return false;
+  if (activationSuperseded(result, latest.current, operation, scopeRevision.current.scope))
+    return false;
+  if (!activated) {
+    setDetail(null);
+    return false;
+  }
+  scopeRevision.current.accepted = operation;
+  setDetail(result);
+  return true;
+}
+
+// A background refresh never raises the foreground error: the visible task is still current.
+function reportLoadFailure(
+  cause: unknown,
+  operation: HistoryLoad,
+  scope: HistoryScope,
+  background: boolean,
+  setError: (value: boolean) => void,
+): void {
+  if (operation.scope.id !== scope.id) {
+    reportScopeChange(operation, scope, "activation-cancelled");
+    return;
+  }
+  reportFailure(cause);
+  if (!background) setError(true);
 }
 
 function historyLoad(taskId: string, scope: HistoryScope): HistoryLoad {
@@ -590,14 +636,32 @@ function useSessionSelection(
   useFollowedRun(input, load, ignoredRun, awaitingRun);
 }
 
+/** The task of the run the window follows right now, or undefined when it follows none. */
+function followedTaskId(
+  status: { readonly read: boolean; readonly conversationId?: string; readonly runId?: string },
+  ignoredRun: { current: string | undefined },
+  awaitingRun: { current: AwaitedRun },
+  active: boolean,
+): string | undefined {
+  const id = status.conversationId;
+  // A status read without a run tells the window no other task's run is pending.
+  if (status.read && status.runId === undefined) awaitingRun.current = undefined;
+  if (id === undefined || status.runId === ignoredRun.current) return undefined;
+  const run = { conversationId: id, runId: status.runId };
+  return followsRun(awaitingRun, ignoredRun, run, active) ? id : undefined;
+}
+
 /** Loads the task of the runtime's run when the window follows it (see `followsRun`). */
 function useFollowedRun(
   input: SessionInput,
-  load: (id: string, activate: boolean) => Promise<void>,
+  load: LoadTask,
   ignoredRun: { current: string | undefined },
   awaitingRun: { current: AwaitedRun },
 ): void {
   const { snapshot, active } = input;
+  const refresh = useCoalescedRefresh(load);
+  // The run's identity as the window follows it; only a revision bump within it is a refresh.
+  const followed = useRef<string | undefined>(undefined);
   const statusRead = snapshot !== null;
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
   // #4068 W9: after a server restart the restored run's task was read before the browser was
@@ -606,14 +670,20 @@ function useFollowedRun(
   // re-runs on each later pairing, like every other session-bound read (F65).
   const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
-    const id = snapshot?.conversationId;
-    // A status read without a run tells the window no other task's run is pending.
-    if (statusRead && snapshot?.runId === undefined) awaitingRun.current = undefined;
-    if (id === undefined || snapshot?.runId === ignoredRun.current) return;
-    const run = { conversationId: id, runId: snapshot?.runId };
-    if (!followsRun(awaitingRun, ignoredRun, run, active)) return;
-    void load(id, false);
-    window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
+    const status = {
+      read: statusRead,
+      ...(snapshot?.conversationId === undefined
+        ? {}
+        : { conversationId: snapshot.conversationId }),
+      ...(snapshot?.runId === undefined ? {} : { runId: snapshot.runId }),
+    };
+    const id = followedTaskId(status, ignoredRun, awaitingRun, active);
+    if (id === undefined) return;
+    const key = [id, snapshot?.runId, snapshot?.state, activeWorkspaceId, active, redemptions];
+    const same = followed.current === key.join("|");
+    followed.current = key.join("|");
+    if (same) refresh(id);
+    else void load(id, false, "initial");
   }, [
     statusRead,
     snapshot?.conversationId,
@@ -626,9 +696,42 @@ function useFollowedRun(
     active,
     redemptions,
     load,
+    refresh,
     ignoredRun,
     awaitingRun,
   ]);
+}
+
+/**
+ * Background refresh of the followed task: one read in flight and at most one trailing read, so a
+ * burst of revision bumps costs a bounded number of reads.
+ */
+function useCoalescedRefresh(load: LoadTask): (id: string) => void {
+  const state = useRef<{ inflight: boolean; trailing: string | undefined }>({
+    inflight: false,
+    trailing: undefined,
+  });
+  return useCallback(
+    (id: string): void => {
+      const current = state.current;
+      if (current.inflight) {
+        current.trailing = id;
+        return;
+      }
+      current.inflight = true;
+      const run = async (target: string): Promise<void> => {
+        let next: string | undefined = target;
+        while (next !== undefined) {
+          await load(next, false, "refresh");
+          next = current.trailing;
+          current.trailing = undefined;
+        }
+        current.inflight = false;
+      };
+      void run(id);
+    },
+    [load],
+  );
 }
 
 /**
