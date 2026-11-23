@@ -130,7 +130,10 @@ Text and JSON are read whole and scanned in every spelling a parser restores. A 
 through a rolling window that holds back the last `longest form - 1` bytes. A match fails closed
 (`credential-in-response`); the relay never rewrites an artifact. npm packuments are rewritten so
 that every tarball URL under the upstream registry points at the relay base the run was given, on
-the bound loopback origin; tarball URLs on other hosts are left unchanged. The request's `Host`
+the bound loopback origin; tarball URLs on other hosts are left unchanged. "Under" is decided on
+parsed URLs, not on the literal text: scheme and host in any case and an explicit default port name
+the same registry, the path stays case-sensitive, and dot segments are resolved first, so a tarball
+URL cannot climb out of the registry path. The request's `Host`
 never chooses that base: a proxy in front of Keiko rewrites it (the development runner names its
 own backend port), and npm sends the run's capability only to the origin its configuration names,
 so a tarball moved onto another port would be fetched without it (#4530).
