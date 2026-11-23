@@ -1202,3 +1202,74 @@ describe("a task the person left stays left after a reload (#4491)", () => {
     expect(second.result.current.conversationId).toBeUndefined();
   });
 });
+
+describe("switching back to a repository shows its open task (#4491)", () => {
+  function workspaceOf(workspaceId: string, root: string): ActiveWorkspaceApi {
+    const base = activeWorkspace();
+    if (base.activeInstance === null) throw new Error("fixture has an active instance");
+    return {
+      ...base,
+      activeInstance: { ...base.activeInstance, workspaceId, repositoryRoot: root },
+    };
+  }
+  const other: CodingHistoryDetail = {
+    ...detail,
+    task: {
+      ...detail.task,
+      id: "chat-two",
+      projectPath: "/repo-b",
+      workspaceId: "ws-two",
+      latestRunId: "run-two",
+    },
+  };
+
+  it("restores the first repository's task after a run in the second one", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const first = { snapshot: snapshot("chat-one"), root: "/repo", workspace: activeWorkspace() };
+    const second = {
+      snapshot: { ...snapshot("chat-two"), runId: "run-two" },
+      root: "/repo-b",
+      workspace: workspaceOf("ws-two", "/repo-b"),
+    };
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(result.current.conversationId).toBe("chat-one");
+  });
+
+  it("does not restore a task the person left with New task", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const first = { snapshot: snapshot("chat-one"), root: "/repo", workspace: activeWorkspace() };
+    const second = {
+      snapshot: { ...snapshot("chat-two"), runId: "run-two" },
+      root: "/repo-b",
+      workspace: workspaceOf("ws-two", "/repo-b"),
+    };
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({
+          ...props,
+          active: false,
+          selection: undefined,
+          location: "local",
+        }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    await act(async () => {
+      await result.current.newTask();
+    });
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+  });
+});

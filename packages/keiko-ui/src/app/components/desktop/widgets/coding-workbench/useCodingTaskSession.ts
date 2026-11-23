@@ -130,8 +130,9 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   latest.current = input;
   const controller = useTaskLoader(latest);
   const { detail, pending, setPending, error, setError, load } = controller;
-  const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller);
-  useSessionSelection(input, load, newTask, ignoredRun, awaitingRun);
+  const scopeTasks = useScopeTasks(latest, detail, load);
+  const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller, scopeTasks);
+  useSessionSelection(input, load, newTask, ignoredRun, awaitingRun, scopeTasks);
   const finish = async (): Promise<void> => {
     if (input.active || detail === null) return;
     setPending(true);
@@ -557,11 +558,57 @@ function useHistoryScope(
   return tracker;
 }
 
+/** The task each repository showed last in this window, bounded; in memory only (#4491). */
+type ScopeTasks = { readonly current: Map<string, string> };
+const MAX_SCOPE_TASKS = 32;
+
+/**
+ * Remembers the task a repository showed and shows it again when the window switches back to that
+ * repository. The server follows one latest run for every window, so without it a run in the other
+ * repository left the first one's open task unreachable outside Coding History.
+ */
+function useScopeTasks(
+  latest: { current: SessionInput },
+  detail: CodingHistoryDetail | null,
+  load: LoadTask,
+): ScopeTasks {
+  const scopeTasks = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (detail === null || detail.task.status === "completed") return;
+    const tasks = scopeTasks.current;
+    tasks.delete(detail.task.projectPath);
+    tasks.set(detail.task.projectPath, detail.task.id);
+    const oldest = tasks.keys().next().value;
+    if (tasks.size > MAX_SCOPE_TASKS && oldest !== undefined) tasks.delete(oldest);
+  }, [detail]);
+  const root = latest.current.root;
+  useEffect(() => {
+    const current = latest.current;
+    const id = root === undefined ? undefined : scopeTasks.current.get(root);
+    if (id === undefined || current.active || current.selection !== undefined) return;
+    void load(id, false);
+  }, [root, latest, load]);
+  return scopeTasks;
+}
+
+/** The followed task, unless this window already showed it under another repository. */
+function inRepository(
+  taskId: string | undefined,
+  scopeTasks: ScopeTasks,
+  root: string | undefined,
+): string | undefined {
+  if (taskId === undefined || root === undefined) return taskId;
+  for (const [taskRoot, id] of scopeTasks.current)
+    if (id === taskId) return taskRoot === root ? taskId : undefined;
+  return taskId;
+}
+
 function useNewTask(
   latest: { current: SessionInput },
   ignoredRun: { current: string | undefined },
   awaitingRun: { current: AwaitedRun },
   controller: TaskLoader,
+  scopeTasks: ScopeTasks,
 ): () => Promise<void> {
   const { sequence, setDetail, setError, setPending } = controller;
   const newTask = useCallback(async (): Promise<void> => {
@@ -579,6 +626,7 @@ function useNewTask(
     }
     ignoredRun.current = current.snapshot?.runId;
     current.onLeftRun?.(ignoredRun.current);
+    if (current.root !== undefined) scopeTasks.current.delete(current.root);
     awaitingRun.current = current.snapshot === null ? {} : undefined;
     sequence.current += 1;
     setDetail(null);
@@ -594,7 +642,7 @@ function useNewTask(
     } finally {
       setPending(false);
     }
-  }, [latest, ignoredRun, awaitingRun, sequence, setDetail, setError, setPending]);
+  }, [latest, ignoredRun, awaitingRun, sequence, setDetail, setError, setPending, scopeTasks]);
   return newTask;
 }
 
@@ -618,6 +666,7 @@ function useSessionSelection(
   newTask: () => Promise<void>,
   ignoredRun: { current: string | undefined },
   awaitingRun: { current: AwaitedRun },
+  scopeTasks: ScopeTasks,
 ): void {
   const { selection, snapshot, active } = input;
   const statusRead = snapshot !== null;
@@ -651,7 +700,7 @@ function useSessionSelection(
     awaitingRun,
     lastSelection,
   ]);
-  useFollowedRun(input, load, ignoredRun, awaitingRun);
+  useFollowedRun(input, load, ignoredRun, awaitingRun, scopeTasks);
 }
 
 /** The task of the run the window follows right now, or undefined when it follows none. */
@@ -675,9 +724,12 @@ function useFollowedRun(
   load: LoadTask,
   ignoredRun: { current: string | undefined },
   awaitingRun: { current: AwaitedRun },
+  scopeTasks: ScopeTasks,
 ): void {
   const { snapshot, active } = input;
   const refresh = useCoalescedRefresh(load, ignoredRun);
+  const root = useRef(input.root);
+  root.current = input.root;
   // The run's identity as the window follows it; only a revision bump within it is a refresh.
   const followed = useRef<string | undefined>(undefined);
   const statusRead = snapshot !== null;
@@ -695,7 +747,11 @@ function useFollowedRun(
         : { conversationId: snapshot.conversationId }),
       ...(snapshot?.runId === undefined ? {} : { runId: snapshot.runId }),
     };
-    const id = followedTaskId(status, ignoredRun, awaitingRun, active);
+    const id = inRepository(
+      followedTaskId(status, ignoredRun, awaitingRun, active),
+      scopeTasks,
+      root.current,
+    );
     if (id === undefined) return;
     const key = [id, snapshot?.runId, snapshot?.state, activeWorkspaceId, active, redemptions];
     const same = followed.current === key.join("|");
@@ -717,6 +773,7 @@ function useFollowedRun(
     refresh,
     ignoredRun,
     awaitingRun,
+    scopeTasks,
   ]);
 }
 
