@@ -402,7 +402,7 @@ function createControlPlaneOrchestrator(
 export function codingRuntimeTerminalFacts(
   eventHub: Pick<
     CodingRuntimeEventHub,
-    "lastModelCallFailure" | "lastModelCallProviderUnavailable"
+    "lastModelCallFailure" | "lastModelCallProviderUnavailable" | "lastModelCallGatewayCut"
   >,
   runtimeHost: Pick<CodingRuntimeHost, "envelopeDurationExhausted"> | undefined,
 ): CodingRuntimeTerminalFacts {
@@ -410,6 +410,7 @@ export function codingRuntimeTerminalFacts(
     envelopeDurationExhausted: (runId) => runtimeHost?.envelopeDurationExhausted?.(runId) === true,
     lastModelCallFailure: (runId) => eventHub.lastModelCallFailure(runId),
     lastModelCallProviderUnavailable: (runId) => eventHub.lastModelCallProviderUnavailable(runId),
+    lastModelCallGatewayCut: (runId) => eventHub.lastModelCallGatewayCut(runId),
   };
 }
 

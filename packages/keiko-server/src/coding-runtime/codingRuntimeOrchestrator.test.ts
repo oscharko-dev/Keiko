@@ -7786,6 +7786,7 @@ describe("terminal run cause (F9, #3873)", () => {
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
+    gatewayCut = false,
   ) {
     return {
       envelopeDurationExhausted: vi.fn(
@@ -7797,6 +7798,7 @@ describe("terminal run cause (F9, #3873)", () => {
       lastModelCallProviderUnavailable: vi.fn(
         (runId: string) => runId === RUN_ID && providerUnavailable,
       ),
+      lastModelCallGatewayCut: vi.fn((runId: string) => runId === RUN_ID && gatewayCut),
     } satisfies CodingRuntimeTerminalFacts;
   }
 
@@ -7902,6 +7904,36 @@ describe("terminal run cause (F9, #3873)", () => {
       });
     },
   );
+
+  it("settles a run whose model call the gateway cut at its output bound as output-limit-reached", async () => {
+    const { f, records } = settledWith(
+      "failed",
+      terminalFacts("output-exhausted", false, false, true),
+    );
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "output-limit-reached",
+      });
+    });
+    const settled = settledLine(records);
+    expect(settled).toMatchObject({
+      correlationId: RUN_ID,
+      errorKind: "unavailable",
+      extra: {
+        failureCode: "output-limit-reached",
+        failureBasis: "model-call-failure",
+        modelCallFailure: "output-exhausted",
+      },
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ failureCode: "output-limit-reached", failureBasis: "model-call-failure" });
+  });
 
   // F10 (#3873 review, PR #3876): the gateway answers a provider that stayed down past its outage
   // window with `provider-failed`, the same code as a rejection, and states beside it that the

@@ -433,6 +433,7 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "prompt-allowance-exhausted",
         "envelope-duration-exhausted",
         "output-exhausted-repeated",
+        "output-limit-reached",
         "provider-unavailable",
         "model-turn-failed",
         "edits-blocked",

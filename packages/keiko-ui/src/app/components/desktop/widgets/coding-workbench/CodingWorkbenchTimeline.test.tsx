@@ -2884,6 +2884,22 @@ describe("Timeline — error report on a failed run", () => {
     expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
   });
 
+  it("names the output allowance on a run the gateway cut, and still offers the report", () => {
+    const cut: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      runId: RUN_ID,
+      state: "failed",
+      failureCode: "output-limit-reached",
+    };
+    const { container } = render(
+      <Timeline events={[cut]} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
+    );
+    expect(container).toHaveTextContent(/used up the output allowance of one step/iu);
+    expect(container).not.toHaveTextContent(/internal error|again, after/iu);
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+  });
+
   it("shows no report on a turn failure that names its own mapped cause", () => {
     const turn: CodingWorkbenchRuntimeSseEvent = {
       ...event(5),

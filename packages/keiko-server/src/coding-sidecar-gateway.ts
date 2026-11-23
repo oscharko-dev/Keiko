@@ -2135,6 +2135,7 @@ function recordGatewayOutcome(
       },
     ),
   );
+  if (outcome === "output-limit") reportGatewayOutputCut(ctx, deps, runId);
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
@@ -2144,6 +2145,18 @@ function recordGatewayOutcome(
   } catch {
     emitGatewayEvidenceAggregationDiagnostic(deps, runId);
   }
+}
+
+// A call the gateway cut at its output bound is a failed model call with cause `output-exhausted`
+// for the run: the run's settlement names it, and no later bookkeeping may count it as answered.
+// `recordGatewayOutcome` is the one place every cut (reasoning or answer, streamed or buffered)
+// passes through, so the frame is published once per cut.
+function reportGatewayOutputCut(ctx: RouteContext, deps: UiHandlerDeps, runId: string): void {
+  reportGatewayTurnFailure(ctx, deps, runId, {
+    failureCode: "output-exhausted",
+    runtimeRetry: "refused",
+    gatewayCut: true,
+  });
 }
 
 function outputByteBudget(maxOutputTokens: number): number {
@@ -2451,19 +2464,18 @@ function reportGatewayTurnFailure(
     readonly failureCode: CodingWorkbenchTurnFailureCode;
     readonly runtimeRetry: RuntimeRetry;
     readonly error?: unknown;
+    /** True when the gateway itself ended the call at its output bound (no provider error). */
+    readonly gatewayCut?: boolean;
   },
 ): boolean {
   const { failureCode, runtimeRetry, error } = failure;
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const providerUnavailable = failureCode === "provider-failed" && providerUnavailableFault(error);
-  const publicationReason = gatewayTurnFailurePublication(
-    deps,
-    runId,
-    snapshot,
-    failureCode,
+  const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode, {
     providerUnavailable,
-  );
+    gatewayCut: failure.gatewayCut === true,
+  });
   const run = { revision: snapshot.revision, state: snapshot.state };
   logGatewayTurnFailure(
     ctx,
@@ -2509,14 +2521,14 @@ function gatewayTurnFailurePublication(
   runId: string,
   snapshot: CodingWorkbenchRuntimeSnapshot,
   failureCode: CodingWorkbenchTurnFailureCode,
-  providerUnavailable: boolean,
+  evidence: { readonly providerUnavailable: boolean; readonly gatewayCut: boolean },
 ): GatewayFailurePublicationReason {
   const publication = deps.codingRuntimeEventHub?.publishTurnFailure(
     runId,
     snapshot.state,
     snapshot.revision,
     failureCode,
-    { providerUnavailable },
+    evidence,
   );
   const publicationReason =
     publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");

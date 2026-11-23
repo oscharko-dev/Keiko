@@ -267,6 +267,7 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
+    "output-limit-reached",
     "provider-unavailable",
     "model-turn-failed",
     "edits-blocked",

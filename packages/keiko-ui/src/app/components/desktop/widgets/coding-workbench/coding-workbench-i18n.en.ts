@@ -1301,6 +1301,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This step could not be completed. Try again. If the error recurs, create an error report below and pass it to your support.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
+  "codingWorkbench.event.failure.output-limit-reached":
+    "The model used up the output allowance of one step, usually by thinking at length, before it answered or used a tool, so Keiko ended the run. Your changes so far stay in the task workspace. Start the task again or split it into smaller steps. If it happens again, choose another model or ask your administrator to raise the model's output limit.",
   "codingWorkbench.event.failure.output-exhausted-repeated":
     "The run ended because the model used its whole output budget again without calling a tool or answering, even after a repair attempt. The model usually spends that budget on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then start the task again; your changes so far stay in the task workspace.",
   "codingWorkbench.event.stopped":

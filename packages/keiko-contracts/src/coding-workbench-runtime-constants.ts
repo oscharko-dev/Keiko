@@ -118,6 +118,9 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "prompt-allowance-exhausted"
   | "envelope-duration-exhausted"
   | "output-exhausted-repeated"
+  // `output-limit-reached`: the gateway ended the most recent model call itself at the output bound
+  // of one step (no repair ran first), before the model answered or called a tool.
+  | "output-limit-reached"
   | "provider-unavailable"
   | "model-turn-failed"
   // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again settles
@@ -229,6 +232,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
+    "output-limit-reached",
     "provider-unavailable",
     "model-turn-failed",
     "edits-blocked",

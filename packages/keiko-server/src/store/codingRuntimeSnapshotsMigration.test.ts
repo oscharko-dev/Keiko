@@ -22,15 +22,19 @@ const CAUSES = [
 ] as const;
 
 function v80Database(): DatabaseSync {
+  return databaseAtVersion(80);
+}
+
+function databaseAtVersion(version: number): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON");
   for (const migration of MIGRATIONS) {
-    if (migration.version > 80) break;
+    if (migration.version > version) break;
     db.exec(migration.sql);
     migration.apply?.(db);
   }
-  db.exec(`PRAGMA user_version = 80;
+  db.exec(`PRAGMA user_version = ${String(version)};
     INSERT INTO projects (path, name, created_at, last_opened_at) VALUES ('/fixture','Fixture',1,1);
     INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)
       VALUES ('chat-1','/fixture','Fixture','model',1,1);
@@ -126,6 +130,24 @@ describe("V81 supervisor-refusal causes", () => {
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
     expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
+  });
+});
+
+describe("V82 output-limit cause", () => {
+  it("denies the cause at v81 and admits it after v82, still refusing an invented one", () => {
+    const db = databaseAtVersion(81);
+    expect(() => {
+      settle(db, "output-limit-reached");
+    }).toThrow(/CHECK constraint failed/u);
+    runMigrations(db);
+    settle(db, "output-limit-reached");
+    settle(db, "output-exhausted-repeated");
+    expect(() => {
+      settle(db, "output-limit-invented");
+    }).toThrow(/CHECK constraint failed/u);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
 

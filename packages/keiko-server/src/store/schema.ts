@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 81;
+export const SCHEMA_VERSION = 82;
 
 interface Migration {
   readonly version: number;
@@ -1625,6 +1625,17 @@ const V81_SQL = `${V41_SQL.replaceAll(
 CREATE INDEX idx_coding_runtime_predecessor
   ON coding_runtime_snapshots(predecessor_run_id);
 `;
+
+// V82: admits `output-limit-reached`, the cause a run settles with when the gateway itself ended its
+// model call at the output bound of one step. V81's rebuild again (SQLite cannot ALTER a
+// table-level CHECK) with the one new code; the indexes are recreated and no column changes.
+const V82_SQL = V81_SQL.replaceAll(
+  "coding_runtime_snapshots_v81",
+  "coding_runtime_snapshots_v82",
+).replace(
+  "'runtime-supervisor-refused'))",
+  "'runtime-supervisor-refused','output-limit-reached'))",
+);
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
@@ -3608,6 +3619,7 @@ export const MIGRATIONS: readonly Migration[] = [
       WHERE role = 'user';`,
   },
   { version: 81, sql: V81_SQL, rebuildsReferencedTable: true },
+  { version: 82, sql: V82_SQL, rebuildsReferencedTable: true },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

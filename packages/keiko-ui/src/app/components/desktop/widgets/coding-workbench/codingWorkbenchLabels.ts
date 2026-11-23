@@ -426,6 +426,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["recovery-required", "codingWorkbench.recovery.summary"],
   ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
+  ["output-limit-reached", "codingWorkbench.event.failure.output-limit-reached"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
   ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
   ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],

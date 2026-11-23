@@ -718,7 +718,8 @@ would restore the false green it replaced.
 
 A run ends as failed, and the Workbench names why instead of "The coding run ended with an internal
 error": the run's time limit is used up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
-attempt (`output-exhausted-repeated`), the model provider could not be reached or stopped answering
+attempt (`output-exhausted-repeated`) or the gateway ended one step at its output bound
+(`output-limit-reached`), the model provider could not be reached or stopped answering
 (`provider-unavailable`), or the last model step failed for the reason the failed step above it
 names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
 `failureCode`, a `failureBasis` and, when one is on record, the `modelCallFailure` of the run's last
@@ -747,7 +748,11 @@ F9; runs `run-65084062444586162471229658028402064666` and
   `coding-sidecar.gateway.turn-failed` line carries `providerUnavailable: true`, and the settled line
   names `modelCallFailure: provider-failed` beside `failureCode: provider-unavailable`.
   `output-exhausted`, which ends a run only after the gateway's steered repair or the runtime's
-  retries exhausted the budget again, settles `output-exhausted-repeated`; every other cause,
+  retries exhausted the budget again, settles `output-exhausted-repeated`. A call the gateway itself
+  cut at its output bound (a reasoning or answer stream past its byte bound, or a finished answer past
+  the budget; its `coding-sidecar.gateway.outcome` line carries `outcome: output-limit` and `limit`)
+  is also kept as the run's last failed model call, published as an `output-exhausted` turn failure,
+  and settles `output-limit-reached`; no repair ran first. Every other cause,
   including a `provider-failed` without that fact (a 4xx rejection, a refused credential, a
   configuration or egress refusal), settles `model-turn-failed`.
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
@@ -800,6 +805,8 @@ the run's own cause names the outage.
   `deadline-exhausted`, the limit that ran out is the repair's own: it is kept per pull request and
   task, a new run inherits it and a longer setting does not extend it, so repair that pull request's
   failing check by hand, or start the task for a new pull request.
+- `output-limit-reached`: start the task again or split it into smaller steps; if it repeats, choose
+  another model or have the gateway declare a larger `max_output_tokens` for it.
 - `output-exhausted-repeated`: have the gateway declare a larger `max_output_tokens` for the model, or
   choose a model with a smaller reasoning share, then start the task again.
 - `provider-unavailable`: check the model gateway's and the model server's health, then start the

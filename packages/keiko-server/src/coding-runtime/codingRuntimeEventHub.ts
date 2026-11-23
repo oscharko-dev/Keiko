@@ -119,6 +119,7 @@ interface RetainedEvent {
 interface ModelCallFailure {
   readonly failureCode: CodingWorkbenchTurnFailureCode;
   readonly providerUnavailable: boolean;
+  readonly gatewayCut: boolean;
 }
 
 interface RunBuffer {
@@ -216,7 +217,7 @@ export class CodingRuntimeEventHub {
     state: CodingWorkbenchRuntimeStateName,
     revision: number,
     failureCode: CodingWorkbenchTurnFailureCode,
-    evidence: { readonly providerUnavailable?: boolean } = {},
+    evidence: { readonly providerUnavailable?: boolean; readonly gatewayCut?: boolean } = {},
   ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
     if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
@@ -224,6 +225,7 @@ export class CodingRuntimeEventHub {
       this.modelCallFailures.set(runId, {
         failureCode,
         providerUnavailable: evidence.providerUnavailable === true,
+        gatewayCut: evidence.gatewayCut === true,
       });
     }
     return this.publish({
@@ -293,6 +295,14 @@ export class CodingRuntimeEventHub {
    */
   lastModelCallProviderUnavailable(runId: string): boolean {
     return this.modelCallFailures.get(runId)?.providerUnavailable === true;
+  }
+
+  /**
+   * Whether the gateway itself ended the run's most recent failed model call at its output bound,
+   * which no later answered call superseded. A provider's own output exhaustion reports false.
+   */
+  lastModelCallGatewayCut(runId: string): boolean {
+    return this.modelCallFailures.get(runId)?.gatewayCut === true;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
