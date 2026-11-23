@@ -11,6 +11,7 @@ import {
   expectFormatActionAvailability,
 } from "./support/editor-document-actions.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
+import { isBenignMonacoCancellation } from "./support/monaco-cancellation.js";
 
 // Issue #1380 (Epic #1491), ADR-0068 D8 item 4 — packaged-app browser e2e for the built-in editor
 // language features and deterministic formatting baseline.
@@ -112,12 +113,6 @@ const ALL_FIXTURE_FILES: readonly FixtureFile[] = [
 function formattingSource(file: FixtureFile): EditorBuiltinFormattingSource {
   const languageId = inferEditorLanguageModeId(file.relativePath);
   return languageId === null ? "none" : editorBuiltinDocumentFormatting(languageId);
-}
-
-function isBenignMonacoCancellation(error: Error): boolean {
-  if (error.message === "Canceled: Canceled") return true;
-  if (error.message !== "Canceled") return false;
-  return /\b(monaco|inline[-\s]?completion|suggest|editor|format)\b/i.test(error.stack ?? "");
 }
 
 function collectPageErrors(page: Page): () => void {

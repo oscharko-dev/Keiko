@@ -1372,7 +1372,7 @@ function startScopeFacts(pipeline: FunctionalPipeline): string {
 function warningLines(log: BufferedServerLogSink): string {
   const lines = log.events.flatMap((event) =>
     event.level === "warn" || event.level === "error"
-      ? [`${event.level} ${event.op} ${JSON.stringify(event.extra ?? {})}`.slice(0, 400)]
+      ? [`${event.level ?? "info"} ${event.op} ${JSON.stringify(event.extra ?? {})}`.slice(0, 400)]
       : [],
   );
   return `\n${lines.join("\n")}`;
@@ -1639,6 +1639,8 @@ interface ShellProbeInput {
    * with the run's runtime still alive.
    */
   readonly onProbeOutput?: (live: LiveProbeRun) => void;
+  /** The activity log the pipeline writes to, read when the probe's output never arrives. */
+  readonly log?: BufferedServerLogSink;
 }
 
 /** The run a probe's output belongs to, while its runtime is alive. */
@@ -1684,13 +1686,37 @@ async function startShellProbe(input: ShellProbeInput): Promise<ShellProbeRun> {
   );
   const runId = await startRun(pipeline, startBody("boundary-probe"));
   started(runId);
-  await vi.waitFor(
-    () => {
-      expect(transcripts.join("\n")).toContain("probe.done=1");
-    },
-    { timeout: 60_000, interval: 200 },
-  );
+  try {
+    await vi.waitFor(
+      () => {
+        expect(transcripts.join("\n")).toContain("probe.done=1");
+      },
+      { timeout: 60_000, interval: 200 },
+    );
+  } catch (error) {
+    // A turn can end before its next model call reaches the scripted model (#4523, run
+    // 45120790653: the runtime's second assistant message finished with an error). Name what the
+    // pipeline and the runtime recorded, not only the first request's transcript.
+    throw new Error(
+      `the probe's output never reached the model after ${String(transcripts.length)} model ` +
+        `requests${input.log === undefined ? "" : probeStallLines(input.log, runId)}` +
+        runtimeGitLines(fixture.root),
+      { cause: error },
+    );
+  }
   return { fixture, workspace: fixture.workspace, pipeline, runId, transcripts };
+}
+
+/** The activity a probe that never returned leaves: refusals, failures and the gateway's lines. */
+function probeStallLines(log: BufferedServerLogSink, runId: string): string {
+  const lines = log.events.flatMap((event) =>
+    event.level !== "info" ||
+    event.correlationId === runId ||
+    /^(?:coding-sidecar\.gateway|gateway)\./u.test(event.op)
+      ? [`${event.level ?? "info"} ${event.op} ${JSON.stringify(event.extra ?? {})}`.slice(0, 400)]
+      : [],
+  );
+  return `\nactivity ${String(lines.length)}\n${lines.slice(-40).join("\n")}`;
 }
 
 // #4521: the credentials a launch's environment could carry, as the run's shell sees them. The
@@ -1815,7 +1841,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
     it("ends what a shell took out of the run's tree when a run that changed nothing settles: SIGHUP ignored, a double fork, a new session and a file watcher", async () => {
       const log = recordActivityLog();
       try {
-        const probe = await startEscapeProbe("none");
+        const probe = await startEscapeProbe("none", log);
         // A run that changed no file offers no undo: its runtime ends when it settles, and every
         // process of its tree with it.
         await vi.waitFor(
@@ -1842,7 +1868,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
     it("ends what a shell took out of the run's tree when a held runtime ends with the next run: SIGHUP ignored, a double fork, a new session and a file watcher", async () => {
       const log = recordActivityLog();
       try {
-        const probe = await startEscapeProbe("change");
+        const probe = await startEscapeProbe("change", log);
         // The run settles on its own when its turn ends. Its shell changed a file that no edit
         // settlement reported and ran no check, so the run's step change calls for one (#3901)
         // and the run ends failed (verification-not-evidenced).
@@ -1890,13 +1916,17 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
  * Runs the escape probe and checks its positive control: when the shell returned, all four
  * escaped processes ran, each adopted by launchd, and nohup either refused or runs.
  */
-async function startEscapeProbe(change: "change" | "none"): Promise<EscapeProbeRun> {
+async function startEscapeProbe(
+  change: "change" | "none",
+  log: BufferedServerLogSink,
+): Promise<EscapeProbeRun> {
   let escaped: readonly ProcessRow[] = [];
   let midTurn: Promise<string> = Promise.resolve("unobserved");
   let snapshotLog = "";
   const probe = await startShellProbe({
     script: ESCAPE_PROBE_SCRIPT,
     args: () => change,
+    log,
     operatorEnv: () => ({}),
     onProbeOutput: (live) => {
       escaped = escapedProcesses();
