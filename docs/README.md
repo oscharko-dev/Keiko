@@ -337,6 +337,9 @@ Rules:
 Primary docs:
 
 - [security-and-audit-boundaries.md](security-and-audit-boundaries.md)
+- [owner-decisions.md](owner-decisions.md) — long form of the owner decisions AGENTS.md §1 summarizes
+- [observability/operation-notes.md](observability/operation-notes.md) — what individual Activity Log
+  operations record
 - [command-runner/security-notes.md](command-runner/security-notes.md)
 - [container-runtime/security-notes.md](container-runtime/security-notes.md)
 - [troubleshooting/README.md](troubleshooting/README.md)

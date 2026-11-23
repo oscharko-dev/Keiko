@@ -6,14 +6,25 @@ every agent works from the same rules. Read it before you touch code.
 
 **Working, clean, secure, verified code is authoritative.** Architecture Decision Records are
 guardrails and the repository's architectural memory; they are not executable truth and must never
-be used to defend broken, unsafe, or contradictory behavior. Agents must decide in favour of
-working, clean, secure code. When implementation requirements or verified safe behavior conflict
-with an ADR, do not stop merely because the text disagrees. Fix the code and update the affected ADR
-sections in the same change so the documentation reflects the corrected reality. Do not create a
-new or "superseding" ADR merely to repair outdated or contradictory text; reserve new ADRs for
-genuinely new architectural decisions. `AGENTS.md`,
-[`CONTRIBUTING.md`](CONTRIBUTING.md), and the ADRs must converge in the resulting change; flag any
-remaining drift.
+be used to defend broken, unsafe, or contradictory behavior. When implementation requirements or
+verified safe behavior conflict with an ADR, do not stop merely because the text disagrees: fix the
+code and update the affected ADR sections in the same change. Do not create a new or "superseding"
+ADR merely to repair outdated text; reserve new ADRs for genuinely new architectural decisions.
+`AGENTS.md`, [`CONTRIBUTING.md`](CONTRIBUTING.md), and the ADRs must converge in the resulting
+change; flag any remaining drift.
+
+**Keep this file to rules.** It is loaded into every agent's context, so it holds only what every
+change must respect. Per-feature behaviour, per-operation log fields and the long form of owner
+decisions live where that area is documented:
+
+- [`docs/owner-decisions.md`](docs/owner-decisions.md) — the full text of the owner decisions §1
+  summarizes;
+- [`docs/observability/operation-notes.md`](docs/observability/operation-notes.md) — what
+  individual Activity Log operations record, including the connected-context retrieval contract;
+- [`EXPERIENCE.md`](EXPERIENCE.md) — repository lessons and traps (§9);
+- the ADRs in [`docs/adr/`](docs/adr/) — the architectural record.
+
+A change that alters such behaviour updates that document, not this one.
 
 ---
 
@@ -26,30 +37,28 @@ product.
 **The human-control invariant — non-negotiable:**
 
 > A local human selects or accepts the task, autonomy mode, and Authority Envelope within the
-> server-owned deployment ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
-> when policy says `allowed`. For accepted repository work targeting `dev`, agents may commit, push
-> their feature branch, and maintain the pull request. Only the repository owner account
-> `oscharko` may authorize and execute integration into `dev`, including enabling native auto-merge.
-> Agents acting under that account operate within the owner's explicit authorization. Integration
-> additionally requires the app-bound required checks to succeed on the exact current head and every
-> review conversation to be resolved. Direct pushes to
-> `dev`, force pushes, gate bypasses, and authority widening remain denied or separately approved.
+> server-owned deployment ceiling. Keiko may then act inside that validated, bounded authority
+> without per-action approval when policy says `allowed`. For accepted repository work targeting
+> `dev`, agents may commit, push their feature branch, and maintain the pull request. Only the
+> repository owner account `oscharko` may authorize and execute integration into `dev`, including
+> enabling native auto-merge. Agents acting under that account operate within the owner's explicit
+> authorization. Integration additionally requires the app-bound required checks to succeed on the
+> exact current head and every review conversation to be resolved. Direct pushes to `dev`, force
+> pushes, gate bypasses, and authority widening remain denied or separately approved.
 > Manifest-producing surfaces emit **redacted** evidence for deterministic gate evaluation.
 
-The repository-delivery sentence above governs how agents contribute accepted work to Keiko's own
-`dev` branch under ADR-0135. It is not a capability promise for the end-user Governed Merge Gateway:
-ADR-0087 continues to require an explicit, approval-gated merge request and excludes autonomous or
-background auto-merge scheduling from that product surface.
+That repository-delivery sentence governs how agents contribute to Keiko's own `dev` branch
+(ADR-0135). It is not a capability promise for the end-user Governed Merge Gateway: ADR-0087 still
+requires an explicit, approval-gated merge request and excludes autonomous or background
+auto-merge from that product surface.
 
-The product has exactly three user-facing modes — the product-wide authority model for every
-autonomy-capable surface, anchored by
-[ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md), amended for repository
-delivery by [ADR-0135](docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md), and
-governed in detail by
+The product has exactly three user-facing modes — the product-wide authority model
+([ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md), amended by
+[ADR-0135](docs/adr/ADR-0135-deterministic-dev-delivery-and-keiko-for-quality.md), detailed in
 [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
-[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md), with the corrected
-monotonic semantics fixed by
-[ADR-0138](docs/adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md):
+[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md), with the monotonic
+semantics of
+[ADR-0138](docs/adr/ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md)):
 
 - **Ask for approval** (`governed-assist`) allows reads and planning and asks before workspace
   edits, commands, external files, internet use, or delivery.
@@ -58,29 +67,8 @@ monotonic semantics fixed by
   or delivery.
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
-  integrated only by `oscharko` once the preconditions in the invariant above hold.
-  (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
-  capability-availability clarification: a surface still needs an implemented execution path
-  before a given mode's `allowed` verdict can act.)
-
-In every mode a native Coding run reads dependencies from the Maven and npm repositories the person
-configured, through Keiko's repository credential relay (owner decision 2026-11-22, ADR-0184 D6).
-Below Full access it is the one path to those repositories, beside the read-only Maven cache, and
-gives the run no network route of its own: Keiko makes the read. The build command keeps its mode's
-disposition; the relay read itself needs no approval.
-
-**Coding Workbench availability (owner decision, 2026-09-27):** a normal installation offers all
-three modes without extra configuration; its Coding ceiling defaults to `autonomous-delivery`.
-The selected mode defaults to **Ask for approval**, and a saved human mode selection remains a
-selection, not an installation side effect. Explicitly configured narrower ceilings still apply;
-invalid explicit values fail closed. This availability default is scoped to Coding: Memory retains
-its explicit deployment ceiling or `governed-assist` for its mode and standing maintenance; only an
-explicitly configured `governed-assist` ceiling holds routine facts for review (#4206). See ADR-0124 D2 and ADR-0163 D7. A person's own clear "Merke dir" or "Vergiss das" in a Chat is
-their decision, not unattended learning: it acts at once in every mode, after the hard denials
-(ADR-0146 D4b). Routine private facts learned from natural conversation are used without approval in every mode
-(team and project facts keep the mode rule until project memory), and a correction replaces the old
-fact; confidential content is refused. Deterministic checks on the
-person's own words admit them, and they never replace a clear statement (ADR-0146 D2, D4c).
+  integrated only by `oscharko` once the preconditions above hold. (`allowed` is a policy ceiling:
+  a surface still needs an implemented execution path before it can act — ADR-0138 D4.)
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -89,139 +77,56 @@ restrictions fail closed.
 This shapes the product _and_ how you work on it:
 
 - For an accepted Keiko task or epic, agents may commit, push the assigned non-`dev` branch, open or
-  update its PR, and repair deterministic findings. Only `oscharko` may merge into `dev` or arm native
-  auto-merge for that target; an agent acting under that account needs the owner's explicit
+  update its PR, and repair deterministic findings. Only `oscharko` may merge into `dev` or arm
+  native auto-merge for that target; an agent acting under that account needs the owner's explicit
   authorization. Acceptance of a contributor's task does not grant `dev` integration authority.
-  Close the issue only after verified merge. Never push directly to `dev`, force-push, bypass a
-  required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
-  direct-check path.
-- Explicit Files/Editor folder selections use the existing `coding-repository` presentation
-  binding for Git repositories and ordinary folders alike. Task-bound windows retain the active
-  workspace override and navigation within that root. Never let a Files title name a configured
-  root while its tree shows a different resolved root. Folder navigation and reads record body-free
-  client stage lifecycle evidence on the existing Activity Log (ADR-0090 D4).
-- **Ordinary Editor scope (owner decision, 2026-10-03):** the Editor is a human-operated file
-  editor. Its agent presence/history, incoming action execution, and Editor/Chat handoffs are
-  retired. Preserve manual file operations and the ownership-bound, content-free dirty-buffer
-  safety state; that state must never make the Editor discoverable or executable as an agent
-  session. Chat repository search and the separate Coding Workbench are outside this retirement.
-  Shared runtime contracts remain only where active consumers need them (ADR-0061).
-- **Keiko does not cap prompt tokens (owner decision, 2026-11-11):** no Coding run, Chat tool turn,
-  agent run or CI repair carries a cumulative prompt-token allowance; every agent step resends the
-  whole conversation, so any fixed sum ends healthy long runs. Cost control is the operator-configured
-  Model Gateway spend ceiling. Per-request context-window fitting, output limits, duration, tool-call
-  and patch budgets remain. Never reintroduce a token-count quota; a better guard against a model
-  that loops unnoticed is tracked in #4346 (ADR-0137).
-- **Knowledge Pod scope (owner decision, 2026-11-04):** Knowledge Pods use local storage and have
-  no sharing roadmap or sharing placeholders. The ordinary Create Knowledge Pod dialog asks only
-  for a name; the existing server-side `standard` default supplies model-use policy. Model routing
-  belongs to the central gateway configuration. Local pod storage does not imply local model
-  providers. Preserve existing model-use policy, containment and audit guards; see
-  [Knowledge Pods](docs/local-knowledge/knowledge-pods.md).
-- **Linux desktop is a community tier (owner decision, 2026-11-12):** Keiko promises feature
-  parity for macOS and Windows only. Design, implement and qualify new or changed
-  operating-system features (supervision, sandbox and egress confinement, credential storage, file
-  ownership, native dialogs, launcher, installer, update handoff, runtime activation) for those two.
-  On Linux such a feature reuses an existing implementation or reports itself unavailable through
-  its existing closed disposition and fails closed; never block a macOS or Windows delivery on Linux
-  qualification. Keep building and publishing `keiko-linux-x64.zip` and every gate on it. Existing
-  Linux capabilities, tests and CI jobs stay, and a red Linux job is fixed, never skipped. Linux
-  remains the development and CI platform (§3, §9). See
-  [ADR-0183](docs/adr/ADR-0183-linux-desktop-community-tier.md).
-- Local browser connection uses the trusted native launcher and existing single-use fragment
-  redemption. The one-click open request returns only a closed outcome, never proof or cookies;
-  preserve server-owned destinations, fixed browser targets, launch bounds and authenticated APIs.
+  Close the issue only after verified merge. Never push directly to `dev`,
+  force-push, bypass a required check, dismiss a finding to obtain green status, or merge outside
+  the ADR-0135 direct-check path.
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
-- Desktop layout restoration is bound to the current UI database's existing persisted installation
-  identity. Preserve the same-store restart path; never replay unowned browser window references
-  into another data store or clear chats and files to hide a broken restoration (ADR-0027).
-- **Standalone folder package (owner decision, 2026-11-17):** for workplaces where nothing may be
-  installed, Keiko ships as one folder: the portable payload, every file unchanged, with start and
-  stop files around it (`scripts/build-standalone-package.mjs`, ADR-0121 D9). It starts with
-  `keiko portable launch --in-place`: no managed setup, no registration, state in
-  `~/.keiko-standalone`, nothing downloaded at start. It declares itself managed outside the app
-  (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
-  and never offers the portable setup. Never modify the payload inside a package, never let the
-  folder form perform or suggest an installation, never let the program folder become a working
-  folder (every folder launch declares `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`; the program folder is
-  the launch directory, the payload's `app` folder or, in the npm form, the package folder itself;
-  the server seeds no default project from it and the read surface refuses it as a root, so it is
-  listed unreadable and is never a window's starting folder or a coding repository, while a Chat
-  started without a folder is still kept there; `keiko.config.json` and `*.vault` are credential
-  names of the sensitive-path denial, kernel-enforced for native commands, wherever they lie), and
-  never weaken the operating system's download
-  checks to make a package start: an administrator removes the download mark before internal
-  distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
-  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable
-  `latest` release carries the generic package of each desktop target as `keiko-<target>.standalone.zip`,
-  built and attested in the stable-tag run (`scripts/build-folder-release-assets.mjs`). A folder
-  package's name keeps the dot before its form: shipped updaters read every dot-free `keiko-*.zip`
-  release asset as an update archive and refuse a release with one too many.
-- **npm folder package (owner decision, 2026-11-18):** where an npm registry, often an internal
-  mirror, is the approved way in, the same folder form ships without the program: the release's
-  Node.js runtime, a `package.json` that pins `@oscharko-dev/keiko` exactly and a lockfile with a
-  public-registry sha512 integrity for every package npm downloads
-  (`scripts/build-standalone-npm-package.mjs`, ADR-0121 D9). Its first start runs
-  `npm ci --ignore-scripts` into the folder's own `node_modules` from the registry the folder's
-  `.npmrc` names, then `keiko start` with the same state, management declaration and provisioned
-  configuration as the folder package. Never write outside the folder and the state directory,
-  never run an install script, never ship a lockfile without those integrities. The
-  administrator's access step (`Zugang speichern`) writes `keiko.config.json` from the
-  configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
-  Setup verified; a provider or reranker with its own connection is refused, never given that token.
-  The Windows form locks `@oscharko-dev/keiko-coding-runtime-win32-x64` exactly like the macOS
-  forms (published 2026-11-20, #4068).
-  The folder carries the release's Node.js runtime without `include/`, `share/`, CHANGELOG.md and
-  README.md; every kept file stays the archive's, byte for byte. `keiko start` prints one line when
-  the running Node.js is outside the `engines` range of the package's own manifest and records the
-  closed `nodeSupport` value on `process.started`; it never refuses the start.
-  It is no product release asset (its lockfile needs the integrity npm reports for the published
-  version), so a release owner runs `npm-folder-publish.yml` after a release: it starts every
-  package on its own platform (`scripts/testing/qualify-npm-folder-package.mjs` on `macos-15`,
-  `macos-15-intel`, `windows-2025`) and only then publishes the exact tested ZIPs as the attested
-  GitHub prerelease `npm-folder-<version>`. That prerelease is a transport, never latest, and grants
-  no update trust; keep the dot before the form in the asset names.
-- Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
-  handoff copies against the exact current artifact digests in the validated plan after managed
-  registration admission; preserve candidate authenticity, containment and process ownership.
-  Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
-- **Content threshold (owner decision, 2026-11-04, supersedes the opt-out of #4098):** Keiko runs on
-  the user's own device and its stores never leave it, so what a person reads and what the model
-  receives lose only the credential floor by default. `KEIKO_CONTENT_REDACTION=on` lowers the
-  threshold back to the strict projection; `off` or an absent value preserves; an unrecognized value
-  warns and keeps redaction. The server resolves it once at startup into the deps graph
-  (`chat.content-policy.resolved`); no package reads it per request. `deps.redactor` and the Chat
-  model ports follow it, including tool arguments a person reads and the tool transcript. The
-  OpenCode runtime is its own producer and always receives the model's output preserved (owner
-  decision, 2026-10-27). `keiko_research_fetch` arguments leave for the public internet and keep the
-  full redaction. Evidence, audit records, memory proposals and Quality Intelligence stay on
-  `strictRedactor`; Coding repository search, Coding History exports and support exports keep their
-  own redaction.
-  The floor always goes: configured secret literals, private keys, URL credentials, `Authorization`
-  header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes.
-  Workspace authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and
-  ADR-0022 D4.
-- **The Activity Log carries no personal data (owner decision, 2026-11-04).** It is the only thing
-  that ever leaves the machine, so its sink over-redacts: a value holds no space, and a name, IBAN,
-  telephone, card or account number, date with a year, IPv4 address, remote URL or host, or personal
-  field name is refused whatever field carries it (`log-redaction.ts`, `activity-log-label-policy.ts`). Never loosen
-  this to keep a value readable: emit a count, a closed value or a digest instead.
-- Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
-  syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
-  use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
-  leaf and separate native old/new images; unsupported fragments fail closed. Plain prose is not
-  inferred as source: error recovery counts a declaration only at a statement boundary with a header
-  its grammar allows, and a Markdown list item is judged on its own text (ADR-0022, #3900). Only the
-  raw Git diff view of the user's own repository keeps syntax-refused hunks readable under the
-  credential floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
-  publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
-  not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
-- Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
-  body-free logging on the existing activity log, and when you debug, that log is the source you
-  read first (§8).
+- Every change to product runtime behaviour ships its own body-free logging on the existing
+  activity log, and when you debug, that log is the source you read first (§8).
+
+### Standing owner decisions
+
+Each line is binding. Read its long form in [`docs/owner-decisions.md`](docs/owner-decisions.md)
+before you change that area.
+
+- **Coding Workbench availability (2026-09-27):** a normal installation offers all three modes; the
+  Coding ceiling defaults to `autonomous-delivery`, the selected mode to **Ask for approval**.
+  Memory keeps its own ceiling; a person's clear "Merke dir"/"Vergiss das" acts at once in every
+  mode after the hard denials (ADR-0124 D2, ADR-0146, ADR-0163 D7).
+- **Repository credential relay (2026-11-22):** in every mode a native Coding run reads the
+  person's Maven and npm repositories only through Keiko's relay; the relay read needs no approval
+  (ADR-0184 D6).
+- **Ordinary Editor (2026-10-03):** the Editor is a human-operated file editor; its agent surfaces
+  are retired and must not come back (ADR-0061). Files/Editor folder selections use the
+  `coding-repository` binding, and a Files title never names a different root than its tree shows.
+- **No prompt-token cap (2026-11-11):** never reintroduce a cumulative prompt-token allowance;
+  cost control is the Model Gateway spend ceiling (ADR-0137, #4346).
+- **Knowledge Pods (2026-11-04):** local storage, no sharing roadmap or placeholders; the create
+  dialog asks only for a name.
+- **Linux is a community tier (2026-11-12):** feature parity is promised for macOS and Windows
+  only; on Linux a new OS feature reuses an existing implementation or fails closed. Linux stays the
+  development and CI platform, and a red Linux job is fixed, never skipped
+  ([ADR-0183](docs/adr/ADR-0183-linux-desktop-community-tier.md)).
+- **Standalone and npm folder packages (2026-11-17, 2026-11-18):** never modify the payload, never
+  let the folder form install anything or become a working folder, never run an install script,
+  never weaken the OS download checks, keep the dot before the form in asset names (ADR-0121 D9).
+- **Portable updates** never require an Apple Developer subscription (ADR-0121 D7).
+- **Local browser connection** keeps the trusted native launcher and single-use fragment
+  redemption; **desktop layout restoration** stays bound to the installation identity (ADR-0027).
+- **Content threshold (2026-11-04):** content a person reads and the model receives loses only the
+  credential floor by default; `KEIKO_CONTENT_REDACTION=on` restores the strict projection.
+  Evidence, audit, memory proposals and Quality Intelligence stay on `strictRedactor` (ADR-0003 D7,
+  ADR-0022 D4).
+- **The Activity Log carries no personal data (2026-11-04):** its sink over-redacts; never loosen
+  it to keep a value readable — emit a count, a closed value or a digest.
+- **Source redaction** preserves TypeScript/JavaScript and Java syntax but never exempts credential
+  data; failed projection is unavailable evidence, not a complete source (ADR-0022).
 
 ---
 
@@ -229,49 +134,28 @@ This shapes the product _and_ how you work on it:
 
 ```bash
 npm install               # installs all workspaces from the single root lockfile
-npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
-npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools — see below
+npm run provision:usearch # ONCE per checkout — without it `npm test` is red
+npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools
 node scripts/install-git-hooks.mjs     # ONCE per checkout — the pre-push SonarJS scan (§3)
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
 ```
 
-The dev UI and BFF bind loopback port **1983** (not Vite's 5173, not 3000). If 1983 is taken,
+The dev UI and BFF bind loopback port **1983** (not 5173, not 3000). If 1983 is taken,
 `dev:start` picks the next free loopback port and prints it.
 
-**`provision:usearch` is a real prerequisite, not an optional extra.** The pinned USearch HNSW ANN
-runtime (ADR-0164; sqlite-vec was retired — it performed exhaustive KNN, not ANN) is deliberately not
-an npm dependency (upstream publishes an invalid SPDX license string that two supply-chain gates
-reject), so the exact upstream tarball is fetched and SHA-256-verified by that script instead. CI
-runs it as a setup step before every test lane. `npm test` does **not** run it for you, so on a
-fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
-and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
-on purpose: a missing runtime must never quietly mask a real ANN regression.
+`provision:usearch` and `provision:ripgrep` fetch pinned, SHA-256-verified upstream binaries that
+are deliberately not npm dependencies. `npm test` does **not** run them; without USearch the two
+Knowledge-M2 proof suites fail on purpose, so a missing runtime never masks an ANN regression.
+Details: [`docs/runtime-toolchain.md`](docs/runtime-toolchain.md).
 
-**`provision:ripgrep` is the same pattern for the OpenCode coding runtime (#3897).** OpenCode's
-`glob` and `grep` tools and its file finder run ripgrep. Left alone, the runtime downloads it from
-GitHub on first use, which a firewalled customer and the loopback-only runtime lane forbid, and
-search then fails silently. Keiko ships the identical upstream release (15.1.0) pinned and
-SHA-256-verified in `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`: the script fetches
-the one approved archive for the host, extracts only `rg` and `LICENSE-MIT` into the gitignored
-`.ripgrep/<version>/<target>/`, and verifies both again. Portable staging copies those verified files
-to `runtime/native/rg` (`rg.exe` on Windows). The npm runtime package builder
-(`scripts/build-coding-runtime-npm-package.mjs`) stages the same verified `rg`, its `LICENSE-MIT` and a
-component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same paths, provisioning the
-TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
-`<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
-remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
-customer-shape qualification, the nightly real-binary journey, the portable stage jobs and the npm runtime
-package build do, and CI runs it as a setup step there.
-
-Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
-pnpm/yarn/bun lockfile. Do not add one.
+Use `npm` only. There is no pnpm/yarn/bun lockfile; do not add one.
 
 Every workspace package's `scripts.test` is `"vitest run"` — never `"npm run build && vitest run"`.
-An isolated `npm test --workspace <pkg>` therefore requires a prior `npm run build:packages`, which
-root `npm test` performs for you once, workspace-wide, before it invokes vitest (KEIKO-0915,
-#3336).
+An isolated
+`npm test --workspace <pkg>` therefore requires a prior `npm run build:packages`, which root
+`npm test` performs for you once.
 
 ---
 
@@ -279,47 +163,30 @@ root `npm test` performs for you once, workspace-wide, before it invokes vitest 
 
 **This is the most important section. Read it twice.**
 
-Keiko holds a production, enterprise quality bar and enforces it with a large gate surface. A
-change is "done" only when the gates that apply to it pass **locally**. Do not use CI as your
-test loop — reproduce the gates here first.
+A change is "done" only when the gates that apply to it pass **locally**. Do not use CI as your
+test loop, and never use it to discover what your own diff obviously breaks.
 
 ### The trap that catches every new agent
 
 > **`npm test` (vitest) does NOT run TypeScript type-checking or ESLint.**
 
-Vitest transpiles and runs — it will happily go green on code that does not type-check and that
-lint would reject. "Tests pass" is **not** "the change is green." You must run `typecheck`,
-`lint`, and `format:check` as separate steps, every time.
+Vitest happily goes green on code that does not type-check and that lint would reject. Run
+`typecheck`, `lint`, and `format:check` as separate steps, every time.
 
 ### Minimum loop for any change
 
 ```bash
 npm run typecheck        # builds packages, checks the package graph, then tsc --noEmit (strict)
-npm run lint             # eslint --max-warnings=0 per package + root (scripts/lint-repository.mjs) AND keiko-ui lint
-npm run format:check     # prettier --check (CI runs this; format:check failing = red)
+npm run lint             # eslint --max-warnings=0 per package + root AND keiko-ui lint
+npm run format:check     # prettier --check (a CI gate)
 npm test                 # build:packages then vitest run
 npm run arch:check       # dependency-cruiser + import-policy + contract-boundaries
 npm run arch:check:negative
 ```
 
-There is a convenience aggregate that chains the core of the above:
-
-```bash
-npm run conversation:release-check
-```
-
-To run the common failure classes in CI's own Linux userland before pushing — the same image for
-every contributor and agent:
-
-```bash
-npm run gates:local
-```
-
-Two thirds of recent required-CI failures were reproducible this way, each otherwise costing a full
-CI cycle to discover. What the container may and may not answer is in
-[`docs/qa/local-gates.md`](docs/qa/local-gates.md) — note that D12 measurement evidence is the
-opposite of CI-owned: its reference environment IS a developer-machine container, and no hosted
-runner matches it.
+`npm run conversation:release-check` chains the core of the above. `npm run gates:local` runs the
+common failure classes in CI's own Linux userland; what it may and may not answer is in
+[`docs/qa/local-gates.md`](docs/qa/local-gates.md).
 
 ### Before every pull request, without exception
 
@@ -327,77 +194,52 @@ runner matches it.
 npm run gates:sonar
 ```
 
-**This is mandatory before you open or update a pull request against `dev`.** It runs a real SonarJS
-analyzer against your diff in a self-hosted, digest-pinned container and exits non-zero if it finds
-anything. It never contacts sonarcloud.io. After `node scripts/install-git-hooks.mjs`,
-`.githooks/pre-push` runs it on every push and stops the push on a finding or on a scan that cannot run.
+It runs a real SonarJS analyzer against your diff in a digest-pinned local container and never
+contacts sonarcloud.io; the installed pre-push hook runs it on every push. It is mandatory because
+`npm run check:sonar-rules` (the `ci` step on changed files) uses `eslint-plugin-sonarjs`, which
+lacks hundreds of analyzer rules (for example `S7786`, `S7755`, `S7778`, `S7776`). The full
+SonarCloud analysis runs only on `dev` after integration and demands zero issues, so one such
+finding turns `dev` red (ADR-0131). See [`docs/qa/local-sonar.md`](docs/qa/local-sonar.md).
 
-The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026-11-21): the
-whole-project scan needs most of a hosted runner's memory, and its verdict depended on the runner
-rather than on the change. It runs on every push to `dev`; a finding there turns the `dev` run red
-and the next pull request repairs it. On a pull request, `ci` runs `check:sonar-rules` over the
-changed files, and this local scan covers the rules that gate cannot see.
-
-Run it because `npm run check:sonar-rules` cannot answer the question. That gate runs
-`eslint-plugin-sonarjs`, which carries 279 rules in every published version up to 4.2.0; SonarCloud
-runs the full analyzer, which carries hundreds more. `S7786` (throw `TypeError`, not `Error`, after a
-type check), `S7755` (`.at(-1)`, not `[x.length - 1]`), `S7778` (one `push` with several arguments)
-and `S7776` (a `Set`, not `.includes()` on a constant array) are in that gap and exist in **no**
-version of the plugin. Each of them has already cost this repository a full CI round, and the
-full analysis on `dev` demands zero unresolved issues — so one MINOR of that class turns `dev` red
-after the merge. A green `check:sonar-rules` says nothing about any of them.
-
-What it is and is not, and how to read a disagreement with CI:
-[`docs/qa/local-sonar.md`](docs/qa/local-sonar.md).
-
-For PR-bound work there is deliberately **no aggregate pre-PR wrapper** (ADR-0145 retired
-`agent:pre-pr` by owner decision): run the minimum-loop commands that can see your change, plus
-`npm run gates:sonar` and any touched-area gate from the table below, and let the required CI run on
-the pull request be the complete arbiter.
+There is deliberately **no aggregate pre-PR wrapper** (ADR-0145): run the minimum-loop commands that
+can see your change, `npm run gates:sonar`, and any touched-area gate below.
 
 ### Local-first gate policy
 
-Verify locally what your change can affect; required CI is the authoritative full matrix on every
-pull request. Never use CI to discover what your own diff obviously breaks. Concretely:
-
-1. Before a push or PR update, run the minimum-loop commands scoped to what your change touches,
-   `npm run gates:sonar`, and any touched-area gate from the table below.
-2. If a required CI gate goes red, reproduce that exact failure locally with the targeted
-   command before pushing another fix; after the fix, rerun that command first.
-3. Push only when your targeted local runs are green or a documented platform-specific local
-   skip is unavoidable.
+1. Before a push or PR update, run the minimum loop scoped to your change, `npm run gates:sonar`,
+   and every touched-area gate from the table below.
+2. If a required CI gate goes red, reproduce that exact failure locally before pushing another fix;
+   after the fix, rerun that command first.
+3. Push only when your targeted local runs are green or a documented platform-specific skip is
+   unavoidable. If a required gate cannot run locally, say so in the PR.
 4. Report outcomes from the runs you actually executed, not from memory.
 5. The required CI run on the pull request is the final, complete arbiter.
 
-If a required gate cannot be run locally, state that in the PR instead of guessing.
-
-For UI smoke failures, run the targeted Playwright repro first, then the full affected smoke gate.
-For package export or runtime surface changes, run the package build and package-surface smoke
-locally before pushing. For platform-specific evidence, do not replace CI/Linux evidence with
-macOS-generated values unless the repository explicitly documents macOS as authoritative for that
-evidence.
+For UI smoke failures, run the targeted Playwright repro first, then the full affected smoke gate. For package export changes, run the
+package build and package-surface smoke locally. Never replace CI/Linux evidence with
+macOS-generated values unless the repository documents macOS as authoritative for that evidence.
 
 ### When you touched these areas, also run
 
-| You changed…                                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the sources declared in `scripts/check-update-ui-evidence.mjs` (including the core/optional message catalogs, optional translation owner, API, styles, and updater components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                       |
-| A package's **public exports** / a new package                  | `npm run check:package-surface:assembled`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Server error handling / diagnostics                             | `check:error-observability`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog`, then `npm run check:activity-log`, the Activity Log implementation gate over the complete registered inventory (it runs `check:op-catalog` itself; the catalog is generated, never hand-edited — §8)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| An ADR (added/renumbered)                                       | `npm run check:adr-index`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Anything under `tests/e2e/` — added, renamed, deleted OR edited | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629), a spec no script can reach is not a suite, and a retained spec calling an unmounted route is a journey that cannot pass (#2955). An EDIT counts: changing a title, a `@tag` or an `/api/...` literal moves reachability just as a rename does. Reads the built `API_ROUTES`, so run `npm run build:packages` (or `npm run typecheck`) first                                                                                                                                                                                                                                                                                                                  |
-| The ESLint toolchain or `eslint.config.*`                       | `npm run check:eslint-lane` and `npm run check:dependency-hygiene` — #2777: covers `eslint`, `@eslint/js`, and a workspace's own `eslint` range, none of which `npm ls` can police                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Any file under `.github/workflows/`                             | **`npm run list:workflow-consumers` FIRST** — it names every gate and suite that reads that workflow, so the coupling is a list you work through instead of a series of red CI runs (~33 consumers for `ci.yml`). Then `npm run check:zizmor-anchors` — `.github/zizmor.yml` ignores are LINE numbers, so inserting a line anywhere above one silently drops a reviewed risk acceptance and turns the required `workflow hygiene` context red on an unrelated diff; `npm run check:zizmor-anchors -- --fix` re-pins anchors that only shifted, pairing them with their steps BY ORDER (nearest-line would hand two anchors the same step). A job's `if:` also reaches `check:e2e-suite-wiring`, which reads an unknown term as "does not run" |
-| A dependency version or a pinned GitHub Action                  | `npm run check:dependency-currency` — the closeout document records the reviewed disposition, and this gate fails when it stops describing the lockfile or the workflow pins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Package versions / release metadata                             | `check:version-consistency`, `check:release-impact`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Coverage-sensitive code                                         | `npm run test:coverage:quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **Any code at all, before every pull request**                  | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| You changed…                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anything under `packages/keiko-ui/`             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence`, and `npm run check:update-ui-evidence` when a source declared in `scripts/check-update-ui-evidence.mjs` changed (regeneration: `docs/design-system/evidence/3405/README.md`)                                                                                          |
+| A package's **public exports** / a new package  | `npm run check:package-surface:assembled` (read its ordering warning in EXPERIENCE.md first)                                                                                                                                                                                                                                                                                                                                                          |
+| Retrieval / RAG / grounding                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                          |
+| Context lanes / compaction                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Server error handling / diagnostics             | `check:error-observability`                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| A new or changed activity-log line or `op`      | `npm run generate:op-catalog`, then `npm run check:activity-log` (it runs `check:op-catalog` itself; the catalog is generated, never hand-edited — §8)                                                                                                                                                                                                                                                                                                |
+| An ADR (added/renumbered)                       | `npm run check:adr-index`                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Anything under `tests/e2e/` — including an edit | `npm run check:e2e-suite-wiring` after `npm run build:packages` — changing a title, a `@tag` or an `/api/...` literal moves reachability just as a rename does                                                                                                                                                                                                                                                                                        |
+| The ESLint toolchain or `eslint.config.*`       | `npm run check:eslint-lane` and `npm run check:dependency-hygiene`                                                                                                                                                                                                                                                                                                                                                                                    |
+| Any file under `.github/workflows/`             | **`npm run list:workflow-consumers` FIRST** (it names every gate and suite that reads that workflow), then `npm run check:zizmor-anchors` — `.github/zizmor.yml` ignores are line numbers, so a line inserted above one silently drops a reviewed risk acceptance; `-- --fix` re-pins anchors that only shifted, pairing them with steps by order. A job's `if:` also reaches `check:e2e-suite-wiring`, which reads an unknown term as "does not run" |
+| A dependency version or a pinned GitHub Action  | `npm run check:dependency-currency`                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Package versions / release metadata             | `check:version-consistency`, `check:release-impact`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Coverage-sensitive code                         | `npm run test:coverage:quality`                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Any code at all, before every pull request**  | **`npm run gates:sonar`**                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
-Prefer the narrow gate for your change over running everything; run the full
-`test:coverage:quality` chain before you claim a release-affecting change is green.
+Prefer the narrow gate for your change; run the full `test:coverage:quality` chain before you claim
+a release-affecting change is green.
 
 ---
 
@@ -407,37 +249,30 @@ Packages live under `packages/`. Root `src/` holds the top-level entrypoints and
 `tests/` holds cross-package integration + Playwright e2e; `scripts/` holds the build/gate/release
 tooling (`.mjs`, Node ESM, outside the TS program); `docs/adr/` is the decision record.
 
-Dependencies flow **one direction only**, enforced by `arch:check` (dependency-cruiser rules
-named after their governing ADR, plus `check-import-policy.mjs` and `check-contract-boundaries.mjs`).
-The shape (ADR-0019):
+Dependencies flow **one direction only**, enforced by `arch:check` (ADR-0019):
 
 - **`keiko-contracts` is the leaf** — the shared type/contract layer. It depends on nothing else
-  in the repo. Everything else depends _inward_ toward it. Put cross-package types here.
+  in the repo. Put cross-package types here.
 - **`keiko-security`** depends only on contracts. Most domain packages depend only on
   contracts + security.
-- **`keiko-activity-log`** owns the writer, segmented store, and reader engine. It depends only on
-  contracts + security; server and CLI compose it, while domain packages keep injected log ports
-  and UI never imports it (ADR-0179).
-- **`keiko-mcp`** owns the shared managed MCP protocol host (ADR-0181). Its only internal
-  dependencies are contracts and security; official MCP SDK imports are confined to this package.
-  Server composition supplies provider/log ports and retains catalog/binder admission. Central
-  Settings/connection ownership includes external OAuth for Chat and Workbench. Native production
-  runs receive scoped relay capabilities, never external OAuth tokens. Keep credential epochs,
-  app-session-bound one-use callbacks, scope binding and effect-safe no-replay behavior intact.
+- **`keiko-activity-log`** owns the writer, segmented store, and reader engine; it depends only on
+  contracts + security. Server and CLI compose it, domain packages keep injected log ports, and UI
+  never imports it (ADR-0179).
+- **`keiko-mcp`** owns the shared MCP protocol host and is the only place official MCP SDK imports
+  may live (ADR-0181). Server composition supplies provider/log ports and keeps catalog/binder
+  admission; central Settings owns connections, including external OAuth for Chat and Workbench. Native runs receive scoped relay capabilities, never external OAuth tokens; keep
+  credential epochs, app-session-bound one-use callbacks, scope binding and no-replay intact.
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
-  `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
-  else (ADR-0019 trust-1).
+  `*-ai-sdk`) may be imported — a hard gate (ADR-0019 trust-1).
 - **`keiko-tools` / `keiko-harness` / `keiko-workflows`** must not touch `node:fs` outside the
   workspace boundary, and file patches route through `keiko-tools` (trust-4 / trust-5).
-- **`keiko-server`** (the BFF) sits near the top: it may use the domain packages, but **domain
-  packages must not depend on the server**, and the server must not depend on `keiko-editor`.
-- **`keiko-ui`** (Next.js, static export) is the frontend. It talks to the server only across
-  the shared contract types — `check-contract-boundaries.mjs` pins specific wire types (e.g.
-  desktop chat SSE payloads must come from `keiko-contracts`, not be re-declared).
+- **`keiko-server`** (the BFF) may use the domain packages, but **domain packages must not depend
+  on the server**, and the server must not depend on `keiko-editor`.
+- **`keiko-ui`** (Next.js, static export) talks to the server only across the shared contract
+  types; `check-contract-boundaries.mjs` pins specific wire types.
 
-Before adding a dependency edge, check whether it points the right way. If `arch:check` rejects
-it, the fix is almost never "add an exception" — it's "move the code to the layer that owns it"
-or "route through contracts."
+If `arch:check` rejects an edge, the fix is almost never "add an exception" — move the code to the
+layer that owns it or route through contracts.
 
 ---
 
@@ -445,10 +280,9 @@ or "route through contracts."
 
 Keiko already has a workspace layer, a graph/relationship engine, a policy layer, an evidence
 layer, a memory subsystem, a connector layer, a workflow engine, and a design-system-driven UI.
-The PR template makes this a checklist item; treat it as a design rule:
 
-- **Inspect before you build.** `grep`/read for an existing helper, contract, or subsystem that
-  already does most of this. Extend, generalize, or consolidate it.
+- **Inspect before you build.** Search for an existing helper, contract, or subsystem that already
+  does most of this. Extend, generalize, or consolidate it.
 - **Do not** introduce a parallel workspace, graph, relationship, policy, evidence, memory,
   connector, workflow, or UI subsystem when an existing one can be shaped for the need.
 - If existing code is close but not quite right, refactoring it is preferred over a second copy.
@@ -462,36 +296,22 @@ The bar is strict and **machine-enforced** — match it or the build is red.
 
 - **TypeScript strict, and then some:** `strict`, `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noImplicitOverride`, `noFallthroughCasesInSwitch`,
-  `verbatimModuleSyntax`. **No `any`** (`no-explicit-any: error`). **Explicit function return
-  types** are required. Model states with discriminated unions; narrow instead of casting.
-- **ESLint:** `strictTypeChecked` + `stylisticTypeChecked`, **zero warnings**
-  (`--max-warnings=0`). Cyclomatic **complexity ≤ 10**. **`max-lines-per-function: 50`** (blank
-  lines and comments excluded; test `describe` blocks are exempt). Small functions, extract
-  helpers. `no-console` is a warning in product code — route real output through the intended
-  logger/diagnostic sink, not `console.*`.
-  - **`keiko-ui` is held to these three numbers too, with a shrink-only bridge.** It sits in the
-    root config's `ignores`, so `packages/keiko-ui/eslint.config.mjs` sets `complexity`,
-    `max-lines-per-function` and `explicit-function-return-type` itself, at the root config's exact
-    values (pinned by `scripts/__tests__/keiko-ui-lint-bar.test.mjs`, which compares against the
-    root config rather than restating the numbers). The 1,325 violations that predate the bar are
-    held in `packages/keiko-ui/eslint-suppressions.json`, an ESLint bulk-suppression register: new
-    files and new violations in listed files fail the lint run, and the register may only shrink.
-    After removing a violation, prune the register and commit the smaller file:
-
-    ```bash
-    npm run lint:prune-suppressions --workspace @oscharko-dev/keiko-ui
-    ```
-
-    This is a temporary bridge, not a carve-out — decomposing the oversized files is tracked
-    separately (audit KEIKO-0118, #2891).
-- **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
-  `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
-  finish; `format:check` is a CI gate.
-- **Match the file you are in.** Naming, error handling, evidence redaction, and test style are
-  consistent within a package — read a neighbouring file and follow it rather than importing an
-  outside convention.
-- **Delete dead code** instead of commenting it out. No leftover scaffolding, no `TODO` that
-  hides an unfinished branch.
+  `verbatimModuleSyntax`. **No `any`**. **Explicit function return types.** Model states with
+  discriminated unions; narrow instead of casting.
+- **ESLint:** `strictTypeChecked` + `stylisticTypeChecked`, **zero warnings**. Cyclomatic
+  **complexity ≤ 10**. **`max-lines-per-function: 50`** (blank lines and comments excluded; test
+  `describe` blocks exempt). `no-console` is a warning in product code — route real output through the intended logger or
+  diagnostic sink.
+- **`keiko-ui` meets the same three limits** through its own config, with a shrink-only
+  bulk-suppression register (`packages/keiko-ui/eslint-suppressions.json`) for violations that
+  predate the bar. New violations fail; after removing one, run
+  `npm run lint:prune-suppressions --workspace @oscharko-dev/keiko-ui` and commit the smaller file.
+  This is a temporary bridge, not a carve-out (#2891).
+- **Prettier is law:** 2-space indent, double quotes, semicolons, `printWidth: 100`, trailing
+  commas, LF. Run `npm run format` before you finish.
+- **Match the file you are in.** Naming, error handling, redaction, and test style follow the
+  neighbouring code, not an outside convention.
+- **Delete dead code** instead of commenting it out. No `TODO` that hides an unfinished branch.
 - **English only** in all code, comments, identifiers, docs, commit messages, issues, and PRs —
   regardless of the language the human is chatting in.
 
@@ -499,1310 +319,224 @@ The bar is strict and **machine-enforced** — match it or the build is red.
 
 ## 7. Landing a change — patterns reviewers hold you to
 
-Distilled from how Keiko is actually reviewed and gated. These are the things that get a change
-sent back.
-
-- **Prove the failure first.** A regression test must fail before your fix and pass after. A test
-  that passes with and without the fix proves nothing.
+- **Prove the failure first.** A regression test must fail before your fix and pass after.
 - **A fixture never restates a formula the code under test owns — it derives it from the production
-  entry point.** A fixture that recomputes the expectation cannot detect the case where the
-  production formula moves and the fixture's copy does not: both sides change together and the test
-  stays green over a broken product. Import the producer and call it. Epic #2285: the debug-launch
-  validator re-derived the workspace identity digest as `sha256(JSON.stringify([...]))` while the
-  producer had migrated to the shared framed digest, so every Linux debug launch failed
-  `INVALID_CAPSULE_PLAN` with the suite green (#2643). The same rule applies to a mock: simplify it
-  past the point where the violation it guards can occur and it will never fail again.
-- **Fix the whole class, at the owning layer.** Don't patch one call site if the same bug exists
-  behind three others — fix it where the invariant lives (usually a contract or the layer that
-  owns the state). One implementation, not a special case bolted on.
-- **No silent failures.** Don't swallow errors with an empty `catch`. Errors must surface with
-  enough context to diagnose — and, on the server, a correlation id that ties a UI-visible opaque
-  500 to a redacted operator diagnostic (this exact pattern is gated by `check:error-observability`;
-  a bare `.catch(() => {})` fails it).
-- **Fail closed on trust boundaries.** Validate before you process. Assume workspace input,
-  model output, and connector data are hostile. Generated/model-produced code runs behind the
-  sandbox egress boundary — never route it around that.
+  entry point.** A recomputed expectation moves together with a broken producer and stays green
+  over a broken product (#2643). The same holds for a mock simplified past the violation it guards.
+- **Fix the whole class, at the owning layer.** Fix the invariant where it lives (usually a contract
+  or the state owner), not one call site of several.
+- **No silent failures.** No empty `catch`. Errors surface with enough context to diagnose, and on
+  the server with a correlation id that ties a UI-visible opaque 500 to a redacted operator
+  diagnostic (gated by `check:error-observability`).
+- **Fail closed on trust boundaries.** Workspace input, model output, and connector data are
+  hostile. Model-produced code runs behind the sandbox egress boundary — never route around it.
 - **Keep evidence redacted.** Manifests, audit exports, and diagnostics report counts, statuses,
   scopes, and hashes — never raw memory bodies, secrets, or customer data.
-- **Tests are hermetic.** No external network or shared services in ordinary fixtures, no shared
-  mutable global state, no wall-clock/ordering races, no reliance on a port being free. OS and HTTP
-  integration proofs may use fixture-owned loopback listeners on ephemeral ports, with awaited
-  readiness, a reachable positive control, and cleanup in `finally`. `await` a condition instead of
-  sleeping. Fixtures are deterministic and self-contained; separately authorized live-provider
-  qualification records its actual environment and never masquerades as a hermetic unit test.
-  The real login keychain is out of reach for every test: `realKeychainWithheld` in `keiko-security`
-  withholds it under vitest, and an end-to-end server or lab instance sets `KEIKO_OS_KEYCHAIN=off`.
-  A test of that tier injects a fake `executable`.
-- **A behavioural change is documented where decisions live.** If it changes an architectural
-  decision, add or update an ADR (and the index). If it's release-impacting, update the
-  release-impact catalog / issue metadata.
-- **A regression pin may be relocated or strengthened, never relaxed.** A pin is a test that
-  encodes a specific past incident — the very thing it must never accept again. If a change
-  makes an existing pin fail, treat the pin as authoritative: understand what invariant it
-  captures (usually named in a comment or an ADR reference), then either preserve the
-  invariant, move the pin to the layer that now owns it, or add a tighter pin around the new
-  shape. Do NOT edit the pin's assertion so the current change passes, and never re-attribute
-  the pin to a decision record that does not actually sanction the relaxation. A pin rewritten
-  to bless the behaviour it was written to prevent — especially under a false ADR attribution
-  — is the highest-consequence artifact this repository can produce; the Wave-2 pre-merge
-  audit of epic #2285 (#2627) caught this exact class of edit.
+- **Tests are hermetic.** No external network or shared services, no shared mutable state, no
+  wall-clock or ordering races, no reliance on a free port. Loopback listeners on ephemeral ports
+  are fine with awaited readiness, a positive control and cleanup in `finally`. `await` a condition
+  instead of sleeping. Fixtures are deterministic and self-contained. Authorized live-provider qualification records its actual environment and
+  never masquerades as a hermetic unit test. No test ever reaches the real login keychain: `realKeychainWithheld`
+  withholds it under vitest, and e2e or lab servers set `KEIKO_OS_KEYCHAIN=off`; a test of that
+  tier injects a fake `executable`.
+- **Document behavioural change where decisions live:** the ADR (and its index) for an
+  architectural decision, the release-impact catalog for a release-impacting change.
+- **A regression pin may be relocated or strengthened, never relaxed.** If your change makes a pin
+  fail, the pin is authoritative: preserve its invariant, move it to the layer that now owns it, or
+  tighten it. Never edit its assertion so the change passes, and never re-attribute it to an ADR
+  that does not sanction the relaxation (#2627).
 
 ---
 
 ## 8. Logging is part of every change — and the first thing you read when something breaks
 
-Keiko's activity log (the segments in `<stateDir>/logs/`, governed by
-[ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) and
-described in [`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction
-contract**: a customer's log file must let an agent rebuild a defect 1:1 without access to the
-machine it happened on. That contract only holds if every change keeps it true, so the two rules
-below apply to **every** change to product runtime behaviour — feature, enhancement, refactor,
-fix, migration, connector, UI surface — in every autonomy mode, with no exceptions and no "too
-small to log". (Repository tooling under `scripts/` is not product runtime; it keeps its
-deterministic `PASS`/`FAIL` output. Everything that runs inside the product is in scope.)
+Keiko's activity log (segments in `<stateDir>/logs/`,
+[ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md),
+[`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction contract**: a
+customer's log must let an agent rebuild a defect 1:1 without access to that machine. Both rules
+below apply to **every** change to product runtime behaviour, in every autonomy mode, with no
+exceptions and no "too small to log".
+Repository tooling under `scripts/` is not product runtime and keeps its `PASS`/`FAIL` output.
 
-Received support reports must pass the canonical offline validator before any renderer or agent
-uses them. Export contains only the closed private incident and registered causal events, with
-embedded integrity and explicit insufficiency; no raw logs, inclusion flags or sidecars. Use the
-[controlled support workspace guide](docs/observability/support-workspace.md). Matching historical
-registries are repository-owned, never report-supplied (ADR-0173 D8/D9).
+What individual operations record is in
+[`docs/observability/operation-notes.md`](docs/observability/operation-notes.md); the
+authoritative machine contract is each operation's registration and the generated
+[`op-catalog.generated.json`](docs/observability/op-catalog.generated.json).
 
 ### Rule 1 — every change ships its own logging, on the existing system
 
-The behaviour you add or change must leave body-free evidence in the activity log, built on the
-system that exists, never beside it:
-
-- **Emit through the owning layer's existing port.** On the server: `ServerLogSink` /
-  `ServerLogEvent` ([`server-log.ts`](packages/keiko-activity-log/src/server-log.ts)) for
-  activity, `emitServerDiagnostic` / `defaultServerDiagnosticSink`
-  ([`diagnostics-log.ts`](packages/keiko-server/src/diagnostics-log.ts)) for diagnostics. In domain
-  packages: the injected log port of that package — `SecurityLogSink`, `KnowledgeLogSink`,
-  `MemoryVaultLogSink`, `ConsolidationLogSink`, `ModelGatewayLogSink`. In the browser:
-  `reportClientDiagnostic` ([`client-diagnostics.ts`](packages/keiko-ui/src/lib/client-diagnostics.ts)).
-  A new package that performs work receives a port of the same shape from the server. Not
-  `console.*`, not a private logger, not a second log file, not a new format.
-- **`op` is a typed registry value, never a free string.** Declare each production operation with
-  `defineActivityLogOperation` and emit it with `activityLogEvent`. The registration owns the
-  category, emitter, exact required/optional field set, primitive types, hard bounds, closed data
-  classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
-  proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
-  symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
-  registrations without an emitter, unregistered emitters, and an emission outside the operation's
-  owner package (a bypass of its owning port) fail closed. Run
-  `npm run generate:op-catalog` and commit the regenerated
-  [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
-  `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
-  the catalog. Its legacy literal scan is migration input only and authorizes nothing.
-  Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
-  basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
-  `search.connected-context.source-details` operation; the shared correlation joins its completed
-  read-window and budget evidence without exceeding the operation field cap. Extensionless document
-  admission uses a shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist, separate
-  from overview ranking. Ordinary prose cannot gain explicit-file authority from its ranking bucket;
-  explicit filenames, selected scope and the existing discovery/read grants remain authoritative.
-  Existing source-details counts distinguish actual explicit admission from ordinary ranking.
-  Diagnostic-reference selection uses the final six available source-detail fields. Additional
-  selection observations
-  use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
-  correlation; existing completed fields and the contextual-field cap remain unchanged.
-  Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its
-  lexical producer order requires matching live content identities and excludes semantic or
-  successfully reranked selections. At most two additional eligible content peers may share the
-  first retained source's same-query matched-group key; equal numeric scores alone do not
-  qualify. Existing read/byte grants remain binding. `keepOneFallbackApplied` describes exactly
-  one retained fallback source, and the existing completion count records the actual size.
-  Short ordinary documents may use the existing canonical
-  reader's complete current redacted source only within both existing byte grants; explicit
-  selections and certified/source-code ranges retain their geometry (ADR-0022).
-  The six-reference intake preserves the primary local trace frame and explicitly named question
-  paths before secondary frames or conversation referents. Prompt fitting preserves a complete
-  matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
-  identities before citation reconciliation. Physical reads remain actual I/O counts: import
-  classification and parsing share one complete guarded source read rather than charging another
-  classification read. Existing final-prompt, range and read observations describe these decisions
-  without recording source text or paths.
-  Grounded single-source, multi-source and hybrid prompts place the existing redacted answer
-  task after supplied evidence and uncertainty. The same ordering applies to single-source and
-  multi-source marker repair; hybrid repair already appends its task. Governed memory and
-  continuity remain untrusted context inside that unchanged task block. Existing final-prompt
-  selection and gateway admission record fitted counts and costs; citation validation and
-  original input/output grants remain authoritative.
-  Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
-  the answer. The existing repair owner constructs the candidate locally, then applies the
-  unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
-  Literal marker-only responses remain subject to those same guards. Citation repair uses the same
-  admitted, turn-metered model port without a tool catalog or tool loop. Unexpected tool-call
-  output is refused and charged; current readiness, authority, cancellation and cumulative
-  synthesis/spend grants remain binding. Existing answer-details evidence records the disposition.
-  Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
-  Each definition retains current-source, call/parent and range certificates; no persistent source
-  cache, read grant, synthesis attempt or source authority is added by batching.
-  Endpoint definition traversal binds a registration's observed handler reference to its current
-  lexical AST target. Further calls retain their exact callable owner and complete observed spans;
-  same-named declarations and uninvoked nested functions do not certify that relationship.
-  Contextual natural-language code questions can seed the same bounded definition traversal from
-  current AST callable owners of actual lexical source hits without requiring an HTTP route or a
-  user-supplied identifier. Lexical overlap does not certify invocation or an unrelated declaration;
-  continuation retains the existing exact ownership, currentness and read-budget guards. The existing
-  selection-details Activity Log records the admitted contextual definition seed count only.
-  Productive string literals can identify a callable; comment-only matches cannot. Contextual roots
-  reuse their observed exact declarations and original-query relevance instead of repeating a global
-  symbol-name search. Only sources with indexed outgoing relationships require contextual excerpt
-  reads. Unavailable source reads retain explicit uncertainty; cancellation and scope denials propagate.
-  Contextual traversal shares the plan's structural request context and exact limit binding. Fully
-  verified definition lookups retain the existing decision to skip redundant optional traversal.
-  Imported targets retain exact runtime module-export identities. Explicit compiler output mappings
-  reuse already guarded metadata and can address only admitted sources in the owning package.
-  Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
-  ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
-  reservation and request-local current-source metadata capacity. The code intelligence build also
-  bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
-  `evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
-  bounded complete-text reuse retain their separate limits.
-  A question naming a subfolder of the admitted inventory (`commands-Ordner`, `the X folder`,
-  `components/PromptInput`) reads that subtree once more, entry files first, as whole-file listing
-  evidence within the known-fit capacity plus at most eight of its documents; ordinary evidence,
-  floors and grants are unchanged. `evidence-details` records `namedDirectoryFocusState` and counts,
-  never a folder name (#4429, ADR-0022).
-  Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
-  cannot certify a unique runtime target when a competing branch is unobserved.
-  A guarded current definition reached through an observed inline-callable reference retains its
-  definition evidence and a resolved reference edge. Declaration priority does not certify callback
-  invocation; continuation retains that reference relationship and `source-graph-incomplete`.
-  Partially overlapping excerpt windows retain uncovered lines and their originating strength;
-  deduplication removes only lines already covered by a higher-priority window.
-  Exact structural endpoint-registration ranges and their existing surrounding-context boundaries
-  split broader ordinary windows. Uncovered surrounding evidence retains its relevance and priority;
-  these spans do not certify handler invocation.
-  Natural-language matching separates standalone citation-format clauses from the search subject.
-  The conservative citation vocabulary leaves quoted text and unrecognized identifiers, paths and
-  routes intact. Definition intent and content groups use that same subject while the original query
-  and diagnostic identity remain unchanged. Persistent natural-language match identities carry a
-  normalization revision. The existing completion-details Activity Log records only the aggregate
-  removed-clause count across actual searches; literal, regex and exact-symbol matching retain their existing semantics.
-  Numbered, letter-led compounds retain their full spelling as contextual lexical hints before
-  camel-case fragments are extracted. Their shape alone never grants exact-target or code-symbol
-  authority: a complete spelling receives literal lexical relevance only at a lexical boundary.
-  Unicode letters, combining marks, numbers, underscores and hyphens continue the same compound;
-  punctuation and filename separators can delimit it. Matching and excerpt confidence use the same
-  case-sensitive or case-insensitive rule. An absent complete spelling preserves full-question
-  matching, including technical aliases and ordinary context.
-  The existing persistent natural-language matching revision invalidates older scores. After actual
-  excerpt assembly and final prompt fitting, an unobserved compound hint lowers selection confidence
-  without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
-  Returned and persisted answers use the confidence of their actual sent source; another source cannot
-  supply its missing spelling. Existing completion events record the target decision/count, selection
-  confidence and actual read counts. The existing `chat.context.selected` event records available
-  fitted selection confidence without source bodies.
-  Evidence manifest hashes and ranges enumerate final sent excerpts; retrieval candidate counts, usage and omissions
-  retain the actual earlier work. Existing prompt sent/available counts distinguish fitting removals
-  without inventing retrieval omissions.
-  Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
-  An observed admitted callable may retain an imported constant declaration only when its current
-  TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier
-  span agree. Calls retain their existing priority; value references use the remaining bounded
-  frontier, carry reference uncertainty and an exact source witness, and never certify invocation or
-  a call cycle. Shadowed, uninvoked, dynamic, ambiguous or stale references remain unsupported;
-  missing owner metadata reports source-graph-incomplete. Retaining a declaration does not evaluate
-  a computed runtime value.
-  An explicit natural-language request for recursion can retain observed static call cycles as
-  coherent source evidence. The request-local trace records exact nearest-owned call edges before
-  repeated targets are suppressed, derives finite strongly connected groups from selected declaration
-  identities, and leaves the acyclic parent tree and reference uncertainty unchanged. References alone
-  never certify a call cycle. Every member must remain selected and current at allocation time.
-  The existing allocation runs first and remains unchanged when it already retains all requested
-  cycles. If a cycle is missing, one alternative starts from the same bounded initial allocations,
-  admits each complete cycle atomically through the existing whole-target and parent-caller guards,
-  then continues the existing shared order. It is used only if it retains every cycle already complete
-  in the original allocation and adds at least one missing complete cycle; otherwise the original
-  allocation remains. This adds no source reads, relevance bonus, reserved bytes, file quota or budget
-  increase. Ordinary evidence retains its existing separate share. The existing selection-details
-  Activity Log records only requested and planned static-call-cycle counts; those counts do not claim
-  that a call executed or that a final answer covered the cycle.
-  Physical excerpt allocation funds selected, current target definition windows and their observed
-  parent caller spans inside the existing connected share and each physical excerpt's byte limit. A
-  compact caller span remains bound to its original current parent, exact child and observed source
-  coordinates; it does not acquire a new definition certificate. Independent roots and files within
-  each root receive bounded initial byte portions. Existing certified traversal sets file order;
-  existing query relevance orders targets within each file, with stable ties. Roots and their file
-  queues take turns within those portions. After that bounded pass, shared opportunities combine
-  the existing root-local relevance nominations with the existing root/file turns. Each relevance
-  nomination considers its file's higher-scored and tied whole targets in stable certified traversal
-  order. Existing admission checks retain the longest prospective prefix that fits jointly with
-  the nominated file turn. If no joint proposal fits, the feasible relevance proposal is retained.
-  This bounded tradeoff applies to new targets; previously funded targets remain intact. Whole
-  targets that fail admission remain separately retryable, including later targets in served files.
-  A shared file turn advances only after a newly funded whole relevance prefix makes progress.
-  Pending file nominations first consider existing queue heads below the current relevance
-  nomination's score. Nominations from files with higher or tied heads remain fallback candidates
-  when no target from the first group fits jointly.
-  Each group uses its existing relevance-ordered queue head's score, highest first. At equal head
-  scores, an unfunded physical file precedes continuation in a file whose head is already fully
-  funded in committed state. Among unfunded files, a selected definition that reaches its actual
-  physical head score and owns a certified selected child precedes terminal-only nominees. This
-  uses the existing owned-continuation eligibility check; a weaker descendant cannot become an
-  independent head-level source seed. Remaining ties retain their existing stable order. The first jointly feasible target in a different
-  physical file whose queue head is not fully funded receives the shared file turn.
-  When the relevance file's head was already fully funded in committed state before the turn,
-  its pending whole targets at or above the first nominated file's queue-head score also
-  participate in the joint proposal. While the extra opportunity remains eligible, each guarded
-  relevance-file and first-file checkpoint probes the existing owned opportunity, then same-file
-  targets tied to that actual head score within the ranked entry's certified owned-call family.
-  The family includes its selected owned children and its selected parent's owned children only
-  when the ranked entry is itself a certified owned child of that parent. Existing stable order
-  and whole-target guards apply. Only an actually selected guarded owned continuation establishes
-  owned progress. A global competing return retains its guarded state and any prior owned-progress
-  fact; it does not establish that fact merely by returning a different state. Mere file equality
-  also does not establish family membership.
-  Actual owned progress or a newly guarded tied family target in these eligibility probes closes
-  the extra second-file opportunity for the entire outer shared turn and clears any earlier
-  uncommitted second-file checkpoint. Later callbacks cannot reopen it. These eligibility probes may remain unpublished;
-  a refused tie is not guaranteed funding. Zero-score ties participate under the same rule.
-  While eligible, the existing fair order may guard a second body in a physical file distinct
-  from both, whose nominee meets the same first-file head score. Its head must not be fully funded
-  in the joint proposal, except for a committed parent with a pending owned continuation as
-  described below. Every retained joint preserves committed whole targets, the guarded
-  relevance proposal at that checkpoint and the first nominated body. The relevance-only proposal
-  grows separately; explicit successful second-file results retain the latest such joint through
-  both prefix loops, so a later first-file-only result cannot replace it while eligibility holds.
-  The second nominee may change under existing order. This bounded physical-file turn takes
-  precedence over later uncommitted higher-scored prefix additions in the already-served file
-  when they cannot fit together; when they fit, the latest guarded joint includes them.
-  A disqualified turn instead maximizes the original guarded single-fair prefix, then applies
-  one final owned opportunity. A prior owned result is reused only for the identical raw joint;
-  classification does not publish its probed tied targets. If no second joint is retained, the
-  feasible first-file joint remains the fallback. Funding the relevance head only inside a
-  provisional proposal does not enable this extension. Scores, ownership, currentness, authority,
-  byte caps and deferred retries remain unchanged.
-  A shared joint proposal may also fund one finite chain of selected definitions connected by
-  certified nearest-owned source calls. The exact parent/child witness carries this ownership;
-  a reference edge alone does not qualify. The first new child must itself own a selected child.
-  It must meet the nominated physical file-head score unless a fully funded owned connector on
-  that same lineage has already met that comparison and owns a selected child. A starting parent
-  can discharge the comparison when it is fully funded in the continuation's actual input state,
-  meets that comparison and owns a selected child. That input may be committed state or an
-  already guarded joint proposal; other branches retain their own floors.
-  This gives a multi-body source continuation one bounded opportunity while standalone terminal
-  leaves keep their existing ranked and deferred turns. Already funded connectors can be
-  traversed without counting as progress; after the first new target, lower-relevance descendants
-  and terminal leaves may complete that chain.
-  A newly guarded first-file definition that owns selected children retains its finite source
-  continuation at that physical file's own head score. An already FULL first-file parent resumes
-  at the same own-head comparison. This source turn retains its guarded joint through both
-  ranked-prefix loops, growing compatible whole targets from that same state. It does not add
-  terminal fair-file loans or reopen global competing nomination. Failed descendants retain the
-  feasible source joint; their complete bodies still require the existing admission guards.
-  Outside a retained source turn, a continuation below the nominated head yields when an unfunded
-  selected body at or above that head still fits the existing whole-target guards from the same
-  pre-child state. The canonical nominee follows the already-computed shared target order:
-  relevance and stable ties within each source root, interleaved between roots. Its complete body
-  must pass the existing guards first. Pending same-file targets at or above the nominee's score
-  may then join in stable file order through the same guards. While retaining this guarded
-  canonical proposal, the existing pending fair-file order may admit a distinct physical file
-  whose head is not FULL in the proposal or resume its committed FULL parent. This joint addition
-  first uses the canonical nominee's score, then the borrowed floor if no such addition fits; it retains the canonical body
-  and its guarded same-file prefix. If no joint addition fits and the canonical physical file head
-  is already FULL in committed state, the existing pending fair-file order may instead nominate
-  an alternative from the original pre-child state. That alternative must meet the borrowed floor
-  and pass the same whole-target guards. Each selected nominee's pending same-file targets at or
-  above its own score may join through the same guards. A failed extension retains the previously
-  feasible proposal, and the guarded canonical proposal remains the fallback. Failed proposals
-  are neither reserved nor read. Deferred final retries retain their existing admission rules.
-  In global competing nomination, an offered FULL parent can resume its pending owned continuation.
-  It must have been FULL in committed state, lie outside the canonical file, and meet the existing
-  nomination score floor. Its finite certified owned continuation uses its actual physical
-  file-head score and adds at least one newly guarded whole target before it can be retained.
-  This resumed branch preserves the input joint and does not reopen global competing nomination;
-  the existing fair-file order and fresh-target admission remain unchanged.
-  Existing source order selects one branch, and
-  identity tracking bounds recursive cycles. Every target still passes the existing currentness,
-  whole-definition, physical-window and connected-share checks; a failed extension retains the
-  original feasible joint proposal.
-  A file whose relevance-ordered head is fully funded is eligible for another file turn only
-  through an already fully funded parent with a pending owned multi-body continuation.
-  Availability uses the lowest score among pending unfunded physical file heads and the current
-  relevance file head to find possible nominations. Actual admission uses the current
-  nomination's physical file-head score. A feasible external joint
-  proposal may also extend individually fully funded parents in the relevance file at that
-  external file's actual head score. Those parents must have been fully funded in committed
-  state before the turn; funding them only inside the proposal does not enable this extension.
-  The admitted proposal retains the external file body and the original joint fallback. Other
-  pending targets in a funded file do not acquire a new file turn. Assigned, statement, returned
-  and awaited calls qualify equally; return and await remain relevance hints, and source
-  ownership does not certify handler invocation.
-  Infeasible nominations remain eligible without blocking feasible nominations in other files.
-  A weaker target or compact caller window does not complete that head's file opportunity.
-  Higher and tied file heads retain their existing relevance turns and guarded deferred retries.
-  A nomination that adds no prefix target cannot donate fresh fair-only bytes; deferred file turns
-  remain eligible for a final guarded retry in their existing order.
-  Aggregate same-file unions consume the connected share; each physical excerpt retains its existing
-  per-window limit. Shared physical lines and separators are charged once;
-  upgrades retain already funded targets, later same-file targets remain eligible, and an oversized
-  branch spends no partial reservation. Explicit human selections remain first, and ordinary ranked
-  evidence retains its share of the existing grant. Reserved windows precede ordinary extras.
-  When current coverage windows apply, independent search windows and unfunded discovered-definition
-  windows share the residual byte grant through bounded queues after explicit human and funded
-  current windows. Unused portions return to their shared grant.
-  Bounded initial opportunities protect portions for every already selected, file-capped readable
-  path, including definition-only evidence, before expansion consumes the remainder. Paths without a
-  retained nonempty initial view retry shared bytes before already served paths expand, preserving
-  the existing order within each group. When no current coverage windows apply, manual selections
-  come first, followed by existing definition context windows overlapping an original ordinary atom
-  range, the independent ordinary remainder and the existing fallback. These opportunities do not
-  certify declaration ownership or invocation.
-  Natural-language ordinary reads reuse the canonical query term groups on the current guarded,
-  redacted source. Only already proposed ranges can receive separate bounded opportunities for
-  those groups; repeated stronger matches cannot consume every opportunity before another requested
-  aspect is considered. Existing order within each group, full-range admission, deduplication,
-  source currentness and every byte, file and deadline grant still apply. Explicit selected line windows,
-  funded definition windows and trace priorities retain their existing behavior. File-pattern, regular-expression
-  and exact-symbol queries do not use this scheduling. A matched term group is lexical
-  coverage, not proof of a complete implementation or a supported answer.
-  The existing completion-details event records served canonical query-group counts
-  for these ordinary reads. Counts are summed per path and describe actual reader coverage before
-  final prompt fitting; no source or query text enters the Activity Log.
-  Already admitted named source files are prioritized before the shared code index applies its
-  existing source-file ceiling; resolver metadata remains reserved within that same ceiling. The
-  request fixes that preference before its first index build and reuses the same canonical index.
-  For contextual whole-file questions, fresh callable evidence is observed through the existing
-  batched reader within the existing aggregate discovery-byte capacity. The reader derives window
-  capacity from finite requested ranges and remaining bytes, with the existing deadline and cancellation
-  guards. Current callable ownership and actual code matches precede root selection; contextual roots
-  use the existing query and certified-definition capacity. Explicit selected lines, non-addressed
-  discovery and route tracing keep their own rules.
-  Lexical query-group coverage alone never certifies the requested implementation or an answer.
-  The governed request's existing document collector checks the original remaining file and
-  excerpt-byte grant before each extraction. It bounds the redacted logical projection, including
-  UTF-8 separator bytes, within that capacity and discloses exhausted or truncated evidence. All positive returned document
-  projections reserve their bytes and distinct paths before code reads. Final usage preserves any
-  larger assembler usage and retains original initial usage plus actual consumed code bytes and
-  distinct positive-consumption paths plus all actually returned positive document projection bytes
-  and paths, even when later invalidation or assembly drops their published views. The reservation
-  does not enter assembler initial usage, so those contributions are not charged twice. Raw document
-  input, parser work and all filesystem I/O are outside these excerpt charges.
-  Each batch uses one classified, redacted source snapshot. A later expansion uses a fresh guarded
-  read and must match the first
-  complete redacted-source fingerprint; a mismatch invalidates all views for that path without
-  refunding consumed bytes. Subsequent passes exclude processed ranges and retain actual partial-view
-  identities rather than claiming complete bodies from clipped reads.
-  The existing selection-details operation records planned ordinary ranges on attempted reader paths,
-  ordinary ranges intersected by nonempty returned views, and deferred definition ranges. An
-  intersection count does not certify complete source content; truncation and omission counts remain
-  authoritative.
-  Separately identified returned partial views retain their actual ranges, contents and physical-view
-  identities through assembly, without inventing continuity or uncharged separators. Unidentified
-  multiple uncovered views remain fail-closed; conflicting views retain uncertainty. Bounded
-  observations do not establish that an arbitrarily large function was fully read. File and deadline
-  grants, current-source checks, invocation uncertainty and actual truncation/omission reporting
-  remain authoritative.
-  Existing query evidence orders endpoint intake; bounded delegation traversal keeps the original
-  workspace authority and budgets. Pack uncertainty retains closed omission reasons; existing
-  Activity Log uncertainty, physical-read and final-prompt counts describe the observed result.
-  Optional augmentation skip detail and metadata retention capacity use completion-details;
-  the completed and source-details emitters each retain at most 48 registered context fields.
-  Selection-details records calibrated absolute/ordinary relative floors, the low-confidence
-  keep-one state, and pre-cut reranker disposition/failed-call counts. Addressed-file demotion
-  remains separate from healthy unaddressed basename diversity; safe reranker failure frames and
-  causes use the existing failure-class contract. Pack, prompt, wire, and log share the same
-  high/low selection vocabulary and actual observed scope/semantic dispositions.
-  Workspace-index failures with no retained, indexed or reused records report live fallback;
-  actual cold or warm request work remains visible even when saving its snapshot fails.
-  Conversation continuity records only its closed referent source and source/admitted/rejected
-  counts on selection-details; assistant path text never enters activity evidence.
-  A previous-answer path stays a continuity hint: it never replaces the current question's own
-  keep-one fallback, which remains low confidence beside it within the same grants (#4458).
-  The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
-  `targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
-  An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for
-  planning; concrete new targets and new traces classify independently. The registered completed
-  and clarification operations retain the actual turn classification.
-  Leading `./` reference spellings are canonicalized before strict path admission; parent and
-  interior dot segments remain subject to the existing validator and every sensitive-path denial.
-  Complete document path references are data when classifying relationship/history requests;
-  directory names such as `reference` cannot request graph or Git enrichment. An ordinary-folder
-  factual lookup focuses discovery on canonically admitted named documents with a scope-bound
-  request context only when every meaningful request clause stays bound to a named document.
-  Independent prose topics retain recursive discovery even without a strong planner target.
-  Its source/read/ring
-  observations reuse the same registered retrieval siblings. Supported ordinary formats reuse the
-  canonical web/text-document extension groups, alongside XML and bounded document extraction.
-  Quoted targets use the same canonical reference identity. When every complete factual document
-  target is rejected, `explicit-target-unavailable` records skipped rings and augmentation; other
-  same-basename files cannot substitute for the unavailable target.
-  Ordinary-folder documents under `build` and `dist` follow document discovery policy; repository
-  generated-code exclusions, sensitive-path denials, containment and all read grants remain intact.
-  Request-local worktree observation reuses the observed Git runner, feeds allowed recent paths
-  into search policy and targeted/diagnostic ranking, and records its closed disposition, duration,
-  observed/deleted counts, and recent-path hint/hit counts on selection-details. Paths and the
-  private status digest stay outside logs; observation cannot admit evidence or bypass a floor.
-  Directly connected deep Git subfolders check ancestor metadata until the filesystem root under
-  the original deadline and abort guard; this hint never expands the selected evidence root.
-  Optional semantic live refresh reuses the original exploration governor and gateway spend ledger.
-  Each new read reserves a file and its observed byte upper bound; each embedding attempt reserves
-  a UTF-8 input-token upper bound before dispatch. Selection-details distinguishes actual read/call
-  attempts from reserved byte/token bounds and counts only retained refreshed files. Baseline index
-  fingerprint verification remains part of the existing logical semantic lookup. Live document
-  refresh defaults off; `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX` explicitly enables at most eight
-  files, within the original remaining deadline and a five-second ceiling. Missing or denied
-  remaining grants perform no new refresh I/O, and stale vectors retain honest lexical fallback.
-  The typed `search.connected-context.answer-details` sibling joins the same scope/query digests
-  and correlation. It records actual final-prompt file counts, answer kind, observed citation
-  behaviour, bounded declaration counts, citation-repair disposition, and follow-up trigger,
-  pass/admission counts, outcome, and configuration disposition.
-  Pass count records a completed follow-up retrieval even when fitting refuses its synthesis;
-  admission count records targets retained by follow-up retrieval, independently of physical
-  read/byte accounting and final sent membership.
-  Technical failures use the existing closed error header, body-free frames and causes;
-  declaration paths remain outside logs.
-  Connected synthesis buffers normalized output before publication so rejected declaration lines
-  cannot escape through streamed chunks. Initial synthesis plus either marker repair or an
-  insufficiency follow-up shares two physical synthesis attempt slots and the original remaining budgets, including gateway and context-window retries.
-  The separately bounded entailment stage cannot grant another synthesis attempt. The existing
-  context allocator's high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX`
-  defaults to `1`; only explicit `1` enables and `0` disables it, and other explicit values fail
-  closed to zero passes with an invalid configuration observation. Final sent packs and ranges
-  authenticate citations; assembled reads remain separate physical-usage and audit evidence.
-  The same answer-details line optionally records `synthesisCallCount` and
-  `completedSynthesisCallCount`; the former counts physical attempts and the latter completed
-  responses. Grounded evidence reports use completed responses for `usageTotals.requestCount`,
-  including completed marker repairs and follow-up answers; failed retries do not become completed
-  requests. Legacy evidence callers retain their one-request default.
-  It also records
-  `synthesisReservedOutputTokens`. Synthesis input usage records the greater of the canonical sent
-  prompt estimate and reported provider usage. These totals include discarded attempts but never
-  reduce a later request's input capacity (owner decision 2026-11-11, ADR-0137 D2).
-  Reported discarded output is retained; an interrupted
-  stream without output measurement retains its requested output reservation instead of granting an
-  unknown output amount as zero. These output charges are conservative admission bounds, not claims of exact
-  provider consumption. The optional local gateway attempt hook preserves transient recovery within
-  the two-attempt allowance and does not change unrelated callers' retry policy.
-  OpenAI-compatible HTTP dispatches, including shape/stream/output-field fallbacks, settle the same
-  caller and durable spend admission for each actual POST; adapters without that transport hook
-  retain the existing gateway boundary. No nested compatibility path grants another attempt.
-  A terminal caller attempt/cap refusal remains a local fault even after an earlier compatibility
-  dispatch; it cannot open the shared provider breaker. Genuine provider failures retain the
-  existing breaker and retry classification. Caller attempt/cap refusals use the nonretryable
-  `GATEWAY_ATTEMPT_ADMISSION_DENIED` code and HTTP 403; streamed notices retain that same code.
-  Their localized request-limit notice does not claim a model context overflow or exact unknown
-  output consumption. Genuine context-window refusals retain `GATEWAY_CONTEXT_OVERFLOW`.
-  Prompt fitting retains separate model and caller input caps for each request; earlier prompt usage
-  consumes neither cap. Mandatory overhead that
-  fits the model but exceeds the caller allowance uses the caller refusal; overhead that exceeds
-  the model retains context-overflow handling. Best-effort citation repair keeps the completed
-  answer when its current prompt does not fit, its cumulative output grant is exhausted, or no
-  synthesis attempt slot remains.
-  Final grounded publication reuses `chat.response.message` after governed memory attachment. Its
-  optional `uncitedMemoryContextMarkerCount` counts the final structured marker, and
-  `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
-  and originating request retain the existing causal link. Candidate counts and model-authored
-  marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
-  `client.scope.notice` records scope narrowing, widening and adding missing
-  evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
-  `narrowed-to-directory`, `widened`, `pinned-folder`, `missing-evidence-added`, or, for the
-  plain-language AppData sensitive-data notice that informs without blocking (#4437),
-  `app-data-contained` (the folder holds an `AppData` folder) and `app-data-selected` (the folder
-  is part of one). `scopeKind` is
-  `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
-  `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
-  folder or asks for confirmation. The existing timeline carries these dispositions and counts
-  without scope paths or notice text.
-  Files directory responses identify the guarded canonical root, including for symbolic aliases.
-  Every directory response retains its canonical identity and latest per-path read ownership;
-  child-discovered replacements and unmounted windows cannot publish older roots or listings.
-  Root normalization/replacement and superseded child reads use the existing Files scope-decision
-  Activity Log under their directory-read correlation, without paths or contents.
-  Explicitly forgetting a failed Files edge releases only its own failed admission hold;
-  pending work and independent source holds remain protected.
-  An unchanged privacy-elided Files edge may restore its local representation from the same
-  conversation/connection's canonical acknowledgement only when its persisted fingerprint and
-  visible scope both match. This does not start a new source intent or cancel a response. Missing
-  or changed proof and failed transitions retain normal recovery; other source holds remain intact.
-  The existing `automatic-suppressed` scope decision joins the original acknowledgement.
-  A mounted Chat may establish its conversation through the existing runtime before its id is
-  persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
-  Initial Files bindings hold admission before an edge exists, using stable window ownership.
-  Returning to an acknowledged root after failure requires fresh canonical reconciliation.
-  Retired owners release settled failed holds only; timeout-blocked work and failed compensation
-  retain their holds until the existing recovery path proves settlement.
-  Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
-  retains per-source pending/failed admission holds and releases only the current accepted token;
-  drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision
-  operation and the serialized mutation correlation.
-  `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
-  `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
-  `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch
-  failure emits WARN with the existing closed `errorKind` header and bounded `errorClass`, `frames`
-  and `causeChain`; the other reasons emit INFO. Inspection evidence remains body-free.
-- **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
-  implementation-obligation categories and a failure-class matrix with product owners, lifecycle
-  transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
-  replay references. Its release expectation is 100% complete. A genuinely unavoidable platform
-  or durability boundary may use only the registry's reviewed exemption shape: one exact operation
-  and failure class, the operation's owning package as owner, a technical reason, a linked issue,
-  and an expiry at most 180 days ahead. Wildcards, expired or effectively permanent records, unknown
-  operations, another owner, extra authorization fields, silent loss, and incomplete evidence fail
-  closed.
-- **Sufficiency is complete by default.** A supported failure class owns its start/state/end/failure
-  and loss transitions, causal edges, safe context, frames/causes, analyzer projection, and replay
-  proof. Exercise unavailable sinks, rejected writes, backpressure, disk and durability failures,
-  interrupted publication, and degraded capability in focused fault-injection tests. A missing
-  transition or proof is a contract failure, not an optional follow-up; this proof set is the
-  fault-injection gate for the change.
-- **Declare informational failure facts at their owner.** If a closed failure outcome or positive
-  failure counter would otherwise be optional report context, declare its exact `diagnosticWhen`
-  condition on the existing operation. Prove retention through the actual producer, registered
-  writer and incident query with zero optional context; include healthy controls. Ordinary file
-  eligibility exclusions and budget limits are not technical failures.
-- **Thread the correlation.** Every line of one logical operation carries that operation's
-  `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
-  back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
-  ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
-  silently missing id.
-  Adapters that rebind an event use `withActivityLogCorrelation` or
-  `withActivityLogParentCorrelation`; a plain object spread drops its non-enumerable registration
-  and rejection markers. Preserve producer-owned ids and prove forwarded events through the real
-  registered formatter, not only a buffered event assertion.
-  Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
-  the attempt and settlement even when dismissed; effect replay is not a human dismissal.
-- **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
-  flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
-  events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery; the server alone counts that dropped report, avoiding a second client-post-failed count. Final pagehide loss reports use an independent bounded admission budget, so ordinary report storms cannot discard the closing tab's counters. Stream resources, circuit admissions, spend reservations and completion evidence settle before the terminal done packet reaches a consumer. Neither path records customer diffs or generated text.
-
-- **SSE streams are flow-controlled, never size-limited (2026-10-28).** Every server SSE write goes
-  through `writeSseFrame` (`sse-write.ts`). A `false` from `res.write()` is Node's buffer accounting
-  (Node 24 answers it for any single write of 64 KiB or more, even to an idle reader): the frame
-  stays queued and the stream waits for `drain`. Only a reader that drains nothing within
-  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is torn down as `backpressure-killed`; producers that pull
-  from a model await `whenSseWritable` so a slow reader slows the provider instead of growing a
-  backlog. `sse.stream.closed` records the `drainWaitCount`. Never reintroduce a destroy-on-false
-  write or a frame-size limit on a stream.
-- **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
-  log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
-  closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
-  `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
-  logs free text, loses the defect for good; `check:error-observability` pins the named sites and
-  checks every `catch` in the whole tree on every run. Failure paths that predate that full-tree
-  check are listed in a register that may only shrink
-  (`docs/observability/legacy-failure-path-register.json`): never add to it, and after fixing a
-  listed path run `node scripts/check-error-observability.mjs --prune-register` and commit the
-  smaller file.
-- **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
-  stamped at the central sink with schema/registry versions and digests, product/build/release and
-  safe platform classes, compatibility and writer-capability states, plus
-  `(pid, instanceId, seq)`. Producers cannot set or spoof those fields. Registered events are
-  revalidated immediately before serialization, so post-construction mutation, an unknown field,
-  a wrong type or vocabulary value, or an invalid identity cannot reach JSON. Rejection evidence
-  uses a closed body-free reason and never echoes the rejected operation or value.
-- **Loss and degraded operation are explicit.** Backpressure, disk exhaustion, unsafe targets,
-  failed durability, and an unavailable primary sink may never masquerade as an active complete
-  writer. Persist the applicable closed completeness/loss/capability state when the primary path is
-  available; otherwise use the existing independent body-free diagnostic fallbacks and state their
-  loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
-  `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
-  `/api/health`, `keiko status` and the UI. The workspace shows a plain-language notice for
-  degraded or unavailable readiness; closed technical reasons stay in health, logs and reports,
-  and the footer keeps its installed-version display. An explicit `silent` log level suppresses ordinary events
-  only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
-  (`level-silent`) so a silent interval never passes for an active complete writer.
-- **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
-  hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
-  secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
-  existing redaction ([`log-redaction.ts`](packages/keiko-activity-log/src/log-redaction.ts));
-  if a value cannot be made body-free, log its hash or its count, not the value.
-- **The log is part of the definition of done.** A change is complete only when the new behaviour
-  can be reconstructed from the log alone. Prove it the way you prove the fix: a test asserts the
-  emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
-  change to a user-visible or failure-prone surface is checked against `keiko support analyze`
-  showing the operation in its timeline. The pull-request template carries this as a checklist item.
-- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log
-  in `<stateDir>/logs/`; it must not create a second logical stream or a path-based replacement
-  shortcut. It is stored as immutable segments (ADR-0173 D14). Each process appends only to its own
-  active segment, and a sealed segment is read-only and never rewritten. Retention bounds the whole
-  directory by bytes and age, so total use stays within the byte budget plus the pin quota. Never
-  remove or loosen a disk bound. Sealing, recovery and pruning operate only inside an
-  owner-private, non-redirected directory, on the closed name grammar in `keiko-contracts`
-  (`activity-log-files.ts`), and only on opened handles that prove regular, owner-matched files.
-  Publication never replaces an existing name; rename is only the fallback on filesystems that
-  report hard links unsupported. Readers enumerate and order the files only through that grammar
-  (`orderActivityLogFileNames`), never through a hand-written pattern or a fixed file path. Segment
-  and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
-  and support-export reconstruction.
-- **Saved reports remain under human control.** A support export or replay fixture is written only
-  through a user-initiated local export. CLI exports enforce owner-private directories and files;
-  desktop exports use the browser's download destination and filesystem permissions, including its
-  configured Downloads folder. A browser download does not promise CLI permission enforcement or
-  a destination picker. This desktop behavior is the owner's accepted local export workflow.
-  Keiko does not upload it, attach it to GitHub, open an
-  issue, or otherwise disclose it automatically. Content-bearing optional sections require their
-  existing explicit consent; adding a new destination or disclosure path is a separate authority
-  and privacy decision, never an implied extension of logging.
-- **Keep the contract converged in the same change.** When runtime behavior changes this contract,
-  update the owning code, failure-first regression, emitted-line/analyzer or replay proof,
-  ADR-0173, this section, `CONTRIBUTING.md`, and directly affected operator documentation together.
-- **One command is the gate.** `npm run check:activity-log` is the Activity Log implementation
-  gate, and required CI runs that exact command. Every run builds the packages and evaluates the
-  complete registered inventory: `check:op-catalog` (typed registrations and emitters, closed fields
-  and vocabularies, exemptions, failure-class coverage, the failure-surface inventory, and proof and
-  scenario resolution), `test:activity-log-scenarios` (executes every curated end-to-end scenario
-  the inventory resolves, each of which must reach a complete support-analyze report),
-  `check:error-observability`, `arch:check` with `arch:check:negative`, and `check:release-impact`.
-  It takes no changed-file input, so an unchanged emitter is proven again over the complete
-  inventory rather than over a diff. On an integration commit whose tree is byte-identical to a
-  pull-request head that already ran this exact gate, ADR-0178 reuses that verdict — which proves
-  the same complete inventory on the same bytes, and is strictly stronger than a changed-file
-  scope. Any other narrowing of the gate remains rejected. Each failure
-  names its check, rule, site, and remediation. Run it before every pull request that changes
-  product runtime behaviour.
-
-Expected Memory capability states and salience extraction/capture summaries use the registered
-`server.diagnostic.observation` timeline at info, without an error kind or automatic failure incident
-(#4247). Producers explicitly declare `diagnosticOutcome: "routine"`; unclassified diagnostics and
-real model, vault or vector-index failures retain the failure channel. Shutdown start is info even
-with work in flight; faulted cleanup retains its warning and failure evidence.
-
-`cli.lifecycle.provisioned-config` records what `keiko start --provisioned-config` did with an
-administrator's gateway configuration (ADR-0121 D9), under the start's correlation: `adopted` (new
-or changed since the last adoption; it replaces the configuration as a whole), `unchanged`,
-`deferred-running` (a running Keiko is never written under), `overridden` (an explicit
-`KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins), `absent`, or at warn `invalid`, `too-large`,
-`refused-link`, `read-failed`, `write-failed` and `marker-failed` (the configuration is in force,
-its record is not) with the error class. A candidate must load through the gateway's own config
-loader before it replaces anything. Never the path, a digest of the content or the content. `portable launch` hands its sink to `keiko start` on every platform,
-so a macOS or Linux launch records its health, browser handoff, failure and adoption lines like a
-Windows one.
-
-`client.citation.activated` records a citation click and its source selection under the
-activation correlation. `reason` describes the source fingerprint: `matched` (one root),
-`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
-`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
-is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
-recording the fingerprint, file path, source label or citation text. The registered server
-projection retains these closed fields on the existing Activity Log timeline.
-
-`client.coding-run.restored` records, once per distinct restoration, how the Workbench rebuilt a
-settled coding run's conversation from Coding History after a reload, under the run's own id (the
-correlation its `coding-runtime.history` lines carry). The timeline carries the newest messages the
-safe-activity contract's bounds admit (`timelineCount`, `turnCount`, `feedBytes`); every older
-message the feed cannot carry stays in the transcript, whole (`transcriptCount`,
-`transcriptChars`), so no message of the run is shown in neither place. The restoration reads the
-run's messages from the newest end and only as far as the feed can still hold them; everything
-older is named for the transcript by position and never examined. `cutCount` counts timeline
-messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
-task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
-truncated.". Counts only — never a message, path or run name. An explicit Stop or takeover keeps the
-run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
-with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
-
-`coding-runtime.history.export` records the human's local export of a Coding History task (Export
-JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
-`completed` or `refused` under the request's correlation. A refusal carries one closed reason
-(`unauthenticated`, `unavailable`, `invalid-format`, `too-large`, `failed`; a failure also its error
-class, frames and cause chain), a completion the format, message, omitted and redacted-message
-counts and the byte size. Message text is stored as the runtime produced it, so the export redacts
-every string again with the evidence redactor and masks absolute host paths; no text, title, branch
-or path ever enters the line (ADR-0137 D4).
-
-`coding-runtime.history.import` records the human's local import of a saved task (Import task: a
-Keiko task export or an OpenCode session transcript the person picks; nothing is fetched or
-uploaded): `requested`, then `completed` or `refused` under the request's correlation. A refusal
-carries one closed reason (`unauthenticated`, `unavailable`, `no-workspace`, `invalid-document`,
-`unsupported-version`, `too-large`, `empty`, `failed`; a failure also its error class, frames and
-cause chain), a completion the source, message, omitted, skipped and redacted-message counts and the
-byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
-title or path ever enters the line (ADR-0137 D4).
-
-`coding-runtime.repository-relay` records Keiko's repository credential relay (#4522, ADR-0184): a
-native run reads the Maven and npm repositories the person configured through a per-run, read-only
-capability on the attested loopback origin and never holds a credential Keiko read from a file. A
-credential Keiko takes from its own environment stays readable to a macOS shell (ADR-0184 D2). The
-line records `bind`
-(`bound` or `refused` with a closed `reason`), a refused or `failed` request, and one `settled`
-summary per binding when its run is released (request, relayed, refused, failed, cancelled,
-upstream client and server error and redirect counts, bytes, duration), under the run's
-correlation. The admission line `coding-runtime.native-build-settings.admitted` adds
-`relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and the closed
-`relayRefusalReasons` (including `id-ambiguous`, `rewrite-missed` and the informational
-`profile-inactive`). Never a URL, host, path, artifact coordinate, user name or credential; a
-credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
-never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
-user-level files are read.
-
-`coding-runtime.schedule.wake`, `coding-runtime.schedule.control` and `coding-runtime.schedule.lease`
-record scheduled continuations (#4271, ADR-0137): a schedule a native run's model created wakes its
-task at the due time while Keiko runs. The wake line records `started`, `waiting` (closed `wait`:
-`run-active`, `workspace-inactive`, `retrying`), `refused`, `fired`, `missed`, `auto-paused`,
-`removed`, `retain-lost` or `failed`, with the task and schedule digests, the wake run's id and mode,
-counts and the due lag; the control line records a human's pause, resume, delete or list, or the
-pause after three missed wakes (`initiator` `missed-wakes`); the lease line records Keiko's hold on
-the runtime's scheduler, its release in the wake run and the re-hold once the schedule fired. Lines
-of one wake run carry its run id as correlation; lines that belong to no run carry a correlation
-derived from the schedule's digest. Never a schedule id, name, cadence or prompt.
-
-`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
-did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
-progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
-agent's name), a start the human gave up before it had a run (`start-cancelled`), a jump to a pending decision, a repository bound for trust (its two body-free ids)
-and a changeset received for review (`fileCount`). It also records a history task of another
-repository or workspace that was not activated (`history-repository-switched`,
-`history-workspace-switched`; #4118), a window that kept the task picked from Coding History or
-a new task instead of following a settled run of another task (`history-run-held`, once per pick;
-#4271), a run that needed recovery left with New task (`recovery-left`, once per departure; F30), the starting repository of a window without a stored one, decided only after the
-task-workspace state answered (`repository-seeded` from the shell's project or
-`repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371) and a refused editor
-bridge registration
-(`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
-refused request's correlation and the run as parent; #4117) and a diff that switched to the
-windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
-`answer-diff`, and `fileCount`, `totalLineCount`, `totalByteCount`; once per diff, not per page turn;
-never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
-run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
-`notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
-reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
-(`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
-`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). What a delivery card showed is `delivery-step-shown` with the closed
-`deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
-`commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
-`deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;
-never a head or tree digest; #4271). Once per mounted window, `repository-resolved` records where
-its repository came from with the closed `repositorySource`: `window` (its own saved selection,
-which the layout retains with its branch and location), `shell` (the folder the shell held) or
-`none` (an active task binding met it first); never the path (#4068). These were warn/unknown
-`client.diagnostic` notes before and buried the rare real browser failures. The server side of
-that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
-`refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
-`capability-held`). A root-boundary refusal holds until the run or its root changes; only a held
-lease is retried with backoff. The editor action queue is bounded by count, by serialized bytes per
-session (64 MiB) and by serialized bytes for the process (256 MiB); every `QUEUE_FULL` refusal is
-recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`, `session-bytes`,
-`process-bytes`) and the action, session and process counts and bytes (#4107). `gateway.setup.target.accepted` records,
-at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
-and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
-
-`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
-request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
-(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
-`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
-`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
-Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
-status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
-every other, unmeasured, mutation. A start that hit its deadline re-reads the run, because the
-server may have started it; when the client hung up before a run existed, the server creates none
-and records `coding-runtime.operation.refused` with the route-level reason `start-abandoned`, a
-reason never stored or sent as a failure code. Stop is never queued behind another mutation: it ends the client
-wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
-while another mutation is pending. Closed values and one duration only.
-
-`client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
-Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
-`crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).
-Monaco gives a model created without a line break the platform default, so a Windows browser would
-otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
-edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
-`projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
-workspace update overtook it; the repeat is bounded to three attempts per routing episode, and an
-episode that ends (the project held, the window no longer needs one, or the open failed) frees the
-budget for the next one. When every attempt was overtaken, the window stops waiting, shows that the
-Chat could not be opened and records `client.binding.project-open-exhausted` at warn (`conflict`,
-failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
-text or paths.
-
-`gateway.conversation.admission` records the closed decision before a conversation model call,
-with admitted and current configuration generations and the request correlation. A successful startup
-observation remains usable for the same configuration generation; its age is diagnostic only
-(`allowed-fresh` or `allowed-cached`). Conversation requests, page loads, model-list reads and
-Workbench choices never initiate another readiness probe. Configuration replacement invalidates the
-observation; a failed or missing result requires explicit verification in Settings > Models.
-A definitive authentication or missing-model failure on a real model call withdraws that exact
-current observation (`provider-rejected`); a late failure cannot overwrite a replacement generation
-or a newer verification. Rate limits, timeouts and transient provider errors do not erase a proved
-capability. Refusals distinguish model or generation replacement, absent observations, failed probes
-and invalid timestamps without recording model names, requests or answers. An uninvoked model port
-consumes no physical synthesis attempt or uncertain output reservation; actual interrupted provider
-calls retain conservative accounting.
-
-Keiko lists every model a gateway offers through metadata requests, which cost nothing, and sends
-an inference request only to a model a person activated (#4351, owner decision 2026-11-13; manual
-activation, product decision 2026-11-16): a check loads the model, which on a shared gateway evicts
-a model somebody else is using. Startup checks no chat model and starts no tool-calling proof; every
-chat model is inactive in each server process until the person activates it in Settings > Models
-(per model or "Activate all"), and that activation is its readiness check. Replacing a connection
-deactivates it, and the person can deactivate an activated model there again (Deactivate,
-`POST /api/gateway/readiness/deactivation`): that sends nothing to the provider, the model leaves the
-Chat picker and is refused until it is activated anew, and a deactivation while that model's check
-still runs is refused (`gateway.readiness.deactivation` records the closed outcome). Only activated models are offered by the Chat picker and elected as an automatic
-default (Chat create and the Workbench prefer activated models over a better-ranked inactive one);
-a pick or a Send in Chat and a pick or Start in the Coding Workbench never start a basic-chat check.
-The Workbench proves tool calling and context only for an activated model. Startup still probes the
-embedding model in use, and Gateway Setup verifies the model that becomes the default (which
-activates it) and the embedding model in use: the other listed models are configured as listed and
-inactive. Gateway Setup keeps the full verification round for explicitly named deployments;
-for a discovered listing, a candidate the walk reaches and the gateway rejects is dropped, a wildcard
-route pattern is dropped by its shape without a request (a listing of nothing else fails with its own
-reason), a default that got no verdict from a gateway that answers (a timeout of its completion, a rate
-limit, an overloaded status) is kept unverified and the walk stops, a failure to reach the gateway at
-all (refused connection, unknown host, TLS or proxy fault) is no verdict and takes the existing
-base-URL fallback and deferred admission without saving anything, and the listed models no request
-reached are configured and reported as unverified. A model kept without a verdict is saved only
-because the answer names it as not verified (the dialog tells the person to activate it in
-Settings > Models), its tool-calling record is `unverified`, and no successful observation is
-recorded for it. A request for a model with no current positive observation is refused and starts
-no check: Chat send and regeneration answer 400 `CONVERSATION_MODEL_NOT_READY`, a coding run start
-is refused as model-unavailable (`conversation-not-ready`), and the Voice queue retries a bounded
-number of times and then suspends with the transcript kept. Opening an empty local Chat requires a
-configured chat model and works while readiness is unknown or failed; `chat.creation.opened`
-records the closed readiness observation without starting a check. A window opening or restored
-selection reads the Workbench profile with `check=use`, which may join a check that already runs and
-report the state but never dispatches one; a pick or Start sends `check=1`, and a Start belongs to the
-model it was pressed for (a model adopted or picked meanwhile ends its wait with a plain message and
-starts no run). When no activated model can start a run only because its tool calling was never
-confirmed (the state after Gateway Setup) or its proof aged out, the Workbench lists those activated,
-not refuted models and offers one explicit "Check tool calling" action that sends `check=1` for the
-selected model (`client.coding-workbench.interaction` `tool-check-requested`); with an eligible model
-present the picker lists eligible models only, and nothing starts a check by opening a window
-(ADR-0171). `gateway.readiness.scope` records how many models were listed and checked and why,
-only for a check that actually sent a request; `gateway.readiness.selection` remains the record of
-the server's selection route, which the Chat picker no longer calls; and
-`gateway.readiness.automatic.started` carries the closed `checkReason` (`startup`, `fallback`,
-`selection`). Nothing renews or recovers a model on a timer or passive read. Activation may retry an
-unsuccessful check. Startup-owned catalog work can be observed with a bounded, cancellable metadata
-wait; disconnecting a browser does not cancel shared discovery or start another provider call. The
-Workbench profile describes the model chosen in its picker (`modelId`) and its own observed
-verification, rather than the gateway-wide state. `model-verification-pending` means that a check of
-that model is already running; a tracked model nobody activated is `conversation-not-ready`;
-`tool-calling-unverified` records an unknown tool capability without dispatching a probe.
-See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
-
-The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the
-tool offered and no forced `tool_choice`; only a model that called no tool is asked once more with the
-forced named call. It ends in one of six closed outcomes (`called-unforced`, `called-only-forced`,
-`forced-refused`, `no-call`, `tools-refused`, `inconclusive`), recorded as `toolCallingOutcome` on the
-existing readiness completion lines and told in plain words in the tool-calling evidence of
-Settings > Models. A forced call the provider refuses (a thinking mode answers HTTP 400 to
-`tool_choice`) is never a verdict that the model cannot call tools, and writes no "unsupported"
-record, but it confirms nothing either: the conversation stays admitted and tool turns stay
-`unverified` until a check passes. `called-only-forced` is admitted. Settings > Models words every closed outcome in one plain
-sentence per language (`settings.models.toolOutcome.<outcome>`, informal German), saying what it was
-and what to do next, in place of the server's English evidence; a new outcome without a sentence
-fails a test. A check a
-person starts in Settings waits at least the interactive silence floor for a slow model when the stored
-configuration does not name a provider timeout (a timeout a person named, whatever its value, stays as
-configured; a person's value is stored with `timeoutNamed: true`, and Setup's own 30 s default is
-stored bare, as are the 30 s and 120 s defaults of installations written before the marker, so those
-read as defaults); it is bounded, cancelled when
-the request closes, shown on the start line as `chatProbeTimeoutMs` and announced as still running; no
-conversation turn is affected. Every tool definition leaves the gateway as a plain object schema (no
-`oneOf`, `anyOf`, `allOf`, `enum`, `const` or `not` at the top level; the alternatives are named in the
-description), and Keiko's own validation keeps using the original schema; a hermetic walk over every
-registered tool definition fails on any other construct at the root; alternatives nested below the root
-pass unchanged (the captured provider 400 and rule name the top level; a live pass is the evidence for
-nested ones). A meter read that withholds the window probe for an unused model records
-`gateway.context-window.probe` state `skipped-unused` once per deployment and generation. The meter read of a Chat's context window
-sends its probe only for a model a person has used: an actual model call completed through the
-current configuration generation, or an explicit Settings check passed (a startup observation is not
-use). Operator procedure:
-[`docs/troubleshooting/model-does-not-call-tools.md`](docs/troubleshooting/model-does-not-call-tools.md).
-
-`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
-request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
-`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
-validate a supplied `expectedGroundingScopeIdentity` against the current server-issued identity;
-a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description authority is
-checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
-scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
-
-A Chat connected to exactly one folder and to nothing else offers its model the read-only tool
-`folder.files` (list a directory, search, read a line window) for repeated use within one turn; the
-automatic first retrieval stays (owner proposal 2026-11-21, ADR-0181). `folder.files.turn-selected`
-records once per turn whether the tool turn ran (`tool-turn`) or the single retrieval was kept
-(`one-shot-model-not-tool-ready`, `one-shot-scope-unavailable`, `one-shot-catalog-unavailable`).
-`folder.files.operation` records each call under the request correlation: the `view`, `outcome`,
-the closed `reason` of a refusal, returned count, result and payload bytes, scanned files,
-unavailable hits, whether more exists, and the turn's cumulative calls, search time and result
-bytes. Never a path, a query or file text. Lines the tool returned are merged into the sent pack and
-may be cited; any other line stays an unsupported citation. The tool runs on the search scope of
-the request's own retrieval, under the `connected-folder` authority subject with `folder.read`
-only. Never give it a regular-expression mode, a write, or a scope the retrieval does not have.
-
-Chat context selection emits `chat.context.selected` before the provider call for buffered,
-streaming and regenerated turns. Its request correlation joins the compacted/retained history
-counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
-effective input budget and image reserve. This evidence survives generation timeout or
-cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
-not provider-measured usage, and no conversation or image content is recorded. With memory on it and
-the grounded `chat.response.message` also count the standing profile and recall (#4228):
-`profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
-facts the question was about, sent once with recall), `retrievedMemoryCount`,
-`belowFloorMemoryCount` and `semanticFloor` (the cosine floor in force, only with semantic scores),
-never a fact
-([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
-
-Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
-`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
-when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
-parts take the same per-part media reserve as images. A positive reported count
-replaces the image reserve even when the local text/tool/schema floor determines the final total;
-a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
-
-Circuit admission that cannot fit a caller's remaining budget emits `gateway.circuit.wait` with
-`budget-refused`, `remainingMs` and `delayMs`; it does not fabricate a provider attempt or retry.
-Parallel retryable responses may extend the recovery minimum of the same open outage, while probe
-ownership and later circuit generations remain protected. Unchanged admission state does not wake
-every waiting caller.
-For a saturated probe, `delayMs` records the remaining request budget (zero at expiry), not a
-fabricated cooldown. A stream records its start before admission waiting and its zero-chunk failure
-if admission is refused or cancelled. Late sibling probes cannot extend a reopened outage.
-
-On retries, `reportedPromptTokens` always describes only the current counter response and is
-absent when that response has no count. `providerPromptTokens` adds the current response-schema
-cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
-plus schema cost. Admission preserves the maximum of local, current-provider and retained
-candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
-`imageAccounting` uses that disposition when only the retained positive measurement replaces the
-image reserve. Neither retained value is presented as a new provider observation.
-
-A chat model whose window nobody declared is planned as `contextWindowAssumed` until the provider
-states it. `gateway.context-window.probe` records the one-per-deployment window probe (`reported`,
-`not-reported`, `failed`, `skipped-spend-budget`) under its own correlation joined by
-`parentCorrelationId` to the reading that spawned it. `gateway.context-window.adoption` records the
-adopted window with its source (`window-probe`, `provider-overflow`), the previous window and
-whether it was assumed, or `stale-deployment` when the stating deployment was replaced.
-`gateway.context-window.retry` records the single re-planned retry of an admitted turn, with its
-surface and the planned and adopted windows. All three carry a correlation id and a model digest,
-never provider text.
-`search.prompt.window-fitted` records a Knowledge Pod answer prompt that dropped trailing references
-to fit the model (`trimmed`) or could not fit a single one (`refused`), with the reference counts,
-the prompt size and the input budget.
-`client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
-no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
-`search.citations.reconciled` records numeric-reference and file-location reconciliation for
-Knowledge Pod, connected-folder, multi-source and hybrid answers under the request correlation.
-`citationKind` distinguishes `numeric` from `file`; hybrid answers may emit one line of each kind.
-The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`,
-`assessment-only`) and reference, attached and dangling counts describe the actual reconciliation. File lines also carry
-ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
-absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
-the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
-`gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
-`wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
-counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
-counts: stored and projected history, knowledge-source tokens, the sent and available reference
-counts, the last knowledge request (measured and estimated), the system, summary and message shares,
-the automatic-compaction trigger, and the assumed-window and pending-probe flags. Grounded
-readings also carry the conversation lane budget and unused source capacity separately; a
-conversation checkpoint is validated against that lane, not against the entire model window.
-`search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
-undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
-`hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
-`search.citations.support-settled` records the settled caveat of a Knowledge Pod answer (`none`,
-`judge-undecided`, `no-judge`, `unjudged-citation`) with its weak-citation and hidden-claim counts. The multi-source
-prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
-prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
-its error kind and frames), whether the answer was grounded, and how many marker groups the copy
-removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
-for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
-`search.answer.assessed` records whether a connected answer carried Keiko's own, labelled
-assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under the existing operator
-policy (`allowed`, `disabled`), with character sizes only. This learned knowledge is available
-without Internet or matching evidence; source-specific claims still require actual sent evidence.
-Disabled assessment text is dropped, never promoted into source-backed claims. Source-linked
-observations carry the canonical scope/query digests and `phase` (`candidate`, `accepted-final`);
-only the final accepted phase can explain delivered source-warning eligibility. Candidate or legacy
-unbound observations cannot suppress retrieval-miss findings. The citation sibling records
-`assessment-only` with zero source-marker counts, and repair never changes the assessment block.
-A no-anchor general request can use the same validated empty pack and cumulative synthesis grants
-when the policy allows assessment; scope validation and disabled-policy clarification still apply.
-A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
-provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
-`reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,
-the provider-reported `reasoningTokens` (absent when not reported, never estimated) and
-`reasoningDisposition` (`none`, `forwarded`, `discarded`); `coding-sidecar.gateway.usage-settled`
-records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputBytes`;
-`coding-sidecar.gateway.outcome` records the `reasoningFrames` and `forwardedReasoningBytes`
-forwarded to the coding runtime, `reasoningWithheld` for a buffered answer delivered without its
-oversized reasoning, and on an `output-limit` turn the bound that ended it (`limit`: `answer`,
-`reasoning`); and `coding-runtime.history-projection` the `reasoningSignalCount` a history read
-prepared for the timeline. OpenCode persists a streamed text or reasoning part only empty and then
-complete, so the timeline grows from the runtime's delta events: the same line counts, since its
-previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
-(`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
-reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
-caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
-are carried over unchanged. The runtime completes a streamed part in place, so every message from the
-anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
-compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
-holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
-`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
-carried over). The continuation's complete read stays strict (`history-oversized`). The
-reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
-#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
-from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
-`gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
-A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
-final answer gets one steered repair from the gateway on a call that asks for it with the explicit
-`answerRepair: "steered"` (the coding sidecar route and every round of a Chat tool turn; #3873, F17,
-F23, S09 of epic #4173), and the log records it
-in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
-`reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
-`coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`
-and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`,
-naming how the repaired attempt ended) — a line written before the gateway call settled (a byte cut,
-a cancellation) omits both, because it cannot know; a repaired turn that failed the same way again
-is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
-discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
-roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
-`discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
-sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
-never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
-messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
-prior reasoning is omitted. A qualified provider can explicitly select `reasoningHistory`:
-`required-with-tools` restores all previous assistant reasoning when tools are advertised;
-`current-turn` restores only assistants after the latest user message. The gateway restores only
-completed responses from bounded, session- and provider-bound transient state, independently of
-`codingReasoningDisplay`; `reasoningHistoryField` selects `reasoning_content` (default) or `reasoning`.
-Missing, expired or ambiguous required state fails closed. Same-generation context refinements
-share state; a configuration generation change starts independent state. Full-history providers use a fresh
-native Coding session and the existing history replay instead of resuming/forking incomplete
-protocol state. `gateway.reasoning-history` records only closed state and counts; reasoning never
-enters evidence, logs, history exports or repository files. Identifying echoed reasoning requires
-the runtime to preserve part types: reasoning already relabelled as ordinary text cannot be identified from
-the wire body. ADR-0137 D8 records the pinned runtime's interrupted-reasoning qualification limit.
-A deployment with no such setting is detected, not configured (#4351): an unattributed HTTP 400 on a
-tool-turn continuation is answered once with the current turn's retained reasoning restored (the closed
-retry reason `reasoning-restore-repair`; the model request only, never a re-run tool, never a replayed
-write; a stream only before its first chunk); only a successful retry marks the deployment as wanting
-its reasoning back, held in memory for the gateway instance (gone with a generation change, never
-persisted or logged beyond the closed states `learned` and `unlearned`) and shown in Settings > Models;
-a second rejection surfaces the original error; an explicit setting always wins; the current turn's
-reasoning is kept in memory for this purpose only and dropped when the turn ends (a final answer, a
-failure or a cancellation of a gateway call; a turn that ends outside the gateway waits for the next
-turn of the session or the 30-minute idle TTL). A learned deployment that rejects a continuation which carried its
-reasoning is answered once without it (the closed retry reason `reasoning-withhold-repair`, still one
-retry per call); when that succeeds the deployment is unlearned, and a second rejection surfaces the
-original error and changes nothing.
-
-For the authenticated native Coding path, the separate explicit provider policy
-`reasoningContinuation: "required-with-tools"` uses the existing native session as the sole
-continuation owner (#4059). It is mutually exclusive with `reasoningHistory` and
-`reasoningHistoryField`; its qualified wire field remains `reasoning_content`. The native context
-hook reads canonical session context and removes excluded rounds from lowered context before
-provider serialization, excluding aborted, unfinished
-and foreign-model assistant rounds and orphaned tool results. Existing run and retained-session
-route bindings prevent continuation under changed or unproven routes. This native path retains exact
-completed reasoning independently of live display, checks the current credential floor, and applies
-full byte, context and spend limits. Missing, conflicting, secret-bearing or oversized state fails
-closed. It bypasses the shared transient history cache and preserves native resume/fork ownership;
-no additional reasoning store is introduced. Activity evidence contains counts and closed outcomes
-only.
-
-The text a model wrote beside its tool calls is resent as written, like a standalone OpenCode run
-(#3907); only a tool-calling turn without
-text goes upstream as `content: null`, and the same line counts the others as
-`toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
-explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
-latency profile selects timeout floors only.
+- **Emit through the owning layer's existing port.** Server: `ServerLogSink` / `ServerLogEvent`
+  ([`server-log.ts`](packages/keiko-activity-log/src/server-log.ts)) and `emitServerDiagnostic`
+  ([`diagnostics-log.ts`](packages/keiko-server/src/diagnostics-log.ts)). Domain packages: their
+  injected log port (`SecurityLogSink`, `KnowledgeLogSink`, `MemoryVaultLogSink`,
+  `ConsolidationLogSink`, `ModelGatewayLogSink`, …). Browser: `reportClientDiagnostic`
+  ([`client-diagnostics.ts`](packages/keiko-ui/src/lib/client-diagnostics.ts)). A new package that
+  performs work receives a port of the same shape from the server. Never `console.*`, a private
+  logger, a second log file, or a new format.
+- **`op` is a typed registry value, never a free string.** Declare each operation with
+  `defineActivityLogOperation` and emit it with `activityLogEvent`; the registration owns fields,
+  types, bounds, closed vocabularies, lifecycle, failure classes and proofs. Local look-alike
+  helpers, unresolved dynamic calls, duplicate or emitter-less registrations, unregistered emitters
+  and emissions outside the owner package fail closed. Run `npm run generate:op-catalog` and commit
+  the regenerated catalog; `npm run check:op-catalog` rejects drift. Never hand-edit it; its legacy
+  literal scan authorizes nothing.
+- **Failure-class coverage is complete.** Every supported failure class owns its transitions,
+  causal edges, safe context, analyzer projection and replay proof, exercised by fault-injection
+  tests. The only exemption is the registry's exact, owner-bound, issue-linked shape with an expiry
+  at most 180 days ahead.
+- **Declare informational failure facts at their owner** with an exact `diagnosticWhen` condition,
+  proven through the real producer and writer. Ordinary eligibility exclusions and budget limits
+  are not technical failures.
+- **Thread the correlation.** Every line of one logical operation carries its `correlationId`; a
+  spawned job carries `parentCorrelationId`. The only fallback is `UNKNOWN_CORRELATION_ID`
+  ([`correlation.ts`](packages/keiko-server/src/correlation.ts)). Rebind events with
+  `withActivityLogCorrelation` / `withActivityLogParentCorrelation`, never an object spread.
+- **Errors and loss take the structured path:** closed `errorKind` and completeness vocabularies,
+  `extra.frames` / `extra.causeChain`, and a correlation id on every failure line.
+  `check:error-observability` checks every `catch` in the tree. The legacy register
+  (`docs/observability/legacy-failure-path-register.json`) may only shrink: never add to it; after
+  a fix run `node scripts/check-error-observability.mjs --prune-register`.
+- **The persisted identity is complete or the write fails closed.** The central sink stamps schema,
+  registry, build and platform identity plus `(pid, instanceId, seq)`; producers cannot set them,
+  and events are revalidated before serialization.
+- **Loss and degraded operation are explicit.** Backpressure, disk exhaustion, failed durability or
+  an unavailable sink never masquerade as a complete writer: count every lost event, persist
+  `activity-log.loss`, and report readiness (`ready`, `degraded`, `unavailable`) in `/api/health`,
+  `keiko status` and the UI. `silent` suppresses ordinary events only.
+- **Body-free, always.** Counts, statuses, scopes, hashes, ids, route templates, sizes, durations —
+  never prompts, responses, file contents, secrets, paths, endpoints or PII (ADR-0173 D4). New
+  fields go into `extra` through [`log-redaction.ts`](packages/keiko-activity-log/src/log-redaction.ts).
+- **SSE streams are flow-controlled, never size-limited.** Every server SSE write goes through
+  `writeSseFrame`; a `false` from `res.write()` waits for `drain`, and only a reader stalled for
+  `SSE_STALLED_READER_TIMEOUT_MS` is torn down. Never reintroduce destroy-on-false or a frame-size
+  limit.
+- **Keep one logical, bounded Activity Log** of immutable segments in `<stateDir>/logs/`
+  (ADR-0173 D14). Never add a second stream, never loosen a disk bound, and enumerate files only
+  through the closed name grammar (`orderActivityLogFileNames`).
+- **Saved reports remain under human control.** A support export is written only by a
+  user-initiated local export; Keiko never uploads, attaches or discloses it automatically. Content-bearing optional sections
+  need their explicit consent, and a new destination or disclosure path is a separate authority and
+  privacy decision.
+- **The log is part of the definition of done.** A test asserts the emitted line(s) — `op`,
+  `correlationId`, `errorKind`, the evidence fields — and a user-visible or failure-prone surface is
+  checked against `keiko support analyze` showing the operation in its timeline.
+- **Keep the contract converged.** A change to this contract updates the owning code, its
+  failure-first proof, ADR-0173, this section, `CONTRIBUTING.md` and the affected operator docs
+  together.
+- **One command is the gate.** `npm run check:activity-log` builds the packages and evaluates the
+  complete registered inventory (`check:op-catalog`, `test:activity-log-scenarios`,
+  `check:error-observability`, `arch:check` with `arch:check:negative`, `check:release-impact`).
+  It takes no changed-file input; the only sanctioned reuse is ADR-0178's byte-identical tree.
+  Run it before every pull request that changes product runtime behaviour.
 
 ### Rule 2 — when you debug, the log is your primary source
-
-For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
-and `speech.stt.request.completed` records a received provider HTTP status. An absent status
-means no response was observed. When a provider's `text` is exactly its verbose segments joined
-by line breaks (whisper.cpp), the adapter joins the segments as they are and the same line counts
-the removed separators (`segmentSeparatorsRemoved`); any other line break is the provider's own
-and stays. Browser clips are normalized in memory to mono PCM16 WAV;
-normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
-
-Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only; the
-Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
-Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
-browser persistence; stale revisions fail closed (ADR-0114 D1).
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 
-1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
-   Manual UI and CLI export must also work at retained incident capacity through the canonical
-   transient descriptor, without stealing in-flight reservations or widening retention. At byte
-   pressure, completed candidates may roll over; in-flight reservations remain protected.
-   Exporting stored server evidence requires an authenticated app session; scoped-cookie refresh
-   reuses its verified bearer and absolute expiry. An unpaired or offline browser can still create
-   and download a limited report from validated body-free client failure facts. That fallback
-   grants no access to stored server evidence.
-   Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
-   flags are not accepted at the support-report boundary. For local debugging, use
-   `keiko support query --correlation-id <id> --json` on the existing Activity Log.
+1. **Get the artifact.** `keiko support export --incident <id>` or a correlation selector; for
+   local debugging `keiko support query --correlation-id <id> --json`. Received evidence is one
+   canonical private report — never raw logs or legacy bundles — and must pass the canonical
+   offline validator before any renderer or agent uses it; matching historical registries are
+   repository-owned, never report-supplied (ADR-0173 D8/D9;
+   [support workspace guide](docs/observability/support-workspace.md)).
 2. **Validate before reconstruction.** `keiko support analyze report.json --json` emits the
-   versioned body-free machine view only after complete offline validation. Give agents that
-   analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
-   seeds and explicitly selected replay fixtures derive from the same validated evidence.
-3. **Investigate from the validated timeline.**
-   New exports replace local identifiers with artifact-local ordinal references. The UI Support ID
-   selects local evidence on the originating installation; it cannot select a received report.
-   Read the unfiltered analysis first, then use its `incident.correlation.rootCorrelationId` or a
-   validated timeline's exported reference as `<exported-ref>` in
-   `keiko support analyze report.json --correlation-id <exported-ref> --json > timeline.json`.
-   This emits that validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
-4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
-   expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
-   stays unknown. The seed warnings name unavailable evidence classes; never replace them with
-   invented reproduction text or assume a historical PID is locally running.
+   body-free machine view only after complete offline validation. Give agents that projection,
+   never unvalidated report bytes.
+3. **Investigate from the validated timeline:**
+   `keiko support analyze report.json --correlation-id <exported-ref> --json > timeline.json`, then
+   `keiko investigate --from-timeline timeline.json`.
+4. **Read sufficiency and integrity before trusting a seed.** Never replace a named evidence gap
+   with invented reproduction text, or assume a historical PID is running locally.
 5. **Turn the seed into a red-then-green test** following
-   [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md), so the
-   fix is proven against the customer's actual sequence rather than a guess.
+   [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md).
 
-The join keys — `(pid, instanceId, seq)` within a process lifetime, `correlationId` within an
-operation, `parentCorrelationId` across a spawn — are stated once in ADR-0173's "How an agent reads
-the log". If a defect cannot be located from the log, that gap is the first defect to fix: add the
-missing evidence under Rule 1, then fix the behaviour.
+The join keys — `(pid, instanceId, seq)`, `correlationId`, `parentCorrelationId` — are defined in
+ADR-0173's "How an agent reads the log". If a defect cannot be located from the log, that gap is the
+first defect to fix: add the missing evidence under Rule 1, then fix the behaviour.
 
 ---
 
 ## 9. Traps specific to this repo (learn these once)
 
-Repository lessons now live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling,
-performance evidence, package exports, workflow branch lists or coverage gates, read the matching
-entry there. In particular, the assembled package-surface check prunes the live dependency tree:
-read its ordering warning before running it. The applicable constraints are unchanged.
-
-Keep new lessons evidence-backed and scoped; prefer executable regression protection to growing
-this always-loaded contract. Reviewers use the existing
-[review standards](docs/qa/review-standards.md), already consumed by CodeRabbit, rather than a
-second root review-policy file.
+Repository lessons live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling, performance
+evidence, package exports, workflow branch lists or coverage gates, read the matching entry there.
+Keep new lessons evidence-backed and scoped there, and prefer executable regression protection to
+growing this always-loaded file. Reviewers use the existing
+[review standards](docs/qa/review-standards.md).
 
 ---
 
 ## 10. Tests
 
-- **Unit/integration tests are co-located:** `foo.ts` → `foo.test.ts` next to it. Vitest,
-  `environment: "node"` for packages; `keiko-ui` and `keiko-editor` use jsdom (+ `axe` a11y
-  assertions). Root suite include globs are in `vitest.config.ts`.
-- **E2E** lives in `tests/e2e/` and runs on Playwright (chromium is the reference browser; WebKit
-  timing/render on CI is a software-render artifact — don't gate on it). Smoke: `npm run
-test:e2e:smoke`. Performance-evidence and per-feature suites have their own `test:e2e:*` scripts.
-- **Test files are held to three determinism rules** (`scripts/lib/eslint-test-determinism.mjs`):
-  no measured wall-clock duration compared outside `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS`, no fixed
-  sleep outside a polling loop, and no negative substring assertion of at most four hexadecimal
-  characters, which a digest contains by chance (#4481). Older occurrences sit in the shrink-only
-  root `eslint-suppressions.json`; after removing one, run
+- **Co-located:** `foo.ts` → `foo.test.ts`. Vitest with `environment: "node"` for packages;
+  `keiko-ui` and `keiko-editor` use jsdom (+ `axe` assertions).
+- **E2E** lives in `tests/e2e/` on Playwright; chromium is the reference browser — don't gate on
+  WebKit timing. Smoke: `npm run test:e2e:smoke`; performance-evidence and per-feature suites have their own
+  `test:e2e:*` scripts.
+- **Determinism rules for test files** (`scripts/lib/eslint-test-determinism.mjs`): no measured
+  wall-clock comparison outside `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS`, no fixed sleep outside a polling
+  loop, no negative substring assertion of at most four hex characters. The root
+  `eslint-suppressions.json` may only shrink: after removing an entry, run
   `node scripts/lint-repository.mjs --prune-suppressions` and lower the ceiling in
   `scripts/__tests__/test-determinism-register.test.mjs`.
-- Cover the input space, not one happy path: empty, boundary, malformed, and hostile inputs;
-  both branches of every guard you add.
-- **Pure text rules also get seeded property tests** (`*.property.test.ts`) on the repo-owned
-  harness [`tests/support/property-testing.ts`](tests/support/property-testing.ts) — no
-  third-party dependency. It draws inputs from a fixed seed, shrinks a failure and prints
-  `KEIKO_PROPERTY_SEED=<n>` to replay it; `KEIKO_PROPERTY_RUNS=<n>` widens a local or nightly run.
-  Both apply to every property in the run, so replay one with `-t "<test name>"`, and derive
-  vacuity floors from the runs actually made (`propertySettings`), never from a fixed count.
-  `measureScaling` proves linear time by comparing two input sizes, never one absolute time. Guard
-  each property against vacuity (count what it actually reached) and prove it red against the
-  defect class it names before relying on it.
+- Cover the input space: empty, boundary, malformed, and hostile inputs; both branches of every
+  guard you add.
+- **Pure text rules also get seeded property tests** (`*.property.test.ts`) on
+  [`tests/support/property-testing.ts`](tests/support/property-testing.ts). Replay with
+  `KEIKO_PROPERTY_SEED=<n>` and `-t "<test name>"`, widen with `KEIKO_PROPERTY_RUNS=<n>`, derive
+  vacuity floors from the runs actually made (`propertySettings`), guard each property against
+  vacuity, and prove it red against its defect class first. The harness has no third-party
+  dependency; `measureScaling` proves linear time by comparing two input sizes.
 
 ---
 
 ## 11. Git, branches, and PRs
 
-- **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
-  commit signing is configured before you commit.
-- **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history and signed squash merges. Only the repository owner account `oscharko` may merge into
-  `dev` or enable native auto-merge for it. Agents acting under that account require the owner's
-  explicit authorization; contributors cannot authorize integration. Required checks must be green
-  on the exact current head and every review conversation must be resolved (ADR-0135). Green gates
-  and settled review threads are necessary; they do not grant a contributor merge authority.
-- **The integration run reuses the pull request's evidence, it does not repeat it.** `dev` takes
-  signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
-  as the head the required matrix already proved. The `dev` run resolves that first and skips the
-  gates that evidence already carries, completing in about two minutes instead of ~48
-  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). One chain is
-  never reused on `dev`: the coverage suites and the SonarCloud analysis run on every push to `dev`,
-  because SonarCloud files an analysis under the branch the scanner names and a pull-request analysis
-  never advances `dev`'s own history (ADR-0178 D1, amended 2026-09-25). It fails closed on every
-  uncertainty, so one differing byte — including an edit to CI itself — runs the full matrix. The
-  pull-request run is unchanged and remains the complete arbiter: never treat a fast `dev` run as
-  permission to let a pull request go unmeasured.
-- **Agent reaction SLO.** When a review finding is published on the current head, the delivering
-  agent pushes one repair within 10 minutes of its appearance. In that window, harvest every
-  already-published finding from every producer into one head. Do not wait for CI to turn green or
-  for a reviewer that has not yet spoken. Measurement and the harvest rule:
-  [`docs/qa/review-settlement.md`](docs/qa/review-settlement.md).
-- **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
-  `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
-- **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
-  `refactor(scope): …`) and reference the PR/issue (`(#1234)`). English, no secrets.
-- **All required CI checks must be green before merge.** As of today (verify against
-  [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative):
-
-  `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
-  `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
-  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts`.
-
-  `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
-  lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
-  sets as the four separate contexts it replaced — plus the repository-owned `check:zizmor-anchors`,
-  which runs ahead of zizmor so a drifted line anchor names its own cause instead of surfacing as
-  the finding it was accepted for (#3130).
-
-  No additional approving review is required for `dev`, so owner-authored PRs remain possible.
-  The owner's merge or authorized auto-merge is the integration approval. Only `oscharko` may
-  dismiss blocking reviews; approvals become stale when the reviewed changes change. CodeRabbit
-  reviews every `dev` pull request and
-  every subsequent push without auto-pause. Its status is not required because quota can omit a
-  current-head review, but every emitted inline finding requests changes and blocks until repaired
-  and its conversation is resolved. Qodo remains retired under ADR-0167, and Keiko for
-  Quality is retired under
-  [ADR-0176](docs/adr/ADR-0176-retire-keiko-for-quality.md): it has no workflow, configuration,
-  repository variable, credential consumer, or protected context here.
-  The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
-  retired: neither has repository configuration, an installed App, a workflow, or a protected
-  context. Sonar holds a pull request through the SonarJS rule step inside `ci`; the pre-push scan
-  is a skippable local supplement, and the full analysis runs on `dev` after integration (ADR-0131). Full mutation and
-  reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
-  secret, and deterministic performance proxies run inside `ci` in parallel.
-
-- **A review finding thread is resolved by whoever answers it, and never silently.**
-  The resolution carries one of exactly two things: a **fix reference** (the commit or the changed
-  line that repaired it), or an **evidenced refutation** — what the finding claimed, and the guard,
-  line, or call that disproves it. Resolving a finding thread without a reply is prohibited, for
-  every agent, every human, and every script, including one that only waits for a merge.
-
-  A resolved thread is also invisible to the reviewer's own duplicate suppression, so the finding
-  returns on the next push: silence re-publishes the comment it was meant to clear. A refutation is
-  worth more than a resolve — it is the only signal that teaches the reviewer not to make that
-  claim again.
-
-- **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
-  branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment
-  format.
-- Fill in the [PR template](.github/pull_request_template.md) honestly — the Reuse/No-Duplication,
-  Verification, and Update-Impact sections are load-bearing, not decoration. Report failures and
+- **Signed commits are required** — configure commit signing before you commit.
+- **`dev` is the integration branch** and the PR base (not `main`): linear history, signed squash
+  merges. Only `oscharko` may merge into `dev` or enable auto-merge; required checks must be green on
+  the exact current head and every review conversation resolved (ADR-0135). Contributors cannot
+  authorize integration: green gates and settled threads are necessary, not merge authority. No
+  additional approving review is required for `dev`.
+- **The `dev` run reuses the pull request's evidence** for a byte-identical tree and fails closed on
+  any difference; coverage and the full SonarCloud analysis always run on `dev`
+  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). Never treat a
+  fast `dev` run as permission to leave a pull request unmeasured.
+- **Agent reaction SLO.** Push one repair within 10 minutes of a review finding on the current head,
+  harvesting every already-published finding into that head; do not wait for CI to turn green or for
+  a reviewer that has not yet spoken
+  ([`docs/qa/review-settlement.md`](docs/qa/review-settlement.md)).
+- **Branch naming** `type/short-slug` (`feat/…`, `fix/…`, `issue/<n>-…`, `codex/…`, `claude/…`,
+  `release/…`). Never work directly on `dev`.
+- **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`) and reference
+  the PR/issue (`(#1234)`).
+- **Required checks** are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative.
+  CodeRabbit reviews every push; its status is not required, but every inline finding blocks until
+  repaired and its conversation resolved. Qodo (ADR-0167), Keiko for Quality (ADR-0176) and the
+  ADR-0169 dashboard and paced reviewer are retired; do not reintroduce them.
+- **A review finding thread is never resolved without a reply** — by any agent, human or script,
+  including one that only waits for a merge. The resolution carries a **fix reference**
+  or an **evidenced refutation** (what was claimed, and the guard, line or call that disproves it).
+  A silent resolve also makes the finding return on the next push.
+- **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment.
+- Fill in the [PR template](.github/pull_request_template.md) honestly; report failures and
   skipped steps truthfully; "green" claims must be backed by output you actually ran.
 
 ---
 
 ## 12. Decisions and docs
 
-- **ADRs (`docs/adr/`) are architectural guardrails, not authority over working code.** Read the
-  relevant ones before changing a boundary, use them to understand intent and constraints, and
-  update their affected sections when a repair proves the recorded behavior outdated,
-  contradictory, or unsafe. An ADR mismatch alone is not a stop condition and must not preserve a
-  defect. There is a machine-checked index
-  (`check:adr-index`) — a genuinely new ADR must be added with the next free number and registered
-  in the index. Do not renumber existing ADRs.
+- **ADRs (`docs/adr/`) are guardrails, not authority over working code.** Read the relevant ones
+  before changing a boundary and update their affected sections when a repair proves them outdated.
+  A new ADR takes the next free number and is registered in the index (`check:adr-index`); never
+  renumber existing ADRs.
 - There is intentionally **no root `CHANGELOG.md`**; release notes live in GitHub Releases and the
   release-impact catalog.
-- Operator failure modes go in [`docs/troubleshooting/`](docs/troubleshooting/) using the template
+- Operator failure modes go in [`docs/troubleshooting/`](docs/troubleshooting/) using its template
   (Symptom / Root Cause / Diagnostic Steps / Resolution) — redacted, no live endpoints or logs.
-
-**Document retention and npm delivery (#4157, #3582).**
-Chat's extracted document text belongs to its admitted user message in the existing private store;
-keep the visible draft separate, redact before persistence and prompt use, include attachment text
-in history accounting/compaction and the existing private recall index, and keep evidence body-free.
-Publish staging keeps external ownership in vendor archives and the root, while the physical npm
-bundle omits equivalently promoted external edges. Preserve required/optional reachability and
-qualify project npm, isolated global npm and Yarn installs without bundling the external closure.
+- Per-feature behaviour, per-operation log fields and owner-decision detail go into the documents
+  named at the top of this file, never into AGENTS.md.
 
 ---
 
@@ -1810,7 +544,6 @@ qualify project npm, isolated global npm and Yarn installs without bundling the 
 
 Stop and ask the human rather than guessing across a trust boundary, a governance gate, a release
 process, or the human-control invariant. Do not stop solely because an ADR contradicts a verified
-requirement or safe product behavior: repair the code and bring the affected ADR text into line in
-the same change. A blocked gate is a signal, not an obstacle: understand _why_ it exists before you
-try to move it. Reuse beats rebuild; redaction beats disclosure; failing closed beats a convenient
-bypass.
+requirement or safe product behavior: repair the code and bring the ADR into line in the same
+change. A blocked gate is a signal, not an obstacle: understand _why_ it exists before you try to
+move it. Reuse beats rebuild; redaction beats disclosure; failing closed beats a convenient bypass.
