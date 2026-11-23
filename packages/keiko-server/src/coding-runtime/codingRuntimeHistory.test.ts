@@ -452,8 +452,29 @@ describe("paired coding conversation history", () => {
     expect(title).not.toMatch(/[\n\r\t\u202E]/u);
     expect(title.startsWith("Fix the bug evil a")).toBe(true);
     expect(Array.from(title)).toHaveLength(100);
-    expect(title.endsWith("\u{1F600}")).toBe(true);
+    // No word ends in the second half, so the cut falls inside the emoji run, on a whole one.
+    expect(title.endsWith("\u{1F600}…")).toBe(true);
     expect(title).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
+  // #4491 lab: a title cut at the limit read as a sentence that simply stopped in Coding History.
+  it("cuts a long title on its last word and marks the cut", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const begin = (runId: string, taskIntent: string): string => {
+      history.begin(
+        { requestId: `${runId}-request`, taskIntent, requestedMode: "governed-assist" as const },
+        activeWorkspace(),
+        runId,
+      );
+      return history.forRun(runId)?.title ?? "";
+    };
+    const long =
+      "Die Funktion sum in src/sum.js liefert falsche Ergebnisse. Bitte korrigiere sie und prüfe es mit den Tests.";
+    expect(begin("word-cut-run", long)).toBe(
+      "Die Funktion sum in src/sum.js liefert falsche Ergebnisse. Bitte korrigiere sie und prüfe es mit…",
+    );
+    const exact = "x".repeat(100);
+    expect(begin("exact-run", exact)).toBe(exact);
   });
 
   it("preserves a completed conversation when a continuation's intent cannot be written", () => {

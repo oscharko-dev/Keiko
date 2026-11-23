@@ -218,10 +218,18 @@ export function recordContextPresentation(log: ServerLogSink | undefined, runId:
 
 const TASK_TITLE_MAX_CODE_POINTS = 100;
 
-/** One clean line: unsafe characters dropped, whitespace collapsed, cut by code point. */
+/**
+ * One clean line: unsafe characters dropped, whitespace collapsed. A longer line is cut by code
+ * point, on its last word when that keeps at least half of it, and ends in "…", so a title in Coding
+ * History never reads as a sentence that simply stops.
+ */
 function taskTitle(intent: string): string {
-  const line = stripUnsafeFormatChars(intent).replace(/\s+/gu, " ").trim();
-  return Array.from(line).slice(0, TASK_TITLE_MAX_CODE_POINTS).join("").trim();
+  const points = Array.from(stripUnsafeFormatChars(intent).replace(/\s+/gu, " ").trim());
+  if (points.length <= TASK_TITLE_MAX_CODE_POINTS) return points.join("");
+  const head = points.slice(0, TASK_TITLE_MAX_CODE_POINTS - 1);
+  const space = head.lastIndexOf(" ");
+  const kept = space >= TASK_TITLE_MAX_CODE_POINTS / 2 ? head.slice(0, space) : head;
+  return `${kept.join("").trimEnd()}…`;
 }
 
 function digest(value: string): string {
