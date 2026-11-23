@@ -202,6 +202,14 @@ export function recordContextPresentation(log: ServerLogSink | undefined, runId:
   recordHistory(log, "context-presented", { correlationId: runId, runId, messageCount: 1 });
 }
 
+const TASK_TITLE_MAX_CODE_POINTS = 100;
+
+/** One clean line: unsafe characters dropped, whitespace collapsed, cut by code point. */
+function taskTitle(intent: string): string {
+  const line = stripUnsafeFormatChars(intent).replace(/\s+/gu, " ").trim();
+  return [...line].slice(0, TASK_TITLE_MAX_CODE_POINTS).join("").trim();
+}
+
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -478,7 +486,7 @@ export class CodingRuntimeHistory {
     const task = history.begin({
       ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
       projectPath: active.instance.repositoryRoot,
-      title: request.taskIntent.trim().slice(0, 100),
+      title: taskTitle(request.taskIntent),
       modelId: request.modelId ?? "coding",
       workspaceId: active.instance.workspaceId,
       taskId: active.instance.taskId,
@@ -531,7 +539,7 @@ export class CodingRuntimeHistory {
       throw new Error("Coding History unavailable.");
     const forked = history.fork({
       ...forkSourceFields(request.fork, active, source),
-      title: request.taskIntent.trim().slice(0, 100),
+      title: taskTitle(request.taskIntent),
       modelId: request.modelId ?? "coding",
       operatorDigest,
       runId,

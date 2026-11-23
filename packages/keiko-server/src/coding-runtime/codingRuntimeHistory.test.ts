@@ -436,6 +436,26 @@ describe("paired coding conversation history", () => {
     },
   );
 
+  it("titles a task with one clean line cut at 100 code points, never inside a surrogate pair", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const intent = `Fix\n\n  the\tbug \u202Eevil ${"a".repeat(80)}${"\u{1F600}".repeat(20)}`;
+    history.begin(
+      {
+        requestId: "title-request",
+        taskIntent: intent,
+        requestedMode: "governed-assist" as const,
+      } as Parameters<CodingRuntimeHistory["begin"]>[0],
+      activeWorkspace(),
+      "title-run",
+    );
+    const title = history.forRun("title-run")?.title ?? "";
+    expect(title).not.toMatch(/[\n\r\t\u202E]/u);
+    expect(title.startsWith("Fix the bug evil a")).toBe(true);
+    expect([...title]).toHaveLength(100);
+    expect(title.endsWith("\u{1F600}")).toBe(true);
+    expect(title.isWellFormed()).toBe(true);
+  });
+
   it("preserves a completed conversation when a continuation's intent cannot be written", () => {
     store.close();
     const db = openNodeUiDatabase(join(root, "history.sqlite"));
