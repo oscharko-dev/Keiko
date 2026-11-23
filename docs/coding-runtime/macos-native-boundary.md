@@ -6,7 +6,8 @@ uses the dev-lane process backend (`macos-app-sandbox`, ADR-0163 D9). This page 
 states about that boundary. Each statement names the test that proves it from the shell of a real
 run of the pinned runtime, and the positive control that shows the same action succeeds
 unconfined. A sentence without a proof is not published; what does not hold is listed under
-limits.
+limits. The proofs run on macOS 15 on Apple silicon, from the runtime a checkout stages; Intel Macs,
+other macOS releases and the portable `Keiko.app` are not proven here.
 
 The proofs run in the **macOS native boundary** lane (`.github/workflows/macos-native-boundary.yml`)
 on a pull request that touches the boundary, every night, and before every release, where the npm
@@ -30,6 +31,7 @@ Suites, abbreviated below:
 | Statement                                                                                                                                                                                                                                                                                                                                                | Proof                                                                                                                                                                                                                                                                                                                                                                                                                               | Positive control                                                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | A shell child writes inside the opened folder and the run's private area only. A write beside the folder or into the account's home is refused in every mode.                                                                                                                                                                                            | Q: "keeps a shell's writes inside the opened folder and its .env files unreadable, in every mode"; Q: "keeps the account's credential files and its home out of a shell's reach in every mode, while the account reads and writes them"                                                                                                                                                                                             | The test process writes beside the folder and into the home.                                                 |
+| In an opened repository the shell cannot write the hooks in its `.git` folder, which the person's own Git would run, or the configuration there, which decides what Keiko's Git runs. Ordinary repository work (refs, objects, the index) stays writable.                                                                                                | Q: "keeps what Keiko's own Git runs out of a shell's reach, and ordinary repository work in it"                                                                                                                                                                                                                                                                                                                                     | `git add` and `git init` of a nested repository run in the same folder.                                      |
 | `.env` files are unreadable to the shell even inside the opened folder. So are the account's SSH folder, cloud credential folders and Git's stored credentials.                                                                                                                                                                                          | The same two Q tests.                                                                                                                                                                                                                                                                                                                                                                                                               | The test process reads every canary.                                                                         |
 | No Keychain item and no item name can be read from the shell, in any mode, even from a keychain file in a folder the shell may read.                                                                                                                                                                                                                     | Q: "keeps a Keychain item out of a shell's reach in every mode, while the account itself reads it"                                                                                                                                                                                                                                                                                                                                  | The test process reads both canary items and lists their names.                                              |
 | The shell can neither read nor write the clipboard, in any mode.                                                                                                                                                                                                                                                                                         | Q: "keeps the person's clipboard out of a shell's reach, to read and to write, in every mode"                                                                                                                                                                                                                                                                                                                                       | An ordinary program in the same shell line runs.                                                             |
@@ -65,8 +67,9 @@ read-only to the shell (F, #3902).
   work natively and break under a Keiko-ports-only rule".
 - **Full access opens the internet**, so project content can leave the computer. The secret
   statements above hold in every mode.
-- **Git in the shell is held back by Keiko's policy, not by the kernel.** In an opened folder a
-  script file or low-level Git (`commit-tree` and a ref file) still writes local history: after
+- **Git in the shell is held back by Keiko's policy, not by the kernel.** The policy reads the
+  command text. In an opened folder a script file, a Git alias or low-level Git (`commit-tree` and a
+  ref file) still writes local history: after
   approval in Ask for approval and Supervised workspace, without asking at Full access. A managed
   task worktree's Git directory is read-only to the shell (F, #3902). Pushing needs credentials
   and, below Full access, a network the shell does not have. The shell cannot read the account's
@@ -75,7 +78,32 @@ read-only to the shell (F, #3902).
   the shell can push with it.
 - **Processes live as long as the runtime.** A settled run that changed files keeps its runtime for
   the undo window (30 minutes, #3904 AC3), and what its shell started keeps running until the
-  runtime ends.
+  runtime ends. Keiko ends a run's processes while it runs itself; when its sweep cannot prove that
+  none is left, it records that instead of reporting a clean end. No test shows that a detached
+  process of a run ends when the Keiko server itself ends abruptly.
+- **The preferences service stays reachable.** Foundation tools need macOS's preferences service,
+  so the profile leaves it open. Through it (`defaults write`) the shell can change the account's
+  app settings outside the folder; no file rule sees that write, because the service writes it.
+- **Credential files are refused by name.** The kernel denies the names of the shared list
+  (`.ssh`, `.aws`, `.azure`, `.kube`, `.env*`, `.npmrc`, `.netrc` and others) wherever they sit.
+  A credential file whose name is not on the list is readable when it lies inside the opened
+  folder, for example the gcloud or GitHub CLI credentials under `~/.config` when the home folder
+  is opened. Keiko refuses a folder that contains its own runtime, which in the usual setups covers
+  the home folder, but not when the runtime lives elsewhere. `.env.example` stays readable.
+- **A hook folder inside the project.** When the repository's configuration sets `core.hooksPath`
+  to a folder of the project, as husky does, that folder is writable like every project file, and
+  the person's next `git commit` runs what a run wrote there.
+- **A repository inside the project.** A repository that a run creates in a subfolder, or that
+  already lies in one, is the run's own: its `.git` folder, hooks included, is writable, and the
+  person's next `git commit` in that subfolder runs what a run wrote there. The protection covers
+  the opened repository only.
+- **The repository relay reads for the run.** Below Full access Keiko's repository relay reads the
+  Maven and npm repositories the person configured, for the run and without an approval for each
+  read (ADR-0184 D6).
+- **Inbound connections.** No test shows whether a device on the local network can reach a server
+  that a run's shell starts.
+- **Git comes from the Xcode Command Line Tools.** Keiko runs the Git that `xcrun` finds and
+  installs none.
 - **Other programs' start environments.** macOS lets any process of an account read the start
   environment of the account's other processes (`KERN_PROCARGS2`), and no Seatbelt rule gates it.
   A secret any program of the same account was started with is therefore readable from the shell,

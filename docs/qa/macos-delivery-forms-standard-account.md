@@ -30,7 +30,9 @@ For each form, from an empty state (no `~/.keiko`, `~/.keiko-standalone` or
 | Standalone folder  | The release asset `keiko-<target>.standalone.zip`, checked against its `.sha256`, extracted with `ditto`                                 | `Start Keiko.command`, `Stop Keiko.command`                           |
 
 Each form then passes, in order: the first start, health reporting the version, one coding run
-that settles `succeeded` (the model is the customer-shape LiteLLM twin on loopback), a second
+that settles `succeeded` (the model is the customer-shape LiteLLM twin on loopback; the task asks
+for a short reply, so the run changes no file and runs no check — a run that changes files and runs
+the project's checks as a standard account is #4519's proof), a second
 start that reports the running instance, stop, no process of the form left, and no entry of the
 form's folder carrying the download mark. A form whose checks stop before the coding run does not
 pass.
