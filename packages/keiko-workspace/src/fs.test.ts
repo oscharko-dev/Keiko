@@ -337,7 +337,10 @@ describe("nodeWorkspaceFs", () => {
     // otherwise this passes for the wrong reason.
     expect(after.size).not.toBe(before.size);
     expect(after.mtimeNs).not.toBe(before.mtimeNs);
-    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    // NTFS stamps the change time from the system clock tick (about 15.6 ms), so a rewrite inside
+    // one tick keeps it (seen on the Windows runner, #4432); size and the modification time the
+    // utimes above moved still show the rewrite there.
+    if (process.platform !== "win32") expect(after.ctimeNs).not.toBe(before.ctimeNs);
     expect(after.fileIdentity).toBe(before.fileIdentity);
   });
 
