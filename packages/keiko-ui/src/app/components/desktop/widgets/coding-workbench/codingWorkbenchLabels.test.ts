@@ -22,6 +22,8 @@ import {
   activeRunState,
   changesetDeliveryAlert,
   eventDetail,
+  eventOffersErrorReport,
+  eventOffersRunCheck,
   eventTitle,
   generatingRunState,
   modelSourceLabel,
@@ -1281,4 +1283,45 @@ describe("runtimeUnavailableMessageKey", () => {
     "preserves the server's concrete prerequisite instead of guessing a package repair: %s",
     (reason) => expect(runtimeUnavailableMessageKey(reason)).toBeDefined(),
   );
+});
+
+// #4491: the verification-not-evidenced card names the gap the settlement carries, offers the check
+// and never the error report; every other failed run keeps the report.
+describe("verification gap on a failed run", () => {
+  const failed = (extra: Record<string, unknown>): CodingWorkbenchRuntimeSseEvent =>
+    runtimeEvent({ kind: "status", state: "failed", ...extra, eventKind: undefined });
+
+  it.each([
+    ["no-check-run", "codingWorkbench.event.failure.verificationGap.no-check-run"],
+    ["check-failed", "codingWorkbench.event.failure.verificationGap.check-failed"],
+    ["check-not-started", "codingWorkbench.event.failure.verificationGap.check-not-started"],
+    ["budget-exhausted", "codingWorkbench.event.failure.verificationGap.budget-exhausted"],
+  ])("names the gap %s with its own sentence", (verificationGap, key) => {
+    expect(
+      eventDetail(failed({ failureCode: "verification-not-evidenced", verificationGap }), t),
+    ).toBe(key);
+  });
+
+  it("keeps the generic sentence for a settlement that recorded no gap", () => {
+    expect(eventDetail(failed({ failureCode: "verification-not-evidenced" }), t)).toBe(
+      "codingWorkbench.event.failure.verification-not-evidenced",
+    );
+  });
+
+  it("offers the check, not the error report, exactly on verification-not-evidenced", () => {
+    const gap = failed({
+      failureCode: "verification-not-evidenced",
+      verificationGap: "check-failed",
+    });
+    expect(eventOffersRunCheck(gap)).toBe(true);
+    expect(eventOffersErrorReport(gap)).toBe(false);
+    const other = failed({ failureCode: "runtime-failed" });
+    expect(eventOffersRunCheck(other)).toBe(false);
+    expect(eventOffersErrorReport(other)).toBe(true);
+    expect(
+      eventOffersRunCheck(
+        failed({ failureCode: "verification-not-evidenced", state: "cancelled" }),
+      ),
+    ).toBe(false);
+  });
 });

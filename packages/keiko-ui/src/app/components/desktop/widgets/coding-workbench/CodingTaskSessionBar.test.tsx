@@ -305,6 +305,28 @@ describe("CodingTaskTranscript", () => {
     expect(within(transcript).getAllByText("You")).toHaveLength(1);
   });
 
+  // #4491: a turn Keiko dispatched itself is a collapsed note labelled as Keiko's, never the person's
+  // message, and it offers no fork.
+  it("labels a Keiko continuation as Keiko's collapsed note, not as the user", () => {
+    const keiko: HistoryMessage = {
+      ...historyMessage("m-k", undefined, "Rerun the failed check."),
+      taskType: "keiko-continuation",
+    };
+    const { container } = render(
+      <CodingTaskTranscript
+        session={sessionWith([keiko, historyMessage("m-u", undefined, "Typed by a person")])}
+        shownRun={undefined}
+        onFork={vi.fn()}
+      />,
+    );
+    const transcript = screen.getByRole("region", { name: "Previous conversation" });
+    expect(within(transcript).getAllByText("You")).toHaveLength(1);
+    const note = container.querySelector("[data-origin='keiko']");
+    expect(note?.querySelector("summary")).toHaveTextContent("Keiko");
+    expect(note?.querySelector("details")).not.toHaveAttribute("open");
+    expect(note?.querySelector("button")).toBeNull();
+  });
+
   it("shows nothing of a run whose feed carries the whole conversation, other runs excepted", () => {
     const wholeRun: ShownRun = { runId: "run-7", overflowMessageIds: new Set() };
     render(<CodingTaskTranscript session={sessionWith(messages)} shownRun={wholeRun} />);

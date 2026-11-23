@@ -2919,3 +2919,220 @@ describe("Timeline — error report on a failed run", () => {
     expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
   });
 });
+
+// #4491: a run that changed code without a passing check after its last change names the concrete
+// gap in one plain sentence and offers "Run the check now" in place of the error report: nothing
+// broke inside Keiko, and the person can act on the sentence.
+describe("Timeline — verification gap on a failed run", () => {
+  const RUN_ID = "run-272120967981827964065820685403290179367";
+  const GAP_SENTENCES = {
+    "no-check-run": /no check ran after the last change/iu,
+    "check-failed": /A check failed after the last change/iu,
+    "check-not-started": /The check could not start/iu,
+    "budget-exhausted": /used up its budget of tool calls or changed bytes/iu,
+  } as const;
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    resetSupportReportOutcomesForTests();
+  });
+
+  function gapEvent(
+    gap?: keyof typeof GAP_SENTENCES,
+  ): Extract<CodingWorkbenchRuntimeSseEvent, { kind: "status" }> {
+    return {
+      schemaVersion: "1",
+      cursor: "cursor-5",
+      sequence: 5,
+      occurredAt: AT,
+      kind: "status",
+      runId: RUN_ID,
+      revision: 5,
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+      ...(gap === undefined ? {} : { verificationGap: gap }),
+    };
+  }
+
+  function renderGap(
+    gap: keyof typeof GAP_SENTENCES | undefined,
+    onRunCheck?: () => void,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        events={[gapEvent(gap)]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+        onRunCheck={onRunCheck}
+      />,
+    );
+  }
+
+  it.each(Object.entries(GAP_SENTENCES))(
+    "names the gap %s and ends with what the person can do",
+    (gap, sentence) => {
+      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES, vi.fn());
+      expect(container).toHaveTextContent(sentence);
+      expect(container).toHaveTextContent(/Run the check now/u);
+      expect(container).not.toHaveTextContent(/internal error/iu);
+    },
+  );
+
+  it("offers Run the check now and no error report, and the button submits the request", () => {
+    const onRunCheck = vi.fn();
+    renderGap("check-failed", onRunCheck);
+
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run the check now" }));
+    expect(onRunCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the generic sentence, with the button, for a run settled before the gap was recorded", () => {
+    const { container } = renderGap(undefined, vi.fn());
+    expect(container).toHaveTextContent(/The task is not verified/u);
+    expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+
+  it("shows neither button when a new request cannot be sent, and never the error report", () => {
+    renderGap("no-check-run");
+    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+
+  it("restores the gap with the settled snapshot after a reload", () => {
+    const restored = eventsWithRestoredSettlement([], {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: RUN_ID,
+      failureCode: "verification-not-evidenced",
+      verificationGap: "budget-exhausted",
+    });
+    expect(restored).toMatchObject([{ kind: "status", verificationGap: "budget-exhausted" }]);
+  });
+
+  it("keeps the error report on every other failed run", () => {
+    render(
+      <Timeline
+        events={[{ ...gapEvent(), failureCode: "runtime-failed" }]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+        onRunCheck={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+  });
+
+  it("speaks German on the card and on the button", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            events={[gapEvent("no-check-run")]}
+            activity={activityLike(bareFeed())}
+            questions={IDLE_QUESTIONS}
+            onRunCheck={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+      expect(container).toHaveTextContent(/lief keine Prüfung/u);
+      expect(screen.getByRole("button", { name: "Prüfung nachholen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+});
+
+// #4491: a turn Keiko dispatched itself is never the person's own message. It reads as a compact
+// note labelled as Keiko's, collapsed until opened, told apart by the message's own origin.
+describe("Timeline — turns Keiko dispatched itself", () => {
+  afterEach(cleanup);
+
+  function feedWithContinuation(): AvailableCodingSafeActivityFeed {
+    const message = (
+      messageId: string,
+      role: "user" | "assistant",
+      text: string,
+      origin?: "keiko",
+    ): AvailableCodingSafeActivityFeed["turns"][number]["messages"][number] => ({
+      messageId,
+      role,
+      ...(origin === undefined ? {} : { origin }),
+      occurredAt: AT,
+      segments: [{ kind: "text", text, truncated: false }],
+      truncated: false,
+    });
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [
+            message("msg_person", "user", "Fix the parser."),
+            message("msg_answer", "assistant", "Done."),
+          ],
+          tools: [],
+          truncated: false,
+        },
+        {
+          turnId: "turn-2",
+          messages: [message("msg_keiko", "user", "Rerun the failed check.", "keiko")],
+          tools: [],
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  it("shows the person's own message as theirs and Keiko's as a collapsed Keiko note", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithContinuation())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const articles = [...container.querySelectorAll<HTMLElement>("[data-message-role='user']")];
+    expect(articles).toHaveLength(2);
+    expect(articles[0]).toHaveTextContent("You");
+    expect(articles[0]).toHaveTextContent("Fix the parser.");
+    expect(articles[0]).not.toHaveAttribute("data-message-origin");
+
+    const note = articles[1];
+    expect(note).toHaveAttribute("data-message-origin", "keiko");
+    expect(note).not.toHaveTextContent(/^You/u);
+    const details = note?.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent("Keiko");
+    expect(note).toHaveTextContent("Rerun the failed check.");
+  });
+
+  it("labels the note as Keiko's in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            active={false}
+            events={[]}
+            activity={activityLike(feedWithContinuation())}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+      const note = container.querySelector("[data-message-origin='keiko']");
+      expect(note?.querySelector("summary")).toHaveTextContent("Hinweis von Keiko");
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+});

@@ -1978,6 +1978,13 @@ function WorkbenchColumns({
               activity={timeline.activity}
               questions={questions}
               focusRef={focusRef}
+              onRunCheck={
+                canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
+                  ? (): void => {
+                      taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
+                    }
+                  : undefined
+              }
             />
             <CodingWorkbenchRevertBar
               revert={revert.revert}

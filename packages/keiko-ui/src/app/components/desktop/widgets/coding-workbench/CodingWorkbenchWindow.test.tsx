@@ -797,6 +797,45 @@ describe("CodingWorkbenchWindow", () => {
       expect(transcript).not.toHaveTextContent("I read the parser");
     });
 
+    // #4491: a run whose changes were not checked names the gap and offers the check; the button
+    // starts the check through the composer's own start path, as the person's own request.
+    it("offers Run the check now on a not-verified run and starts the check as the person's request", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      const liveActions = renderWorkbench(
+        liveState({
+          canStart: true,
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({
+              state: "failed",
+              runId: "run-7",
+              revision: 9,
+              updatedAt: SETTLED_AT,
+              failureCode: "verification-not-evidenced",
+              verificationGap: "no-check-run",
+              conversationId: "task-7",
+            }),
+          },
+        }),
+      );
+
+      const [card] = settledRows();
+      expect(card).toHaveTextContent("no check ran after the last change");
+      expect(
+        within(card as HTMLElement).queryByRole("button", { name: "Create error report" }),
+      ).toBeNull();
+      fireEvent.click(
+        within(card as HTMLElement).getByRole("button", { name: "Run the check now" }),
+      );
+
+      expect(liveActions.start).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(liveActions.start).mock.calls[0]?.[0]).toBe(
+        "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
+      );
+    });
+
     it("keeps the server's own activity projection while it is still held", () => {
       taskSessionHookMock.mockReturnValue(restoredSession());
       activityHookMock.mockReturnValue({
