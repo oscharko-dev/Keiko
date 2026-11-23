@@ -538,16 +538,22 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
     : undefined;
 }
 
+// A refused response never reads its body, so the body is released before the refusal is thrown;
+// an unread body would hold the loopback connection open.
+async function refuseResponse(response: Response, error: Error): Promise<never> {
+  await response.body?.cancel().catch(() => undefined);
+  throw error;
+}
+
 async function boundedJson(response: Response): Promise<Readonly<Record<string, unknown>>> {
   if (response.status === 204) return {};
-  if (!response.ok) throw new OpenCodeV2HttpStatusError(response.status);
+  if (!response.ok) return refuseResponse(response, new OpenCodeV2HttpStatusError(response.status));
   if (!(response.headers.get("content-type") ?? "").startsWith("application/json")) {
-    throw new Error("opencode-v2-response-invalid");
+    return refuseResponse(response, new Error("opencode-v2-response-invalid"));
   }
   const length = Number(response.headers.get("content-length"));
   if (Number.isFinite(length) && length > MAX_JSON_BYTES) {
-    await response.body?.cancel();
-    throw new Error("opencode-v2-response-oversized");
+    return refuseResponse(response, new Error("opencode-v2-response-oversized"));
   }
   if (response.body === null) throw new Error("opencode-v2-response-invalid");
   const bytes = await readBoundedJsonBytes(response.body);
@@ -1099,13 +1105,16 @@ type V2Request = (
   signal?: AbortSignal,
 ) => Promise<Readonly<Record<string, unknown>>>;
 
+// The WHATWG SSE field rules: a comment line and the id/retry/event fields carry nothing this
+// client uses, a `data` field may omit the space after its colon, and a frame without data (a
+// heartbeat or a comment) is not an event.
 function parseEventFrame(frame: string): Readonly<Record<string, unknown>> | undefined {
-  if (frame.startsWith(":")) return undefined;
-  const data = frame
+  const dataLines = frame
     .split("\n")
-    .filter((line) => line.startsWith("data: "))
-    .map((line) => line.slice(6))
-    .join("\n");
+    .filter((line) => line === "data" || line.startsWith("data:"))
+    .map((line) => (line.startsWith("data: ") ? line.slice(6) : line.slice(5)));
+  if (dataLines.length === 0) return undefined;
+  const data = dataLines.join("\n");
   if (data.length === 0) throw new Error("opencode-v2-event-invalid");
   const parsed: unknown = JSON.parse(data);
   const event = record(parsed);
@@ -1417,7 +1426,9 @@ export function createOpenCodeV2HttpClient(
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (response.type === "opaqueredirect") throw new Error("opencode-v2-redirect-denied");
+    if (response.type === "opaqueredirect") {
+      return refuseResponse(response, new Error("opencode-v2-redirect-denied"));
+    }
     return boundedJson(response);
   }
   return {
