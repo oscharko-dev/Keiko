@@ -620,6 +620,17 @@ export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): Rou
   return runHandlerSync(() => {
     const targetPath = requireQuery(ctx, "path");
     const normalizedPath = validateProjectPath(targetPath, { mustExist: false });
+    // Coding tasks cascade from their repository's project row; removing the project from the
+    // generic list must never destroy Coding History.
+    if (deps.store.codingHistory?.hasTasksForProject(normalizedPath) === true)
+      return {
+        status: 409,
+        body: errorBody(
+          "PROJECT_HAS_CODING_TASKS",
+          "This repository still has Coding tasks and cannot be removed.",
+          ctx.correlationId,
+        ),
+      };
     const deletedChats = deps.store.listChats(normalizedPath);
     deps.store.deleteProject(normalizedPath);
     for (const chat of deletedChats) {

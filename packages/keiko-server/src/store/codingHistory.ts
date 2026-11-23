@@ -135,6 +135,8 @@ export interface CodingHistoryStore {
   readonly messagesBeforeRun: (id: string, runId: string) => readonly ChatMessage[];
   readonly detail: (id: string, operatorDigest: string) => CodingHistoryDetail | undefined;
   readonly forRun: (runId: string) => CodingHistoryTask | undefined;
+  /** Whether any Coding task is registered under the repository path (project removal guard). */
+  readonly hasTasksForProject: (projectPath: string) => boolean;
   /**
    * The user message that carries the run's task intent: created when the run began, it holds the
    * conversation's skill selection of that moment as its immutable turn binding (#4025).
@@ -885,6 +887,12 @@ export function createCodingHistoryStore(
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
       return typeof row?.chat_id === "string" ? readTask(db, store, row.chat_id) : undefined;
     },
+    hasTasksForProject: (projectPath): boolean =>
+      db
+        .prepare(
+          "SELECT 1 AS found FROM coding_history_tasks t JOIN chats c ON c.id = t.chat_id WHERE c.project_path = ? LIMIT 1",
+        )
+        .get(projectPath) !== undefined,
     intentMessageId: (runId) => readIntentMessageId(db, runId),
     bindNativeTurn: (runId, nativeMessageId, text) =>
       bindNativeTurn(db, store, now, runId, nativeMessageId, text),
