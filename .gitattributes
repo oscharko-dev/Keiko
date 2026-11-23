@@ -6,3 +6,10 @@ packages/keiko-server/src/coding-runtime/windowsPortableAuthenticodeVerifier.gen
 native/secure-workspace-read/** text eol=lf
 # The Windows npm runtime approval pins the supervisor's source tree the same way (#4068).
 native/runtime-supervisor/** text eol=lf
+# `check:tool-catalog-conformance` hashes the RAW BYTES of these records (sourceContractDigest and
+# the H1/producer receipt digests), so a `core.autocrlf=true` checkout makes the gate read a
+# different file than the one the digest was taken over: on Windows it reports drift that is not
+# there, and `generate:tool-catalog --write` then rewrites the digest from CRLF bytes. Same reason
+# as the native trees above (#4068).
+docs/architecture/*.v1.json text eol=lf
+docs/qa/evidence/**/*.v1.json text eol=lf
