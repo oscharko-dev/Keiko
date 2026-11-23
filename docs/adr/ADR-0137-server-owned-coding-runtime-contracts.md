@@ -295,9 +295,13 @@ generic "verification is not complete" request at the end of a run. Three facts 
 - A change needs a check only when it touched more than documentation. An applied edit carries the
   workspace-relative paths it changed (in memory only, read by the run's effort ledger, never logged,
   persisted or sent to the model) and `editNeedsVerification` (`codingRuntimeDocumentationPaths.ts`)
-  decides. A file is documentation by its extension alone (`.md`, `.mdx`, `.markdown`, `.txt`,
+  decides. A file is documentation by its extension (`.md`, `.mdx`, `.markdown`, `.txt`,
   `.rst`, `.adoc`, `.asciidoc`, plus the extensionless `README`, `LICENSE`, `NOTICE`, `CHANGELOG`,
-  `CONTRIBUTING` and `AUTHORS`). A `docs/` folder is deliberately not enough, because
+  `CONTRIBUTING` and `AUTHORS`) unless one of its directory segments, in any letter case, is a
+  directory code or tests read (`CODE_READ_DIRECTORIES`: `src`, `lib`, `app`, test, spec, resource,
+  fixture, snapshot, prompt, template, skill, locale, data, mock, asset, public and static folders,
+  `.claude` and `.github`), because `src/test/resources/expected.txt` is a golden file and a prompt
+  or skill `.md` is read by code. A `docs/` folder is deliberately not enough on its own, because
   `docs/conf.py` or an example source file in it is code a check covers, and a CMake list and a pip
   requirements or constraints `.txt` are build input. An edit that names no path reads as code.
   A documentation-only edit demands no verification and leaves earlier check results standing; a run
@@ -306,7 +310,10 @@ generic "verification is not complete" request at the end of a run. Three facts 
 - At most one automatic continuation per run (`VERIFICATION_CONTINUATION_MAX` is 1), and only when,
   after the run's last code change, a check actually ran and failed and the model ended its turn
   without a passing one. The continuation names that fact and nothing else of the run (which check
-  and how many steps failed, from the governed verifier's closed result or a counted shell check)
+  and how many steps failed or timed out, from the governed verifier's closed result or a counted
+  shell check; a denied, cancelled or resource-exceeded step never ran to a verdict, is carried
+  apart as the summary's `notRunCount`, and makes a summary with no other failure a check that
+  could not start)
   and asks to repair the cause and rerun that check, or to state exactly why it cannot. It never
   runs when no check ran at all (`no-failed-check`), when a check could not start or was refused or
   blocked (`blocked`, any `CODING_VERIFICATION_BLOCKED_REASONS` member), when the run's tool-call or
@@ -317,7 +324,9 @@ generic "verification is not complete" request at the end of a run. Three facts 
 - A run that changed code and ends without a passing check after its last change settles as before
   (`failed` with `verification-not-evidenced`, the change kept), and the settlement carries the
   concrete gap as the closed `verificationGap`: `no-check-run`, `check-failed`, `check-not-started`
-  or `budget-exhausted`, decided in that precedence from the latest. The gap rides the snapshot
+  or `budget-exhausted`, decided with the most concrete fact first: `check-failed`, then
+  `check-not-started`, then `budget-exhausted`, then `no-check-run`. A failed check stays the gap when the
+  budget ran out afterwards; the continuation is still skipped for the budget. The gap rides the snapshot
   (persisted by the snapshot store's `verification_gap` column, schema version 83), the `status`
   frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. The Workbench names
   it in one plain sentence that ends with what the person can do, and offers "Run the check now"

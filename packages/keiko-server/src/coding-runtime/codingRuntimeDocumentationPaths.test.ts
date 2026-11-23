@@ -14,6 +14,7 @@ describe("isDocumentationPath", () => {
     "sub\\folder\\NOTICE",
     "CONTRIBUTING",
     "docs/architecture/overview.md",
+    "handbook/notes.txt",
   ])("treats %s as documentation", (path) => {
     expect(isDocumentationPath(path)).toBe(true);
   });
@@ -35,6 +36,15 @@ describe("isDocumentationPath", () => {
     "Makefile",
     "",
     "docs/",
+    // Prose extensions that code or tests read: golden files, prompts, templates, skills.
+    "src/test/resources/expected.txt",
+    "tests/fixtures/answer.md",
+    "app/prompts/system.md",
+    "SRC/Main/Notes.MD",
+    "packages/a/skills/review/SKILL.md",
+    ".github/pull_request_template.md",
+    ".claude/commands/review.md",
+    "docs\\tests\\expected.txt",
   ])("treats %s as code", (path) => {
     expect(isDocumentationPath(path)).toBe(false);
   });

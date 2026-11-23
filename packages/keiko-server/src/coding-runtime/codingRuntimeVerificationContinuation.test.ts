@@ -4,6 +4,7 @@ import {
   recordVerificationContinuation,
   VERIFICATION_CONTINUATION_MAX,
   VERIFICATION_CONTINUATION_SKIP_REASONS,
+  VERIFICATION_GAP_WORDS,
   verificationContinuationIntent,
 } from "./codingRuntimeVerificationContinuation.js";
 import type { ServerLogEvent } from "../observability/index.js";
@@ -134,6 +135,13 @@ describe("verification continuation emitted evidence", () => {
       "coding-runtime.run.verification-continuation.emitted-line",
       formatActivityLogProofLine(line),
     );
+  });
+});
+
+// #4491 audit: one literal vocabulary serves both registrations and equals the contract's.
+describe("verification gap vocabulary", () => {
+  it("is exactly the contract's closed list", () => {
+    expect([...VERIFICATION_GAP_WORDS]).toEqual([...CODING_WORKBENCH_VERIFICATION_GAPS]);
   });
 });
 

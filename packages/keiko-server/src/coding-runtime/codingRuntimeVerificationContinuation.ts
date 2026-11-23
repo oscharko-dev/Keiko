@@ -69,6 +69,27 @@ export const VERIFICATION_CONTINUATION_SKIP_REASONS = [
 export type VerificationContinuationSkipReason =
   (typeof VERIFICATION_CONTINUATION_SKIP_REASONS)[number];
 
+/**
+ * The contract's verification-gap vocabulary (`CODING_WORKBENCH_VERIFICATION_GAPS`), written once
+ * here as a literal because the typed-registry generator reads a registration's values only from a
+ * literal it can see in source, not from another package's compiled declaration. The check below
+ * fails to compile when this list and the contract's type drift apart in either direction.
+ */
+export const VERIFICATION_GAP_WORDS = [
+  "no-check-run",
+  "check-failed",
+  "check-not-started",
+  "budget-exhausted",
+] as const;
+type VerificationGapWordsMatchContract = [CodingWorkbenchVerificationGap] extends [
+  (typeof VERIFICATION_GAP_WORDS)[number],
+]
+  ? [(typeof VERIFICATION_GAP_WORDS)[number]] extends [CodingWorkbenchVerificationGap]
+    ? true
+    : never
+  : never;
+export const VERIFICATION_GAP_WORDS_MATCH_CONTRACT: VerificationGapWordsMatchContract = true;
+
 type ContinuationState =
   | "continued"
   | "skipped"
@@ -138,7 +159,7 @@ const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
+      values: [...VERIFICATION_GAP_WORDS],
     },
     // The failed check a `continued` line names (#4491): which check and how many steps failed,
     // the only two facts the continuation task carries. Never a path or a line of output.

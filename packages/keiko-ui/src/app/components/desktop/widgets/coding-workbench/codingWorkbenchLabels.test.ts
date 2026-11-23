@@ -1313,14 +1313,16 @@ describe("verification gap on a failed run", () => {
       failureCode: "verification-not-evidenced",
       verificationGap: "check-failed",
     });
-    expect(eventOffersRunCheck(gap)).toBe(true);
+    expect(eventOffersRunCheck(gap, true)).toBe(true);
+    expect(eventOffersRunCheck(gap, false)).toBe(false);
     expect(eventOffersErrorReport(gap)).toBe(false);
     const other = failed({ failureCode: "runtime-failed" });
-    expect(eventOffersRunCheck(other)).toBe(false);
+    expect(eventOffersRunCheck(other, true)).toBe(false);
     expect(eventOffersErrorReport(other)).toBe(true);
     expect(
       eventOffersRunCheck(
         failed({ failureCode: "verification-not-evidenced", state: "cancelled" }),
+        true,
       ),
     ).toBe(false);
   });

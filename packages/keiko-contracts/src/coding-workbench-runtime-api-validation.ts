@@ -123,7 +123,7 @@ export function isCodingWorkbenchVerificationSummary(
   if (!isRecord(value)) return false;
   const keys = ["verifierId", "status", "passedCount", "failedCount", "skippedCount", "durationMs"];
   return (
-    exactKeys(value, [...keys, "deniedCount"], "verificationSummary").length === 0 &&
+    exactKeys(value, [...keys, "deniedCount", "notRunCount"], "verificationSummary").length === 0 &&
     keys.every((key) => Object.hasOwn(value, key)) &&
     isVerificationKind(value.verifierId) &&
     isOneOf(value.status, ["passed", "failed", "partial"]) &&
@@ -138,14 +138,20 @@ function validVerificationCounts(value: Record<string, unknown>): boolean {
   const counts = [value.passedCount, value.failedCount, value.skippedCount];
   if (!counts.every((count) => Number.isSafeInteger(count) && Number(count) >= 0)) return false;
   if (value.status === "passed" && value.failedCount !== 0) return false;
-  if (!Object.hasOwn(value, "deniedCount")) return true;
-  const count = value.deniedCount;
   return (
-    typeof count === "number" &&
-    Number.isSafeInteger(count) &&
-    count >= 0 &&
-    count <= Number(value.failedCount)
+    optionalCountWithin(value, "deniedCount", Number(value.failedCount)) &&
+    optionalCountWithin(value, "notRunCount", Number(value.failedCount)) &&
+    // A denied step never ran, so the not-run count includes it.
+    (!Object.hasOwn(value, "notRunCount") ||
+      !Object.hasOwn(value, "deniedCount") ||
+      Number(value.deniedCount) <= Number(value.notRunCount))
   );
+}
+
+function optionalCountWithin(value: Record<string, unknown>, key: string, bound: number): boolean {
+  if (!Object.hasOwn(value, key)) return true;
+  const count = value[key];
+  return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 && count <= bound;
 }
 
 function validateSseNativeRetry(value: Record<string, unknown>, errors: string[]): void {

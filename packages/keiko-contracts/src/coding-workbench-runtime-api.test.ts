@@ -1721,6 +1721,29 @@ describe("body-free Workbench verifier metadata", () => {
   );
 
   it.each([
+    [{ failedCount: 3, notRunCount: 2 }],
+    [{ failedCount: 3, deniedCount: 1, notRunCount: 2 }],
+    [{ failedCount: 1, notRunCount: 1, deniedCount: 1 }],
+  ])("accepts a not-run subset of the canonical failures: %j", (counts) => {
+    const enriched = { ...event, verificationSummary: { ...verificationSummary, ...counts } };
+    expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toEqual({ ok: true, value: enriched });
+  });
+
+  it.each([
+    { notRunCount: -1 },
+    { notRunCount: 0.5 },
+    { notRunCount: "1" },
+    { notRunCount: 2 },
+    { failedCount: 3, deniedCount: 2, notRunCount: 1 },
+  ])("rejects a not-run count outside the canonical failures %j", (invalid) => {
+    const enriched = {
+      ...event,
+      verificationSummary: { ...verificationSummary, failedCount: 1, ...invalid },
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toMatchObject({ ok: false });
+  });
+
+  it.each([
     { stdout: "private verifier output" },
     { path: "/private/workspace/test.ts" },
     { verifierId: "unimplemented" },

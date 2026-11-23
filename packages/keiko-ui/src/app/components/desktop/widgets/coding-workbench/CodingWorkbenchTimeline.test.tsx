@@ -2974,7 +2974,7 @@ describe("Timeline — verification gap on a failed run", () => {
     (gap, sentence) => {
       const { container } = renderGap(gap as keyof typeof GAP_SENTENCES, vi.fn());
       expect(container).toHaveTextContent(sentence);
-      expect(container).toHaveTextContent(/Run the check now/u);
+      expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
       expect(container).not.toHaveTextContent(/internal error/iu);
     },
   );
@@ -2995,10 +2995,16 @@ describe("Timeline — verification gap on a failed run", () => {
     expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
   });
 
-  it("shows neither button when a new request cannot be sent, and never the error report", () => {
-    renderGap("no-check-run");
-    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  it("shows neither button when a new request cannot be sent, and the sentence still reads right", () => {
+    for (const gap of Object.keys(GAP_SENTENCES) as (keyof typeof GAP_SENTENCES)[]) {
+      const { container, unmount } = renderGap(gap);
+      expect(container).toHaveTextContent(GAP_SENTENCES[gap]);
+      // The sentence names the next step, never a control that may not be on the card.
+      expect(container).not.toHaveTextContent(/Run the check now|Select/u);
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+      unmount();
+    }
   });
 
   it("restores the gap with the settled snapshot after a reload", () => {

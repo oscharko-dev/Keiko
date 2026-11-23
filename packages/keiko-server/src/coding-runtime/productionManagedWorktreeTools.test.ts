@@ -2229,6 +2229,8 @@ describe("production managed worktree tools", () => {
         passedCount: 0,
         failedCount: 1,
         deniedCount: 1,
+        // A denied step never ran: it is canonical failure, not a check that ran and failed (#4491).
+        notRunCount: 1,
       },
     });
     expect(completeVerification).not.toHaveBeenCalled();

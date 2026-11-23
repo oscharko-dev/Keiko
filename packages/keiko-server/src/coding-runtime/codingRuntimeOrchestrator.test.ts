@@ -9024,6 +9024,115 @@ describe("verification truth at task settlement", () => {
 
   // #4491 part 3: after the last code edit a check ran and failed. Exactly one continuation, which
   // names that fact; the run that still lacks a passing check settles with the gap, never a second.
+  // #4491 audit: a summary's failedCount is canonical (denied, cancelled and resource-exceeded steps
+  // included), but only failed and timed-out steps are a check that ran and did not pass.
+  async function summarized(
+    f: ReturnType<typeof fixture>,
+    failedCount: number,
+    notRunCount: number,
+  ): Promise<void> {
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: `verification-${String(f.orchestrator.status().revision)}`,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: "failed",
+      passedCount: 0,
+      failedCount,
+      skippedCount: 0,
+      verificationEditRevision: f.orchestrator.verificationRevision("run-1"),
+      verificationTargetDigest: codingVerificationTargetDigest("test"),
+      verificationSummary: {
+        verifierId: "test",
+        status: "failed",
+        passedCount: 0,
+        failedCount,
+        ...(notRunCount === 0 ? {} : { notRunCount }),
+        skippedCount: 0,
+        durationMs: 1,
+      },
+      failureLocationCount: 0,
+      failureLocationsTruncated: false,
+    });
+  }
+
+  it("sends no continuation when every non-passing step was denied, cancelled or over its limit", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 3, 3);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  it("names only the failed and timed-out steps in the continuation of a mixed summary", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 3, 2);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+    expect(request.taskIntent).toContain(
+      "The test check you ran after your last change failed (1 step failed)",
+    );
+  });
+
+  // #4491 audit: the most concrete fact names the gap. A failed check stays the gap when the budget
+  // ran out afterwards; the continuation is still skipped for the budget.
+  it("names check-failed when the budget ran out after a failed check, and still skips for the budget", async () => {
+    const { f, log, finish } = await runningTask(undefined, () => true);
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-failed",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "budget-exhausted" });
+  });
+
+  it("names check-failed before check-not-started, and check-not-started before the budget", async () => {
+    const failedThenBlocked = await runningTask();
+    failedThenBlocked.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(failedThenBlocked.f, "failed");
+    failedThenBlocked.f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+    );
+    failedThenBlocked.finish();
+    await vi.waitFor(() => {
+      expect(failedThenBlocked.f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-failed",
+      });
+    });
+    expect(failedThenBlocked.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const blockedAndBudget = await runningTask(undefined, () => true);
+    blockedAndBudget.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    blockedAndBudget.f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+    );
+    blockedAndBudget.finish();
+    await vi.waitFor(() => {
+      expect(blockedAndBudget.f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-not-started",
+      });
+    });
+  });
+
   it("sends exactly one fact-based continuation after a failed check, never a second", async () => {
     const { f, log, finish } = await runningTask();
     f.taskDispatcher.dispatch.mockResolvedValueOnce({
@@ -9069,26 +9178,11 @@ describe("verification truth at task settlement", () => {
     expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
   });
 
-  it("prefers a check that could not start over an earlier failed one", async () => {
-    const { f, finish } = await runningTask();
-    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-    await verification(f, "failed");
-    f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_RUNNER_UNAVAILABLE");
-    finish();
-    await vi.waitFor(() => {
-      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-        verificationGap: "check-not-started",
-      });
-    });
-    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
-  });
-
   // #4491 part 3: the budget refusal said "finish and report"; a continuation that said "verify"
   // would contradict it, so an exhausted budget sends no continuation and names itself.
   it("sends no continuation after the run's budget ran out, and names budget-exhausted", async () => {
     const { f, log, finish } = await runningTask(undefined, () => true);
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
-    await verification(f, "failed");
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({

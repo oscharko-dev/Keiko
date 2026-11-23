@@ -1316,13 +1316,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.verification-not-evidenced":
     "The task is not verified: its checks failed, did not run, or preceded the final edit. Your changes remain in the task workspace. Inspect the latest verification result, resolve its cause, and rerun the relevant checks before completing the task.",
   "codingWorkbench.event.failure.verificationGap.no-check-run":
-    "The changes to the project's code were not checked: no check ran after the last change, so nothing shows they work. Your changes stay in the task workspace. Select \"Run the check now\" to have Keiko run the project's check and repair what it finds, or say in the box below which check to run.",
+    "The changes to the project's code were not checked: no check ran after the last change, so nothing shows they work. Your changes stay in the task workspace. Ask Keiko to run the project's check and repair what it finds, or say in the box below which check to run.",
   "codingWorkbench.event.failure.verificationGap.check-failed":
-    'A check failed after the last change and the run ended before it was repaired. Your changes stay in the task workspace. Select "Run the check now" to have Keiko run it again and repair the cause, or describe the fix in the box below.',
+    "A check failed after the last change and the run ended before it was repaired. Your changes stay in the task workspace. Ask Keiko to run it again and repair the cause, or describe the fix in the box below.",
   "codingWorkbench.event.failure.verificationGap.check-not-started":
-    'The check could not start, so the changes were not checked. The step above names the reason, for example a refused permission or a tool this computer lacks. Your changes stay in the task workspace. Remove that reason, then select "Run the check now".',
+    "The check could not start, so the changes were not checked. The step above names the reason, for example a refused permission or a tool this computer lacks. Your changes stay in the task workspace. Remove that reason, then ask Keiko to run the check again.",
   "codingWorkbench.event.failure.verificationGap.budget-exhausted":
-    'The run used up its budget of tool calls or changed bytes before a check could run, so the changes were not checked. Your changes stay in the task workspace. Select "Run the check now" to check them in a new run with a fresh budget.',
+    "The run used up its budget of tool calls or changed bytes before a check could run, so the changes were not checked. Your changes stay in the task workspace. Start a new run to check them with a fresh budget.",
   "codingWorkbench.event.runCheck.action": "Run the check now",
   "codingWorkbench.event.runCheck.request":
     "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",

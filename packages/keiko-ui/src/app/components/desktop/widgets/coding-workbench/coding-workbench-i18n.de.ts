@@ -1360,13 +1360,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.verification-not-evidenced":
     "Die Aufgabe ist nicht verifiziert: Die Prüfungen sind fehlgeschlagen, wurden nicht ausgeführt oder fanden vor der letzten Änderung statt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Prüfe das letzte Verifikationsergebnis, behebe die Ursache und führe die passenden Prüfungen erneut aus, bevor die Aufgabe abgeschlossen wird.",
   "codingWorkbench.event.failure.verificationGap.no-check-run":
-    "Die Änderungen am Code des Projekts wurden nicht geprüft: Nach der letzten Änderung lief keine Prüfung, also zeigt nichts, dass sie funktionieren. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Wähle „Prüfung nachholen“, damit Keiko die Prüfung des Projekts ausführt und behebt, was sie findet, oder nenne unten, welche Prüfung laufen soll.",
+    "Die Änderungen am Code des Projekts wurden nicht geprüft: Nach der letzten Änderung lief keine Prüfung, also zeigt nichts, dass sie funktionieren. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Lass Keiko die Prüfung des Projekts ausführen und beheben, was sie findet, oder nenne unten, welche Prüfung laufen soll.",
   "codingWorkbench.event.failure.verificationGap.check-failed":
-    "Nach der letzten Änderung ist eine Prüfung fehlgeschlagen, und der Lauf endete, bevor sie behoben war. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Wähle „Prüfung nachholen“, damit Keiko sie erneut ausführt und die Ursache behebt, oder beschreibe unten die Korrektur.",
+    "Nach der letzten Änderung ist eine Prüfung fehlgeschlagen, und der Lauf endete, bevor sie behoben war. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Lass Keiko sie erneut ausführen und die Ursache beheben, oder beschreibe unten die Korrektur.",
   "codingWorkbench.event.failure.verificationGap.check-not-started":
-    "Die Prüfung konnte nicht starten, deshalb wurden die Änderungen nicht geprüft. Der Schritt darüber nennt den Grund, zum Beispiel eine abgelehnte Berechtigung oder ein Werkzeug, das auf diesem Computer fehlt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Beseitige diesen Grund und wähle dann „Prüfung nachholen“.",
+    "Die Prüfung konnte nicht starten, deshalb wurden die Änderungen nicht geprüft. Der Schritt darüber nennt den Grund, zum Beispiel eine abgelehnte Berechtigung oder ein Werkzeug, das auf diesem Computer fehlt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Beseitige diesen Grund und lass Keiko die Prüfung dann erneut ausführen.",
   "codingWorkbench.event.failure.verificationGap.budget-exhausted":
-    "Der Lauf hat sein Budget an Werkzeugaufrufen oder geänderten Bytes verbraucht, bevor eine Prüfung laufen konnte, deshalb wurden die Änderungen nicht geprüft. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Wähle „Prüfung nachholen“, um sie in einem neuen Lauf mit frischem Budget zu prüfen.",
+    "Der Lauf hat sein Budget an Werkzeugaufrufen oder geänderten Bytes verbraucht, bevor eine Prüfung laufen konnte, deshalb wurden die Änderungen nicht geprüft. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Starte einen neuen Lauf, um sie mit frischem Budget zu prüfen.",
   "codingWorkbench.event.runCheck.action": "Prüfung nachholen",
   "codingWorkbench.event.runCheck.request":
     "Führe jetzt die Prüfung des Projekts aus (Tests, Typprüfung oder Build), behebe einen Fehler, den du beheben kannst, und sag mir das Ergebnis.",

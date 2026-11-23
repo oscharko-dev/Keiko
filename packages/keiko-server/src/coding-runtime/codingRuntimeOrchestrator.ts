@@ -80,6 +80,7 @@ import {
   recordVerificationContinuation,
   verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
+  VERIFICATION_GAP_WORDS,
   type VerificationContinuationSkipReason,
 } from "./codingRuntimeVerificationContinuation.js";
 import type {
@@ -789,7 +790,7 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["no-check-run", "check-failed", "check-not-started", "budget-exhausted"],
+      values: [...VERIFICATION_GAP_WORDS],
     },
     taskOutcomeStatus: {
       type: "string",
@@ -1713,13 +1714,23 @@ function isCompleteVerificationSummary(
 }
 
 // What the fact-based continuation may say about a failed check: which check and how many steps
-// failed, from the summary's closed verifier word and count. Never a path or a line of output.
+// failed or timed out, from the summary's closed verifier word and counts. Steps that never ran to a
+// verdict (denied, cancelled, resource-exceeded) are no failed check. Never a path or output.
 function verificationFailureEvidence(
   event: CodingWorkbenchRuntimeEvent,
 ): CodingVerificationFailureEvidence | undefined {
-  const failedCount = event.failedCount ?? 0;
+  const failedCount = (event.failedCount ?? 0) - (event.verificationSummary?.notRunCount ?? 0);
   if (failedCount < 1) return undefined;
   return { check: event.verificationSummary?.verifierId ?? "check", failedCount };
+}
+
+// A summary whose every non-passing step never ran: the check could not run, which is a blocker to
+// report and no failure to repair.
+function verificationNeverRan(event: CodingWorkbenchRuntimeEvent): boolean {
+  return (
+    (event.failedCount ?? 0) > 0 &&
+    (event.failedCount ?? 0) - (event.verificationSummary?.notRunCount ?? 0) < 1
+  );
 }
 
 function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean | null {
@@ -3201,6 +3212,8 @@ export class CodingRuntimeOrchestrator {
       event.verificationEditRevision,
       verificationFailureEvidence(event),
     );
+    if (verificationNeverRan(event))
+      this.effort.verificationBlocked(current.runId, "VERIFICATION_RUNNER_UNAVAILABLE");
   }
 
   private async ingestActiveEvent(
@@ -3605,13 +3618,15 @@ export class CodingRuntimeOrchestrator {
 
   /**
    * The concrete gap of a run that changed code and has no passing check after its last change
-   * (#4491), decided in this order: its budget was used up, a check could not start, a check ran
-   * and failed, or no check ran at all. Read from the ledger and the authority's own facts.
+   * (#4491), the most concrete fact first: a check ran and failed, a check could not start, the
+   * run's budget was used up, or no check ran at all. Read from the ledger and the authority's own
+   * facts. A failed check stays the gap when the budget ran out afterwards; the continuation is
+   * still skipped for the budget.
    */
   private verificationGap(runId: string): CodingWorkbenchVerificationGap {
-    if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
+    if (this.effort.failedCheck(runId) !== undefined) return "check-failed";
     if (this.effort.verificationBlockedReason(runId) !== undefined) return "check-not-started";
-    return this.effort.failedCheck(runId) === undefined ? "no-check-run" : "check-failed";
+    return this.deps.toolBudgetExhausted?.(runId) === true ? "budget-exhausted" : "no-check-run";
   }
 
   // Why no continuation runs: only a failed check, with a repair still unspent, justifies one.
@@ -3620,16 +3635,11 @@ export class CodingRuntimeOrchestrator {
   ): VerificationContinuationSkipReason | undefined {
     if ((this.verificationContinuations.get(runId) ?? 0) >= VERIFICATION_CONTINUATION_MAX)
       return "already-continued";
-    switch (this.verificationGap(runId)) {
-      case "budget-exhausted":
-        return "budget-exhausted";
-      case "check-not-started":
-        return "blocked";
-      case "no-check-run":
-        return "no-failed-check";
-      case "check-failed":
-        return undefined;
-    }
+    // A failed check is the gap even when the run was blocked or ran out of budget afterwards, but
+    // neither leaves anything the model could still repair, so no continuation runs.
+    if (this.effort.verificationBlockedReason(runId) !== undefined) return "blocked";
+    if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
+    return this.effort.failedCheck(runId) === undefined ? "no-failed-check" : undefined;
   }
 
   /** A run that changed documentation alone asks for no check; the line says why none was asked. */

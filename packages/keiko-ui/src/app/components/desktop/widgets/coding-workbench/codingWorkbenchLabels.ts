@@ -511,8 +511,9 @@ const identityTranslate: CodingWorkbenchTranslate = (key) => key;
  * action that is not there.
  */
 export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): boolean {
-  // A run whose changes were not checked has nothing broken to report: it offers the check itself.
-  if (eventOffersRunCheck(event)) return false;
+  // A run whose changes were not checked has nothing broken to report, with or without a check to
+  // offer, so it never offers the error report.
+  if (isVerificationGapEvent(event)) return false;
   if (event.kind === "status" && event.state === "failed") return true;
   if (turnFailureDetail(event, identityTranslate).length > 0) return false;
   const key = runFailureMessageKey(event);
@@ -522,17 +523,25 @@ export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): b
   );
 }
 
-/**
- * True exactly when the card names a verification gap (#4491): the run settled `failed` with
- * `verification-not-evidenced`. The card then offers "Run the check now" instead of the error
- * report, because nothing failed inside Keiko and the person can act on the sentence.
- */
-export function eventOffersRunCheck(event: CodingWorkbenchRuntimeSseEvent): boolean {
+/** True exactly when the event is a run settled `failed` with `verification-not-evidenced` (#4491). */
+export function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return (
     event.kind === "status" &&
     event.state === "failed" &&
     event.failureCode === "verification-not-evidenced"
   );
+}
+
+/**
+ * True when the card of a verification gap can offer "Run the check now": only while a new request
+ * can be sent (`runCheckAvailable`). The card's sentence names the gap and the next step without
+ * naming a control, so it reads correctly with or without the button.
+ */
+export function eventOffersRunCheck(
+  event: CodingWorkbenchRuntimeSseEvent,
+  runCheckAvailable: boolean,
+): boolean {
+  return runCheckAvailable && isVerificationGapEvent(event);
 }
 
 function turnFailureDetail(

@@ -1469,8 +1469,8 @@ function RunFailureReport({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const onRunCheck = useContext(RunCheckContext);
-  if (eventOffersRunCheck(event)) {
-    return onRunCheck === undefined ? null : (
+  if (onRunCheck !== undefined && eventOffersRunCheck(event, true)) {
+    return (
       <p className={styles.timelineDetail} data-run-check="">
         <button type="button" className={styles.runCheckAction} onClick={onRunCheck}>
           {t("codingWorkbench.event.runCheck.action")}

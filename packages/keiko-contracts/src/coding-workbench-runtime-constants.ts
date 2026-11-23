@@ -209,11 +209,14 @@ export type CodingWorkbenchTurnFailureCode =
  * could not start (it was refused or blocked). `budget-exhausted`: the run's tool-call or patch
  * budget was used up before a check ran. A closed word, never inferred from text.
  */
-export type CodingWorkbenchVerificationGap =
-  "no-check-run" | "check-failed" | "check-not-started" | "budget-exhausted";
+export const CODING_WORKBENCH_VERIFICATION_GAPS = [
+  "no-check-run",
+  "check-failed",
+  "check-not-started",
+  "budget-exhausted",
+] as const;
 
-export const CODING_WORKBENCH_VERIFICATION_GAPS: readonly CodingWorkbenchVerificationGap[] =
-  Object.freeze(["no-check-run", "check-failed", "check-not-started", "budget-exhausted"] as const);
+export type CodingWorkbenchVerificationGap = (typeof CODING_WORKBENCH_VERIFICATION_GAPS)[number];
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
