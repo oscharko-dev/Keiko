@@ -33,9 +33,10 @@ incomplete`, then `Keiko could not start.`
 
 **Root Cause**
 
-1. The copy carries the download mark of a browser, mail or chat program. macOS and Windows stop
-   an unsigned program that carries it, and Keiko has no Apple or Microsoft signature (ADR-0121
-   D7). An organization's application control can produce the same block without any mark.
+1. The copy carries the download mark of a browser, mail or chat program. macOS with Gatekeeper
+   on, as it ships, and Windows stop an unsigned program that carries it, and Keiko has no Apple or
+   Microsoft signature (ADR-0121 D7). An organization's application control can produce the same
+   block without any mark.
 2. The folder is not complete: the archive was extracted only in part, files were moved out of
    `system`, or an endpoint-protection product removed one. The in-place launch validates the
    payload before it starts anything (ADR-0121 D9).

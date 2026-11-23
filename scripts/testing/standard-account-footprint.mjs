@@ -6,13 +6,19 @@
 // this script walks the whole writable data volume as root and lists every entry that changed after
 // a marker file the job wrote before the account acted. It ignores the account's own areas: its home
 // and the per-user folder macOS assigns it under /var/folders (its temporary and cache folders). Of
-// the rest, an entry counts against the promise when the account owns it (it created or replaced
-// it), or when it is a file the account may write by its mode bits (it may have changed it). Every
-// other change belongs to a program of another account and is counted, not attributed. Entries a
-// run created and removed again leave nothing behind and are not seen.
+// the rest, an entry counts against the promise when the account owns it: the account created or
+// replaced it. Two kinds of change are listed but not attributed:
+//   - an entry the account owns inside a folder macOS's own services (trustd, sfanalytics, mds)
+//     keep for that account below /private/var, named after its GeneratedUID or its uid: like
+//     /var/folders, an area the system assigns the account, not one a program it runs chooses;
+//   - a regular file of another account that the account may also write by its mode bits: a change
+//     to it cannot be told apart from that account's own change (on a hosted runner, the runner
+//     account works through the whole job).
+// Every other change belongs to a program of another account and is counted. Entries a run created
+// and removed again leave nothing behind and are not seen.
 //
-// It must run as root, so it can read every folder. Output: one line per counted class, the first
-// attributed paths of the runner, and an evidence file; it exits 1 when anything is attributed.
+// It must run as root, so it can read every folder. Output: one line per counted class, the listed
+// paths, and an evidence file; it exits 1 when the account owns an entry outside its areas.
 
 import { spawnSync } from "node:child_process";
 import { lstatSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -22,12 +28,14 @@ import { performance } from "node:perf_hooks";
 import { readFlagPairs } from "../lib/flag-pairs.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
 
-export const EVIDENCE_KIND = "keiko-standard-account-footprint";
-export const EVIDENCE_SCHEMA_VERSION = 1;
+const EVIDENCE_KIND = "keiko-standard-account-footprint";
+const EVIDENCE_SCHEMA_VERSION = 2;
 /** The writable volume of a Mac since macOS 10.15; the system volume is sealed and read-only. */
 export const DATA_VOLUME = "/System/Volumes/Data";
 const ACCOUNT_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
-const LISTED_PATHS = 20;
+const GUID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/iu;
+const LISTED_PATHS = 200;
+const LISTED_KINDS = Object.freeze(["owned", "systemArea", "shared"]);
 const FIND_TIMEOUT_MS = 30 * 60 * 1000;
 
 const USAGE = `Usage (as root, after the account acted):
@@ -68,18 +76,28 @@ function output(command, args) {
   return String(result.stdout).trim();
 }
 
-/** The account's ids and its own areas: its home and the per-user folder under /var/folders. */
+function directoryValue(run, account, key) {
+  return run("dscl", [".", "-read", `/Users/${account}`, key])
+    .replace(new RegExp(`^${key}:\\s*`, "u"), "")
+    .trim();
+}
+
+/**
+ * The account's ids, its GeneratedUID and its own areas: its home and the per-user folder under
+ * /var/folders.
+ */
 export function accountAreas(account, run = output) {
   const uid = Number(run("id", ["-u", account]));
   const gids = run("id", ["-G", account]).split(/\s+/u).map(Number);
-  const home = run("dscl", [".", "-read", `/Users/${account}`, "NFSHomeDirectory"])
-    .replace(/^NFSHomeDirectory:\s*/u, "")
-    .trim();
+  const home = directoryValue(run, account, "NFSHomeDirectory");
+  const guid = directoryValue(run, account, "GeneratedUID");
   // DARWIN_USER_DIR is <per-user folder>/0/; its parent also holds the T (temporary) and C
   // (cache) folders of the account.
   const userDir = run("sudo", ["-u", account, "getconf", "DARWIN_USER_DIR"]);
-  if (!Number.isInteger(uid) || home === "" || userDir === "") refuse("the account is unknown");
-  return { uid, gids, roots: [home, dirname(userDir.replace(/\/+$/u, ""))] };
+  if (!Number.isInteger(uid) || home === "" || userDir === "" || !GUID_PATTERN.test(guid)) {
+    refuse("the account is unknown");
+  }
+  return { uid, gids, guid, roots: [home, dirname(userDir.replace(/\/+$/u, ""))] };
 }
 
 /**
@@ -94,23 +112,44 @@ export function writableBy(stats, { uid, gids }) {
 }
 
 /**
- * The class of one changed entry: `owned` (the account owns it), `writable` (a regular file the
- * account may write), `others` (a change the account could not have made), or `gone` (removed
- * since).
+ * Whether an entry lies below /private/var in a folder named after the account's GeneratedUID or
+ * its uid: there macOS's own services keep what they hold for that account (trustd its trust
+ * cache, sfanalytics its analytics, mds its messages) and create it as the account.
  */
-export function classifyEntry(path, account, stat = lstatSync) {
-  let stats;
+export function inSystemArea(path, { uid, guid }, volume = DATA_VOLUME) {
+  const prefix = `${volume}/private/var/`;
+  if (!path.startsWith(prefix)) return false;
+  const named = new Set([guid.toUpperCase(), String(uid)]);
+  return path
+    .slice(prefix.length)
+    .split("/")
+    .some((segment) => named.has(segment.toUpperCase()));
+}
+
+/** The entry's own metadata, or undefined when it is no longer there. */
+function inspectEntry(path, stat) {
   try {
-    stats = stat(path);
+    return stat(path);
   } catch (error) {
     // Only an entry that is no longer there is gone; any other failure leaves it uninspected.
     const code = error instanceof Error && "code" in error ? String(error.code) : "unknown";
-    if (code === "ENOENT" || code === "ENOTDIR") return "gone";
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
     refuse(`a changed entry could not be inspected (${code})`);
   }
-  if (stats.uid === account.uid) return "owned";
+}
+
+/**
+ * The class of one changed entry: `owned` (the account owns it outside its areas), `systemArea`
+ * (it owns it in a folder the system keeps for it), `shared` (a regular file of another account
+ * that the account may also write), `others` (a change the account could not have made), or `gone`
+ * (removed since).
+ */
+export function classifyEntry(path, account, stat = lstatSync) {
+  const stats = inspectEntry(path, stat);
+  if (stats === undefined) return "gone";
+  if (stats.uid === account.uid) return inSystemArea(path, account) ? "systemArea" : "owned";
   // A regular file only: a socket or a folder of another account changes without the account.
-  if (stats.isFile() && writableBy(stats, account)) return "writable";
+  if (stats.isFile() && writableBy(stats, account)) return "shared";
   return "others";
 }
 
@@ -136,18 +175,16 @@ export function findArguments(volume, prunedRoots, marker) {
   ];
 }
 
-/** Counts each class and keeps the first attributed paths. */
+/** Counts each class and lists the owned, system-area and shared paths, up to a bound each. */
 export function summarize(paths, classify) {
-  const counts = { owned: 0, writable: 0, others: 0, gone: 0 };
-  const attributed = [];
+  const counts = { owned: 0, systemArea: 0, shared: 0, others: 0, gone: 0 };
+  const listed = Object.fromEntries(LISTED_KINDS.map((kind) => [kind, []]));
   for (const path of paths) {
     const kind = classify(path);
     counts[kind] += 1;
-    if ((kind === "owned" || kind === "writable") && attributed.length < LISTED_PATHS) {
-      attributed.push(`${kind}: ${path}`);
-    }
+    if (listed[kind] !== undefined && listed[kind].length < LISTED_PATHS) listed[kind].push(path);
   }
-  return { counts, attributed, violationCount: counts.owned + counts.writable };
+  return { counts, listed, violationCount: counts.owned };
 }
 
 // What find may report without the walk losing an entry the account could have written: a folder
@@ -194,7 +231,7 @@ function changedEntries(options, areas) {
 }
 
 /** Walks the data volume and returns the evidence. */
-export function runFootprint(options) {
+function runFootprint(options) {
   if (process.getuid?.() !== 0) refuse("run as root: only root can read every folder");
   const started = performance.now();
   const areas = accountAreas(options.account);
@@ -211,7 +248,7 @@ export function runFootprint(options) {
     vanishedDuringWalkCount: vanished,
     counts: summary.counts,
     violationCount: summary.violationCount,
-    attributed: summary.attributed,
+    listed: summary.listed,
     passed: summary.violationCount === 0,
     durationMs: Math.round(performance.now() - started),
   };
@@ -230,9 +267,11 @@ function main(argv) {
     }
     const { counts } = evidence;
     console.log(
-      `changed after the marker: ${String(evidence.changedEntryCount)} entries; owned by ${options.account}: ${String(counts.owned)}; writable by it: ${String(counts.writable)}; by other accounts: ${String(counts.others)}; removed since: ${String(counts.gone)}; unreadable folders: ${String(evidence.unreadableFolderCount)}; vanished during the walk: ${String(evidence.vanishedDuringWalkCount)}`,
+      `changed after the marker: ${String(evidence.changedEntryCount)} entries; owned by ${options.account} outside its areas: ${String(counts.owned)}; in folders the system keeps for it: ${String(counts.systemArea)}; files of other accounts it may also write: ${String(counts.shared)}; by other accounts: ${String(counts.others)}; removed since: ${String(counts.gone)}; unreadable folders: ${String(evidence.unreadableFolderCount)}; vanished during the walk: ${String(evidence.vanishedDuringWalkCount)}`,
     );
-    for (const line of evidence.attributed) console.log(`attributed ${line}`);
+    for (const kind of LISTED_KINDS) {
+      for (const path of evidence.listed[kind]) console.log(`${kind}: ${path}`);
+    }
     console.log(
       `${evidence.passed ? "PASS" : "FAIL"} nothing outside the account's own areas was created or changed`,
     );

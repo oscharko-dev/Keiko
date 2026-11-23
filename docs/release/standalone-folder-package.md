@@ -163,19 +163,19 @@ where it can be protected:
 macOS and Windows mark every file a browser, a mail program or a chat program downloads, and the
 built-in unzip passes the mark to every extracted file. Keiko carries no Apple or Microsoft
 signature ([ADR-0121 D7](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d7--stable-delivery-uses-protected-platform-neutral-keiko-release-trust)),
-so macOS does not run a marked copy: it holds the first program of the folder, Keiko's own
-Node.js runtime, before it runs, and Keiko does not start. Windows shows "Windows protected your
+so a Mac with Gatekeeper on, as macOS ships, does not run a marked copy: it holds the first program
+of the folder, Keiko's own Node.js runtime, before it runs, and Keiko does not start. Windows shows "Windows protected your
 PC". Finder then offers an approval in System Settings; Keiko's statement for people without
 administrator rights does not rely on it, and an organization may not allow it.
 
-What a standard account saw on each way a package reached it
+What the record observed on each way a package reached the account
 ([record](../qa/macos-delivery-forms-standard-account.md)):
 
-| How the copy reached the account                                     | Mark                    | Start                                           |
-| -------------------------------------------------------------------- | ----------------------- | ----------------------------------------------- |
-| A copy without the mark, as from an internal file share              | none                    | starts, and a coding run settles `succeeded`    |
-| The npm registry (the npm package, the npm folder's `node_modules`)  | none                    | starts, and a coding run settles `succeeded`    |
-| The standalone archive with a browser's mark, extracted with `ditto` | on every extracted file | macOS holds the first program; Keiko never runs |
+| How the copy reached the account                                     | Mark                    | Start                                                                                                                                                |
+| -------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A copy without the mark, as from an internal file share              | none                    | a standard account starts it, and a coding run settles `succeeded`                                                                                   |
+| The npm registry (the npm package, the npm folder's `node_modules`)  | none                    | a standard account starts it, and a coding run settles `succeeded`                                                                                   |
+| The standalone archive with a browser's mark, extracted with `ditto` | on every extracted file | Gatekeeper on, as macOS ships: macOS holds the first program and Keiko never runs. Gatekeeper off, as on the hosted runner: the mark changes nothing |
 
 The package starts when the mark never reaches the person's copy:
 

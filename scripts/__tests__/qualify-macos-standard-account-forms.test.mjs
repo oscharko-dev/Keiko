@@ -15,6 +15,7 @@ import {
   assertDisposableHome,
   browserDownloadMark,
   buildFormsEvidence,
+  gatekeeperState,
   markedEntryCount,
   markedOutcome,
   nodeUserInstallScript,
@@ -37,7 +38,12 @@ function passedForms() {
   return FORMS.map((form) => ({ form, passed: true, checks }));
 }
 
-const MARKED = { markedEntryCount: 12, startExit: 1, outcome: "start-refused" };
+const MARKED = {
+  gatekeeper: "enabled",
+  markedEntryCount: 12,
+  startExit: 1,
+  outcome: "start-refused",
+};
 
 function fakeRun(outputs) {
   return (command, args) => outputs[`${command} ${args.join(" ")}`] ?? { status: 1, stdout: "" };
@@ -218,6 +224,41 @@ describe("buildFormsEvidence", () => {
       runner,
     });
     expect(evidence.passed).toBe(false);
+  });
+
+  it("holds a pinned outcome only where Gatekeeper assesses programs", () => {
+    const options = { ...OPTIONS, expectMarked: MARKED.outcome };
+    const evidence = (marked) =>
+      buildFormsEvidence({ options, account: STANDARD, forms: passedForms(), marked, runner });
+    expect(evidence(MARKED).passed).toBe(true);
+    for (const gatekeeper of ["disabled", "unknown"]) {
+      expect(evidence({ ...MARKED, gatekeeper }).passed).toBe(false);
+    }
+    // Recording observes whatever the start showed, also where Gatekeeper is off.
+    const recorded = buildFormsEvidence({
+      options: OPTIONS,
+      account: STANDARD,
+      forms: passedForms(),
+      marked: { ...MARKED, gatekeeper: "disabled", outcome: "started-coding-run-succeeded" },
+      runner,
+    });
+    expect(recorded.passed).toBe(true);
+  });
+});
+
+describe("gatekeeperState", () => {
+  const answer =
+    (stdout, status = 0) =>
+    () => ({ stdout, stderr: "", status });
+
+  it("reads whether Gatekeeper assesses programs", () => {
+    expect(gatekeeperState(answer("assessments enabled\n"))).toBe("enabled");
+    expect(gatekeeperState(answer("assessments disabled\n", 1))).toBe("disabled");
+  });
+
+  it("names anything else unknown, never enabled", () => {
+    expect(gatekeeperState(answer(""))).toBe("unknown");
+    expect(gatekeeperState(() => ({ error: new Error("ENOENT") }))).toBe("unknown");
   });
 });
 

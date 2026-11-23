@@ -20,7 +20,15 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { arch, homedir, platform, release, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -59,8 +67,8 @@ import {
   waitFor,
 } from "./qualify-npm-folder-package.mjs";
 
-export const EVIDENCE_KIND = "keiko-macos-standard-account-forms";
-export const EVIDENCE_SCHEMA_VERSION = 1;
+const EVIDENCE_KIND = "keiko-macos-standard-account-forms";
+const EVIDENCE_SCHEMA_VERSION = 1;
 export const FORMS = Object.freeze(["npm", "npm-folder", "standalone"]);
 export const MARKED_OUTCOMES = Object.freeze([
   "start-refused",
@@ -212,7 +220,19 @@ export function markedOutcome({ healthy, codingRun }) {
   return codingRun === "succeeded" ? "started-coding-run-succeeded" : "started-coding-run-failed";
 }
 
-/** The body-free evidence: closed values, counts, digests and durations. */
+/**
+ * Whether Gatekeeper assesses programs on this Mac (`spctl --status`). It is on by default; a
+ * hosted CI image turns it off, and there a marked copy runs whatever the mark says, so its start
+ * observes nothing about the mark.
+ */
+export function gatekeeperState(run = spawnSync) {
+  const result = run("/usr/sbin/spctl", ["--status"], { encoding: "utf8" });
+  const text = `${String(result.stdout ?? "")}${String(result.stderr ?? "")}`;
+  if (/assessments enabled/u.test(text)) return "enabled";
+  if (/assessments disabled/u.test(text)) return "disabled";
+  return "unknown";
+}
+
 /** A form passed only when its checks ran through to a coding run that settled `succeeded`. */
 function formPassed(entry) {
   return (
@@ -221,6 +241,10 @@ function formPassed(entry) {
   );
 }
 
+/**
+ * The body-free evidence: closed values, counts, digests and durations. A pinned marked outcome
+ * holds only where Gatekeeper assesses programs; `record` records whatever the start showed.
+ */
 export function buildFormsEvidence({ options, account, forms, marked, runner }) {
   const formsPassed = FORMS.every((form) =>
     forms.some((entry) => entry.form === form && formPassed(entry)),
@@ -231,7 +255,8 @@ export function buildFormsEvidence({ options, account, forms, marked, runner }) 
     marked !== undefined &&
     marked.markedEntryCount > 0 &&
     MARKED_OUTCOMES.includes(marked.outcome) &&
-    (options.expectMarked === "record" || options.expectMarked === marked.outcome);
+    (options.expectMarked === "record" ||
+      (marked.gatekeeper === "enabled" && options.expectMarked === marked.outcome));
   const passed = formsPassed && markedMatches;
   const standard = !account.administrator && account.sudo === "refused";
   return {
@@ -309,7 +334,7 @@ function startEnvironment(context, form, port) {
 }
 
 /** One coding run on the synthetic repository, from activation to its settled state. */
-export async function codingRun(baseUrl, context, timeoutMs = RUN_TIMEOUT_MS) {
+async function codingRun(baseUrl, context, timeoutMs = RUN_TIMEOUT_MS) {
   const session = await openApiSession(baseUrl, {
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: context.launcherSecret,
   });
@@ -518,6 +543,16 @@ async function stopChecks(form, checks, env, context) {
   });
 }
 
+/**
+ * Keeps a form's Activity Log beside the evidence before the next form removes its state. The log
+ * is body-free by construction and is the record of why a check failed (AGENTS.md section 8).
+ */
+function keepActivityLog(form, context) {
+  const logs = join(form.stateDir, "logs");
+  if (!existsSync(logs)) return;
+  cpSync(logs, join(context.logDir, form.form), { recursive: true });
+}
+
 /** Ends whatever a failed form left running, so the next form starts from an empty state. */
 async function emergencyStop(form, env, context) {
   if ((await healthVersion(context.port)).reachable) {
@@ -544,6 +579,7 @@ async function qualifyForm(name, context) {
     await stopChecks(form, checks, env, context);
   } finally {
     await emergencyStop(form, env, context);
+    keepActivityLog(form, context);
   }
   return { form: name, passed: !checks.failed, checks: checkResults(checks) };
 }
@@ -559,13 +595,20 @@ async function qualifyMarkedDownload(context) {
   mkdirSync(form.parent, { recursive: true });
   const marked = join(form.parent, `keiko-${context.target}.standalone.zip`);
   copyFileSync(zip, marked);
-  const written = spawnSync("xattr", ["-w", "com.apple.quarantine", browserDownloadMark(), marked]);
+  const written = spawnSync("/usr/bin/xattr", [
+    "-w",
+    "com.apple.quarantine",
+    browserDownloadMark(),
+    marked,
+  ]);
   if (written.status !== 0) refuse("the download mark could not be written");
   form.extract(marked);
   const markedEntries = markedEntryCount(form.folder);
   if (markedEntries === 0)
     refuse("the extracted copy carries no download mark: nothing to observe");
-  return observeMarkedStart(form, context, markedEntries);
+  const gatekeeper = gatekeeperState();
+  console.log(`marked-download: ${String(markedEntries)} marked entries; Gatekeeper ${gatekeeper}`);
+  return { gatekeeper, ...(await observeMarkedStart(form, context, markedEntries)) };
 }
 
 // A coding run of the marked copy: its failure is the observation, recorded with its reason.
@@ -599,6 +642,7 @@ async function observeMarkedStart(form, context, markedEntries) {
     return { markedEntryCount: markedEntries, startExit: started.status, outcome };
   } finally {
     await emergencyStop(form, env, context);
+    keepActivityLog(form, context);
   }
 }
 
@@ -654,7 +698,7 @@ export function assertDisposableHome(
 }
 
 /** Runs the whole qualification and returns its evidence; removes what it created. */
-export async function runFormsQualification(options) {
+async function runFormsQualification(options) {
   if (platform() !== "darwin") refuse("the macOS delivery forms are qualified on a Mac only");
   const account = accountFacts();
   console.log(`account groups: ${account.groups.join(" ")}; sudo ${account.sudo}`);
@@ -675,7 +719,9 @@ export async function runFormsQualification(options) {
     configPath: join(home, WORK_FOLDER, "gateway.json"),
     repository: join(home, WORK_FOLDER, "repository"),
     launcherSecret: randomBytes(32).toString("hex"),
+    logDir: join(resolve(options.outDir), "activity-logs"),
   };
+  rmSync(context.logDir, { recursive: true, force: true });
   try {
     writeCustomerShapeGatewayConfig(context.configPath, twin.baseUrl);
     createRepository(context.repository);

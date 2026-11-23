@@ -19,6 +19,7 @@ import {
   classifyEntry,
   findArguments,
   findChanged,
+  inSystemArea,
   onDataVolume,
   parseFootprintArgs,
   summarize,
@@ -26,9 +27,11 @@ import {
 } from "../testing/standard-account-footprint.mjs";
 
 // #4520: what a standard account created or changed outside its own folders. The pins keep the
-// attribution honest: whatever the account owns counts, a regular file it may write counts, and a
-// change it could not have made is counted apart, never against the promise.
-const ACCOUNT = { uid: 501, gids: [20, 12] };
+// attribution honest: whatever the account owns outside its areas counts against the promise; what
+// it owns in a folder the system keeps for it, and a file of another account it may also write, are
+// listed apart; a change it could not have made is counted apart.
+const GUID = "8963DEA9-06A2-4378-BF4A-B72B408B0BF4";
+const ACCOUNT = { uid: 501, gids: [20, 12], guid: GUID };
 
 function stats({ uid = 0, gid = 0, mode = 0o644, kind = "file" }) {
   return { uid, gid, mode, isFile: () => kind === "file", isDirectory: () => kind === "directory" };
@@ -68,16 +71,51 @@ describe("writableBy", () => {
   });
 });
 
+describe("inSystemArea", () => {
+  it("names a folder below /private/var named after the account's GeneratedUID or uid", () => {
+    for (const path of [
+      `${DATA_VOLUME}/private/var/protected/trustd/private/${GUID}`,
+      `${DATA_VOLUME}/private/var/protected/sfanalytics/${GUID.toLowerCase()}/trust_analytics.db`,
+      `${DATA_VOLUME}/private/var/db/mds/messages/501/se_SecurityMessages`,
+    ]) {
+      expect(inSystemArea(path, ACCOUNT)).toBe(true);
+    }
+  });
+
+  it("names no folder outside /private/var, of another account, or by a partial match", () => {
+    for (const path of [
+      `${DATA_VOLUME}/Users/Shared/${GUID}/x`,
+      `${DATA_VOLUME}/Library/501/x`,
+      `${DATA_VOLUME}/private/var/db/mds/messages/502/se_SecurityMessages`,
+      `${DATA_VOLUME}/private/var/db/x5015/y`,
+      `${DATA_VOLUME}/private/var/protected/trustd/private/${GUID}x/y`,
+      `${DATA_VOLUME}/private/var/tmp/x`,
+    ]) {
+      expect(inSystemArea(path, ACCOUNT)).toBe(false);
+    }
+  });
+});
+
 describe("classifyEntry", () => {
   const classify = (entry) => classifyEntry("/x", ACCOUNT, () => entry);
 
-  it("attributes what the account owns, file or folder", () => {
+  it("attributes what the account owns outside its areas, file or folder", () => {
     expect(classify(stats({ uid: 501 }))).toBe("owned");
     expect(classify(stats({ uid: 501, kind: "directory", mode: 0o755 }))).toBe("owned");
+    const elsewhere = `${DATA_VOLUME}/private/var/db/keiko/x`;
+    expect(classifyEntry(elsewhere, ACCOUNT, () => stats({ uid: 501 }))).toBe("owned");
   });
 
-  it("attributes a regular file of another account that the account may write", () => {
-    expect(classify(stats({ mode: 0o666 }))).toBe("writable");
+  it("lists what the account owns in a folder the system keeps for it apart", () => {
+    const area = `${DATA_VOLUME}/private/var/protected/trustd/private/${GUID}/ocspcache.sqlite3`;
+    expect(classifyEntry(area, ACCOUNT, () => stats({ uid: 501 }))).toBe("systemArea");
+    // The same file of another account in that folder is no entry of the account.
+    expect(classifyEntry(area, ACCOUNT, () => stats({ uid: 0, mode: 0o644 }))).toBe("others");
+  });
+
+  it("lists a regular file of another account that the account may also write apart", () => {
+    expect(classify(stats({ mode: 0o666 }))).toBe("shared");
+    expect(classify(stats({ uid: 502, gid: 20, mode: 0o664 }))).toBe("shared");
   });
 
   it("counts a folder, a socket or a protected file of another account apart", () => {
@@ -104,18 +142,25 @@ describe("classifyEntry", () => {
 });
 
 describe("summarize", () => {
-  it("counts every class and lists only attributed entries, at most twenty", () => {
-    const kinds = { "/o": "owned", "/w": "writable", "/r": "others", "/g": "gone" };
-    const paths = ["/o", "/w", "/r", "/g", ...Array.from({ length: 30 }, () => "/o")];
-    const summary = summarize(paths, (path) => kinds[path]);
-    expect(summary.counts).toEqual({ owned: 31, writable: 1, others: 1, gone: 1 });
-    expect(summary.violationCount).toBe(32);
-    expect(summary.attributed).toHaveLength(20);
-    expect(summary.attributed.slice(0, 2)).toEqual(["owned: /o", "writable: /w"]);
+  it("counts every class and lists owned, system-area and shared paths, at most 200 each", () => {
+    const kinds = { "/s": "systemArea", "/w": "shared", "/r": "others", "/g": "gone" };
+    const owned = Array.from({ length: 250 }, (_, index) => `/o${String(index)}`);
+    const paths = ["/s", "/w", "/r", "/g", ...owned];
+    const summary = summarize(paths, (path) => kinds[path] ?? "owned");
+    expect(summary.counts).toEqual({ owned: 250, systemArea: 1, shared: 1, others: 1, gone: 1 });
+    expect(summary.violationCount).toBe(250);
+    expect(summary.listed.owned).toHaveLength(200);
+    expect(summary.listed.owned[0]).toBe("/o0");
+    expect(summary.listed.systemArea).toEqual(["/s"]);
+    expect(summary.listed.shared).toEqual(["/w"]);
   });
 
-  it("passes a volume where only other accounts changed something", () => {
+  it("fails only on what the account owns outside its areas", () => {
     expect(summarize(["/a", "/b"], () => "others").violationCount).toBe(0);
+    expect(summarize(["/s", "/w"], (path) => (path === "/s" ? "systemArea" : "shared"))).toEqual(
+      expect.objectContaining({ violationCount: 0 }),
+    );
+    expect(summarize(["/o"], () => "owned").violationCount).toBe(1);
   });
 });
 
@@ -261,6 +306,7 @@ describe("accountAreas", () => {
     "id -u keikoqa": "502",
     "id -G keikoqa": "20 12 61",
     "dscl . -read /Users/keikoqa NFSHomeDirectory": "NFSHomeDirectory: /Users/keikoqa",
+    "dscl . -read /Users/keikoqa GeneratedUID": `GeneratedUID: ${GUID}`,
     "sudo -u keikoqa getconf DARWIN_USER_DIR": "/var/folders/ab/cdef/0/",
   };
 
@@ -269,6 +315,7 @@ describe("accountAreas", () => {
     expect(accountAreas("keikoqa", run)).toEqual({
       uid: 502,
       gids: [20, 12, 61],
+      guid: GUID,
       roots: ["/Users/keikoqa", "/var/folders/ab/cdef"],
     });
   });
@@ -276,6 +323,14 @@ describe("accountAreas", () => {
   it("refuses an account it cannot resolve", () => {
     const run = (command, args) =>
       command === "dscl" ? "" : (answers[`${command} ${args.join(" ")}`] ?? "");
+    expect(() => accountAreas("keikoqa", run)).toThrow(FootprintRefusal);
+  });
+
+  it("refuses an account without a well-formed GeneratedUID", () => {
+    const run = (command, args) => {
+      const key = `${command} ${args.join(" ")}`;
+      return key.endsWith("GeneratedUID") ? "GeneratedUID: 501" : (answers[key] ?? "");
+    };
     expect(() => accountAreas("keikoqa", run)).toThrow(FootprintRefusal);
   });
 });

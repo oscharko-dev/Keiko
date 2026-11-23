@@ -37,16 +37,27 @@ pass.
 
 Then a copy of the standalone archive gets the mark a browser writes (`com.apple.quarantine`) and
 is extracted with `ditto`, which carries the mark to every extracted file. The record names how
-many entries carry it and what the start did: `start-refused`, `started-coding-run-failed` or
-`started-coding-run-succeeded`. An extracted copy without a mark observes nothing and fails the
-job.
+many entries carry it, whether Gatekeeper assesses programs on that Mac (`spctl --status`), and
+what the start did: `start-refused`, `started-coding-run-failed` or `started-coding-run-succeeded`.
+An extracted copy without a mark observes nothing and fails the job. A hosted macOS image turns
+Gatekeeper off, so there the mark changes nothing and the outcome says nothing about a Mac where
+Gatekeeper is on; a pinned outcome (`--expect-marked`) holds only where it is on.
 
 After the forms, `scripts/testing/standard-account-footprint.mjs` walks the whole writable data
 volume (`/System/Volumes/Data`) as root and lists every entry changed after a marker the job wrote
 before the account acted. It ignores the account's home and the per-user folder macOS assigns it
 under `/var/folders` (its temporary and cache folders). An entry counts against the promise when
-the account owns it, or when it is a regular file the account may write. The job fails on one,
-even when a program of another account changed that file: the check errs towards failing.
+the account owns it: the account created or replaced it, and the job fails. Two kinds of change
+are listed in full but not attributed:
+
+- An entry the account owns in a folder below `/private/var` that macOS's own services name after
+  the account's GeneratedUID or uid (trustd's trust cache, sfanalytics, mds messages). Like
+  `/var/folders`, the system assigns that folder to the account; no program the account runs
+  chooses it.
+- A regular file of another account that the account may also write. A change to it cannot be told
+  apart from that account's own change, and on a hosted runner the runner account works through
+  the whole job. A program the account runs that wrote outside its areas would create a file there,
+  and that file would be owned by the account.
 
 ## Record
 
@@ -67,3 +78,9 @@ To be filled from the job's run on the pull request.
   either. The walk stays on the data volume, so an external disk or a mounted share is not
   examined.
 - **Intel Macs.** The job runs on Apple silicon (`macos-15`).
+- **Changes to files other accounts also write.** The footprint walk lists them; it cannot tell
+  whether the account or their owner changed one. It proves that the account created nothing
+  outside its areas.
+- **The marked download where Gatekeeper is on, as a standard account.** The hosted image has
+  Gatekeeper off. The observation with Gatekeeper on comes from a Mac where an administrator ran the
+  same qualification (`--account any`): macOS held the folder's Node.js before it ran.
