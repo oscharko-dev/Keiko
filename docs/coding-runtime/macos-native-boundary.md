@@ -40,6 +40,20 @@ Suites, abbreviated below:
 | A run that changed files ends `succeeded` only when the project's own check ran in its shell and passed. A failing check, or none, ends it failed.                                                                                                                                                                                                       | A: every case of "Coding acceptance task on macOS without a container runtime (#4492)", and "never reports success for a failing shell check followed by a refused governed verifier"; F: the held-runtime process test below, whose shell changed a file without a check and settled `verification-not-evidenced`                                                                                                                  | The correct fix of each acceptance case ends `succeeded`.                                                    |
 | When a run's runtime ends, no process it started remains, including one that ignores SIGHUP, a double fork, a new session and a file watcher. A run that changed nothing ends its runtime when it settles. One that changed files keeps it for the undo window, until the next run, Stop, takeover, the end of that window, a crash or Keiko's shutdown. | F: "ends what a shell took out of the run's tree when a run that changed nothing settles: SIGHUP ignored, a double fork, a new session and a file watcher"; F: "ends what a shell took out of the run's tree when a held runtime ends with the next run: SIGHUP ignored, a double fork, a new session and a file watcher"; F: the lifecycle tests of "original OpenCode service lifecycle through the production owner (#3899 AC2)" | The four processes run, adopted by launchd, while the runtime lives.                                         |
 
+## Git routes from the shell, per mode
+
+What each Git route a shell can take does to the history of a folder the person opened themself,
+with every ask approved as a person would (Q: "records each Git route a shell can take to the
+history of an opened folder, in every mode"). A Keiko-managed task worktree keeps its Git directory
+read-only to the shell (F, #3902).
+
+| Route                                                | Ask for approval                        | Supervised workspace                    | Full access                             |
+| ---------------------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `git commit` typed in the shell line                 | refused by Keiko's policy, no commit    | refused by Keiko's policy, no commit    | refused by Keiko's policy, no commit    |
+| `git add`                                            | asks; after approval the file is staged | asks; after approval the file is staged | runs without asking; the file is staged |
+| A script file that runs `git commit`                 | asks; after approval the commit lands   | asks; after approval the commit lands   | runs without asking; the commit lands   |
+| Low-level Git (`commit-tree` and a written ref file) | asks; after approval the commit lands   | asks; after approval the commit lands   | runs without asking; the commit lands   |
+
 ## Limits
 
 - **Loopback is open below Full access.** The shell reaches every port a program on this computer
