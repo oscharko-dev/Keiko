@@ -129,8 +129,11 @@ const approvedScopeValueDigests = new Map([
   // unset Python version, which the analysis-log gate rejects. Re-pinned for #4271: the nested
   // monorepo lab fixture `polyglot-mono/**` is data of the same kind, already outside ESLint, and
   // its `node:test` files are lab targets, not Keiko tests. Re-pinned for PR #4292: the Office Open
-  // XML containers named above. SHA-256 of the raw value after `=`.
-  ["sonar.test.exclusions", "f2acd88bdf310da1e71b6b95f5869e9cb46d9d514039541db9337449da67a222"],
+  // XML containers named above. Re-pinned for #4520: the coding acceptance fixtures
+  // `tests/fixtures/coding-acceptance/**` (#4492, #4519) are data of the same kind; their Maven
+  // projects made the Java analyzer warn about unset binaries on `dev`, which the analysis-log gate
+  // rejects. SHA-256 of the raw value after `=`.
+  ["sonar.test.exclusions", "556462f8c1e0e20611dbac9d681f53e8d82e4f4d27ff1c99377d52d7a507cb25"],
   // Re-pinned for #2360: the root tsconfig, the UI and the e2e servers only. Each listed package
   // tsconfig was a further overlapping program that exhausted the runner; the root program already
   // holds every package source. SHA-256 of the raw value after `=`.

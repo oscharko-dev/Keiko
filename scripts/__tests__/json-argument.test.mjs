@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { readJsonArgument } from "../lib/json-argument.mjs";
+import { permittedJsonPath, readJsonArgument } from "../lib/json-argument.mjs";
 
 function recorder() {
   const errors = [];
@@ -52,5 +52,36 @@ describe("readJsonArgument", () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toMatch(/^check: FAIL the evidence could not be read \(.+\)$/u);
     }
+  });
+
+  it("refuses a file outside the permitted folders, a non-JSON name and a link leading out", () => {
+    const inside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-json-argument-in-")));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-json-argument-out-")));
+    roots.push(inside, outside);
+    const kept = join(inside, "kept.json");
+    const elsewhere = join(outside, "elsewhere.json");
+    const text = join(inside, "kept.txt");
+    const link = join(inside, "link.json");
+    for (const file of [kept, elsewhere, text]) writeFileSync(file, "{}");
+    symlinkSync(elsewhere, link);
+    expect(permittedJsonPath(kept, [inside])).toBe(kept);
+    expect(
+      permittedJsonPath(join(inside, "..", inside.split("/").at(-1), "kept.json"), [inside]),
+    ).toBe(kept);
+    for (const file of [elsewhere, text, link]) {
+      expect(permittedJsonPath(file, [inside])).toBeUndefined();
+    }
+    // The root itself is no file inside it.
+    expect(permittedJsonPath(inside, [inside])).toBeUndefined();
+  });
+
+  it("reports a misplaced file as a failure without reading it", () => {
+    const { errors, io } = recorder();
+    expect(
+      readJsonArgument(["node", "check", "/etc/hosts"], io, { name: "check", input: "evidence" }),
+    ).toEqual({ exitCode: 1 });
+    expect(errors).toEqual([
+      "check: FAIL the evidence must be a .json file in the working directory, the home folder or the temporary folder",
+    ]);
   });
 });
