@@ -669,6 +669,26 @@ function captureDiagnostics(): {
   };
 }
 
+const PRIVATE_FAILURE_TEXT = "private manager failure text";
+
+function expectRecordedLifecycleFailure(
+  records: readonly ServerDiagnosticRecord[],
+  reason: string,
+  errorClass: string,
+): void {
+  const matching = records.filter((record) => record.code === `stage=lifecycle:reason=${reason}`);
+  expect(matching).toHaveLength(1);
+  const [line] = matching;
+  expect(line).toMatchObject({
+    operation: "coding-runtime.lifecycle",
+    // The fixture's run id is not a valid correlation id, so the line falls back to the sentinel.
+    correlationId: UNKNOWN_CORRELATION_ID,
+    errorClass,
+    message: "runtime-lifecycle-failed",
+  });
+  expect(JSON.stringify(line)).not.toContain(PRIVATE_FAILURE_TEXT);
+}
+
 function captureActivityLog(): {
   readonly activityLog: ServerLogSink;
   readonly records: readonly ServerLogEvent[];
@@ -5657,6 +5677,62 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     },
   );
 
+  it("names the cause when the manager resume throws on an operator resume", async () => {
+    const captured = captureDiagnostics();
+    const f = await runningFixture(undefined, captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.manager.resume.mockImplementationOnce(() => {
+      throw new RangeError(PRIVATE_FAILURE_TEXT);
+    });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("failed");
+    expectRecordedLifecycleFailure(captured.records, "resume-failed", "RangeError");
+  });
+
+  it("names the cause when containing a paused runtime throws after a failed resume publish", async () => {
+    const captured = captureDiagnostics();
+    const f = await runningFixture(undefined, captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.eventHub.publish.mockReturnValueOnce({ ok: false });
+    f.manager.stop.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(captured.records, "stop-failed", "RangeError");
+  });
+
+  it("names the cause when stopping an expired paused runtime throws", async () => {
+    const captured = captureDiagnostics();
+    let nowMs = FIXTURE_NOW_MS;
+    const f = await runningFixture(() => new Date(nowMs), captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-expired",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:02.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    nowMs += 60_001;
+    f.manager.stop.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(captured.records, "stop-failed", "RangeError");
+  });
+
   it("persists uncertain-write recovery and retains it across late terminal events", async () => {
     const f = await runningFixture();
     const recovered = await f.orchestrator.ingest({
@@ -10399,6 +10475,34 @@ describe("coding runtime lifecycle races", () => {
           candidate.errorClass === "RangeError",
       ),
     ).toBe(true);
+  });
+
+  it("names the cause when issuing approved authority throws", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    await f.orchestrator.ingest(RACE_PERMISSION);
+    f.approvalAuthority.issue.mockImplementationOnce(() => {
+      throw new RangeError(PRIVATE_FAILURE_TEXT);
+    });
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: f.orchestrator.status().revision,
+    });
+
+    expectRecordedLifecycleFailure(f.diagnosticRecords, "approval-issue-failed", "RangeError");
+  });
+
+  it("names the cause when the quiet reconcile after a failed start throws", async () => {
+    const f = raceFixture();
+    f.manager.start.mockRejectedValueOnce(new Error("start failed"));
+    f.manager.reconcile.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const started = await f.orchestrator.start(start);
+
+    expect(successfulSnapshot(started).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(f.diagnosticRecords, "reconcile-failed", "RangeError");
   });
 
   // Audit finding 6: a failed stop at an undo window's close left the manager in recovery-required
