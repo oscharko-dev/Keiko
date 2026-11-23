@@ -978,6 +978,8 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  leftRun,
+  onLeftRun,
 }: {
   /** The Workbench window's own id, which keys its private composer draft. */
   readonly draftKey?: string | undefined;
@@ -987,6 +989,9 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  /** The run this window left with New task, persisted in its window configuration. */
+  readonly leftRun?: string | undefined;
+  readonly onLeftRun?: ((runId: string | undefined) => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -1015,6 +1020,8 @@ export function CodingWorkbenchWindow({
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: (): void => setTaskIntent(""),
+    leftRun,
+    onLeftRun,
   });
   const state = selectedConversationReadiness(
     historyRuntimeState(runtimeState, history),

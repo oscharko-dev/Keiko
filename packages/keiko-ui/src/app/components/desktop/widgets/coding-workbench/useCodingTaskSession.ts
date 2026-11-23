@@ -82,6 +82,9 @@ interface SessionInput {
   readonly onDraftReset?: (() => void) | undefined;
   /** The workspace a pending fork continues in, while it is the active one. */
   readonly forkTarget?: string | undefined;
+  /** The run the person left with New task in this window; a reload does not follow it again. */
+  readonly leftRun?: string | undefined;
+  readonly onLeftRun?: ((runId: string | undefined) => void) | undefined;
 }
 
 function reportFailure(error: unknown): void {
@@ -121,7 +124,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     root: options.root ?? options.workspace?.activeInstance?.repositoryRoot,
     forkTarget,
   };
-  const ignoredRun = useRef<string | undefined>(undefined);
+  const ignoredRun = useRef<string | undefined>(options.leftRun);
   const awaitingRun = useRef<AwaitedRun>(undefined);
   const latest = useRef(input);
   latest.current = input;
@@ -342,6 +345,7 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
           scopeRevision,
           setDetail,
           isCurrent: () => seq === sequence.current,
+          followed,
         });
         if (accepted && followed !== undefined)
           window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
@@ -362,6 +366,7 @@ interface TaskReadContext {
   readonly scopeRevision: { current: HistoryScopeState };
   readonly setDetail: TaskLoader["setDetail"];
   readonly isCurrent: () => boolean;
+  readonly followed: "initial" | "refresh" | undefined;
 }
 
 /** Shows a read task when it is still the current read of the current scope; says whether it did. */
@@ -373,6 +378,12 @@ async function acceptTaskRead(
 ): Promise<boolean> {
   const { latest, scopeRevision, setDetail, isCurrent } = context;
   if (!isCurrent() || historyLoadCancelled(operation, scopeRevision.current.scope)) return false;
+  // A completed task is never the current task by following its run: after a reload the next
+  // message would reopen it instead of starting a new task. Coding History still opens it (#4491).
+  if (context.followed !== undefined && result.task.status === "completed") {
+    setDetail(null);
+    return false;
+  }
   const activated = await activateHistoryTask(
     result,
     latest,
@@ -567,6 +578,7 @@ function useNewTask(
       reportCodingWorkbenchInteraction({ interaction: "recovery-left" }, newClientCorrelationId());
     }
     ignoredRun.current = current.snapshot?.runId;
+    current.onLeftRun?.(ignoredRun.current);
     awaitingRun.current = current.snapshot === null ? {} : undefined;
     sequence.current += 1;
     setDetail(null);

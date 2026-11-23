@@ -1157,3 +1157,48 @@ describe("a followed run's revision bumps refresh the task in the background", (
     expect(history).not.toHaveBeenCalled();
   });
 });
+
+describe("a task the person left stays left after a reload (#4491)", () => {
+  function render(input: {
+    leftRun?: string;
+    onLeftRun?: (runId: string | undefined) => void;
+  }): ReturnType<typeof renderHook<ReturnType<typeof useCodingTaskSession>, unknown>> {
+    return renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+        location: "local",
+        ...input,
+      }),
+    );
+  }
+
+  it("does not follow a run back into its completed task", async () => {
+    read.mockResolvedValue({ ...detail, task: { ...detail.task, status: "completed" } });
+    const { result } = render({});
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+  });
+
+  it("remembers the run the person left with New task and does not follow it on the next mount", async () => {
+    const onLeftRun = vi.fn();
+    const first = render({ onLeftRun });
+    await waitFor(() => expect(first.result.current.detail?.task.id).toBe("chat-one"));
+    await act(async () => {
+      await first.result.current.newTask();
+    });
+    expect(onLeftRun).toHaveBeenCalledWith("run-one");
+    first.unmount();
+    read.mockClear();
+    const second = render({ leftRun: "run-one" });
+    await waitFor(() => expect(second.result.current.pending).toBe(false));
+    expect(read).not.toHaveBeenCalled();
+    expect(second.result.current.detail).toBeNull();
+    expect(second.result.current.conversationId).toBeUndefined();
+  });
+});
