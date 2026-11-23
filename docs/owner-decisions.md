@@ -169,11 +169,11 @@ ADR-0022 D4.
 
 ## The Activity Log carries no personal data (2026-11-04)
 
-It is the only thing
-that ever leaves the machine, so its sink over-redacts: a value holds no space, and a name, IBAN,
-telephone, card or account number, date with a year, IPv4 address, remote URL or host, or personal
-field name is refused whatever field carries it (`log-redaction.ts`, `activity-log-label-policy.ts`). Never loosen
-this to keep a value readable: emit a count, a closed value or a digest instead.
+Its content leaves the machine in support reports a person exports, so its sink over-redacts: a
+value holds no space, and a name, IBAN, telephone, card or account number, date with a year, IPv4
+address, remote URL or host, or personal field name is refused whatever field carries it
+(`log-redaction.ts`, `activity-log-label-policy.ts`). Never loosen this to keep a value readable:
+emit a count, a closed value or a digest instead.
 
 ## Syntax-preserving source redaction
 
