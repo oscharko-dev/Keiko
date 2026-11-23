@@ -1,4 +1,12 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +17,7 @@ import {
   accountAreas,
   classifyEntry,
   findArguments,
+  findChanged,
   onDataVolume,
   parseFootprintArgs,
   summarize,
@@ -123,6 +132,66 @@ describe("findArguments", () => {
       ")",
       "-print0",
     ]);
+  });
+});
+
+describe("findChanged", () => {
+  // The real find: what the pruned area holds is never listed, and only changes after the marker are.
+  function tree() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "footprint-walk-")));
+    const volume = join(root, "volume");
+    mkdirSync(join(volume, "own", "deep"), { recursive: true });
+    mkdirSync(join(volume, "other"), { recursive: true });
+    writeFileSync(join(volume, "own", "deep", "a.txt"), "a");
+    writeFileSync(join(volume, "other", "b.txt"), "b");
+    const marker = join(root, "marker");
+    writeFileSync(marker, "");
+    return { root, volume, marker };
+  }
+
+  function at(marker, secondsFromNow) {
+    const time = Date.now() / 1000 + secondsFromNow;
+    utimesSync(marker, time, time);
+  }
+
+  it("lists what changed after the marker outside the pruned area", () => {
+    const { root, volume, marker } = tree();
+    try {
+      at(marker, -3600);
+      const { paths, unreadable } = findChanged(volume, [join(volume, "own")], marker);
+      expect(paths.sort()).toEqual([volume, join(volume, "other"), join(volume, "other", "b.txt")]);
+      expect(unreadable).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists nothing that changed before the marker", () => {
+    const { root, volume, marker } = tree();
+    try {
+      at(marker, 3600);
+      expect(findChanged(volume, [join(volume, "own")], marker).paths).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)("counts a folder it cannot read instead of failing", () => {
+    const { root, volume, marker } = tree();
+    const closed = join(volume, "other", "closed");
+    mkdirSync(closed);
+    writeFileSync(join(closed, "c.txt"), "c");
+    chmodSync(closed, 0o000);
+    try {
+      at(marker, -3600);
+      const { paths, unreadable } = findChanged(volume, [join(volume, "own")], marker);
+      expect(unreadable).toBe(1);
+      expect(paths).toContain(closed);
+      expect(paths).not.toContain(join(closed, "c.txt"));
+    } finally {
+      chmodSync(closed, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

@@ -107,6 +107,8 @@ const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const MARKED_START_TIMEOUT_MS = 2 * 60 * 1000;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
 const ACCOUNTS = Object.freeze(["standard", "any"]);
+/** Set only by the CI job that created the account: its home holds nothing to lose. */
+export const DISPOSABLE_ACCOUNT_VARIABLE = "KEIKO_QUALIFY_DISPOSABLE_ACCOUNT";
 const EXPECTATIONS = Object.freeze(["record", ...MARKED_OUTCOMES]);
 
 const USAGE = `Usage (as the account under proof, on a Mac):
@@ -209,12 +211,23 @@ export function markedOutcome({ healthy, codingRun }) {
 }
 
 /** The body-free evidence: closed values, counts, digests and durations. */
+/** A form passed only when its checks ran through to a coding run that settled `succeeded`. */
+function formPassed(entry) {
+  return (
+    entry.passed &&
+    entry.checks.some((check) => check.name === "coding-run-succeeded" && check.result === "pass")
+  );
+}
+
 export function buildFormsEvidence({ options, account, forms, marked, runner }) {
   const formsPassed = FORMS.every((form) =>
-    forms.some((entry) => entry.form === form && entry.passed),
+    forms.some((entry) => entry.form === form && formPassed(entry)),
   );
+  // An observation of a marked copy needs a mark on the extracted files; without one it shows
+  // nothing about the mark.
   const markedMatches =
     marked !== undefined &&
+    marked.markedEntryCount > 0 &&
     MARKED_OUTCOMES.includes(marked.outcome) &&
     (options.expectMarked === "record" || options.expectMarked === marked.outcome);
   const passed = formsPassed && markedMatches;
@@ -369,6 +382,7 @@ function folderForm(context, form, subfolder) {
   };
   return {
     form,
+    parent,
     folder,
     extract,
     path: [],
@@ -539,23 +553,17 @@ async function qualifyForm(name, context) {
  */
 async function qualifyMarkedDownload(context) {
   const zip = await downloadStandalone(context);
-  const parent = join(context.home, WORK_FOLDER, "marked download");
-  mkdirSync(parent, { recursive: true });
-  const marked = join(parent, `keiko-${context.target}.standalone.zip`);
+  const form = folderForm(context, "marked-download", "marked download");
+  mkdirSync(form.parent, { recursive: true });
+  const marked = join(form.parent, `keiko-${context.target}.standalone.zip`);
   copyFileSync(zip, marked);
   const written = spawnSync("xattr", ["-w", "com.apple.quarantine", browserDownloadMark(), marked]);
   if (written.status !== 0) refuse("the download mark could not be written");
-  extractZip(marked, parent, "darwin");
-  const folder = join(parent, "Keiko");
-  const form = {
-    form: "marked-download",
-    folder,
-    path: [],
-    stateDir: join(context.home, ".keiko-standalone"),
-    start: { command: "/bin/sh", args: [startFile(folder, "darwin")] },
-    stop: { command: "/bin/sh", args: [stopFile(folder, "darwin")] },
-  };
-  return observeMarkedStart(form, context, markedEntryCount(folder));
+  form.extract(marked);
+  const markedEntries = markedEntryCount(form.folder);
+  if (markedEntries === 0)
+    refuse("the extracted copy carries no download mark: nothing to observe");
+  return observeMarkedStart(form, context, markedEntries);
 }
 
 // A coding run of the marked copy: its failure is the observation, recorded with its reason.
@@ -618,8 +626,13 @@ export function assertDisposableHome(
   env = process.env,
   realHome = userInfo().homedir,
 ) {
-  if (options.account === "standard" && env.CI !== "true") {
-    refuse("a standard-account run belongs to the CI job's fresh account (CI=true)");
+  if (
+    options.account === "standard" &&
+    (env.CI !== "true" || env[DISPOSABLE_ACCOUNT_VARIABLE] !== "1")
+  ) {
+    refuse(
+      `a standard-account run belongs to the CI job's fresh account (CI=true, ${DISPOSABLE_ACCOUNT_VARIABLE}=1)`,
+    );
   }
   if (options.account === "any" && resolve(home) === resolve(realHome)) {
     refuse(

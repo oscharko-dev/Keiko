@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 import {
+  DISPOSABLE_ACCOUNT_VARIABLE,
   FORMS,
   FormsRefusal,
   MARKED_OUTCOMES,
@@ -31,7 +32,8 @@ const ADMINISTRATOR = { groups: ["staff", "admin"], administrator: true, sudo: "
 const OPTIONS = { version: "1.5.6", nodeVersion: "26.13.1", expectMarked: "record" };
 
 function passedForms() {
-  return FORMS.map((form) => ({ form, passed: true, checks: [] }));
+  const checks = [{ name: "coding-run-succeeded", result: "pass", durationMs: 1 }];
+  return FORMS.map((form) => ({ form, passed: true, checks }));
 }
 
 const MARKED = { markedEntryCount: 12, startExit: 1, outcome: "start-refused" };
@@ -174,10 +176,15 @@ describe("buildFormsEvidence", () => {
     const failed = passedForms().map((entry) =>
       entry.form === "standalone" ? { ...entry, passed: false } : entry,
     );
+    const noCodingRun = passedForms().map((entry) =>
+      entry.form === "npm" ? { ...entry, checks: [] } : entry,
+    );
     const cases = [
       { forms: failed, marked: MARKED },
       { forms: passedForms().slice(0, 2), marked: MARKED },
+      { forms: noCodingRun, marked: MARKED },
       { forms: passedForms(), marked: undefined },
+      { forms: passedForms(), marked: { ...MARKED, markedEntryCount: 0 } },
     ];
     for (const { forms, marked } of cases) {
       const evidence = buildFormsEvidence({
@@ -205,12 +212,15 @@ describe("buildFormsEvidence", () => {
 });
 
 describe("assertDisposableHome", () => {
-  it("runs as a standard account only in the CI job", () => {
+  it("runs as a standard account only in the CI job that created it", () => {
     const standard = { account: "standard" };
-    expect(() =>
-      assertDisposableHome(standard, "/Users/q", { CI: "true" }, "/Users/q"),
-    ).not.toThrow();
-    expect(() => assertDisposableHome(standard, "/Users/q", {}, "/Users/q")).toThrow(FormsRefusal);
+    const job = { CI: "true", [DISPOSABLE_ACCOUNT_VARIABLE]: "1" };
+    expect(() => assertDisposableHome(standard, "/Users/q", job, "/Users/q")).not.toThrow();
+    for (const env of [{}, { CI: "true" }, { [DISPOSABLE_ACCOUNT_VARIABLE]: "1" }]) {
+      expect(() => assertDisposableHome(standard, "/Users/q", env, "/Users/q")).toThrow(
+        FormsRefusal,
+      );
+    }
   });
 
   it("rehearses only in a home of its own, never the account's real home", () => {
@@ -259,6 +269,7 @@ describe("the standard-account job (#4520)", () => {
     const run = step("Install and start the three forms as the standard account").run;
     expect(run).toContain("sudo -u keikoqa -H /usr/bin/env -i");
     expect(run).toContain("CI=true");
+    expect(run).toContain(`${DISPOSABLE_ACCOUNT_VARIABLE}=1`);
     expect(run).toContain("node scripts/testing/qualify-macos-standard-account-forms.mjs");
     expect(run).not.toContain("--account any");
     const check = step(

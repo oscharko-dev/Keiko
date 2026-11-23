@@ -147,11 +147,13 @@ export function summarize(paths, classify) {
   return { counts, attributed, violationCount: counts.owned + counts.writable };
 }
 
-function changedEntries(options, areas) {
-  const pruned = areas.roots.map((root) => onDataVolume(root));
-  const marker = resolve(options.marker);
-  statSync(marker);
-  const found = spawnSync("find", findArguments(DATA_VOLUME, pruned, marker), {
+/**
+ * Runs `find` over one volume and returns the changed entries and how many folders it could not
+ * read. A folder root cannot read (a privacy-protected folder of another account) is counted; find
+ * then exits 1, which is not a failure of the walk itself.
+ */
+export function findChanged(volume, prunedRoots, marker) {
+  const found = spawnSync("find", findArguments(volume, prunedRoots, marker), {
     encoding: "utf8",
     maxBuffer: 512 << 20,
     timeout: FIND_TIMEOUT_MS,
@@ -160,11 +162,15 @@ function changedEntries(options, areas) {
   const unreadable = String(found.stderr)
     .split("\n")
     .filter((line) => line.trim() !== "").length;
-  // A folder root cannot read (a privacy-protected folder of another account) is counted; find
-  // then exits 1, which is not a failure of the walk itself.
   if (found.status !== 0 && unreadable === 0) refuse(`find exited ${String(found.status)}`);
-  const paths = String(found.stdout).split("\0").filter(Boolean);
-  return { paths, unreadable, prunedCount: pruned.length };
+  return { paths: String(found.stdout).split("\0").filter(Boolean), unreadable };
+}
+
+function changedEntries(options, areas) {
+  const pruned = areas.roots.map((root) => onDataVolume(root));
+  const marker = resolve(options.marker);
+  statSync(marker);
+  return { ...findChanged(DATA_VOLUME, pruned, marker), prunedCount: pruned.length };
 }
 
 /** Walks the data volume and returns the evidence. */

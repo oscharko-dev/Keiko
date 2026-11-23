@@ -26,7 +26,9 @@ on:
       - ".github/actions/macos-standard-account/**"
       - ".github/workflows/npm-folder-qualify.yml"
       - "scripts/build-standalone-npm-package.mjs"
+      - "scripts/build-standalone-package.mjs"
       - "scripts/lib/customer-shape-litellm-twin.mjs"
+      - "scripts/lib/npm-folder-qualification.mjs"
       - "scripts/standalone/**"
       - "scripts/testing/coding-workbench-lab/lab-common.mjs"
       - "scripts/testing/coding-workbench-lab/wb-run.mjs"
@@ -218,7 +220,7 @@ jobs:
           temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
           sudo -u keikoqa -H /usr/bin/env -i \
             HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
-            TMPDIR="${temp}" \
+            TMPDIR="${temp}" KEIKO_QUALIFY_DISPOSABLE_ACCOUNT=1 \
             PATH=/Users/keikoqa/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin \
             KEIKO_QUALIFY_VERSION="${KEIKO_QUALIFY_VERSION}" \
             /bin/sh -s <<'FORMS'

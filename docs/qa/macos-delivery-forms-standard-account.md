@@ -32,13 +32,21 @@ For each form, from an empty state (no `~/.keiko`, `~/.keiko-standalone` or
 Each form then passes, in order: the first start, health reporting the version, one coding run
 that settles `succeeded` (the model is the customer-shape LiteLLM twin on loopback), a second
 start that reports the running instance, stop, no process of the form left, and no entry of the
-form's folder carrying the download mark.
+form's folder carrying the download mark. A form whose checks stop before the coding run does not
+pass.
+
+Then a copy of the standalone archive gets the mark a browser writes (`com.apple.quarantine`) and
+is extracted with `ditto`, which carries the mark to every extracted file. The record names how
+many entries carry it and what the start did: `start-refused`, `started-coding-run-failed` or
+`started-coding-run-succeeded`. An extracted copy without a mark observes nothing and fails the
+job.
 
 After the forms, `scripts/testing/standard-account-footprint.mjs` walks the whole writable data
 volume (`/System/Volumes/Data`) as root and lists every entry changed after a marker the job wrote
 before the account acted. It ignores the account's home and the per-user folder macOS assigns it
 under `/var/folders` (its temporary and cache folders). An entry counts against the promise when
-the account owns it, or when it is a regular file the account may write. The job fails on one.
+the account owns it, or when it is a regular file the account may write. The job fails on one,
+even when a program of another account changed that file: the check errs towards failing.
 
 ## Record
 
@@ -54,4 +62,8 @@ To be filled from the job's run on the pull request.
   `KEIKO_OS_KEYCHAIN=off`; the keychain lies in the account's home in any case.
 - **An internal file share.** A copy taken from a share carries no mark; the job stands in for it
   with a copy that carries none, written by the download and the builder.
+- **Folders root cannot read, and other volumes.** A folder that even root cannot read (protected
+  by the system's privacy controls) is counted, not walked; a standard account cannot write there
+  either. The walk stays on the data volume, so an external disk or a mounted share is not
+  examined.
 - **Intel Macs.** The job runs on Apple silicon (`macos-15`).
