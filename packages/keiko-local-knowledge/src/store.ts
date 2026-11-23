@@ -149,10 +149,6 @@ export interface KnowledgeStore {
   };
 }
 
-interface VersionRow {
-  readonly user_version: number;
-}
-
 function defaultClock(): number {
   return Date.now();
 }
@@ -201,8 +197,8 @@ function resolveContentCipher(
 }
 
 function currentUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as VersionRow | undefined;
-  return typeof row?.user_version === "number" ? row.user_version : 0;
+  const version = db.prepare("PRAGMA user_version").get()?.user_version;
+  return typeof version === "number" ? version : 0;
 }
 
 function setUserVersion(db: DatabaseSync, version: number): void {
@@ -391,12 +387,18 @@ const errorRecord = (error: unknown): Record<string, unknown> =>
   sharedErrorRecord(error, isKnowledgeStoreError);
 
 function assertQuickCheckOk(db: DatabaseSync): void {
-  const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];
-  const values = rows
-    .map((row) => Object.values(row)[0])
-    .filter((value): value is string => typeof value === "string");
-  if (values.length === 1 && values[0] === "ok") return;
-  throw new SqliteQuickCheckError(values.length > 0 ? values : ["no quick_check rows returned"]);
+  // Each quick_check row carries one finding in its only column; "ok" alone means a sound file.
+  const findings = db
+    .prepare("PRAGMA quick_check")
+    .all()
+    .flatMap((row) => {
+      const [finding] = Object.values(row);
+      return typeof finding === "string" ? [finding] : [];
+    });
+  if (findings.length === 1 && findings[0] === "ok") return;
+  throw new SqliteQuickCheckError(
+    findings.length > 0 ? findings : ["no quick_check rows returned"],
+  );
 }
 
 function quarantineFile(target: string, cause?: unknown): void {

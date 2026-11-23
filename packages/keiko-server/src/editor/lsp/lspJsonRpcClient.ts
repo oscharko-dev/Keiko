@@ -10,6 +10,7 @@
 // `$/cancelRequest` and rejects with LspRpcCancelledError. On dispose every pending request rejects
 // with LspRpcDisposedError. All three carry only a class name, never request/response content.
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { LspByteSource, LspBytes } from "./lspFrameCodec.js";
 
 export class LspRpcTimeoutError extends Error {
@@ -46,7 +47,12 @@ export class LspServerRequestError extends Error {
 }
 
 type LspNotificationHandler = (method: string, params: unknown) => void;
-type LspServerRequestHandler = (method: string, params: unknown) => unknown;
+// A server request's JSON-RPC result; `undefined` leaves the result member out of the response.
+type LspServerRequestResult = CatalogJsonValue | undefined;
+type LspServerRequestHandler = (
+  method: string,
+  params: unknown,
+) => LspServerRequestResult | Promise<LspServerRequestResult>;
 
 interface LspRequestOptions {
   readonly signal?: AbortSignal | undefined;
@@ -65,10 +71,9 @@ export interface LspJsonRpcClient {
 }
 
 // Injectable so deadline expiry is deterministically testable without wall-clock waits. Defaults to
-// the global timer functions. `setTimer` returns an opaque handle that `clearTimer` cancels.
+// the global timer functions. `setTimer` returns the function that cancels the timer.
 export interface LspRpcScheduler {
-  setTimer(callback: () => void, delayMs: number): unknown;
-  clearTimer(handle: unknown): void;
+  setTimer(callback: () => void, delayMs: number): () => void;
 }
 
 export interface LspJsonRpcClientDeps {
@@ -93,9 +98,11 @@ interface RpcRuntimeState {
 }
 
 const defaultScheduler: LspRpcScheduler = {
-  setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
-  clearTimer: (handle) => {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  setTimer: (callback, delayMs) => {
+    const handle = setTimeout(callback, delayMs);
+    return (): void => {
+      clearTimeout(handle);
+    };
   },
 };
 
@@ -278,7 +285,7 @@ function registerPending(
   const cancel = (): void => {
     send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } });
   };
-  const timer = scheduler.setTimer(() => {
+  const cancelTimer = scheduler.setTimer(() => {
     if (!pending.has(id)) return;
     pending.delete(id);
     settle();
@@ -293,7 +300,7 @@ function registerPending(
     handlers.reject(new LspRpcCancelledError());
   };
   const settle = (): void => {
-    scheduler.clearTimer(timer);
+    cancelTimer();
     options.signal?.removeEventListener("abort", onAbort);
   };
   if (options.signal?.aborted === true) {

@@ -35,7 +35,8 @@ export interface KillableChild {
 export type ChildExitRegistration = (onExit: () => void) => void;
 
 export interface KillScheduler {
-  setTimer(callback: () => void, delayMs: number): unknown;
+  // Schedules the kill deadline; nothing cancels it, so no handle is returned.
+  setTimer(callback: () => void, delayMs: number): void;
 }
 
 export function splitProcessPath(

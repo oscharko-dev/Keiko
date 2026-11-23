@@ -25,6 +25,7 @@
 import type { DocumentId, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { CancelledError } from "@oscharko-dev/keiko-security";
 
+import { isDocumentId, mintedId } from "./knowledge-ids.js";
 import { docxParser } from "./parsers/docx-parser.js";
 import { htmlParser } from "./parsers/html-parser.js";
 import { pdfParser } from "./parsers/pdf-parser.js";
@@ -105,7 +106,7 @@ export interface BoundedDocumentExtractionResult {
 
 // ─── Format resolution ──────────────────────────────────────────────────────────
 
-const DEFAULT_DOCUMENT_ID = "bounded-document" as DocumentId;
+const DEFAULT_DOCUMENT_ID: DocumentId = mintedId("bounded-document", isDocumentId);
 
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";

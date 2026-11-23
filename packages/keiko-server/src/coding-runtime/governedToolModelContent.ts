@@ -31,6 +31,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 /** A result string the rendering moves into a text block: one JSON would escape, or a tag lookalike. */
 export const MODEL_TEXT_BLOCK_STRING_PATTERN = String.raw`[\u0000-\u001f"\\]|<text `;
@@ -132,7 +133,8 @@ export interface GovernedToolModelContentFacts {
 /** The body-free facts of how the shim renders `result`: the same predicate, the same traversal. */
 export function governedToolModelContentFacts(result: unknown): GovernedToolModelContentFacts {
   let textBlockCount = 0;
-  JSON.stringify(result, (_key: string, value: unknown): unknown => {
+  // The replacer only counts: it hands JSON.stringify back every value it was given.
+  JSON.stringify(result, (_key: string, value: unknown) => {
     if (typeof value === "string" && MODEL_TEXT_BLOCK_STRING.test(value)) textBlockCount += 1;
     return value;
   });
@@ -180,20 +182,26 @@ export function recordGovernedToolModelContent(
  * not a well-formed rendering: a malformed block, a block under a second nonce, or text outside the
  * frames.
  */
-export function decodeGovernedToolModelContent(content: string): unknown {
+export function decodeGovernedToolModelContent(content: string): CatalogJsonValue {
   const newline = content.indexOf("\n");
   const blocks =
     newline === -1
       ? new Map<string, string>()
       : governedToolModelContentBlocks(content.slice(newline + 1));
-  return JSON.parse(newline === -1 ? content : content.slice(0, newline), (_key, value: unknown) =>
-    resolvedEnvelopeValue(value, blocks),
-  );
+  // SAFETY: JSON.parse returns what the reviver returns for the root value. The reviver receives
+  // only parsed JSON values or its own earlier results, and returns the value or a block string.
+  return JSON.parse(
+    newline === -1 ? content : content.slice(0, newline),
+    (_key, value: CatalogJsonValue) => resolvedEnvelopeValue(value, blocks),
+  ) as CatalogJsonValue;
 }
 
 // The rendering moves every string containing "<text " into a block, so an envelope string that
 // still starts like a tag must be one of this rendering's placeholders, with its block present.
-function resolvedEnvelopeValue(value: unknown, blocks: ReadonlyMap<string, string>): unknown {
+function resolvedEnvelopeValue(
+  value: CatalogJsonValue,
+  blocks: ReadonlyMap<string, string>,
+): CatalogJsonValue {
   if (typeof value !== "string" || !value.startsWith("<text ")) return value;
   const block = blocks.get(value);
   if (block === undefined)

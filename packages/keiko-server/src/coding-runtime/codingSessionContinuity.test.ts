@@ -135,7 +135,7 @@ describe("the continuity service over a state directory", () => {
 
   it("finds the task of a run through Coding History, and none without it", () => {
     const history = {
-      get: (): unknown => undefined,
+      get: (): undefined => undefined,
       forRun: (runId: string): { readonly id: string } | undefined =>
         runId === "run-known-1" ? { id: "task-known" } : undefined,
     };
@@ -167,7 +167,7 @@ describe("the continuity service over a state directory", () => {
     const service = createStateCodingSessionContinuity({
       stateDir: dir,
       retention: undefined,
-      history: { get: () => ({}), forRun: () => undefined },
+      history: { get: () => ({ id: "task-live" }), forRun: () => undefined },
       activityLog: log,
     });
 

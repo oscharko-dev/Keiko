@@ -133,26 +133,33 @@ interface EntryAdmission {
 function admittedEntry(value: unknown): EntryAdmission {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return { entry: undefined, refused: 1 };
-  const entry: Record<string, unknown> = {};
+  const entry: OpenCodeNativeFormatterEntry = {};
   let refused = 0;
   for (const [key, field] of Object.entries(value as Readonly<Record<string, unknown>>)) {
     const admitted = admittedField(key, field);
     if (admitted === undefined) refused += 1;
-    else entry[key] = admitted;
+    else Object.assign(entry, admitted);
   }
   return { entry, refused };
 }
 
-function admittedField(key: string, value: unknown): unknown {
+/** The entry member `key` names, holding the re-validated `value`; `undefined` when refused. */
+function admittedField(key: string, value: unknown): OpenCodeNativeFormatterEntry | undefined {
   switch (key) {
     case "disabled":
-      return typeof value === "boolean" ? value : undefined;
-    case "command":
-      return admittedList(value, MAX_COMMAND_PARTS, () => true);
-    case "environment":
-      return admittedEnvironment(value);
-    case "extensions":
-      return admittedList(value, MAX_EXTENSIONS, (extension) => EXTENSION.test(extension));
+      return typeof value === "boolean" ? { disabled: value } : undefined;
+    case "command": {
+      const command = admittedList(value, MAX_COMMAND_PARTS, () => true);
+      return command === undefined ? undefined : { command };
+    }
+    case "environment": {
+      const environment = admittedEnvironment(value);
+      return environment === undefined ? undefined : { environment };
+    }
+    case "extensions": {
+      const extensions = admittedList(value, MAX_EXTENSIONS, (item) => EXTENSION.test(item));
+      return extensions === undefined ? undefined : { extensions };
+    }
     default:
       return undefined;
   }

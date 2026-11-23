@@ -43,9 +43,12 @@ export function snapshotManifestPath(stateDir: string, snapshotId: string): stri
   return join(snapshotDir(stateDir, snapshotId), MANIFEST_FILE);
 }
 
-function jsonRead(path: string): unknown {
+// Reads a JSON file and returns its value only when `admits` accepts it; an unreadable or
+// malformed file reads as absent.
+function jsonRead<T>(path: string, admits: (value: unknown) => value is T): T | undefined {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return admits(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -121,8 +124,10 @@ function readSnapshotManifest(
   stateDir: string,
   snapshotId: string,
 ): UpdateRecoverySnapshot | undefined {
-  const manifest = jsonRead(snapshotManifestPath(stateDir, snapshotId));
-  return isSnapshotManifest(manifest, snapshotId) ? manifest : undefined;
+  return jsonRead(
+    snapshotManifestPath(stateDir, snapshotId),
+    (value): value is UpdateRecoverySnapshot => isSnapshotManifest(value, snapshotId),
+  );
 }
 
 export function validateSnapshot(stateDir: string, snapshotId: string): boolean {

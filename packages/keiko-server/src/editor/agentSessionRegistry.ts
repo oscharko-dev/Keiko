@@ -66,10 +66,10 @@ export interface EditorAgentRegistryOptions {
   readonly maxQueuedBytesTotal?: number | undefined;
   // Maximum registered session snapshots before the oldest idle session is evicted.
   readonly maxSessions?: number | undefined;
-  // Injection seams so unit tests drive the action timeout deterministically. Production uses an
-  // unref'd setTimeout so a pending action never keeps the process alive.
-  readonly setTimer?: ((handler: () => void, ms: number) => unknown) | undefined;
-  readonly clearTimer?: ((handle: unknown) => void) | undefined;
+  // Injection seam so unit tests drive the action timeout deterministically. It schedules the
+  // handler and returns the function that cancels it. Production uses an unref'd setTimeout so a
+  // pending action never keeps the process alive.
+  readonly setTimer?: ((handler: () => void, ms: number) => () => void) | undefined;
 }
 
 // Which capacity bound refused an action (all answer QUEUE_FULL): the in-flight count of the
@@ -146,7 +146,7 @@ export interface EditorAgentRegistry {
 
 interface PendingAction {
   readonly action: EditorAgentAction;
-  readonly timer: unknown;
+  readonly cancelTimer: () => void;
   readonly runtimeOwned: boolean;
   // Serialized size of `action`, charged against the byte bounds until the slot is released.
   readonly bytes: number;
@@ -173,19 +173,16 @@ interface RegistryState {
   readonly maxQueuedBytesPerSession: number;
   readonly maxQueuedBytesTotal: number;
   readonly maxSessions: number;
-  readonly setTimer: (handler: () => void, ms: number) => unknown;
-  readonly clearTimer: (handle: unknown) => void;
+  readonly setTimer: (handler: () => void, ms: number) => () => void;
   eventSeq: number;
 }
 
-function defaultSetTimer(handler: () => void, ms: number): unknown {
+function defaultSetTimer(handler: () => void, ms: number): () => void {
   const handle = setTimeout(handler, ms);
-  (handle as { unref?: () => void }).unref?.();
-  return handle;
-}
-
-function defaultClearTimer(handle: unknown): void {
-  clearTimeout(handle as ReturnType<typeof setTimeout>);
+  handle.unref();
+  return (): void => {
+    clearTimeout(handle);
+  };
 }
 
 function lifecycleFailure(
@@ -308,7 +305,7 @@ function clearPending(state: RegistryState, sessionId: string, actionId: string)
   const inner = state.pending.get(sessionId);
   const entry = inner?.get(actionId);
   if (inner === undefined || entry === undefined) return false;
-  state.clearTimer(entry.timer);
+  entry.cancelTimer();
   inner.delete(actionId);
   if (inner.size === 0) state.pending.delete(sessionId);
   return true;
@@ -332,7 +329,7 @@ function cancelPendingByAuthorityRunImpl(state: RegistryState, runId: string): n
   for (const [sessionId, inner] of state.pending) {
     for (const [actionId, entry] of inner) {
       if (!isRuntimeActionForRun(entry, runId)) continue;
-      state.clearTimer(entry.timer);
+      entry.cancelTimer();
       inner.delete(actionId);
       cancelled += 1;
       emit(state, { type: "result", result: cancelledRuntimeResult(entry.action) });
@@ -434,7 +431,7 @@ function queueActionImpl(
   if (refusal !== undefined) return queueFullOutcome(action, refusal);
   const slots = inner ?? new Map<string, PendingAction>();
   if (inner === undefined) state.pending.set(action.sessionId, slots);
-  const timer = state.setTimer(
+  const cancelTimer = state.setTimer(
     () => {
       onTimeout(state, action);
     },
@@ -442,7 +439,7 @@ function queueActionImpl(
   );
   slots.set(action.actionId, {
     action,
-    timer,
+    cancelTimer,
     runtimeOwned: options?.runtimeOwned === true,
     bytes,
   });
@@ -734,7 +731,7 @@ function selectActionSnapshot(
 
 function resetImpl(state: RegistryState): void {
   for (const inner of state.pending.values()) {
-    for (const entry of inner.values()) state.clearTimer(entry.timer);
+    for (const entry of inner.values()) entry.cancelTimer();
   }
   state.sessions.clear();
   state.capabilityDigests.clear();
@@ -763,7 +760,6 @@ function createRegistryState(options: EditorAgentRegistryOptions): RegistryState
     maxQueuedBytesTotal: options.maxQueuedBytesTotal ?? EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL,
     maxSessions: options.maxSessions ?? EDITOR_AGENT_MAX_SESSIONS,
     setTimer: options.setTimer ?? defaultSetTimer,
-    clearTimer: options.clearTimer ?? defaultClearTimer,
     eventSeq: 0,
   };
 }

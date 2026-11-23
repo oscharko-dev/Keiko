@@ -22,7 +22,8 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 import { KnowledgeStoreError } from "../errors.js";
 import { invalidateVectorIndexStateForCapsule } from "../indexing/vector-index-state.js";
 import type { KnowledgeStore } from "../store.js";
-import { textColumn } from "../sql-row.js";
+import { sourceIdColumn } from "../knowledge-ids.js";
+import { numberColumn } from "../sql-row.js";
 
 import type { AuditEventSink, CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
 
@@ -60,8 +61,10 @@ const DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL = [
   "  )",
 ].join(" ");
 
-interface ChangesRow {
-  readonly changes: number;
+// The row count the connection's last INSERT, UPDATE or DELETE changed.
+function lastChangeCount(store: KnowledgeStore): number {
+  const row = store._internal.db.prepare("SELECT changes() AS changes").get();
+  return row === undefined ? 0 : numberColumn(row, "changes");
 }
 
 function cutoffFor(now: number, days: number): number {
@@ -91,9 +94,7 @@ function runCutoffStatement(
 ): number {
   const stmt = store._internal.db.prepare(sql);
   stmt.run({ capsule_id: capsuleId, cutoff });
-  const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
-    ChangesRow | undefined;
-  return row?.changes ?? 0;
+  return lastChangeCount(store);
 }
 
 function runDelete(
@@ -112,9 +113,7 @@ function runCapsuleDelete(
 ): number {
   const stmt = store._internal.db.prepare(sql);
   stmt.run({ capsule_id: capsuleId });
-  const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
-    ChangesRow | undefined;
-  return row?.changes ?? 0;
+  return lastChangeCount(store);
 }
 
 function runUpdate(
@@ -133,7 +132,7 @@ function sourceIdsForCapsule(
   const rows = store._internal.db
     .prepare("SELECT id FROM capsule_sources WHERE capsule_id = :capsule_id ORDER BY id ASC")
     .all({ capsule_id: capsuleId });
-  return rows.map((row) => textColumn(row, "id") as KnowledgeSourceId);
+  return rows.map((row) => sourceIdColumn(row, "id"));
 }
 
 // Runs the retention DELETEs inside a single transaction. Extracted from applyRetentionToCapsule to

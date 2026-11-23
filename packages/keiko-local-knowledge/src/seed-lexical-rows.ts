@@ -4,42 +4,31 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { KnowledgeStoreError } from "./errors.js";
 import { replaceLexicalRowsForDocument } from "./indexing/lexical-index-persist.js";
-import { nullableNumberColumn, textColumn, type KnowledgeSqlRow } from "./sql-row.js";
+import { chunkIdColumn, sourceIdColumn } from "./knowledge-ids.js";
+import { nullableNumberColumn, type KnowledgeSqlRow } from "./sql-row.js";
 import type { KnowledgeStore } from "./store.js";
 
-// The one document a seed helper indexed: its capsule, its source, its id and the text its chunks
-// span.
+// The one document a seed helper indexed: its capsule, its id and the text its chunks span.
 export interface SeedLexicalDocument {
   readonly capsuleId: KnowledgeCapsuleId;
-  readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly text: string;
 }
 
-interface SeedChunkSpan {
-  readonly chunkId: ChunkId;
-  readonly start: number | null;
-  readonly end: number | null;
+interface SeedChunkSpanRow {
+  readonly id: ChunkId;
+  readonly source_id: KnowledgeSourceId;
+  readonly character_start: number | null;
+  readonly character_end: number | null;
 }
 
-// A stored chunk of the seeded document. Its id must be one the chunker returned and its source
-// the seeded source, so both keep their brands without an assertion.
-function seedChunkSpan(
-  row: KnowledgeSqlRow,
-  seed: SeedLexicalDocument,
-  chunkIds: readonly ChunkId[],
-): SeedChunkSpan {
-  const id = textColumn(row, "id");
-  const chunkId = chunkIds.find((candidate) => candidate === id);
-  if (chunkId === undefined || textColumn(row, "source_id") !== seed.sourceId) {
-    throw new KnowledgeStoreError("A seeded chunk does not belong to the seeded document");
-  }
+function seedChunkSpanRow(row: KnowledgeSqlRow): SeedChunkSpanRow {
   return {
-    chunkId,
-    start: nullableNumberColumn(row, "character_start"),
-    end: nullableNumberColumn(row, "character_end"),
+    id: chunkIdColumn(row, "id"),
+    source_id: sourceIdColumn(row, "source_id"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
   };
 }
 
@@ -53,7 +42,7 @@ export function indexSeedLexicalRows(
     replaceLexicalRowsForDocument(store._internal.db, seed.capsuleId, seed.documentId, []);
     return;
   }
-  const spans = store._internal.db
+  const rows = store._internal.db
     .prepare(
       [
         "SELECT id, source_id, character_start, character_end",
@@ -62,19 +51,24 @@ export function indexSeedLexicalRows(
         "ORDER BY order_index ASC",
       ].join(" "),
     )
-    .all({ c: String(seed.capsuleId), d: String(seed.documentId) })
-    .map((row) => seedChunkSpan(row, seed, chunkIds));
+    .all({
+      c: String(seed.capsuleId),
+      d: String(seed.documentId),
+    })
+    .map(seedChunkSpanRow);
   replaceLexicalRowsForDocument(
     store._internal.db,
     seed.capsuleId,
     seed.documentId,
-    spans.map((span) => {
-      const text = seed.text.slice(span.start ?? 0, span.end ?? seed.text.length);
+    rows.map((row) => {
+      const start = row.character_start ?? 0;
+      const end = row.character_end ?? seed.text.length;
+      const text = seed.text.slice(start, end);
       return {
         capsuleId: seed.capsuleId,
-        sourceId: seed.sourceId,
+        sourceId: row.source_id,
         documentId: seed.documentId,
-        chunkId: span.chunkId,
+        chunkId: row.id,
         text,
         exactText: text,
         updatedAt: 1_700_000_000_000,

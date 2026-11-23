@@ -5,7 +5,11 @@ import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contr
 import { freshStore } from "./_support.js";
 import { seedCapsuleSourceAndDocument, seedPage, seedParsedUnit } from "./chunking/_support.js";
 import { chunkDocument } from "./chunking/chunker-runner.js";
-import { lookupCitationPreviewSnapshotForStoredCitation } from "./citation-preview-snapshot.js";
+import {
+  lookupCitationPreviewSnapshot,
+  lookupCitationPreviewSnapshotForStoredCitation,
+} from "./citation-preview-snapshot.js";
+import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
 
 interface Fixture {
@@ -80,5 +84,36 @@ describe("lookupCitationPreviewSnapshotForStoredCitation", () => {
       expect(result.snapshot.characterStart).toBe(0);
       expect(result.snapshot.characterEnd).toBe(text.length);
     }
+  });
+
+  it("fails closed when the stored document status is outside its vocabulary", () => {
+    const text = "Status span.";
+    seedPage(fixture.store, fixture.seeded.capsuleId, fixture.seeded.documentId, {
+      pageNumber: 1,
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    seedParsedUnit(fixture.store, fixture.seeded.capsuleId, "unit-status", {
+      kind: "page",
+      documentId: fixture.seeded.documentId,
+      pageNumber: 1,
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    const chunked = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+    const chunkId = chunked.chunkIds[0];
+    if (chunkId === undefined) throw new Error("expected a chunk");
+    fixture.store._internal.db
+      .prepare("UPDATE documents SET status = 'archived' WHERE id = :id")
+      .run({ id: fixture.seeded.documentId });
+
+    expect(() =>
+      lookupCitationPreviewSnapshot(fixture.store, fixture.seeded.capsuleId, chunkId),
+    ).toThrow(KnowledgeStoreError);
   });
 });

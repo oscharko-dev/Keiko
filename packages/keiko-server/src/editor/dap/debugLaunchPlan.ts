@@ -21,6 +21,7 @@ import {
   type ClosedFileDebugLaunchArguments,
   DebugCapsulePlanError,
   type Layer2DebugCapsulePlan,
+  type Layer2DebugCapsulePlanFields,
   type DebugSpawnArtifactIdentity,
   type DebugSpawnEnvelope,
   type DebugRuntimeDirectoryIdentity,
@@ -151,12 +152,17 @@ interface DebugTargetCandidate {
   readonly fileId?: unknown;
 }
 
-/** @internal Security-boundary helper exposed for direct mutation verification. */
-export function debugOwnTargetData(record: DebugTargetCandidate, key: string): unknown {
+/**
+ * @internal Security-boundary helper exposed for direct mutation verification. Reads an own data
+ * member without invoking accessors; every target member is text, so any other value reads as
+ * undefined.
+ */
+export function debugOwnTargetData(record: DebugTargetCandidate, key: string): string | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(record, key);
   if (descriptor === undefined) throw new DebugCapsulePlanError();
   if (!("value" in descriptor)) throw new DebugCapsulePlanError();
-  return descriptor.value;
+  const value: unknown = descriptor.value;
+  return typeof value === "string" ? value : undefined;
 }
 
 /** @internal Security-boundary helper exposed for direct mutation verification. */
@@ -173,22 +179,22 @@ export function assertDebugTargetCandidate(
 export function parseDebugCatalogTarget(
   candidate: DebugTargetCandidate,
   keys: string[],
-  kind: unknown,
+  kind: string | undefined,
 ): OpaqueTarget | undefined {
   if (kind !== "catalog" || keys.join(",") !== "kind,targetId") return undefined;
   const targetId = debugOwnTargetData(candidate, "targetId");
-  return typeof targetId === "string" ? { kind, targetId } : undefined;
+  return targetId === undefined ? undefined : { kind, targetId };
 }
 
 /** @internal Security-boundary helper exposed for direct mutation verification. */
 export function parseDebugFileTarget(
   candidate: DebugTargetCandidate,
   keys: string[],
-  kind: unknown,
+  kind: string | undefined,
 ): OpaqueTarget | undefined {
   if (kind !== "file" || keys.join(",") !== "fileId,kind") return undefined;
   const fileId = debugOwnTargetData(candidate, "fileId");
-  return typeof fileId === "string" ? { kind, fileId } : undefined;
+  return fileId === undefined ? undefined : { kind, fileId };
 }
 
 /** @internal Opaque target parser exposed for direct mutation verification. */
@@ -292,7 +298,13 @@ function validateEndpoint(context: DebugLaunchRuntimeContext): void {
   const lengths =
     Buffer.byteLength(context.hostSocketPath) <= 100 &&
     Buffer.byteLength(context.capsuleSocketPath) <= 100;
-  const runtimeMount = mount as unknown as Readonly<Record<string, unknown>>;
+  // The inspection type pins these facts to their one valid value; reading them as unknown lets
+  // this boundary re-prove those exact values instead of trusting the type.
+  const runtimeMount: {
+    readonly mode: unknown;
+    readonly owner: unknown;
+    readonly symlink: unknown;
+  } = mount;
   const validMount =
     runtimeMount.mode === "0700" &&
     runtimeMount.owner === "currentUser" &&
@@ -861,7 +873,7 @@ interface FinalLayer2PlanInput {
 }
 
 function finalLayer2Plan(args: FinalLayer2PlanInput): Layer2DebugCapsulePlan {
-  return Object.freeze({
+  const fields: Layer2DebugCapsulePlanFields = {
     schemaVersion: "1",
     ...args.input.binding,
     provisioningDigest: args.provisioningDigest,
@@ -881,7 +893,11 @@ function finalLayer2Plan(args: FinalLayer2PlanInput): Layer2DebugCapsulePlan {
       endpointOwnership: "currentUser",
     }),
     launchRequest: args.launchRequest,
-  }) as unknown as Layer2DebugCapsulePlan;
+  };
+  // SAFETY: the Layer-2 brand is a declared-only symbol with no runtime value, so the frozen fields
+  // are the complete plan; this function is the plan's only producer, the one place the brand is
+  // added.
+  return Object.freeze(fields) as Layer2DebugCapsulePlan;
 }
 
 interface AssemblePlanInput {

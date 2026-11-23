@@ -19,6 +19,7 @@ import {
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
+import { capsuleIdColumn, isCapsuleSetId } from "./knowledge-ids.js";
 import { textColumn } from "./sql-row.js";
 
 export interface CreateCapsuleSetInput {
@@ -43,15 +44,16 @@ function metaKey(id: CapsuleSetId): string {
 }
 
 function parseMeta(value: string, id: CapsuleSetId): SetMetaPayload {
-  const parsed = JSON.parse(value) as unknown;
+  const parsed: unknown = JSON.parse(value);
   if (typeof parsed !== "object" || parsed === null) {
     throw new KnowledgeStoreError(`Corrupt schema_meta payload for ${String(id)}.`);
   }
-  const obj = parsed as Record<string, unknown>;
-  const displayName = obj.displayName;
-  const description = obj.description;
-  const tags = obj.tags;
-  const composedAt = obj.composedAt;
+  // JSON.parse yields own enumerable fields only, so the entries hold every field of the payload.
+  const fields = new Map<string, unknown>(Object.entries(parsed));
+  const displayName = fields.get("displayName");
+  const description = fields.get("description");
+  const tags = fields.get("tags");
+  const composedAt = fields.get("composedAt");
   if (typeof displayName !== "string") {
     throw new KnowledgeStoreError(`schema_meta payload missing displayName for ${String(id)}.`);
   }
@@ -72,7 +74,7 @@ function readMembers(store: KnowledgeStore, setId: CapsuleSetId): readonly Knowl
       "SELECT capsule_id, ordinal FROM capsule_set_members WHERE set_id = :s ORDER BY ordinal ASC",
     )
     .all({ s: setId });
-  return rows.map((row) => textColumn(row, "capsule_id") as KnowledgeCapsuleId);
+  return rows.map((row) => capsuleIdColumn(row, "capsule_id"));
 }
 
 function metaToCapsuleSet(
@@ -164,7 +166,10 @@ export function listCapsuleSets(store: KnowledgeStore): readonly CapsuleSet[] {
     .prepare("SELECT key, value FROM schema_meta WHERE key LIKE :prefix")
     .all({ prefix: `${META_PREFIX}%` });
   const sets = rows.map((row) => {
-    const id = textColumn(row, "key").slice(META_PREFIX.length) as CapsuleSetId;
+    const id = textColumn(row, "key").slice(META_PREFIX.length);
+    if (!isCapsuleSetId(id)) {
+      throw new KnowledgeStoreError("A stored capsule set key names a blank capsule set id.");
+    }
     const payload = parseMeta(textColumn(row, "value"), id);
     const capsuleIds = readMembers(store, id);
     return metaToCapsuleSet(id, payload, capsuleIds);

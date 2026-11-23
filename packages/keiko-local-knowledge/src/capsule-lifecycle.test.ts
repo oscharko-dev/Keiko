@@ -183,6 +183,25 @@ describe("updateCapsuleDetails", () => {
   });
 });
 
+describe("reading stored capsule vocabularies", () => {
+  it.each([
+    ["retrieval_effort", "exhaustive"],
+    ["output_mode", "essay"],
+    ["answer_grounding_policy", "anything-goes"],
+    ["vector_metric", "manhattan"],
+    ["embedding_normalization", "l3"],
+    ["lifecycle_state", "published"],
+  ])("fails closed when %s holds %s, a value outside its vocabulary", (column, value) => {
+    const created = createCapsule(store, sampleCapsuleInput());
+    store._internal.db
+      .prepare(`UPDATE capsules SET ${column} = :value WHERE id = :id`)
+      .run({ id: created.id, value });
+
+    expect(() => getCapsule(store, created.id)).toThrow(KnowledgeStoreError);
+    expect(() => listCapsules(store)).toThrow(/does not admit/u);
+  });
+});
+
 describe("listCapsules", () => {
   it("returns empty before any insert", () => {
     expect(listCapsules(store)).toStrictEqual([]);

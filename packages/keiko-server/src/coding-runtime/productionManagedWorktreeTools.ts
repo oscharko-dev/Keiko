@@ -415,15 +415,16 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
 
 type ProposalApprovalWaitOutcome = "approved" | "denied" | "cancelled" | "expired" | "unavailable";
 
-interface ProposalApprovalProbe {
-  readonly review: (proposalId: string) => unknown;
+/** `Review` is the reviewing service's own review record; the wait only asks whether one exists. */
+interface ProposalApprovalProbe<Review> {
+  readonly review: (proposalId: string) => Review | undefined;
   readonly matchesApproval: (proposalId: string) => boolean;
   /** The operator declined the proposal: it stays reviewable, so this is read first. */
   readonly declined?: (proposalId: string) => boolean;
 }
 
-export function waitForRuntimeProposalApproval(
-  probe: ProposalApprovalProbe,
+export function waitForRuntimeProposalApproval<Review>(
+  probe: ProposalApprovalProbe<Review>,
   proposalId: string,
   signal?: AbortSignal,
   onResolutionFailure?: (error: unknown) => void,
@@ -1047,10 +1048,10 @@ function stageReleaseResult(
 // The run's record of the operator's "no" settles a declined proposal's wait at once: the server
 // raised that ask itself, so no child process is there to be told, and the call would otherwise
 // hold until the approval ceiling (owner decision 2026-09-26, ADR-0124 D6).
-function declinableProposalProbe(
+function declinableProposalProbe<Review>(
   input: ProductionManagedWorktreeToolInput,
-  service: ProposalApprovalProbe,
-): ProposalApprovalProbe {
+  service: ProposalApprovalProbe<Review>,
+): ProposalApprovalProbe<Review> {
   const runId = input.authorityRef.runId;
   return {
     review: (proposalId) => service.review(proposalId),

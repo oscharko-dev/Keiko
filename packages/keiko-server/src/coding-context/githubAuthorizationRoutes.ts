@@ -129,10 +129,14 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function parseUpdate(req: IncomingMessage): Promise<unknown> {
+// Throws SyntaxError for a body that is not JSON; an empty body is no update.
+async function parseUpdate(
+  req: IncomingMessage,
+): Promise<ReturnType<typeof parseUpdateGitHubIssueReaderAuthorizationWire>> {
   const raw = await readBody(req);
   if (raw.length === 0) return undefined;
-  return JSON.parse(raw) as unknown;
+  const parsed: unknown = JSON.parse(raw);
+  return parseUpdateGitHubIssueReaderAuthorizationWire(parsed);
 }
 
 function unknownRepository(ctx: RouteContext, verb: string): RouteResult {
@@ -168,7 +172,7 @@ async function readUpdate(
   ctx: RouteContext,
 ): Promise<ReturnType<typeof parseUpdateGitHubIssueReaderAuthorizationWire>> {
   try {
-    return parseUpdateGitHubIssueReaderAuthorizationWire(await parseUpdate(ctx.req));
+    return await parseUpdate(ctx.req);
   } catch {
     return undefined;
   }

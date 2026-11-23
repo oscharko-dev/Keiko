@@ -3901,10 +3901,10 @@ function workspacePatternEntries(
   cache?: FileExistenceCache,
 ): readonly unknown[] | undefined {
   if (Array.isArray(workspaces)) {
-    return workspaces.map((entry: unknown): unknown => entry);
+    return Array.from<unknown>(workspaces);
   }
   if (isRecord(workspaces) && Array.isArray(workspaces.packages)) {
-    return workspaces.packages.map((entry: unknown): unknown => entry);
+    return Array.from<unknown>(workspaces.packages);
   }
   if (workspaces !== undefined) {
     recordMetadataCoverageIssue(cache, "workspace-manifest-shape-unsupported");
@@ -10885,10 +10885,13 @@ function sourceDetailsActivityExtra(
   }
 }
 
-function originalSearchFailure(error: unknown): unknown {
-  if (contentFreeErrorClass(error) !== "AggregateError") return error;
+// The stack frames of the original search failure: the primary cause's own cause of an
+// AggregateError when it has one, its primary cause otherwise, or the error itself.
+function originalSearchFailureFrames(error: unknown): readonly string[] {
+  if (contentFreeErrorClass(error) !== "AggregateError") return keikoStackFrames(error);
   const primary = errorObjectField(thrownErrorFields(error), "cause");
-  return isRecord(primary) ? (activityProperty(primary, "cause") ?? primary) : primary;
+  const cause = isRecord(primary) ? activityProperty(primary, "cause") : undefined;
+  return keikoStackFrames(cause ?? primary);
 }
 
 function aggregateSearchFailureDetails(
@@ -10931,7 +10934,7 @@ function failureActivityExtra(
   progress: ConnectedContextProgress,
   cancelled: boolean,
 ): ConnectedContextFailedActivityFields {
-  const frames = keikoStackFrames(originalSearchFailure(error));
+  const frames = originalSearchFailureFrames(error);
   const chain = causeChain(error);
   const structural = progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS;
   const index =

@@ -11,6 +11,7 @@
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type { KnowledgeStore } from "../store.js";
 import { getCapsuleSet } from "../capsule-set-lifecycle.js";
+import { isCapsuleSetId } from "../knowledge-ids.js";
 
 export interface CapsuleDocumentText {
   readonly documentId: string;
@@ -68,7 +69,8 @@ export function listCapsuleSetDocumentTexts(
   store: KnowledgeStore,
   capsuleSetId: string | CapsuleSetId,
 ): readonly CapsuleDocumentText[] {
-  const set = getCapsuleSet(store, capsuleSetId as CapsuleSetId);
+  if (!isCapsuleSetId(capsuleSetId)) return [];
+  const set = getCapsuleSet(store, capsuleSetId);
   if (set === undefined) return [];
   const result: CapsuleDocumentText[] = [];
   for (const capsuleId of set.capsuleIds) {

@@ -60,6 +60,7 @@ import { readHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import { resolveScopeModelUsePolicy } from "./model-use-policy.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import { numberColumn } from "./sql-row.js";
 
 interface ManualSummaryEvidence {
   readonly logSink?: KnowledgeLogSink | undefined;
@@ -96,10 +97,6 @@ const MANUAL_REFRESH_SUMMARY_REJECTED_OPERATION = defineActivityLogOperation({
   proofIds: ["knowledge.manual-refresh-summary.rejected.omission"],
   releaseImpact: "patch",
 });
-
-interface CountRow {
-  readonly n: number;
-}
 
 interface CapsuleProjectionInput {
   readonly capsule: KnowledgeCapsule;
@@ -544,8 +541,8 @@ function countRows(
 ): number {
   const row = store._internal.db
     .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :capsuleId`)
-    .get({ capsuleId: String(capsuleId) }) as CountRow | undefined;
-  return row?.n ?? 0;
+    .get({ capsuleId: String(capsuleId) });
+  return row === undefined ? 0 : numberColumn(row, "n");
 }
 
 // Unlike addPolicyReadinessReason() below (the pod-set path), this deliberately has no
@@ -801,7 +798,7 @@ function embeddingDegradationReasons(
 }
 
 function uniqueSourceKinds(sources: readonly KnowledgeSource[]): readonly KnowledgePodSourceKind[] {
-  return uniqueStrings(sources.map(sourceKindForSummary)) as readonly KnowledgePodSourceKind[];
+  return uniqueStrings(sources.map(sourceKindForSummary));
 }
 
 function sourceKindForSummary(source: KnowledgeSource): KnowledgePodSourceKind {
@@ -826,9 +823,7 @@ function manualSourceFingerprint(sources: readonly KnowledgeSource[]): {
 function uniqueSourceIds(
   members: readonly CapsuleProjectionInput[],
 ): readonly KnowledgeSource["id"][] {
-  return uniqueStrings(
-    members.flatMap((member) => member.sources.map((source) => source.id)),
-  ) as readonly KnowledgeSource["id"][];
+  return uniqueStrings(members.flatMap((member) => member.sources.map((source) => source.id)));
 }
 
 function missingMemberReasons(
@@ -853,7 +848,7 @@ function sumCounts(
   };
 }
 
-function uniqueStrings(values: readonly string[]): readonly string[] {
+function uniqueStrings<T extends string>(values: readonly T[]): readonly T[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 

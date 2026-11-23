@@ -263,9 +263,8 @@ function makeContainmentTracker(): KillableChild {
 }
 
 const immediateScheduler: KillScheduler = {
-  setTimer: (callback): unknown => {
+  setTimer: (callback): void => {
     callback();
-    return 0;
   },
 };
 
@@ -308,10 +307,9 @@ describe("escalateKill", () => {
     const tracker = makeKillTracker(1234);
     let exited = false;
     const scheduler: KillScheduler = {
-      setTimer: (callback): unknown => {
+      setTimer: (callback): void => {
         exited = true;
         callback();
-        return 0;
       },
     };
 
@@ -339,9 +337,8 @@ describe("escalateKill", () => {
     // A scheduler whose timer never fires within the test — only the whenExited registration can
     // resolve escalateKill. Proves the prompt-exit short-circuit, not the grace fallback.
     const neverScheduler: KillScheduler = {
-      setTimer: (): unknown => {
+      setTimer: (): void => {
         timerFired = true;
-        return 0;
       },
     };
     let exited = false;

@@ -26,8 +26,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { DELETE_CAPSULE_SQL } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
 import {
+  CAPSULE_ANSWER_GROUNDING_POLICIES,
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
   CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
+  CAPSULE_LIFECYCLE_STATES,
+  CAPSULE_OUTPUT_MODES,
+  CAPSULE_RETRIEVAL_EFFORTS,
+  EMBEDDING_VECTOR_METRICS,
+  EMBEDDING_VECTOR_NORMALIZATIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import { validateKnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
@@ -36,12 +42,16 @@ import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./displa
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
+import { capsuleIdColumn, capsuleSetIdColumn, sourceIdColumn } from "./knowledge-ids.js";
 import {
+  admittedTextColumn,
   type KnowledgeSqlRow,
+  nullableAdmittedTextColumn,
   nullableNumberColumn,
   nullableTextColumn,
   numberColumn,
   textColumn,
+  vocabularyAdmission,
 } from "./sql-row.js";
 
 export interface CreateCapsuleInput {
@@ -62,15 +72,15 @@ export interface CreateCapsuleInput {
 }
 
 interface CapsuleRow {
-  readonly id: string;
+  readonly id: KnowledgeCapsuleId;
   readonly display_name: string;
   readonly description: string | null;
   readonly tags_json: string;
   readonly source_routing_instructions: string | null;
   readonly always_query: number;
-  readonly retrieval_effort: string;
-  readonly output_mode: string;
-  readonly answer_grounding_policy: string;
+  readonly retrieval_effort: CapsuleRetrievalEffort;
+  readonly output_mode: CapsuleOutputMode;
+  readonly answer_grounding_policy: CapsuleAnswerGroundingPolicy;
   readonly contextual_retrieval_enabled: number | null;
   readonly contextual_retrieval_model_id: string | null;
   readonly contextual_retrieval_prompt_version: string | null;
@@ -81,29 +91,41 @@ interface CapsuleRow {
   readonly embedding_model_provider: string;
   readonly embedding_model_id: string;
   readonly embedding_model_revision: string | null;
-  readonly embedding_normalization: string | null;
+  readonly embedding_normalization: EmbeddingVectorNormalization | null;
   readonly embedding_instruction_version: string | null;
   readonly embedding_space_fingerprint: string | null;
   readonly embedding_dimensions_param: number | null;
   readonly vector_dimensions: number;
-  readonly vector_metric: string;
-  readonly lifecycle_state: string;
+  readonly vector_metric: EmbeddingVectorMetric;
+  readonly lifecycle_state: CapsuleLifecycleState;
   readonly storage_reference: string;
   readonly created_at: number;
   readonly updated_at: number;
 }
 
+// The capsule writers take these values from the contracts' closed vocabularies.
+const isRetrievalEffort = vocabularyAdmission(CAPSULE_RETRIEVAL_EFFORTS);
+const isOutputMode = vocabularyAdmission(CAPSULE_OUTPUT_MODES);
+const isAnswerGroundingPolicy = vocabularyAdmission(CAPSULE_ANSWER_GROUNDING_POLICIES);
+const isVectorMetric = vocabularyAdmission(EMBEDDING_VECTOR_METRICS);
+const isVectorNormalization = vocabularyAdmission(EMBEDDING_VECTOR_NORMALIZATIONS);
+const isLifecycleState = vocabularyAdmission(CAPSULE_LIFECYCLE_STATES);
+
 function readCapsuleRow(row: KnowledgeSqlRow): CapsuleRow {
   return {
-    id: textColumn(row, "id"),
+    id: capsuleIdColumn(row, "id"),
     display_name: textColumn(row, "display_name"),
     description: nullableTextColumn(row, "description"),
     tags_json: textColumn(row, "tags_json"),
     source_routing_instructions: nullableTextColumn(row, "source_routing_instructions"),
     always_query: numberColumn(row, "always_query"),
-    retrieval_effort: textColumn(row, "retrieval_effort"),
-    output_mode: textColumn(row, "output_mode"),
-    answer_grounding_policy: textColumn(row, "answer_grounding_policy"),
+    retrieval_effort: admittedTextColumn(row, "retrieval_effort", isRetrievalEffort),
+    output_mode: admittedTextColumn(row, "output_mode", isOutputMode),
+    answer_grounding_policy: admittedTextColumn(
+      row,
+      "answer_grounding_policy",
+      isAnswerGroundingPolicy,
+    ),
     contextual_retrieval_enabled: nullableNumberColumn(row, "contextual_retrieval_enabled"),
     contextual_retrieval_model_id: nullableTextColumn(row, "contextual_retrieval_model_id"),
     contextual_retrieval_prompt_version: nullableTextColumn(
@@ -123,13 +145,17 @@ function readCapsuleRow(row: KnowledgeSqlRow): CapsuleRow {
     embedding_model_provider: textColumn(row, "embedding_model_provider"),
     embedding_model_id: textColumn(row, "embedding_model_id"),
     embedding_model_revision: nullableTextColumn(row, "embedding_model_revision"),
-    embedding_normalization: nullableTextColumn(row, "embedding_normalization"),
+    embedding_normalization: nullableAdmittedTextColumn(
+      row,
+      "embedding_normalization",
+      isVectorNormalization,
+    ),
     embedding_instruction_version: nullableTextColumn(row, "embedding_instruction_version"),
     embedding_space_fingerprint: nullableTextColumn(row, "embedding_space_fingerprint"),
     embedding_dimensions_param: nullableNumberColumn(row, "embedding_dimensions_param"),
     vector_dimensions: numberColumn(row, "vector_dimensions"),
-    vector_metric: textColumn(row, "vector_metric"),
-    lifecycle_state: textColumn(row, "lifecycle_state"),
+    vector_metric: admittedTextColumn(row, "vector_metric", isVectorMetric),
+    lifecycle_state: admittedTextColumn(row, "lifecycle_state", isLifecycleState),
     storage_reference: textColumn(row, "storage_reference"),
     created_at: numberColumn(row, "created_at"),
     updated_at: numberColumn(row, "updated_at"),
@@ -217,7 +243,7 @@ function jsonOrEmpty(value: readonly string[]): string {
 }
 
 function parseTags(json: string): readonly string[] {
-  const parsed = JSON.parse(json) as unknown;
+  const parsed: unknown = JSON.parse(json);
   if (!Array.isArray(parsed)) return [];
   return parsed.filter((entry): entry is string => typeof entry === "string");
 }
@@ -276,7 +302,7 @@ function listSourceIdsFor(
   capsuleId: KnowledgeCapsuleId,
 ): readonly KnowledgeSourceId[] {
   const rows = store._internal.db.prepare(SELECT_SOURCE_IDS_FOR_CAPSULE_SQL).all({ c: capsuleId });
-  return rows.map((row) => textColumn(row, "id") as KnowledgeSourceId);
+  return rows.map((row) => sourceIdColumn(row, "id"));
 }
 
 function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
@@ -284,7 +310,7 @@ function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
     provider: row.embedding_model_provider,
     modelId: row.embedding_model_id,
     vectorDimensions: row.vector_dimensions,
-    vectorMetric: row.vector_metric as EmbeddingVectorMetric,
+    vectorMetric: row.vector_metric,
   };
   if (row.embedding_model_revision !== null) {
     identity = { ...identity, modelRevision: row.embedding_model_revision };
@@ -292,7 +318,7 @@ function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
   if (row.embedding_normalization !== null) {
     identity = {
       ...identity,
-      normalization: row.embedding_normalization as EmbeddingVectorNormalization,
+      normalization: row.embedding_normalization,
     };
   }
   if (row.embedding_instruction_version !== null) {
@@ -339,7 +365,7 @@ function parseModelUsePolicy(json: string | null): KnowledgePodModelUsePolicy | 
   if (json === null) return undefined;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json) as unknown;
+    parsed = JSON.parse(json);
   } catch (cause) {
     throw new KnowledgeStoreError("Corrupt capsules.model_use_policy_json", { cause });
   }
@@ -352,15 +378,15 @@ function parseModelUsePolicy(json: string | null): KnowledgePodModelUsePolicy | 
 
 function rowToCapsule(row: CapsuleRow, sourceIds: readonly KnowledgeSourceId[]): KnowledgeCapsule {
   const base: KnowledgeCapsule = {
-    id: row.id as KnowledgeCapsuleId,
+    id: row.id,
     displayName: row.display_name,
     tags: parseTags(row.tags_json),
     sourceIds,
-    retrievalEffort: row.retrieval_effort as CapsuleRetrievalEffort,
-    outputMode: row.output_mode as CapsuleOutputMode,
-    answerGroundingPolicy: row.answer_grounding_policy as CapsuleAnswerGroundingPolicy,
+    retrievalEffort: row.retrieval_effort,
+    outputMode: row.output_mode,
+    answerGroundingPolicy: row.answer_grounding_policy,
     embeddingModelIdentity: buildEmbeddingIdentity(row),
-    lifecycleState: row.lifecycle_state as CapsuleLifecycleState,
+    lifecycleState: row.lifecycle_state,
     storageReference: row.storage_reference,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -475,7 +501,7 @@ export function listCapsules(store: KnowledgeStore): readonly KnowledgeCapsule[]
   const rows = store._internal.db.prepare(SELECT_ALL_CAPSULES_SQL).all();
   return rows.map((row) => {
     const typed = readCapsuleRow(row);
-    const sourceIds = listSourceIdsFor(store, typed.id as KnowledgeCapsuleId);
+    const sourceIds = listSourceIdsFor(store, typed.id);
     return rowToCapsule(typed, sourceIds);
   });
 }
@@ -708,7 +734,7 @@ export function deleteCapsule(
   const affectedCapsuleSetIds = db
     .prepare(SELECT_AFFECTED_CAPSULE_SETS_SQL)
     .all({ c: id })
-    .map((row) => (row as { readonly set_id: string }).set_id as CapsuleSetId);
+    .map((row) => capsuleSetIdColumn(row, "set_id"));
   db.exec("BEGIN");
   try {
     const result = db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: id });
@@ -735,8 +761,8 @@ function verifyDeleteCleanup(
   for (const table of DELETE_VERIFICATION_TABLES) {
     const row = db
       .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)
-      .get({ c: capsuleId }) as { readonly n: number };
-    if (row.n !== 0) {
+      .get({ c: capsuleId });
+    if (row === undefined || numberColumn(row, "n") !== 0) {
       throw new KnowledgeStoreError(
         `capsule delete left residual rows in ${table} for ${String(capsuleId)}`,
       );

@@ -332,7 +332,8 @@
         "package:@oscharko-dev/keiko-security",
         "package:@oscharko-dev/keiko-workspace",
         "package:@oscharko-dev/keiko-connectors",
-        "package:@oscharko-dev/keiko-memory-vault"
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-local-knowledge"
       ]
     },
     {

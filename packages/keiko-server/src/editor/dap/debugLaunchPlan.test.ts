@@ -69,7 +69,9 @@ describe("opaque debug target parser security boundary", () => {
     Object.defineProperty(record, "data", { enumerable: true, value: "value" });
     const getter = vi.fn(() => "value");
     Object.defineProperty(record, "accessor", { enumerable: true, get: getter });
+    Object.defineProperty(record, "count", { enumerable: true, value: 7 });
     expect(debugOwnTargetData(record, "data")).toBe("value");
+    expect(debugOwnTargetData(record, "count")).toBeUndefined();
     expect(() => debugOwnTargetData(record, "missing")).toThrow(DebugCapsulePlanError);
     expect(() => debugOwnTargetData(record, "accessor")).toThrow(DebugCapsulePlanError);
     expect(getter).not.toHaveBeenCalled();
@@ -388,6 +390,11 @@ async function assertCoreDenials(
     { ...context, runtimeMount: { ...context.runtimeMount, owner: "other" as never } },
     { ...context, runtimeMount: { ...context.runtimeMount, mode: "0755" as never } },
     { ...context, runtimeMount: { ...context.runtimeMount, symlink: true as never } },
+    // The boundary re-proves the exact value: a symlink flag that is not the boolean false refuses.
+    ...[undefined, null, 0].map((symlink) => ({
+      ...context,
+      runtimeMount: { ...context.runtimeMount, symlink: symlink as never },
+    })),
     { ...context, environment: { PATH: "/opt/keiko-runtime" } },
     { ...context, environment: { ...context.environment, NODE_OPTIONS: "x" } },
   ];

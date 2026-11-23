@@ -18,6 +18,7 @@ import {
   GATEWAY_SILENCE_FLOOR_MS,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   GatewayReadinessOptions,
   GatewayReadinessProbeName,
@@ -1100,7 +1101,7 @@ function providerWarning(errorValue: unknown): string {
   );
 }
 
-function nativeProbeAbortReason(error: unknown): unknown {
+function nativeProbeAbortReason(error: unknown): DOMException | undefined {
   // Node's native HTTP transport wraps the signal reason in Error(ABORT_ERR), not DOMException.
   // Preserve that deadline/cancellation reason so a slow gateway does not refute readiness (#4038).
   if (
@@ -1113,7 +1114,7 @@ function nativeProbeAbortReason(error: unknown): unknown {
       ? error.cause
       : new DOMException("Gateway readiness probe cancelled.", "AbortError");
   }
-  return error;
+  return undefined;
 }
 
 // Every probe's `catch` used to collapse an actionable cause — an auth rejection, a DNS/TLS failure,
@@ -1132,7 +1133,7 @@ function reportProbeFailure(
   evidence: string,
   probeError: unknown,
 ): GatewayReadinessProbeResult {
-  const failure = nativeProbeAbortReason(probeError);
+  const failure = nativeProbeAbortReason(probeError) ?? probeError;
   const warning = providerWarning(failure);
   const record = serverDiagnosticFromError({
     correlationId,
@@ -1236,7 +1237,7 @@ function deltaContent(chunk: unknown): string {
   return textFromContent(firstDelta(chunk)?.content);
 }
 
-function readProviderJson(response: Response): Promise<unknown> {
+function readProviderJson(response: Response): Promise<CatalogJsonValue> {
   return readJsonCapped(response, MAX_PROVIDER_RESPONSE_BYTES);
 }
 

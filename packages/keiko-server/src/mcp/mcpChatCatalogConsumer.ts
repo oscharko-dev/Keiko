@@ -45,25 +45,36 @@ export interface McpChatCatalogConsumer extends CatalogConsumer {
   };
 }
 
+const ACTION_KEYS = "actionId,argumentsDigest,idempotencyKey,name,risk,serverName,toolName";
+const isActionText = (entry: CatalogJsonValue | undefined): entry is string =>
+  typeof entry === "string" && entry.length > 0 && entry.length <= 128;
+const isActionRisk = (risk: CatalogJsonValue | undefined): risk is McpToolRisk =>
+  risk === "read" || risk === "write";
+const isActionDigest = (digest: CatalogJsonValue | undefined): digest is string =>
+  typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest);
+
+type McpChatActionTexts = Omit<McpChatCatalogAction, "risk" | "argumentsDigest">;
+
+function captureActionTexts(action: CatalogJsonObject): McpChatActionTexts | undefined {
+  const { actionId, idempotencyKey, name, serverName, toolName } = action;
+  return isActionText(actionId) &&
+    isActionText(idempotencyKey) &&
+    isActionText(name) &&
+    isActionText(serverName) &&
+    isActionText(toolName)
+    ? { actionId, idempotencyKey, name, serverName, toolName }
+    : undefined;
+}
+
 function captureAction(value: CatalogJsonValue): McpChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
-  if (
-    Object.keys(action).sort(compareStrings).join() !==
-      "actionId,argumentsDigest,idempotencyKey,name,risk,serverName,toolName" ||
-    ![
-      action.actionId,
-      action.idempotencyKey,
-      action.name,
-      action.serverName,
-      action.toolName,
-    ].every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 128) ||
-    (action.risk !== "read" && action.risk !== "write") ||
-    typeof action.argumentsDigest !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(action.argumentsDigest)
-  )
+  if (Object.keys(action).sort(compareStrings).join() !== ACTION_KEYS) return undefined;
+  const texts = captureActionTexts(action);
+  const { risk, argumentsDigest } = action;
+  if (texts === undefined || !isActionRisk(risk) || !isActionDigest(argumentsDigest))
     return undefined;
-  return action as unknown as McpChatCatalogAction;
+  return { ...texts, risk, argumentsDigest };
 }
 
 export const mcpChatCatalogConsumerPort: CatalogConsumerPort<McpChatCatalogConsumer> = {

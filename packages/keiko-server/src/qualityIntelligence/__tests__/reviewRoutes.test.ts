@@ -716,6 +716,33 @@ describe("handleQiReview — candidate-scope approve", () => {
   });
 });
 
+describe("hashQiReviewAuditEntry", () => {
+  it("keeps the canonical form that stored audit chains were hashed with", () => {
+    // Written in a different member order than the canonical form; the pinned digest is the one
+    // the earlier copy-then-stringify canonicalisation produced, so stored chains keep verifying.
+    const entry = {
+      toState: "changes-requested",
+      fromState: "approved",
+      governanceFlags: ["needs-revalidation", "needs-rejudge"],
+      reason: "needs another look",
+      actorId: "local-user",
+      reviewerLabel: "Reviewer Ä",
+      candidateId: "cand-1",
+      scope: "candidate",
+      action: "reopen",
+      at: "2026-11-21T08:00:00.000Z",
+      priorHashSha256Hex: "a".repeat(64),
+      sequence: 2,
+    } as const;
+    expect(hashQiReviewAuditEntry(entry)).toBe(
+      "590076f32d8a715cff37affd115a8cc7cafa3027d5ffb8838d13830e792cb590",
+    );
+    expect(hashQiReviewAuditEntry({ ...entry, entryHashSha256Hex: "b".repeat(64) })).toBe(
+      "590076f32d8a715cff37affd115a8cc7cafa3027d5ffb8838d13830e792cb590",
+    );
+  });
+});
+
 describe("handleQiReview — review persistence failures", () => {
   it("maps a live foreign review lock to QI_REVIEW_WRITE_CONFLICT", async () => {
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000);"], {

@@ -9,7 +9,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { readDocumentTextSpan } from "../discovery/persist.js";
 import { lexicalExactText, lexicalIndexedText } from "../retrieval/lexical-normalization.js";
 import type { KnowledgeStore } from "../store.js";
-import { type KnowledgeSqlRow, nullableNumberColumn, textColumn } from "../sql-row.js";
+import { chunkIdColumn, sourceIdColumn } from "../knowledge-ids.js";
+import { type KnowledgeSqlRow, nullableNumberColumn } from "../sql-row.js";
 
 const DELETE_LEXICAL_FOR_DOCUMENT_SQL =
   "DELETE FROM chunk_lexical_index WHERE capsule_id = :c AND document_id = :d";
@@ -56,21 +57,17 @@ export interface LexicalChunkIndexRow {
   readonly updatedAt: number;
 }
 
-interface CountRow {
-  readonly n: number;
-}
-
 interface ChunkLexicalSpanRow {
-  readonly id: string;
-  readonly source_id: string;
+  readonly id: ChunkId;
+  readonly source_id: KnowledgeSourceId;
   readonly char_start: number | null;
   readonly char_end: number | null;
 }
 
 function readChunkLexicalSpanRow(row: KnowledgeSqlRow): ChunkLexicalSpanRow {
   return {
-    id: textColumn(row, "id"),
-    source_id: textColumn(row, "source_id"),
+    id: chunkIdColumn(row, "id"),
+    source_id: sourceIdColumn(row, "source_id"),
     char_start: nullableNumberColumn(row, "char_start"),
     char_end: nullableNumberColumn(row, "char_end"),
   };
@@ -107,17 +104,18 @@ export function countLexicalRowsForDocument(
 ): number {
   const row = db
     .prepare(COUNT_LEXICAL_FOR_DOCUMENT_SQL)
-    .get({ c: String(capsuleId), d: String(documentId) }) as CountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+    .get({ c: String(capsuleId), d: String(documentId) });
+  const count = row?.n;
+  return typeof count === "number" ? count : 0;
 }
 
 export function countLexicalRowsForCapsule(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
 ): number {
-  const row = db.prepare(COUNT_LEXICAL_FOR_CAPSULE_SQL).get({ c: String(capsuleId) }) as
-    CountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+  const row = db.prepare(COUNT_LEXICAL_FOR_CAPSULE_SQL).get({ c: String(capsuleId) });
+  const count = row?.n;
+  return typeof count === "number" ? count : 0;
 }
 
 export function replaceLexicalRowsForDocument(
@@ -196,9 +194,9 @@ export function replaceLexicalRowsFromStoredSpans(
         ) ?? "";
       return {
         capsuleId,
-        sourceId: row.source_id as KnowledgeSourceId,
+        sourceId: row.source_id,
         documentId,
-        chunkId: row.id as ChunkId,
+        chunkId: row.id,
         text,
         exactText: text,
         updatedAt,

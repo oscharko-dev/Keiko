@@ -25,6 +25,7 @@ import {
   createHandleGitChangeApproveDescription,
   createHandleGitChangeApplyDescription,
   createHandleGitChangeReviewDescription,
+  desktopChatErrorResult,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
   handleSendDesktopChat,
@@ -60,6 +61,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { UiStoreError } from "./store/errors.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 import { canonicalChatTurnGroundingScopeIdentity } from "./chat-turn-identity.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
@@ -931,6 +933,38 @@ describe("desktopChatErrorResult gateway diagnostic symmetry", () => {
       expect(event.errorClass).toBe("RateLimitError");
     } finally {
       vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+});
+
+describe("desktopChatErrorResult store faults", () => {
+  it("records a correlated diagnostic for a store fault and none for a client refusal", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      const events: ServerDiagnosticRecord[] = [];
+      const diagnostics: ServerDiagnosticSink = {
+        record: (record): void => {
+          events.push(record);
+        },
+      };
+      const deps: UiHandlerDeps = { ...fixture.deps, diagnostics };
+      const fault = new UiStoreError(
+        "INTERNAL",
+        "A stored record holds a value of an unexpected type.",
+        500,
+      );
+      expect(desktopChatErrorResult(fault, deps, "store-fault-1").status).toBe(500);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        correlationId: "store-fault-1",
+        source: "chat.store",
+        errorClass: "UiStoreError",
+      });
+      const refusal = new UiStoreError("NOT_FOUND", "Chat not found.", 404);
+      expect(desktopChatErrorResult(refusal, deps, "store-refusal-1").status).toBe(404);
+      expect(events).toHaveLength(1);
+    } finally {
       await disposeGatewayBreakerFixture(fixture);
     }
   });

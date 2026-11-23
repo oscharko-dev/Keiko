@@ -14,12 +14,16 @@ import {
   type JiraManagedConnection,
   type JiraTraceOutcome,
 } from "@oscharko-dev/keiko-connectors";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { isCatalogJsonArray } from "@oscharko-dev/keiko-tool-catalog";
 import {
   JIRA_DRAFT_RESULT_ROWS_MAX,
+  JIRA_TEMPLATE_RULE_IDS,
   type JiraDraftItemState,
   type JiraMutationAttempt,
   type JiraMutationOutcome,
   type JiraMutationResultState,
+  type JiraTemplateRuleId,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -162,7 +166,7 @@ function failureDetail(data: CatalogJsonObject): CatalogJsonObject {
   }
   return detail;
 }
-function keyOf(value: unknown): string | undefined {
+function textOf(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 /**
@@ -170,7 +174,7 @@ function keyOf(value: unknown): string | undefined {
  * exists, so its dependents proceed and the model repairs it instead of creating it again.
  */
 function failedItem(ref: string, result: ManagedMcpToolResult): DraftItemResult {
-  const issueKey = keyOf(result.data.issueKey);
+  const issueKey = textOf(result.data.issueKey);
   return {
     ref,
     state: "failed",
@@ -186,16 +190,16 @@ function settledItem(
 ): DraftItemResult {
   const outcome = result.data.outcome;
   if (outcome === "succeeded") {
-    const issueKey = keyOf(result.data.issueKey);
+    const issueKey = textOf(result.data.issueKey);
     return { ref, state: "created", ...(issueKey === undefined ? {} : { issueKey }) };
   }
   if (outcome === "not-dispatched" && attempt?.ok === true) {
-    const issueKey = keyOf(attempt.receipt.issueKey);
+    const issueKey = textOf(attempt.receipt.issueKey);
     return { ref, state: "existing", ...(issueKey === undefined ? {} : { issueKey }) };
   }
   if (outcome === "rejected" || outcome === "not-dispatched") return failedItem(ref, result);
   // A partial effect names the issue it did create, so it is never created again.
-  const partialKey = keyOf(result.data.issueKey);
+  const partialKey = textOf(result.data.issueKey);
   return {
     ref,
     state: "uncertain",
@@ -285,7 +289,7 @@ async function recoveredKey(
       ...input.connection,
       http,
     });
-    const issueKey = found.ok ? keyOf(found.receipt.issueKey) : undefined;
+    const issueKey = found.ok ? textOf(found.receipt.issueKey) : undefined;
     if (issueKey === undefined) return settled;
     return { ref: item.ref, state, issueKey };
   } catch (error) {
@@ -500,11 +504,23 @@ export const JIRA_DRAFT_UNLISTED_GUIDANCE =
 /** What failed items without Jira's own words need: why, or that the same request cannot help. */
 function refusedAgainGuidance(failed: readonly DraftItemResult[]): string | undefined {
   if (failed.some((item) => item.detail?.replayed === true)) return JIRA_ALREADY_REFUSED_GUIDANCE;
-  return jiraTemplateViolationGuidance(
-    failed.flatMap(
-      (item) => (item.detail?.violations ?? []) as unknown as readonly JiraTemplateViolation[],
-    ),
-  );
+  return jiraTemplateViolationGuidance(failed.flatMap((item) => detailViolations(item.detail)));
+}
+const TEMPLATE_RULE_IDS: ReadonlyMap<string, JiraTemplateRuleId> = new Map(
+  JIRA_TEMPLATE_RULE_IDS.map((ruleId): [string, JiraTemplateRuleId] => [ruleId, ruleId]),
+);
+/** The violations of a failed item's detail, read in the shape the result schema admits. */
+function detailViolations(detail: CatalogJsonObject | undefined): readonly JiraTemplateViolation[] {
+  const violations = detail?.violations;
+  return isCatalogJsonArray(violations) ? violations.flatMap(templateViolation) : [];
+}
+function templateViolation(value: CatalogJsonValue): readonly JiraTemplateViolation[] {
+  if (!isRecord(value)) return [];
+  const ruleId = TEMPLATE_RULE_IDS.get(textOf(value.ruleId) ?? "");
+  const subject = textOf(value.subject);
+  const template = textOf(value.template);
+  if (ruleId === undefined || subject === undefined || template === undefined) return [];
+  return [{ ruleId, subject, template }];
 }
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {

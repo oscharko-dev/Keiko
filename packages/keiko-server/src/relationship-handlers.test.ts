@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "./store/schema.js";
 import { listRelationshipAuditEntries } from "./store/relationship-audit.js";
+import { UiStoreError } from "./store/errors.js";
 import { QueueEventSink } from "./sink.js";
 import {
   createRelationshipStorePort,
@@ -261,6 +262,43 @@ function dependsOnBody(
 
 beforeEach(() => {
   _resetIdempotencyStoreForTests();
+});
+
+describe("store faults", () => {
+  it("hands a store fault to the correlated top-level 500 instead of answering 400", async () => {
+    const store = freshStore();
+    const fault = new UiStoreError("INTERNAL", "A stored record holds an unexpected type.", 500);
+    const faulty: RelationshipHandlerDeps["store"] = {
+      ...store,
+      getRelationship: () => {
+        throw fault;
+      },
+    };
+    const { redactor } = trackingRedactor();
+    const id = "rel-00000001";
+    const req = makeReq({ method: "GET", url: `/api/relationships/${id}` });
+    await expect(
+      handleRelationshipGet(makeCtx(req, { id }), buildDeps("ws-a", faulty, redactor)),
+    ).rejects.toBe(fault);
+  });
+
+  it("keeps a store refusal below 500 a client answer", async () => {
+    const store = freshStore();
+    const faulty: RelationshipHandlerDeps["store"] = {
+      ...store,
+      getRelationship: () => {
+        throw new UiStoreError("NOT_FOUND", "Relationship not found.", 404);
+      },
+    };
+    const { redactor } = trackingRedactor();
+    const id = "rel-00000001";
+    const req = makeReq({ method: "GET", url: `/api/relationships/${id}` });
+    const result = await handleRelationshipGet(
+      makeCtx(req, { id }),
+      buildDeps("ws-a", faulty, redactor),
+    );
+    expect(result.status).toBe(404);
+  });
 });
 
 describe("workspace scope (acceptance criterion)", () => {

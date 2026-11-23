@@ -132,9 +132,10 @@ type CollectOutcome =
   // `invalidField` names the field that failed validation; `undefined` means no field was supplied.
   | { readonly ok: false; readonly invalidField: string | undefined };
 
-// The editable fields whose value is an array of candidate body-text lines. `title` (single string)
-// and the closed enums (priority / riskClass) are handled separately in normaliseEditedValue.
-const TEXT_LIST_KEYS: ReadonlySet<string> = new Set([
+// The editable fields whose value is candidate text: `title` (a single string) and the lists of
+// body-text lines. The closed enums (priority / riskClass) are validated as sent.
+const TEXT_KEYS: ReadonlySet<string> = new Set([
+  "title",
   "preconditions",
   "steps",
   "expectedResults",
@@ -144,24 +145,19 @@ const TEXT_LIST_KEYS: ReadonlySet<string> = new Set([
 // Strip bidi / zero-width / control spoofing code points (+ NFKC + trim) from every human-supplied
 // text field BEFORE validation, so an inline edit persists through the SAME candidate-text
 // normalisation as the generation path (parseGeneratedCandidates → normaliseCandidateText — the
-// documented single chokepoint for persisted candidate text). Closed enums (priority / riskClass) and
-// any non-string shape pass through untouched; their validators reject anything off-list. A title or
+// documented single chokepoint for persisted candidate text). A text value that is neither a string
+// nor a list of strings normalises to undefined, which its validator rejects. A title or
 // list item whose only content was format characters normalises to "" and is then rejected by the
 // non-blank validators (an actionable 400) rather than persisted as junk. Normalising first also means
 // MAX_TITLE_LEN is measured on the cleaned text, so padding a title with zero-width marks cannot
 // smuggle it past the length cap.
-function normaliseEditedValue(key: string, value: unknown): unknown {
-  if (key === "title") {
-    return typeof value === "string" ? normaliseCandidateText(value) : value;
-  }
-  if (TEXT_LIST_KEYS.has(key) && Array.isArray(value)) {
-    // `Array.isArray` narrows `unknown` to `any[]`; widen back to `unknown[]` so each item is typed
-    // (no unsafe `any`). Non-string items pass through for the list validator to reject.
-    return (value as readonly unknown[]).map((item) =>
-      typeof item === "string" ? normaliseCandidateText(item) : item,
-    );
-  }
-  return value;
+function normaliseEditedText(value: unknown): string | readonly string[] | undefined {
+  if (typeof value === "string") return normaliseCandidateText(value);
+  if (!Array.isArray(value)) return undefined;
+  const items: readonly unknown[] = value;
+  return items.every((item): item is string => typeof item === "string")
+    ? items.map((item) => normaliseCandidateText(item))
+    : undefined;
 }
 
 function collectEditedFields(edited: Record<string, unknown>): CollectOutcome {
@@ -170,7 +166,9 @@ function collectEditedFields(edited: Record<string, unknown>): CollectOutcome {
   for (const key of EDITABLE_KEYS) {
     const raw = edited[key];
     if (raw === undefined) continue;
-    const value = normaliseEditedValue(key, raw);
+    // A text field that is neither a string nor a list of strings reads as undefined, which its
+    // validator rejects exactly as it rejected the unnormalised value.
+    const value = TEXT_KEYS.has(key) ? normaliseEditedText(raw) : raw;
     if (!isValidField(key, value)) return { ok: false, invalidField: key };
     collected[key] = value;
     fieldCount += 1;
@@ -337,7 +335,7 @@ function recordEdit(
             })),
             editedRevisions: before.editedRevisions,
             evidenceDir,
-            redact: (value: unknown): unknown => value,
+            redact: <T>(value: T): T => value,
           });
         } catch {
           // The handler still returns failure below; a rollback failure must not look successful.

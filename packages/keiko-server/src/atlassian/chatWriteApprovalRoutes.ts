@@ -1,4 +1,7 @@
-import type { ChatToolWriteApprovalDecision } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatToolWriteApprovalDecision,
+  ChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts";
 import {
   getChatConsent,
   decideChatConsent,
@@ -16,7 +19,11 @@ import {
   type ChatWriteApprovalEntry,
 } from "./chatWriteApprovalState.js";
 
-const OWNER: ChatConsentRouteOwner<ChatWriteApprovalEntry, ChatToolWriteApprovalDecision> = {
+const OWNER: ChatConsentRouteOwner<
+  ChatWriteApprovalEntry,
+  ChatToolWriteApprovalDecision,
+  ChatToolWriteApprovalView
+> = {
   phase: "write-approval",
   project: (entry, correlationId) => {
     recordWriteApproval({ kind: "chat-write", entry, correlationId }, 0);

@@ -148,7 +148,10 @@ import {
   type CodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
-import type { RepositorySemanticSearchResolver } from "./codingRuntimeControlPlane.js";
+import type {
+  CodingRuntimePromptReservation,
+  RepositorySemanticSearchResolver,
+} from "./codingRuntimeControlPlane.js";
 import { operatorSkillProjection } from "./skillDiscovery.js";
 import { PRODUCTION_SKILL_STATIC_FACTS } from "./productionAuxiliaryPorts.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -583,9 +586,6 @@ function composedMintLaunch(
 // counts and times it. The admitted reservation answers the call's identity (`modelCallId`) and the
 // gateway hands it back with the settlement, so a call is timed from its own reservation and never
 // from another call's of the same size (#3873 review).
-type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
-  readonly modelCallId?: number;
-};
 
 function runtimeCapabilityAuthenticatorFor(
   authority: CodingRuntimeAuthorityService,
@@ -597,7 +597,7 @@ function runtimeCapabilityAuthenticatorFor(
     reservedPromptTokens: number,
     actualPromptTokens: number,
     modelCallId?: number,
-  ) => unknown;
+  ) => ReturnType<CodingRuntimeAuthorityService["settlePromptTokens"]>;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
   // above. `undefined` (run not tracked here) preserves the advertisement's prior,
@@ -608,7 +608,7 @@ function runtimeCapabilityAuthenticatorFor(
 } {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
-    reservePromptTokens: (capability, promptTokens): PromptReservation => {
+    reservePromptTokens: (capability, promptTokens): CodingRuntimePromptReservation => {
       const reserved = reservePromptWithCiRepair(
         authority,
         (runId) => runs.get(runId)?.ciRepairBudget,

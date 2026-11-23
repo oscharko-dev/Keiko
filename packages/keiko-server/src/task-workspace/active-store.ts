@@ -11,6 +11,7 @@
 // no branch, no path is persisted here. "Clear active" deletes the row → unbound mode.
 
 import type { DatabaseSync } from "node:sqlite";
+import { textColumn, type UiStoreSqlRow } from "../store/sql-row.js";
 
 export interface ActiveWorkspacePointer {
   readonly workspaceId: string;
@@ -30,13 +31,6 @@ export interface ActiveWorkspacePointerStore {
   }) => ActiveWorkspacePointer;
   /** Delete the singleton row → unbound mode. Idempotent. */
   readonly clear: () => void;
-}
-
-interface PointerRow {
-  readonly workspace_id: string;
-  readonly set_by: string;
-  readonly set_at: string;
-  readonly updated_at: string;
 }
 
 const SQL_GET = `SELECT workspace_id, set_by, set_at, updated_at FROM task_workspace_active_pointer WHERE id = 'active'`;
@@ -59,12 +53,12 @@ ON CONFLICT(id) DO UPDATE SET
 RETURNING workspace_id, set_by, set_at, updated_at
 `;
 
-function rowToPointer(row: PointerRow): ActiveWorkspacePointer {
+function rowToPointer(row: UiStoreSqlRow): ActiveWorkspacePointer {
   return {
-    workspaceId: row.workspace_id,
-    setBy: row.set_by,
-    setAt: row.set_at,
-    updatedAt: row.updated_at,
+    workspaceId: textColumn(row, "workspace_id"),
+    setBy: textColumn(row, "set_by"),
+    setAt: textColumn(row, "set_at"),
+    updatedAt: textColumn(row, "updated_at"),
   };
 }
 
@@ -73,13 +67,13 @@ export function buildActiveWorkspacePointerStoreOverDatabase(
 ): ActiveWorkspacePointerStore {
   return {
     get: (): ActiveWorkspacePointer | undefined => {
-      const row = db.prepare(SQL_GET).get() as unknown as PointerRow | undefined;
+      const row = db.prepare(SQL_GET).get();
       return row === undefined ? undefined : rowToPointer(row);
     },
     set: (input): ActiveWorkspacePointer => {
-      const row = db
-        .prepare(SQL_SET)
-        .get(input.workspaceId, input.setBy, input.atIso, input.atIso) as unknown as PointerRow;
+      const row = db.prepare(SQL_SET).get(input.workspaceId, input.setBy, input.atIso, input.atIso);
+      if (row === undefined)
+        throw new Error("active task-workspace pointer upsert returned no row");
       return rowToPointer(row);
     },
     clear: (): void => {

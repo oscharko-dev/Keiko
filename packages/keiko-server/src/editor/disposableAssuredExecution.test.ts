@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   runDisposableAssuredPreFilter,
   type DisposableExecutionPorts,
@@ -11,7 +12,7 @@ const ENFORCED_RUN = {
   filesystemEnforced: true,
 } as const;
 
-const REPORTS: Record<string, unknown> = {
+const REPORTS: Record<string, CatalogJsonValue> = {
   "coverage/baseline.json": {
     "src/widget.ts": { lines: { covered: 2 }, branches: { covered: 0 } },
   },

@@ -14,9 +14,11 @@ export interface CodexAppServerTransport {
   write(chunk: string): void | Promise<void>;
   onData(listener: (chunk: string) => void): () => void;
 }
+/** A pending deadline: a Node.js timer, or the number an injected test scheduler hands out. */
+export type CodexTimerHandle = ReturnType<typeof setTimeout> | number;
 export interface CodexAppServerScheduler {
-  setTimeout(callback: () => void, milliseconds: number): unknown;
-  clearTimeout(handle: unknown): void;
+  setTimeout(callback: () => void, milliseconds: number): CodexTimerHandle;
+  clearTimeout(handle: CodexTimerHandle): void;
 }
 export interface CodexAppServerClientOptions {
   readonly transport: CodexAppServerTransport;
@@ -50,7 +52,7 @@ interface Pending {
   readonly method: string;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: CodexAppServerClientError) => void;
-  readonly timer: unknown;
+  readonly timer: CodexTimerHandle;
   readonly signal: AbortSignal | undefined;
   readonly abort: (() => void) | undefined;
 }

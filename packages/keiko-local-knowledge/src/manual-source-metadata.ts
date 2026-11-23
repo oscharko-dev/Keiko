@@ -14,6 +14,15 @@ import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/lo
 
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import { capsuleIdColumn, sourceIdColumn } from "./knowledge-ids.js";
+import {
+  admittedTextColumn,
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  textColumn,
+  vocabularyAdmission,
+} from "./sql-row.js";
 
 export const HTML_MANUAL_SOURCE_SCOPE_VERSION = 1 as const;
 
@@ -31,8 +40,8 @@ function stripTrailingSlashes(value: string): string {
 }
 
 interface HtmlManualSourceMetadataRow {
-  readonly capsule_id: string;
-  readonly source_id: string;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly source_id: KnowledgeSourceId;
   readonly source_kind: HtmlManualSourceKind;
   readonly source_fingerprint: string;
   readonly root_path: string | null;
@@ -56,6 +65,37 @@ interface HtmlManualSourceMetadataRow {
 interface DocumentTargetRow {
   readonly document_path: string;
   readonly safe_display_name: string;
+}
+
+// The members the html_manual_sources CHECK constraint admits for source_kind.
+const HTML_MANUAL_SOURCE_KINDS = [
+  "html-manual-local",
+  "html-manual-http",
+] as const satisfies readonly HtmlManualSourceKind[];
+
+const isHtmlManualSourceKind = vocabularyAdmission(HTML_MANUAL_SOURCE_KINDS);
+
+function readHtmlManualSourceMetadataRow(row: KnowledgeSqlRow): HtmlManualSourceMetadataRow {
+  return {
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    source_id: sourceIdColumn(row, "source_id"),
+    source_kind: admittedTextColumn(row, "source_kind", isHtmlManualSourceKind),
+    source_fingerprint: textColumn(row, "source_fingerprint"),
+    root_path: nullableTextColumn(row, "root_path"),
+    entry_path: nullableTextColumn(row, "entry_path"),
+    origin: nullableTextColumn(row, "origin"),
+    path_prefix: nullableTextColumn(row, "path_prefix"),
+    max_pages: nullableNumberColumn(row, "max_pages"),
+    max_depth: nullableNumberColumn(row, "max_depth"),
+    max_bytes: nullableNumberColumn(row, "max_bytes"),
+    max_link_sample: nullableNumberColumn(row, "max_link_sample"),
+    timeout_ms: nullableNumberColumn(row, "timeout_ms"),
+    follow_redirects: nullableNumberColumn(row, "follow_redirects"),
+    source_scope_version: nullableNumberColumn(row, "source_scope_version"),
+    last_refreshed_at: nullableNumberColumn(row, "last_refreshed_at"),
+    last_crawl_run_id: nullableTextColumn(row, "last_crawl_run_id"),
+    last_change_summary_json: nullableTextColumn(row, "last_change_summary_json"),
+  };
 }
 
 export interface HtmlManualSourceMetadata {
@@ -297,8 +337,8 @@ export function readHtmlManualSourceMetadata(
     .prepare(
       "SELECT * FROM html_manual_sources WHERE capsule_id = :capsuleId AND source_id = :sourceId",
     )
-    .get({ capsuleId, sourceId }) as HtmlManualSourceMetadataRow | undefined;
-  return row === undefined ? undefined : rowToMetadata(row);
+    .get({ capsuleId, sourceId });
+  return row === undefined ? undefined : rowToMetadata(readHtmlManualSourceMetadataRow(row));
 }
 
 // Reconstruct the approved crawl limits from a persisted row. Returns undefined for a legacy
@@ -331,8 +371,8 @@ function limitsFromRow(
 function rowToMetadata(row: HtmlManualSourceMetadataRow): HtmlManualSourceMetadata {
   const limits = limitsFromRow(row);
   return {
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    sourceId: row.source_id as KnowledgeSourceId,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
     sourceKind: row.source_kind,
     sourceFingerprint: row.source_fingerprint,
     ...(row.root_path !== null ? { rootPath: row.root_path } : {}),
@@ -375,7 +415,7 @@ function readDocumentTarget(
   store: KnowledgeStore,
   input: ResolveHtmlManualCitationTargetInput,
 ): DocumentTargetRow | undefined {
-  return store._internal.db
+  const row = store._internal.db
     .prepare(
       [
         "SELECT document_path, safe_display_name FROM documents",
@@ -386,7 +426,12 @@ function readDocumentTarget(
       capsuleId: input.capsuleId,
       sourceId: input.sourceId,
       documentId: input.documentId,
-    }) as DocumentTargetRow | undefined;
+    });
+  if (row === undefined) return undefined;
+  return {
+    document_path: textColumn(row, "document_path"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+  };
 }
 
 function documentRelativePath(

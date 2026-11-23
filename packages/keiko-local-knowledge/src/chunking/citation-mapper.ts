@@ -31,6 +31,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
+import { documentIdColumn, sourceIdColumn } from "../knowledge-ids.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 import {
@@ -45,7 +46,7 @@ interface ChunkRow {
   readonly id: string;
   readonly capsule_id: string;
   readonly source_id: string;
-  readonly document_id: string;
+  readonly document_id: DocumentId;
   readonly parsed_unit_id: string;
   readonly character_start: number | null;
   readonly character_end: number | null;
@@ -66,7 +67,7 @@ interface ParsedUnitHopRow {
 }
 
 interface DocumentHopRow {
-  readonly source_id: string;
+  readonly source_id: KnowledgeSourceId;
   readonly safe_display_name: string;
 }
 
@@ -80,7 +81,7 @@ function readChunkRow(row: KnowledgeSqlRow): ChunkRow {
     id: textColumn(row, "id"),
     capsule_id: textColumn(row, "capsule_id"),
     source_id: textColumn(row, "source_id"),
-    document_id: textColumn(row, "document_id"),
+    document_id: documentIdColumn(row, "document_id"),
     parsed_unit_id: textColumn(row, "parsed_unit_id"),
     character_start: nullableNumberColumn(row, "character_start"),
     character_end: nullableNumberColumn(row, "character_end"),
@@ -105,7 +106,7 @@ function readParsedUnitHopRow(row: KnowledgeSqlRow): ParsedUnitHopRow {
 
 function readDocumentHopRow(row: KnowledgeSqlRow): DocumentHopRow {
   return {
-    source_id: textColumn(row, "source_id"),
+    source_id: sourceIdColumn(row, "source_id"),
     safe_display_name: textColumn(row, "safe_display_name"),
   };
 }
@@ -311,14 +312,35 @@ function buildCitation(
   return {
     chunkId,
     capsuleId,
-    sourceId: document.source_id as KnowledgeSourceId,
-    documentId: chunk.document_id as DocumentId,
+    sourceId: document.source_id,
+    documentId: chunk.document_id,
     safeDisplayName: document.safe_display_name,
     parsedUnitId: chunk.parsed_unit_id,
+    ...documentLocationFields(hop),
+    ...unitPositionFields(hop),
+  };
+}
+
+// Where in the document the cited unit sits: its page, section path or structured-data path.
+function documentLocationFields(
+  hop: HopFields,
+): Pick<CitationReference, "pageNumber" | "pageLabel" | "sectionPath" | "jsonPointer"> {
+  return {
     ...(hop.pageNumber !== undefined ? { pageNumber: hop.pageNumber } : {}),
     ...(hop.pageLabel !== undefined ? { pageLabel: hop.pageLabel } : {}),
     ...(hop.sectionPath !== undefined ? { sectionPath: hop.sectionPath } : {}),
     ...(hop.jsonPointer !== undefined ? { jsonPointer: hop.jsonPointer } : {}),
+  };
+}
+
+// The position inside that location: table row, fragment anchor and character span.
+function unitPositionFields(
+  hop: HopFields,
+): Pick<
+  CitationReference,
+  "tableName" | "rowIndex" | "anchorId" | "characterStart" | "characterEnd"
+> {
+  return {
     ...(hop.tableName !== undefined ? { tableName: hop.tableName } : {}),
     ...(hop.rowIndex !== undefined ? { rowIndex: hop.rowIndex } : {}),
     ...(hop.anchorId !== undefined ? { anchorId: hop.anchorId } : {}),
@@ -343,10 +365,10 @@ export function mapChunkToCitation(
   const unit = fetchParsedUnitRow(db, capsuleId, chunk.parsed_unit_id);
   if (unit === undefined) return null;
 
-  const document = fetchDocumentRow(db, capsuleId, chunk.document_id as DocumentId);
+  const document = fetchDocumentRow(db, capsuleId, chunk.document_id);
   if (document === undefined) return null;
 
   const baseHop = applyChunkSpan(hopFieldsForUnit(unit, store._internal.contentCipher), chunk);
-  const hop = attachPageHop(db, capsuleId, chunk.document_id as DocumentId, baseHop);
+  const hop = attachPageHop(db, capsuleId, chunk.document_id, baseHop);
   return buildCitation(chunk, document, hop, chunkId, capsuleId);
 }

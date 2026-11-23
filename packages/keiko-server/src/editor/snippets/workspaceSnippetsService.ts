@@ -316,7 +316,8 @@ function saveRecord(
   options: WorkspaceSnippetsServiceOptions,
 ): void {
   const path = recordPath(options.stateDir, realRoot);
-  (options.save ?? savePrivateJson)(path, record as unknown as Record<string, unknown>);
+  // The spread copy is a plain record of the same fields, the shape the private JSON writer takes.
+  (options.save ?? savePrivateJson)(path, { ...record });
 }
 
 function readWorkspaceSnippets(

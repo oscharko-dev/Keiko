@@ -445,6 +445,27 @@ function pushed(redactor: SecretSpellingStreamRedactor, text: string): string {
 }
 
 /**
+ * The upstream body's chunks. Leaving the loop at a chunk (a refusal or a failed write) cancels the
+ * upstream stream, as iterating the stream itself does.
+ */
+async function* bodyChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = body.getReader();
+  let leftAtChunk = false;
+  try {
+    let next = await reader.read();
+    while (!next.done) {
+      leftAtChunk = true;
+      yield next.value;
+      leftAtChunk = false;
+      next = await reader.read(); // NOSONAR typescript:S9382 -- each read waits for the previous chunk
+    }
+  } finally {
+    if (leftAtChunk) await reader.cancel();
+    reader.releaseLock();
+  }
+}
+
+/**
  * Streams the upstream body with backpressure, stops at the response bound and replaces every
  * spelling of a credential, one split across chunks included. MCP's Streamable HTTP transport is UTF-8
  * JSON or event-stream text, decoded and re-encoded unchanged; an event ends with a line break,
@@ -460,7 +481,7 @@ async function pipeResponse(
   if (upstream.body === null) return { bytes, redacted: 0 };
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const redactor = createSecretSpellingStreamRedactor(credentialForms(target));
-  for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
+  for await (const chunk of bodyChunks(upstream.body)) {
     bytes += chunk.byteLength;
     if (bytes > MCP_RELAY_RESPONSE_MAX_BYTES) throw new RelayRefusal(502, "response-too-large");
     await writeChunk(response, pushed(redactor, decoder.decode(chunk, { stream: true })));

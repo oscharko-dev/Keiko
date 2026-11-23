@@ -31,7 +31,6 @@ import type {
   MemoryAuditEvent,
   MemoryAuditInitiatorSurface,
   MemoryEdge,
-  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryScope,
@@ -43,6 +42,7 @@ import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { recordMemoryAudit, type MemoryAuditSink } from "./memory-audit-handler.js";
+import { newMemoryEdgeId } from "./memory-record-builders.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import {
   DEFAULT_MEMORY_AUTONOMY_MODE,
@@ -185,7 +185,7 @@ function runConsolidationPass(
 ): void {
   const result = runConsolidation(records, {
     nowMs,
-    newEdgeId: (): MemoryEdgeId => randomUUID() as unknown as MemoryEdgeId,
+    newEdgeId: newMemoryEdgeId,
     newReviewItemId: (): string => randomUUID(),
     // Wires the same process-wide activity log the route/CLI consolidation-job path uses, stamped
     // with this pass's own correlation id, so a `consolidation.summary.fallback` line produced by

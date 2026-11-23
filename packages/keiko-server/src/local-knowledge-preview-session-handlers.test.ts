@@ -844,7 +844,7 @@ describe("local-knowledge preview session handlers", () => {
 
   it("reports document-not-ready as a recoverable transient state before opening a session", async () => {
     const fixture = await seedPreviewFixture();
-    updatePreviewFixtureDocument(fixture, { status: "indexing" });
+    updatePreviewFixtureDocument(fixture, { status: "pending" });
 
     const result = await handleOpenPdfCitationPreviewSession(
       ctx("/api/local-knowledge/citation-preview/open", {

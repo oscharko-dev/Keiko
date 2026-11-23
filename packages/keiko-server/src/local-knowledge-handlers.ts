@@ -1409,6 +1409,10 @@ function canonicalizeCapsuleSourceRoots(
     if (JSON.stringify(canonicalScope) === JSON.stringify(source.scope)) {
       continue;
     }
+    // The realpath can resolve to a root the scope validator refuses (a folder symlinked to `/`).
+    // Refuse the index request before writing it: a stored refused scope would make every later
+    // read of this pod's sources fail, so one source would break the whole pod listing.
+    assertScopeShape(canonicalScope);
     store._internal.db
       .prepare(
         "UPDATE knowledge_sources SET scope_json = :scope_json, updated_at = :updated_at WHERE id = :id",

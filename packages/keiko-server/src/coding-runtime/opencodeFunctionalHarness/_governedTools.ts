@@ -23,7 +23,10 @@ interface GeneratedTool {
 interface V2ToolPlugin {
   readonly setup: (context: {
     readonly tool: {
-      readonly hook: (name: string, callback: (event: unknown) => void) => Promise<unknown>;
+      readonly hook: (
+        name: string,
+        callback: (event: unknown) => void,
+      ) => Promise<{ readonly dispose: () => void }>;
       readonly transform: (
         register: (editor: { add: (tool: unknown) => void }) => void,
       ) => Promise<void>;
@@ -61,10 +64,13 @@ function generatedToolModuleSource(source: string): string {
   ].join("\n");
 }
 
-async function loadGeneratedTool(
+// Runs the generated module and admits its value only through `accept`; `invalid` names a refusal.
+async function loadGeneratedTool<Loaded>(
   source: string,
   input: ScriptedGovernedToolsInput,
-): Promise<unknown> {
+  accept: (value: unknown) => value is Loaded,
+  invalid: string,
+): Promise<Loaded> {
   const moduleSource = generatedToolModuleSource(source);
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`;
   const module: unknown = await import(moduleUrl);
@@ -77,7 +83,7 @@ async function loadGeneratedTool(
     throw new Error("functional-generated-tool-invalid");
   }
   const factory = module.default as GeneratedToolFactory;
-  return factory({
+  const value = factory({
     process: { env: input.env },
     crypto: webcrypto,
     fetch: input.fetch ?? globalThis.fetch,
@@ -88,6 +94,8 @@ async function loadGeneratedTool(
     setTimeout,
     clearTimeout,
   });
+  if (!accept(value)) throw new Error(invalid);
+  return value;
 }
 
 /** Executes repository-owned generated shims, never source supplied by the model or workspace. */
@@ -98,29 +106,33 @@ async function generatedTool(
   const source =
     generatedToolSources(input)[input.pluginVersion === "v2" ? "keiko_governed_tools" : name];
   if (source === undefined) throw new Error("functional-generated-tool-unavailable");
-  const value = await loadGeneratedTool(source, input);
   if (input.pluginVersion === "v2") {
-    const result = (await registeredV2Tools(value)).get(name);
+    const result = (await registeredV2Tools(await loadV2Plugin(source, input))).get(name);
     if (result === undefined) throw new Error("functional-generated-v2-tool-unavailable");
     return result;
   }
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("execute" in value) ||
-    typeof value.execute !== "function"
-  ) {
-    throw new Error("functional-generated-tool-invalid");
-  }
-  return value as GeneratedTool;
+  return loadGeneratedTool(source, input, isV1GeneratedTool, "functional-generated-tool-invalid");
 }
 
-async function registeredV2Tools(value: unknown): Promise<ReadonlyMap<string, GeneratedTool>> {
-  if (!isV2ToolPlugin(value)) throw new Error("functional-generated-v2-plugin-invalid");
+function loadV2Plugin(source: string, input: ScriptedGovernedToolsInput): Promise<V2ToolPlugin> {
+  return loadGeneratedTool(source, input, isV2ToolPlugin, "functional-generated-v2-plugin-invalid");
+}
+
+function isV1GeneratedTool(value: unknown): value is GeneratedTool {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "execute" in value &&
+    typeof value.execute === "function"
+  );
+}
+
+async function registeredV2Tools(value: V2ToolPlugin): Promise<ReadonlyMap<string, GeneratedTool>> {
   const registered = new Map<string, GeneratedTool>();
   await value.setup({
     tool: {
-      hook: (): Promise<unknown> => Promise.resolve({ dispose: (): void => undefined }),
+      hook: (): Promise<{ readonly dispose: () => void }> =>
+        Promise.resolve({ dispose: (): void => undefined }),
       transform: (register): Promise<void> => {
         register({
           add: (tool): void => {
@@ -144,7 +156,7 @@ async function generatedV2Tools(
 ): Promise<ReadonlyMap<string, GeneratedTool>> {
   const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
   if (source === undefined) throw new Error("functional-generated-v2-plugin-unavailable");
-  return registeredV2Tools(await loadGeneratedTool(source, input));
+  return registeredV2Tools(await loadV2Plugin(source, input));
 }
 
 function isV2ToolPlugin(value: unknown): value is V2ToolPlugin {

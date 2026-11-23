@@ -1142,7 +1142,7 @@ function withPersistedNormalizedText(
 }
 
 function hasAsyncParse(adapter: ParserAdapter | AsyncParserAdapter): adapter is AsyncParserAdapter {
-  return typeof (adapter as { readonly parseAsync?: unknown }).parseAsync === "function";
+  return "parseAsync" in adapter && typeof adapter.parseAsync === "function";
 }
 
 async function runParser(
@@ -1290,7 +1290,7 @@ async function runOcrForImageOnlyPdf(
       mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
       pageNumber: page.pageNumber,
     };
-    const result = (await ocrParser.parseAsync(input, options)) as InternalParserResult;
+    const result: InternalParserResult = await ocrParser.parseAsync(input, options); // NOSONAR typescript:S9382 -- each page advances the shared text cursor in page order
     parser = result.parser;
     diagnostics.push(...result.diagnostics);
     const text = result.normalizedText?.trim() ?? "";

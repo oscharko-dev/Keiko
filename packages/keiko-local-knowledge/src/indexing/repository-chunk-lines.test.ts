@@ -9,6 +9,13 @@ import type {
 
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { createCapsule } from "../capsule-lifecycle.js";
+import {
+  isChunkId,
+  isDocumentId,
+  isKnowledgeCapsuleId,
+  isKnowledgeSourceId,
+  mintedId,
+} from "../knowledge-ids.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import type { KnowledgeStore } from "../store.js";
 import {
@@ -98,6 +105,36 @@ describe("repository chunk line mapping", () => {
       fresh.store._internal.db
         .prepare("UPDATE documents SET document_path = '' WHERE capsule_id = :c AND id = :d")
         .run({ c: capsuleId, d: documentId });
+      expect(() => listRepositoryChunkLineRanges(fresh.store, capsuleId)).toThrow(
+        "REPOSITORY_CHUNK_LINE_RANGE_ROW_INVALID",
+      );
+    } finally {
+      fresh.cleanup();
+    }
+  });
+
+  it("refuses a stored row whose chunk id is blank instead of citing it as a chunk", () => {
+    const capsuleId = mintedId("cap-line-blank", isKnowledgeCapsuleId);
+    const sourceId = mintedId("src-line-blank", isKnowledgeSourceId);
+    const documentId = mintedId("doc-line-blank", isDocumentId);
+    const chunkId = mintedId("chunk-line-blank", isChunkId);
+    const fresh = freshStore();
+    try {
+      seedChunk(fresh.store, capsuleId, sourceId, documentId, chunkId);
+      persistRepositoryChunkLineRange(fresh.store._internal.db, {
+        capsuleId,
+        chunkId,
+        documentId,
+        characterStart: 0,
+        characterEnd: 3,
+        lineIndex: buildDocumentLineIndex("one\ntwo"),
+      });
+      const db = fresh.store._internal.db;
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.prepare(
+        "UPDATE repository_chunk_line_ranges SET chunk_id = '   ' WHERE capsule_id = :c",
+      ).run({ c: capsuleId });
+      db.exec("PRAGMA foreign_keys = ON");
       expect(() => listRepositoryChunkLineRanges(fresh.store, capsuleId)).toThrow(
         "REPOSITORY_CHUNK_LINE_RANGE_ROW_INVALID",
       );

@@ -279,6 +279,18 @@ describe("private DAP endpoint", () => {
       candidate: changedPlan({ runtimeMount: { writable: false } }),
     },
     {
+      name: "writable flag given as a string",
+      candidate: changedPlan({ runtimeMount: { writable: "false" } }),
+    },
+    {
+      name: "writable flag given as a number",
+      candidate: changedPlan({ runtimeMount: { writable: 1 } }),
+    },
+    {
+      name: "writable flag given as an object",
+      candidate: changedPlan({ runtimeMount: { writable: {} } }),
+    },
+    {
       name: "different capsule runtime identity",
       candidate: changedPlan({ capsuleRuntimeIdentityDigest: "c".repeat(64) }),
     },

@@ -12,6 +12,7 @@
 // surfacing junk.
 
 import { createHash } from "node:crypto";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   CodingContextPack,
   LanguageCompletionItemKind,
@@ -130,10 +131,18 @@ export function buildModelCompletionPrompt(input: GenerateModelCompletionsInput)
   return { system: SYSTEM_PROMPT, user };
 }
 
-function extractJsonArray(content: string): unknown {
+// Throws SyntaxError for text that is not JSON.
+function parseJsonValue(text: string): CatalogJsonValue {
+  // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+  // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the members
+  // of the CatalogJsonValue type.
+  return JSON.parse(text) as CatalogJsonValue;
+}
+
+function extractJsonArray(content: string): CatalogJsonValue | undefined {
   const trimmed = content.trim();
   try {
-    return JSON.parse(trimmed);
+    return parseJsonValue(trimmed);
   } catch {
     // Fall through to substring extraction.
   }
@@ -143,7 +152,7 @@ function extractJsonArray(content: string): unknown {
     return undefined;
   }
   try {
-    return JSON.parse(trimmed.slice(start, end + 1));
+    return parseJsonValue(trimmed.slice(start, end + 1));
   } catch {
     return undefined;
   }

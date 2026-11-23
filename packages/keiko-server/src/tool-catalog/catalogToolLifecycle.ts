@@ -515,16 +515,26 @@ function invocationShape(phase: ToolLifecyclePhase, value: CatalogJsonObject): v
     requireLifecycle(value.reason === "late-completion" && value.toolRef !== null);
 }
 
+// The closed field set of the phase, every field's own rule, and the phase's cross-field shape
+// together are the event contract; the checks throw or answer false on any mismatch.
+function isToolLifecycleEvent(
+  phase: ToolLifecyclePhase,
+  value: CatalogJsonObject,
+): value is CatalogJsonObject & ToolLifecycleEvent {
+  exactKeys(value, [...BASE_FIELDS, ...PHASE_FIELDS[phase]], optionalFields(phase));
+  if (!Object.entries(value).every(([key, field]) => validField(key, field))) return false;
+  phaseShape(phase, value);
+  return true;
+}
+
 /** Closed, detached runtime evidence validation before the generic redactor and every sink. */
 export function validateToolLifecycleEvent(source: unknown): ToolLifecycleEvent {
   try {
     const value = object(captureCatalogJson(source, 8192));
     const phase = typeof value.op === "string" ? toolLifecyclePhaseFor(value.op) : undefined;
     requireLifecycle(phase !== undefined);
-    exactKeys(value, [...BASE_FIELDS, ...PHASE_FIELDS[phase]], optionalFields(phase));
-    requireLifecycle(Object.entries(value).every(([key, field]) => validField(key, field)));
-    phaseShape(phase, value);
-    return deepFreeze(value) as unknown as ToolLifecycleEvent;
+    requireLifecycle(isToolLifecycleEvent(phase, value));
+    return deepFreeze(value);
   } catch {
     throw new TypeError("Invalid tool lifecycle evidence");
   }

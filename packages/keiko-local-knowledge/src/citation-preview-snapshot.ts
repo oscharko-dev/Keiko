@@ -1,9 +1,11 @@
 import type {
   ChunkId,
   DocumentId,
+  DocumentStatus,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DOCUMENT_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import type {
   CurrentPdfCitationPreviewSnapshot,
   StoredPdfCitationPreviewCitation,
@@ -11,22 +13,34 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { readExistingDocumentRow } from "./discovery/persist.js";
+import { KnowledgeStoreError } from "./errors.js";
+import { chunkIdColumn, documentIdColumn, sourceIdColumn } from "./knowledge-ids.js";
 import type { KnowledgeStore } from "./store.js";
-import { textColumn, type KnowledgeSqlRow } from "./sql-row.js";
+import { type KnowledgeSqlRow, vocabularyAdmission } from "./sql-row.js";
 import { mapChunkToCitation } from "./chunking/citation-mapper.js";
 
 interface ChunkRow {
-  readonly id: string;
-  readonly source_id: string;
-  readonly document_id: string;
+  readonly id: ChunkId;
+  readonly source_id: KnowledgeSourceId;
+  readonly document_id: DocumentId;
 }
 
 function chunkRowFrom(row: KnowledgeSqlRow): ChunkRow {
   return {
-    id: textColumn(row, "id"),
-    source_id: textColumn(row, "source_id"),
-    document_id: textColumn(row, "document_id"),
+    id: chunkIdColumn(row, "id"),
+    source_id: sourceIdColumn(row, "source_id"),
+    document_id: documentIdColumn(row, "document_id"),
   };
+}
+
+const isDocumentStatus = vocabularyAdmission(DOCUMENT_STATUSES);
+
+// Discovery writes a document's status from the contracts' DocumentStatus vocabulary.
+function storedDocumentStatus(status: string): DocumentStatus {
+  if (!isDocumentStatus(status)) {
+    throw new KnowledgeStoreError("A stored document holds a status outside its vocabulary.");
+  }
+  return status;
 }
 
 const SELECT_CHUNK_SQL = [
@@ -105,7 +119,7 @@ function buildSnapshot(
     documentLabel: document.safe_display_name,
     documentMediaType: document.media_type,
     documentContentHash: document.content_hash,
-    documentStatus: document.status as CurrentPdfCitationPreviewSnapshot["documentStatus"],
+    documentStatus: storedDocumentStatus(document.status),
     ...(citation?.pageNumber !== undefined ? { pageNumber: citation.pageNumber } : {}),
     ...(citation?.pageLabel !== undefined ? { pageLabel: citation.pageLabel } : {}),
     ...(citation?.characterStart !== undefined ? { characterStart: citation.characterStart } : {}),
@@ -136,8 +150,8 @@ export function lookupCitationPreviewSnapshot(
     if (chunk === undefined) {
       return { kind: "missing-chunk" };
     }
-    const documentId = chunk.document_id as DocumentId;
-    const sourceId = chunk.source_id as KnowledgeSourceId;
+    const documentId = chunk.document_id;
+    const sourceId = chunk.source_id;
     const document = readExistingDocumentRow(db, capsuleId, documentId);
     if (document === undefined) {
       return { kind: "missing-document", sourceId, documentId };
@@ -166,14 +180,14 @@ export function lookupCitationPreviewSnapshotForStoredCitation(
     const chunk = readChunkRowByStoredSpan(db, citation);
     if (chunk === undefined) return exact;
 
-    const documentId = chunk.document_id as DocumentId;
-    const sourceId = chunk.source_id as KnowledgeSourceId;
+    const documentId = chunk.document_id;
+    const sourceId = chunk.source_id;
     const document = readExistingDocumentRow(db, citation.lineage.capsuleId, documentId);
     if (document === undefined) {
       return { kind: "missing-document", sourceId, documentId };
     }
 
-    const resolvedChunkId = chunk.id as ChunkId;
+    const resolvedChunkId = chunk.id;
     const currentCitation = mapChunkToCitation(store, citation.lineage.capsuleId, resolvedChunkId);
     return {
       kind: "ok",

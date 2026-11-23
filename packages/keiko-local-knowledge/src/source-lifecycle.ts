@@ -18,6 +18,7 @@ import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { deleteDocumentRow, listPersistedDocumentsForSource } from "./discovery/persist.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
+import { sourceIdColumn } from "./knowledge-ids.js";
 import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "./sql-row.js";
 
 export interface AddCapsuleSourceInput {
@@ -30,7 +31,7 @@ export interface AddCapsuleSourceInput {
 
 // The knowledge_sources columns the `ks.*` selects return; that table carries no capsule_id.
 interface CapsuleSourceRow {
-  readonly id: string;
+  readonly id: KnowledgeSourceId;
   readonly display_name: string;
   readonly description: string | null;
   readonly tags_json: string;
@@ -42,7 +43,7 @@ interface CapsuleSourceRow {
 
 function readCapsuleSourceRow(row: KnowledgeSqlRow): CapsuleSourceRow {
   return {
-    id: textColumn(row, "id"),
+    id: sourceIdColumn(row, "id"),
     display_name: textColumn(row, "display_name"),
     description: nullableTextColumn(row, "description"),
     tags_json: textColumn(row, "tags_json"),
@@ -89,7 +90,7 @@ const UPDATE_CAPSULE_SOURCE_SCOPE_SQL =
   "UPDATE capsule_sources SET scope_kind = :scope_kind, scope_json = :scope_json, updated_at = :updated_at WHERE capsule_id = :c AND id = :id";
 
 function parseTags(json: string): readonly string[] {
-  const parsed = JSON.parse(json) as unknown;
+  const parsed: unknown = JSON.parse(json);
   if (!Array.isArray(parsed)) return [];
   return parsed.filter((entry): entry is string => typeof entry === "string");
 }
@@ -101,17 +102,23 @@ function assertSafeScope(scope: KnowledgeSourceScope): void {
 }
 
 function parseScope(kind: string, json: string): KnowledgeSourceScope {
-  const parsed = JSON.parse(json) as unknown;
+  const parsed: unknown = JSON.parse(json);
   if (typeof parsed !== "object" || parsed === null) {
     throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);
   }
-  // The contract validators in keiko-contracts shape these on write; we trust the row.
-  return { kind, ...parsed } as KnowledgeSourceScope;
+  // Every scope writer in this package runs validateKnowledgeSourceScope first, and so does the
+  // server's index-time realpath rewrite (canonicalizeCapsuleSourceRoots). So the same validator
+  // admits the read, and a stored scope it refuses is corrupt.
+  const validation = validateKnowledgeSourceScope({ kind, ...parsed });
+  if (!validation.ok) {
+    throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);
+  }
+  return validation.value;
 }
 
 function rowToSource(row: CapsuleSourceRow): KnowledgeSource {
   const base: KnowledgeSource = {
-    id: row.id as KnowledgeSourceId,
+    id: row.id,
     displayName: row.display_name,
     tags: parseTags(row.tags_json),
     scope: parseScope(row.scope_kind, row.scope_json),

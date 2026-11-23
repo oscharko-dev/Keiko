@@ -2,23 +2,16 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { Project, UpdateProjectPatch } from "./types.js";
-import { notFound } from "./errors.js";
+import { notFound, UiStoreError } from "./errors.js";
+import { numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 
-interface ProjectRow {
-  readonly path: string;
-  readonly name: string;
-  readonly favorite: number;
-  readonly created_at: number;
-  readonly last_opened_at: number;
-}
-
-function rowToProject(row: ProjectRow): Project {
+function rowToProject(row: UiStoreSqlRow): Project {
   return {
-    path: row.path,
-    name: row.name,
-    favorite: row.favorite !== 0,
-    createdAt: row.created_at,
-    lastOpenedAt: row.last_opened_at,
+    path: textColumn(row, "path"),
+    name: textColumn(row, "name"),
+    favorite: numberColumn(row, "favorite") !== 0,
+    createdAt: numberColumn(row, "created_at"),
+    lastOpenedAt: numberColumn(row, "last_opened_at"),
   };
 }
 
@@ -48,11 +41,11 @@ RETURNING path, name, favorite, created_at, last_opened_at
 const SQL_DELETE = "DELETE FROM projects WHERE path = ?";
 
 export function listProjects(db: DatabaseSync): readonly Project[] {
-  return (db.prepare(SQL_LIST).all() as unknown as ProjectRow[]).map(rowToProject);
+  return db.prepare(SQL_LIST).all().map(rowToProject);
 }
 
 export function getProject(db: DatabaseSync, path: string): Project | undefined {
-  const row = db.prepare(SQL_GET).get(path) as unknown as ProjectRow | undefined;
+  const row = db.prepare(SQL_GET).get(path);
   return row === undefined ? undefined : rowToProject(row);
 }
 
@@ -63,9 +56,8 @@ export function upsertProject(
   hasExplicitName: boolean,
   now: number,
 ): Project {
-  const row = db
-    .prepare(SQL_UPSERT)
-    .get(normalizedPath, name, now, now, hasExplicitName ? 1 : 0) as unknown as ProjectRow;
+  const row = db.prepare(SQL_UPSERT).get(normalizedPath, name, now, now, hasExplicitName ? 1 : 0);
+  if (row === undefined) throw new UiStoreError("INTERNAL", "Stored project is unavailable.", 500);
   return rowToProject(row);
 }
 
@@ -84,8 +76,7 @@ export function updateProject(
 ): Project {
   const nameParam = patch.name ?? null;
   const favoriteParam = resolveFavoriteParam(patch.favorite);
-  const row = db.prepare(SQL_UPDATE).get(nameParam, favoriteParam, now, path) as unknown as
-    ProjectRow | undefined;
+  const row = db.prepare(SQL_UPDATE).get(nameParam, favoriteParam, now, path);
   if (row === undefined) throw notFound("Project");
   return rowToProject(row);
 }

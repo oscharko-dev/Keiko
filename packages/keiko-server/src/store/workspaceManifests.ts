@@ -14,6 +14,7 @@ import {
 } from "../workspace-manifest-identity.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { projectExists } from "./errors.js";
+import { nullableTextColumn, numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 import type {
   WorkspaceManifestMutationInput,
   WorkspaceManifestRecordRow,
@@ -33,6 +34,22 @@ interface ManifestRow {
 interface ProjectRow {
   readonly path: string;
   readonly name: string;
+}
+
+function readManifestRow(row: UiStoreSqlRow): ManifestRow {
+  return {
+    workspace_id: textColumn(row, "workspace_id"),
+    schema_version: numberColumn(row, "schema_version"),
+    manifest_ref: textColumn(row, "manifest_ref"),
+    revision: numberColumn(row, "revision"),
+    manifest_digest: textColumn(row, "manifest_digest"),
+    record_json: textColumn(row, "record_json"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
+}
+
+function readProjectRow(row: UiStoreSqlRow): ProjectRow {
+  return { path: textColumn(row, "path"), name: textColumn(row, "name") };
 }
 
 const SQL_SELECT = `
@@ -74,15 +91,11 @@ function rootProjects(
   db: DatabaseSync,
   workspaceId: string,
 ): readonly WorkspaceManifestRootProject[] {
-  const rows = db.prepare(SQL_ROOT_PROJECTS).all(workspaceId) as unknown as readonly {
-    readonly root_ref: string;
-    readonly project_path: string;
-    readonly object_identity_digest: string | null;
-  }[];
+  const rows = db.prepare(SQL_ROOT_PROJECTS).all(workspaceId);
   return rows.map((row) => ({
-    rootRef: row.root_ref,
-    projectPath: row.project_path,
-    objectIdentityDigest: row.object_identity_digest,
+    rootRef: textColumn(row, "root_ref"),
+    projectPath: textColumn(row, "project_path"),
+    objectIdentityDigest: nullableTextColumn(row, "object_identity_digest"),
   }));
 }
 
@@ -95,17 +108,13 @@ function rootIdentities(
   db: DatabaseSync,
   workspaceId: string,
 ): ReadonlyMap<string, StoredRootIdentity> {
-  const rows = db.prepare(SQL_ROOT_IDENTITIES).all(workspaceId) as unknown as readonly {
-    readonly root_ref: string;
-    readonly identity_digest: string;
-    readonly object_identity_digest: string | null;
-  }[];
+  const rows = db.prepare(SQL_ROOT_IDENTITIES).all(workspaceId);
   return new Map(
     rows.map((row) => [
-      row.root_ref,
+      textColumn(row, "root_ref"),
       {
-        identityDigest: row.identity_digest,
-        objectIdentityDigest: row.object_identity_digest,
+        identityDigest: textColumn(row, "identity_digest"),
+        objectIdentityDigest: nullableTextColumn(row, "object_identity_digest"),
       },
     ]),
   );
@@ -173,15 +182,15 @@ function rowBySql(
   sql: string,
   value: string,
 ): WorkspaceManifestRecordRow | undefined {
-  const row = db.prepare(sql).get(value) as unknown as ManifestRow | undefined;
-  return row === undefined ? undefined : rowToRecord(db, row);
+  const row = db.prepare(sql).get(value);
+  return row === undefined ? undefined : rowToRecord(db, readManifestRow(row));
 }
 
 export function listWorkspaceManifestRecords(
   db: DatabaseSync,
 ): readonly WorkspaceManifestRecordRow[] {
-  const rows = db.prepare(SQL_LIST).all() as unknown as readonly ManifestRow[];
-  return rows.map((row) => rowToRecord(db, row));
+  const rows = db.prepare(SQL_LIST).all();
+  return rows.map((row) => rowToRecord(db, readManifestRow(row)));
 }
 
 export function readWorkspaceManifestRecord(
@@ -251,7 +260,12 @@ function liveObjectIdentity(row: LegacyRootIdentityRow): string | undefined {
 export function migrateWorkspaceRootObjectIdentities(db: DatabaseSync): void {
   const rows = db
     .prepare("SELECT root_ref, canonical_root, identity_digest FROM workspace_manifest_roots")
-    .all() as unknown as readonly LegacyRootIdentityRow[];
+    .all()
+    .map((row): LegacyRootIdentityRow => ({
+      root_ref: textColumn(row, "root_ref"),
+      canonical_root: textColumn(row, "canonical_root"),
+      identity_digest: textColumn(row, "identity_digest"),
+    }));
   const candidates = rows
     .map((row) => ({ row, digest: liveObjectIdentity(row) }))
     .filter(
@@ -430,7 +444,8 @@ export function migrateLegacyProjectManifests(db: DatabaseSync): void {
   // just documentation. Do NOT widen the LIMIT or drop the ORDER BY without amending ADR-0147.
   const projects = db
     .prepare("SELECT path, name FROM projects ORDER BY last_opened_at DESC, path LIMIT 1")
-    .all() as unknown as readonly ProjectRow[];
+    .all()
+    .map(readProjectRow);
   for (const project of projects) {
     // Per-row tolerance is the migration's own invariant, deliberately narrower than the
     // fail-closed `createProjectRecord` path: a legacy project row whose directory no longer
@@ -471,7 +486,8 @@ function restoreReleasedProjects(
     // without its root rows) while leaving the membership change itself intact.
     db.exec("SAVEPOINT keiko_restore_released_root");
     try {
-      const project = read.get(projectPath) as unknown as ProjectRow | undefined;
+      const stored = read.get(projectPath);
+      const project = stored === undefined ? undefined : readProjectRow(stored);
       if (project !== undefined) {
         ensureProjectWorkspaceManifest(db, project.path, project.name, now);
       }

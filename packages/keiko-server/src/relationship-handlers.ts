@@ -1137,7 +1137,10 @@ async function runHandler<T>(
     return toResult(await worker());
   } catch (error) {
     if (error instanceof HandlerError) return errorResult(redactor, error);
-    if (error instanceof UiStoreError) return errorResult(redactor, handlerErrorFromStore(error));
+    // A store fault (status >= 500, such as a stored row of an unexpected type) is no client error:
+    // it reaches the top-level catch, which records a correlated diagnostic and answers an opaque 500.
+    if (error instanceof UiStoreError && error.status < 500)
+      return errorResult(redactor, handlerErrorFromStore(error));
     throw error;
   }
 }
@@ -2016,6 +2019,7 @@ function openRelationshipEventsStream(
         })),
       refreshMs: ACTIVITY_SSE_REFRESH_MS,
       pingMs: ACTIVITY_SSE_PING_MS,
+      diagnostics: deps.diagnostics,
     },
   );
 }

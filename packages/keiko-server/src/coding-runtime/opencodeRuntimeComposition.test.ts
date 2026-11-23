@@ -7374,6 +7374,65 @@ it("offers an inactive original read invocation owner on the existing private br
   }
 });
 
+it("refuses a malformed original read context, offset or limit at the bridge", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_READ_BYTES");
+  const facet = f.facade.nativeTextRead;
+  const invocations = facet?.invocations;
+  if (facet === undefined || invocations === undefined) throw new Error("native read facet");
+  const begin = vi.fn(invocations.begin);
+  const bridgeLog = createBufferedServerLogSink();
+  const fixture = await startBridgeFixture(
+    { ...f.facade, nativeTextRead: { ...facet, invocations: { ...invocations, begin } } },
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    {
+      ...f.control,
+      activityLog: bridgeLog,
+      toolResultCorrelationId: "native-read-run-correlation",
+    },
+  );
+  const valid = nativeInvocationInput();
+  const malformed = [
+    { ...valid, context: { ...valid.context, agent: "" } },
+    { ...valid, context: { ...valid.context, id: "x".repeat(300) } },
+    { ...valid, offset: -1 },
+    { ...valid, limit: 1.5 },
+    // The transport validator has no upper bound; the read producer caps a read at 2000 lines.
+    { ...valid, limit: 5000 },
+  ];
+  try {
+    const bridge = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+    for (const input of malformed) {
+      expect(await bridge?.begin(input)).toEqual({ ok: false, reason: "invalid-request" });
+    }
+    expect(begin).not.toHaveBeenCalled();
+    expect(f.process).not.toHaveBeenCalled();
+    // Each refusal leaves the dispatch-unbound line the read producer wrote before the bridge
+    // captured the input itself, under the run's correlation and without any request content.
+    const unbound = bridgeLog.events.filter(
+      (event) => event.op === "tool-catalog.dispatch-unbound",
+    );
+    expect(unbound).toHaveLength(malformed.length);
+    for (const event of unbound) {
+      expect(event).toMatchObject({
+        level: "warn",
+        correlationId: "native-read-run-correlation",
+        errorKind: "unavailable",
+        extra: { action: "read" },
+      });
+      expect(
+        expectActivityLogProof(
+          "tool-catalog.dispatch-unbound.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ action: "read" });
+    }
+    expect(JSON.stringify(unbound)).not.toContain("x".repeat(300));
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
 it("retains private state while the actual canonical native snapshot producer remains held", async () => {
   let release!: (value: Buffer) => void;
   let physicalSettled = false;

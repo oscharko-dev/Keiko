@@ -13,10 +13,12 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_CHUNKING_STRATEGY_KEY } from "./types.js";
+import { sourceIdColumn } from "../knowledge-ids.js";
 import {
   type KnowledgeSqlRow,
   nullableNumberColumn,
   nullableTextColumn,
+  numberColumn,
   textColumn,
 } from "../sql-row.js";
 
@@ -110,18 +112,13 @@ export function deleteChunksForDocument(
   db.prepare(DELETE_CHUNKS_FOR_DOCUMENT_SQL).run({ c: capsuleId, d: documentId });
 }
 
-interface CountRow {
-  readonly n: number;
-}
-
 export function countChunksForDocument(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): number {
-  const row = db.prepare(COUNT_CHUNKS_FOR_DOCUMENT_SQL).get({ c: capsuleId, d: documentId }) as
-    CountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+  const row = db.prepare(COUNT_CHUNKS_FOR_DOCUMENT_SQL).get({ c: capsuleId, d: documentId });
+  return row === undefined ? 0 : numberColumn(row, "n");
 }
 
 export function hasStaleChunksForDocument(
@@ -134,16 +131,8 @@ export function hasStaleChunksForDocument(
     c: capsuleId,
     d: documentId,
     v: chunkingStrategyVersion,
-  }) as CountRow | undefined;
-  return (row?.n ?? 0) > 0;
-}
-
-interface DocumentSourceRow {
-  readonly source_id: string;
-}
-
-interface DocumentParserRow {
-  readonly parser_id: string;
+  });
+  return row !== undefined && numberColumn(row, "n") > 0;
 }
 
 export function selectDocumentParserId(
@@ -153,8 +142,8 @@ export function selectDocumentParserId(
 ): string | undefined {
   const row = db
     .prepare("SELECT parser_id FROM documents WHERE capsule_id = :c AND id = :d")
-    .get({ c: capsuleId, d: documentId }) as DocumentParserRow | undefined;
-  return row?.parser_id;
+    .get({ c: capsuleId, d: documentId });
+  return row === undefined ? undefined : textColumn(row, "parser_id");
 }
 
 export function selectDocumentSourceId(
@@ -164,8 +153,8 @@ export function selectDocumentSourceId(
 ): KnowledgeSourceId | undefined {
   const row = db
     .prepare("SELECT source_id FROM documents WHERE capsule_id = :c AND id = :d")
-    .get({ c: capsuleId, d: documentId }) as DocumentSourceRow | undefined;
-  return row === undefined ? undefined : (row.source_id as KnowledgeSourceId);
+    .get({ c: capsuleId, d: documentId });
+  return row === undefined ? undefined : sourceIdColumn(row, "source_id");
 }
 
 // The raw row shape we read from `parsed_units`. `kind` and offset columns mirror the

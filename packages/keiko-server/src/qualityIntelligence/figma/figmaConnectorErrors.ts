@@ -214,8 +214,21 @@ const extractName = (err: unknown): string => {
   return "";
 };
 
-const extractCause = (err: unknown): unknown =>
-  err !== null && typeof err === "object" ? (err as Record<string, unknown>).cause : undefined;
+// The two facts the classifier reads from a thrown object's cause: whether it is an outbound egress
+// error, and its name.
+interface CauseFacts {
+  readonly outbound: OutboundHttpEgressError | undefined;
+  readonly name: string;
+}
+
+const extractCauseFacts = (err: unknown): CauseFacts => {
+  const cause =
+    err !== null && typeof err === "object" ? (err as Record<string, unknown>).cause : undefined;
+  return {
+    outbound: cause instanceof OutboundHttpEgressError ? cause : undefined,
+    name: extractName(cause),
+  };
+};
 
 /** Map an outbound egress code string to a FigmaConnectorErrorCode, or return undefined. */
 const mapOutboundCode = (code: string): FigmaConnectorErrorCode | undefined => {
@@ -242,18 +255,15 @@ const mapOutboundCodeFallback = (
 // Finds the OutboundHttpEgressError to classify, preferring the top-level error over its cause.
 const resolveOutboundEgressError = (
   err: unknown,
-  cause: unknown,
-): OutboundHttpEgressError | undefined => {
-  if (err instanceof OutboundHttpEgressError) return err;
-  if (cause instanceof OutboundHttpEgressError) return cause;
-  return undefined;
-};
+  cause: CauseFacts,
+): OutboundHttpEgressError | undefined =>
+  err instanceof OutboundHttpEgressError ? err : cause.outbound;
 
 // (a) OutboundHttpEgressError path — a proxy was genuinely in play.
 // FIGMA_PROXY_* codes are ONLY reachable through this function.
 const classifyOutbound = (
   err: unknown,
-  cause: unknown,
+  cause: CauseFacts,
   topCode: string | undefined,
   causeCode: string | undefined,
 ): FigmaConnectorErrorCode | undefined => {
@@ -270,10 +280,8 @@ const classifyTls = (code: string | undefined, msg: string): FigmaConnectorError
 
 // (c) Timeout / abort names — check both err and its cause.
 const isAbortName = (name: string): boolean => name === "TimeoutError" || name === "AbortError";
-const classifyTimeout = (err: unknown, cause: unknown): FigmaConnectorErrorCode | undefined =>
-  isAbortName(extractName(err)) || isAbortName(extractName(cause))
-    ? "FIGMA_EGRESS_TIMEOUT"
-    : undefined;
+const classifyTimeout = (err: unknown, cause: CauseFacts): FigmaConnectorErrorCode | undefined =>
+  isAbortName(extractName(err)) || isAbortName(cause.name) ? "FIGMA_EGRESS_TIMEOUT" : undefined;
 
 // (d) Direct connectivity codes / messages — no proxy involved.
 const classifyConnectivity = (
@@ -302,7 +310,7 @@ const classifyConnectivity = (
  * underlying `cause.code`) are classified correctly.
  */
 export const classifyFigmaTransportError = (err: unknown): FigmaConnectorErrorCode => {
-  const cause = extractCause(err);
+  const cause = extractCauseFacts(err);
   const topCode = extractCode(err);
   const causeCode = extractCauseCode(err);
   const code = topCode ?? causeCode;

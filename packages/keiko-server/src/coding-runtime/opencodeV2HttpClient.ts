@@ -564,15 +564,16 @@ async function readBoundedJsonBytes(body: ReadableStream<Uint8Array>): Promise<U
   return bytes;
 }
 
-function envelope(value: Readonly<Record<string, unknown>>): unknown {
+// Every response is an envelope that carries its payload as `data`, even when that is null.
+function requireEnvelopeData(value: Readonly<Record<string, unknown>>): void {
   if (!("data" in value)) throw new Error("opencode-v2-envelope-invalid");
-  return value.data;
 }
 
 function objectEnvelope(
   value: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  const parsed = record(envelope(value));
+  requireEnvelopeData(value);
+  const parsed = record(value.data);
   if (parsed === undefined) throw new Error("opencode-v2-envelope-invalid");
   return parsed;
 }
@@ -580,7 +581,8 @@ function objectEnvelope(
 function arrayEnvelope(
   value: Readonly<Record<string, unknown>>,
 ): readonly Readonly<Record<string, unknown>>[] {
-  const data = envelope(value);
+  requireEnvelopeData(value);
+  const data = value.data;
   if (!Array.isArray(data) || !data.every((item: unknown) => record(item) !== undefined)) {
     throw new Error("opencode-v2-envelope-invalid");
   }
@@ -1438,7 +1440,8 @@ export function createOpenCodeV2HttpClient(
         undefined,
         signal,
       );
-      return fileDiffs(envelope(response));
+      requireEnvelopeData(response);
+      return fileDiffs(response.data);
     },
     stageRevert: async (sessionId, messageId, signal) =>
       stagedRevert(

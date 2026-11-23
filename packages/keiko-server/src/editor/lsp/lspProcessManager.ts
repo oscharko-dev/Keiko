@@ -1179,14 +1179,14 @@ async function runInitialize(
   }
   const networkPolicy: LspNetworkPolicy = deps.config.networkPolicy ?? "inherit";
   try {
-    const result = await client.request<unknown>(
-      "initialize",
-      initializeParams(state, networkPolicy),
-      {
-        deadlineMs: deps.config.initializeTimeoutMs,
-        now,
-      },
-    );
+    const params =
+      state.protocol === undefined
+        ? { capabilities: {}, networkPolicy }
+        : state.protocol.initializeParams();
+    const result = await client.request<unknown>("initialize", params, {
+      deadlineMs: deps.config.initializeTimeoutMs,
+      now,
+    });
     if (isCurrentInitialization(state, generation)) {
       if (resourceBudgetSatisfied(state)) {
         completeInitialization(state, deps, client, result, transition);
@@ -1214,12 +1214,6 @@ async function runInitialize(
 // symmetrically for both the success and the failure branch.
 function isCurrentInitialization(state: RuntimeState, generation: number): boolean {
   return state.status === "INITIALIZING" && state.childGeneration === generation;
-}
-
-function initializeParams(state: RuntimeState, networkPolicy: LspNetworkPolicy): unknown {
-  return state.protocol === undefined
-    ? { capabilities: {}, networkPolicy }
-    : state.protocol.initializeParams();
 }
 
 function completeInitialization(

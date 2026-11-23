@@ -42,6 +42,8 @@ import {
   upsertExtractionCheckpoint,
 } from "../indexing/checkpoint-persist.js";
 import type { KnowledgeStore } from "../store.js";
+import { KnowledgeStoreError } from "../errors.js";
+import { type KnowledgeSqlRow, numberColumn } from "../sql-row.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import {
   deleteDependentRows,
@@ -363,6 +365,13 @@ function coverageWithDiagnostics(
   return base;
 }
 
+// An aggregate SELECT always yields exactly one row; a missing row fails closed like a mistyped one.
+function aggregateCount(row: KnowledgeSqlRow | undefined): number {
+  if (row === undefined)
+    throw new KnowledgeStoreError("An aggregate knowledge query returned no row");
+  return numberColumn(row, "n");
+}
+
 function countRows(
   store: KnowledgeStore,
   table: "document_text_windows" | "parsed_units",
@@ -371,8 +380,8 @@ function countRows(
 ): number {
   const row = store._internal.db
     .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c AND document_id = :d`)
-    .get({ c: String(capsuleId), d: String(documentId) }) as { readonly n: number };
-  return row.n;
+    .get({ c: String(capsuleId), d: String(documentId) });
+  return aggregateCount(row);
 }
 
 function maxWindowCharacterEnd(
@@ -384,8 +393,8 @@ function maxWindowCharacterEnd(
     .prepare(
       "SELECT COALESCE(MAX(character_end), 0) AS n FROM document_text_windows WHERE capsule_id = :c AND document_id = :d",
     )
-    .get({ c: String(capsuleId), d: String(documentId) }) as { readonly n: number };
-  return row.n;
+    .get({ c: String(capsuleId), d: String(documentId) });
+  return aggregateCount(row);
 }
 
 function progressiveDocumentRecord(

@@ -5,6 +5,7 @@
 // rejected instead of guessing which one is authoritative.
 
 import { Buffer } from "node:buffer";
+import type { Readable } from "node:stream";
 
 import yauzl from "yauzl";
 
@@ -75,12 +76,10 @@ function markedError(message: string, marker: symbol): Error {
   return error;
 }
 
+// markedError defines the marker as an own property of an Error, so an own-property lookup on an
+// Error is the whole check; a value of any other kind was never marked.
 function hasMarker(error: unknown, marker: symbol): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as Record<PropertyKey, unknown>)[marker] === true
-  );
+  return error instanceof Error && Object.getOwnPropertyDescriptor(error, marker)?.value === true;
 }
 
 /** Maps a reader failure onto the diagnostic family the caller should emit. */
@@ -147,13 +146,6 @@ function scanStop(limits: ScanLimits, entriesSeen: number): Error | undefined {
   return undefined;
 }
 
-function destroyStream(readStream: NodeJS.ReadableStream, error: Error): void {
-  const destroy = (readStream as { readonly destroy?: (cause?: Error) => void }).destroy;
-  if (typeof destroy === "function") {
-    destroy.call(readStream, error);
-  }
-}
-
 function readEntryBytes(
   zip: yauzl.ZipFile,
   entry: yauzl.Entry,
@@ -167,7 +159,7 @@ function readEntryBytes(
         reject(toError(error, `failed to open ${plan.format} entry stream`));
         return;
       }
-      const readStream = stream as NodeJS.ReadableStream;
+      const readStream: Readable = stream;
       const chunks: Buffer[] = [];
       let inflatedBytes = 0;
       let settled = false;
@@ -175,7 +167,7 @@ function readEntryBytes(
         if (settled) return;
         settled = true;
         reject(streamError);
-        destroyStream(readStream, streamError);
+        readStream.destroy(streamError);
       };
       readStream.on("data", (chunk: Buffer) => {
         if (settled) return;
