@@ -76,6 +76,8 @@ export type GovernedCodingToolResult =
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
       /** The steps of a verification that never executed, each with its closed reason (F74). */
       readonly notRun?: readonly VerificationNotRunStep[] | undefined;
+      /** Keiko installed the npm dependencies for the run's own shell while refusing (#4522). */
+      readonly shellDependencies?: "installed" | undefined;
       /** The package folders a verification could not choose between (`packageDir`). */
       readonly packageCandidates?: readonly string[] | undefined;
     };
@@ -219,7 +221,14 @@ function governedFailureOutcome(
     };
   }
   if (action === "verification" && result.notRun !== undefined) {
-    return { outcome: "failed", reasonCode: result.reasonCode, notRun: result.notRun };
+    return {
+      outcome: "failed",
+      reasonCode: result.reasonCode,
+      notRun: result.notRun,
+      ...(result.shellDependencies === undefined
+        ? {}
+        : { shellDependencies: result.shellDependencies }),
+    };
   }
   if (action === "verification" && result.packageCandidates !== undefined) {
     return {
