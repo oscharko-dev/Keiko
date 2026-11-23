@@ -64,6 +64,10 @@ import {
 // sandbox (darwinProcessTable.ts); this process layer runs it.
 const readDarwinProcessTable = darwinProcessTableReader(promisify(execFile));
 
+// Reconciliation awaits an exited tree's sweep, but not without end: a stalled member or process
+// table leaves the tree unproven (`runtime-reap-unproven`) after this bound.
+const RECONCILE_SWEEP_BOUND_MS = 60_000;
+
 /**
  * Gateway-enforcing POSIX process backend. macOS uses Seatbelt for development/evaluation while a
  * release-qualified Linux runtime uses the namespace-to-gateway launcher. Both routes consume the
@@ -414,7 +418,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     if (!tree.exited && timeoutMs > 0) await this.rootExit(tree, timeoutMs);
     if (!this.completedTreeExit(tree)) return false;
     // Reconciliation answers for an exited tree: its sweep is awaited to its own end.
-    const remaining = timeoutMs > 0 ? deadline - performance.now() : Number.POSITIVE_INFINITY;
+    const remaining = timeoutMs > 0 ? deadline - performance.now() : RECONCILE_SWEEP_BOUND_MS;
     return descendantsEnded(await sweepWithin(tree, remaining));
   }
 
@@ -454,7 +458,6 @@ function sweepWithin(
   if (tree.descendants === undefined) return Promise.resolve("untracked");
   if (!tree.exited) return Promise.resolve(undefined);
   const sweep = tree.descendants.sweep();
-  if (!Number.isFinite(remainingMs)) return sweep;
   return new Promise((resolve) => {
     const timeout = setTimeout(
       () => {

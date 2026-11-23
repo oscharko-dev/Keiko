@@ -24,7 +24,11 @@ import {
 
 import type { ProcessTable } from "./darwinProcessTable.js";
 import { RuntimeDescendantTracker } from "./darwinRuntimeDescendants.js";
-import type { SandboxMembership } from "./darwinSandboxMembership.js";
+import type {
+  SandboxMember,
+  SandboxMembership,
+  SandboxMemberSelf,
+} from "./darwinSandboxMembership.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
@@ -515,6 +519,43 @@ describe("dev-lane runtime process backend", () => {
     expect(kills).toEqual([[4711, "SIGKILL"]]);
     expect(child.emitter.listenerCount("error")).toBeGreaterThan(0);
     expect(sink.events.some((event) => event.op === "runtime.confinement.failed")).toBe(true);
+  });
+
+  it("does not await a stalled descendant sweep forever when it reconciles an exited tree", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = stageFixture();
+      const child = fakeChild(4711);
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        spawnRuntime: () => child,
+        killProcessGroup: () => undefined,
+        trackDescendants: (options) =>
+          new RuntimeDescendantTracker({
+            ...options,
+            membership: {
+              self: (): Promise<SandboxMemberSelf> => new Promise(() => undefined),
+              occupied: (): Promise<boolean> => Promise.resolve(true),
+              members: (): Promise<readonly SandboxMember[]> => Promise.resolve([]),
+              killAll: (): Promise<void> => Promise.resolve(),
+              close: (): void => undefined,
+            },
+          }),
+      });
+      const tree = backend.spawnOwnedTree(launchRequest(fixture));
+      child.settle(0);
+      let result: boolean | undefined;
+      void backend.reconcileTreeExit(tree).then((ended) => {
+        result = ended;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(result).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("records stdin port errors without pretending that the live child was reaped", async () => {
