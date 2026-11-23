@@ -622,7 +622,11 @@ function sameTask(value: unknown, task: CodingHistoryTask): value is CodingHisto
 }
 
 /** The task each repository showed last in this window, bounded; in memory only (#4491). */
-type ScopeTasks = { readonly current: Map<string, string> };
+interface ScopeTask {
+  readonly taskId: string;
+  readonly workspaceId: string;
+}
+type ScopeTasks = { readonly current: Map<string, ScopeTask> };
 const MAX_SCOPE_TASKS = 32;
 
 /**
@@ -632,12 +636,18 @@ const MAX_SCOPE_TASKS = 32;
  * History.
  */
 function useScopeTasks(detail: CodingHistoryDetail | null): ScopeTasks {
-  const scopeTasks = useRef(new Map<string, string>());
+  const scopeTasks = useRef(new Map<string, ScopeTask>());
   useEffect(() => {
-    if (detail === null || detail.task.status === "completed") return;
+    if (detail === null) return;
+    const { id: taskId, projectPath, workspaceId, status } = detail.task;
     const tasks = scopeTasks.current;
-    tasks.delete(detail.task.projectPath);
-    tasks.set(detail.task.projectPath, detail.task.id);
+    // A completed task opened from Coding History is no repository's open task any more.
+    if (status === "completed") {
+      if (tasks.get(projectPath)?.taskId === taskId) tasks.delete(projectPath);
+      return;
+    }
+    tasks.delete(projectPath);
+    tasks.set(projectPath, { taskId, workspaceId });
     const oldest = tasks.keys().next().value;
     if (tasks.size > MAX_SCOPE_TASKS && oldest !== undefined) tasks.delete(oldest);
   }, [detail]);
@@ -648,7 +658,9 @@ function useScopeTasks(detail: CodingHistoryDetail | null): ScopeTasks {
  * Shows a repository's remembered task again when the window switches back to it. It runs after
  * the selection and followed-run effects, so in one commit its read is the current one: a
  * followed run of a task no repository remembers cannot supersede it. The read is a background
- * one the completed guard covers, so a task completed or removed meanwhile is not shown.
+ * one the completed guard covers, so a task completed or removed meanwhile is not shown. It reads
+ * only once the task's own workspace is active again: the repository selector binds it a render
+ * after the root moved, and a read before that would be refused as another workspace's task.
  */
 function useScopeRestore(
   latest: { current: SessionInput },
@@ -656,12 +668,14 @@ function useScopeRestore(
   load: LoadTask,
 ): void {
   const root = latest.current.root;
+  const workspaceId = latest.current.workspace?.activeInstance?.workspaceId;
   useEffect(() => {
     const current = latest.current;
-    const id = root === undefined ? undefined : scopeTasks.current.get(root);
-    if (id === undefined || current.active || current.selection !== undefined) return;
-    void load(id, false, "refresh");
-  }, [root, latest, scopeTasks, load]);
+    const task = root === undefined ? undefined : scopeTasks.current.get(root);
+    if (task === undefined || current.active || current.selection !== undefined) return;
+    if (workspaceId !== undefined && workspaceId !== task.workspaceId) return;
+    void load(task.taskId, false, "refresh");
+  }, [root, workspaceId, latest, scopeTasks, load]);
 }
 
 /** The followed task, unless this window already showed it under another repository. */
@@ -671,8 +685,8 @@ function inRepository(
   root: string | undefined,
 ): string | undefined {
   if (taskId === undefined || root === undefined) return taskId;
-  for (const [taskRoot, id] of scopeTasks.current)
-    if (id === taskId) return taskRoot === root ? taskId : undefined;
+  for (const [taskRoot, task] of scopeTasks.current)
+    if (task.taskId === taskId) return taskRoot === root ? taskId : undefined;
   return taskId;
 }
 

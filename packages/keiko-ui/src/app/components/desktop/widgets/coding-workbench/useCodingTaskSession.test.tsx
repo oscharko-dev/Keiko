@@ -1315,14 +1315,20 @@ describe("a Coding History pick while a run is active (#4491)", () => {
     };
     read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? picked : detail));
     const running = { ...snapshot("chat-one"), state: "running" as const };
+    interface Props {
+      readonly root: string;
+      readonly selection: string | undefined;
+      readonly active: boolean;
+    }
+    const initialProps: Props = { root: "/repo", selection: undefined, active: true };
     const { result, rerender } = renderHook(
-      (props: { root: string; selection: string | undefined; active: boolean }) =>
+      (props: Props) =>
         useCodingTaskSession({
           ...props,
           snapshot: props.active ? running : snapshot("chat-one"),
           workspace: activeWorkspace(),
         }),
-      { initialProps: { root: "/repo", selection: undefined, active: true } },
+      { initialProps },
     );
     await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
     rerender({ root: "/repo-b", selection: "chat-two", active: true });
@@ -1420,6 +1426,27 @@ describe("completed tasks and the current task (#4491 audit)", () => {
     await act(async () => Promise.resolve());
     expect(result.current.detail).toBeNull();
     expect(result.current.conversationId).toBeUndefined();
+  });
+
+  // Lab (#4491): the repository selector binds the repository's workspace only after the window's
+  // root moved, so the first render back still has the other repository's workspace active.
+  it("restores the task once the repository's workspace is active again", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...second, root: "/repo" });
+    await act(async () => Promise.resolve());
+    expect(result.current.detail).toBeNull();
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(readsOf("chat-one")).toBe(2);
   });
 
   it("shows the remembered task when the followed run names a task no repository remembers", async () => {
