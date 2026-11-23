@@ -2331,18 +2331,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.enterRecoveryRequired",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.reapTree",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "CodingRuntimeManagerImpl.releaseAfterReap",
       "kind": "unregistered-catch",
       "count": 1

@@ -1,3 +1,8 @@
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { decideOpenCodeNativePolicy } from "./opencodeNativePolicy.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import { createHash } from "node:crypto";
@@ -2387,6 +2392,52 @@ describe("coding runtime manager", () => {
     });
     expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
     expect(manager.health()).toMatchObject({ status: "recovery-required" });
+  });
+
+  it("records each step by which an unreaped tree ends up recovery-required, under the run's correlation id", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const activityLog = createBufferedServerLogSink();
+    const manager = createProductionCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      activityLog,
+      revokeRuntime: (): true => true,
+      abortInFlightActions: (): true => true,
+      markRuntimeRecoveryRequired: (): never => {
+        throw new Error("authority-state-unavailable");
+      },
+      releaseRuntimeAfterReap: (): true => true,
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: true });
+    await manager.stop("run-1988");
+
+    const reaps = activityLog.events.filter((event) => event.op === "coding-runtime.reap.stage");
+    expect(reaps.map((event) => event.correlationId)).toEqual(Array(reaps.length).fill("run-1988"));
+    expect(reaps.map((event) => [event.extra?.stage, event.extra?.outcome])).toEqual([
+      ["graceful-timed-out", "escalated"],
+      ["forced", "unproven"],
+      ["recovery-mark-failed", "failed"],
+    ]);
+    expect(reaps[2]).toMatchObject({ errorKind: "internal" });
+    expect(Array.isArray(reaps[2]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(reaps)).not.toContain("authority-state-unavailable");
+    const first = reaps[0];
+    if (first === undefined) throw new Error("reap stage line missing");
+    expectActivityLogProof(
+      "coding-runtime.reap.stage.emitted-line",
+      formatActivityLogProofLine(first),
+    );
   });
 
   it("fails closed but still terminates when in-flight action cancellation denies", async () => {
