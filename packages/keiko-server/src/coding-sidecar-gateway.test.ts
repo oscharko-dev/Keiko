@@ -2083,44 +2083,46 @@ describe("coding-sidecar gateway", () => {
     expect(frames[4]).toBe("[DONE]");
   });
 
-  it.each(["error", "content_filter"] as const)(
-    "does not record an answer that finished with %s as an answered model call",
-    async (finishReason) => {
-      for (const streamed of [false, true]) {
-        const record = vi.fn();
-        const normalized: NormalizedResponse = {
-          ...assistantResponse("azure-coding-model"),
-          content: "Partial.",
-          finishReason,
-        };
-        const runId = `run-non-serving-${finishReason}-${String(streamed)}`;
-        const response = mockResponse({ captureBody: true });
-        const deps = {
-          ...runtimeGatewayDeps(
-            () => ({ ok: true, binding: { runId } }),
-            () => vi.fn(() => Promise.resolve(normalized)),
-            createOpenCodeGatewayReadinessRegistry(),
-            (): (() => AsyncIterable<GatewayStreamChunk>) =>
-              (): AsyncIterable<GatewayStreamChunk> =>
-                streamedResponse(normalized),
-          ),
-          codingSidecarGatewayEvidenceAggregator: { record },
-        } as UiHandlerDeps;
-        await handleCodingSidecarGatewayChatCompletions(
-          {
-            ...authenticatedContext({
-              model: "coding",
-              ...(streamed ? { stream: true } : {}),
-              messages: [{ role: "user", content: "answer" }],
-              tools: modelVisibleTools(),
-            }),
-            res: response.res,
-          },
-          deps,
-        );
-        expect(record).toHaveBeenCalledTimes(1);
-        expect(record).toHaveBeenCalledWith(expect.objectContaining({ runId, outcome: "failed" }));
-      }
+  it.each([
+    ["error", false],
+    ["error", true],
+    ["content_filter", false],
+    ["content_filter", true],
+  ] as const)(
+    "does not record an answer that finished with %s (streamed: %s) as an answered model call",
+    async (finishReason, streamed) => {
+      const record = vi.fn();
+      const normalized: NormalizedResponse = {
+        ...assistantResponse("azure-coding-model"),
+        content: "Partial.",
+        finishReason,
+      };
+      const runId = `run-non-serving-${finishReason}-${String(streamed)}`;
+      const response = mockResponse({ captureBody: true });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId } }),
+          () => vi.fn(() => Promise.resolve(normalized)),
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            streamedResponse(normalized),
+        ),
+        codingSidecarGatewayEvidenceAggregator: { record },
+      } as UiHandlerDeps;
+      await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            ...(streamed ? { stream: true } : {}),
+            messages: [{ role: "user", content: "answer" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ runId, outcome: "failed" }));
     },
   );
 
