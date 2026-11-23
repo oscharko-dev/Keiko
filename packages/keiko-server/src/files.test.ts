@@ -60,7 +60,7 @@ import {
   type ResolvedProjectRoot,
 } from "./files.js";
 import { errorBody, STREAMING, type RouteResult } from "./routes.js";
-import { mockRequest, mockResponse, type MockResponse } from "./_support.js";
+import { mockRequest, mockResponse, type MockResponse, stringLeafRedactor } from "./_support.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -772,7 +772,7 @@ describe("desktop files browser", () => {
     const victim = join(extraRoot, "victim.ts");
     await writeFile(victim, "outside\n", "utf8");
     let seenTargetMetadata = 0;
-    const redactor: UiHandlerDeps["redactor"] = (value: unknown): unknown => {
+    const redactor: UiHandlerDeps["redactor"] = stringLeafRedactor((value) => {
       if (value === "src/app.ts") {
         seenTargetMetadata += 1;
         if (seenTargetMetadata === 2) {
@@ -781,7 +781,7 @@ describe("desktop files browser", () => {
         }
       }
       return value;
-    };
+    });
 
     await expect(
       writeFilesContent({

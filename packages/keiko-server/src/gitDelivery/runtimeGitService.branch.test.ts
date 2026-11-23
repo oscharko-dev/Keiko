@@ -23,6 +23,7 @@ import {
 } from "./runtimeGitBranch.js";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
+import { mapEvidenceMutationDeps } from "../_support.js";
 
 // #3907 (owner decision 2026-10-31): the coding runtime creates and switches to a task branch
 // through Keiko's Git kernel, against a real fixture-owned repository. The model's shell keeps
@@ -107,20 +108,7 @@ function service(taskBranch: RuntimeGitTaskBranchPort | "none" = port()): Runtim
   return new RuntimeGitService({
     context,
     snapshots: createCodingRuntimeSnapshotStore(db),
-    mutationDeps: {
-      redactor: (value): unknown => value,
-      evidenceStore: {
-        put: (id, body): string => {
-          evidence.set(id, body);
-          return id;
-        },
-        get: (id): string | undefined => evidence.get(id),
-        list: (): readonly string[] => [...evidence.keys()],
-        delete: (id): void => {
-          evidence.delete(id);
-        },
-      },
-    },
+    mutationDeps: mapEvidenceMutationDeps(evidence),
     messageAllowed: (): Promise<boolean> => Promise.resolve(true),
     execution: {
       processEnv: { PATH: process.env.PATH, HOME: base },

@@ -153,9 +153,7 @@ export function insertRelationshipAuditEntry(
   assertSummary(entry.summary);
   const redactedSummary = redactString(entry.summary);
   assertSummary(redactedSummary);
-  const redactedPayload = deepRedactStrings(entry.payload, redactString) as Readonly<
-    Record<string, unknown>
-  >;
+  const redactedPayload = deepRedactStrings(entry.payload, redactString);
   const payloadJson = JSON.stringify(redactedPayload);
   // The subquery's WHERE clause receives workspaceId as the last bind parameter so that
   // COALESCE(MAX(sequence),-1)+1 is scoped to the workspace. SQLite serialises writers so

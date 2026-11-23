@@ -8,6 +8,7 @@ import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
 import { retrieveConnectedContextPack, type RetrievalOnlyOutput } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -85,7 +86,7 @@ describe("production reranking precedes relevance selection", () => {
       selectionConfidence: "low",
     });
     expect(pack.uncertainty.map((marker) => marker.kind)).toContain("low-confidence-selection");
-    const messages = buildGroundedGatewayMessages("Explain billing events", pack, (text) => text);
+    const messages = buildGroundedGatewayMessages("Explain billing events", pack, identityRedactor);
     expect(messages.map((message) => message.content).join("\n")).toContain(
       "The supplied evidence may be unrelated to the question.",
     );

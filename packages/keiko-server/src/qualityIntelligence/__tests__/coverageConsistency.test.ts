@@ -13,6 +13,7 @@
 //
 // Pattern: #728 "live chain via real route" — no mocks, real evidenceDir, real route handlers.
 
+import { identityRedactor } from "../../_support.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,7 +190,7 @@ describe("Issue #741 — coverage consistency across all three surfaces", () => 
       generatedAt: "2026-06-14T10:01:00.000Z",
       candidates: [coveringCandidate()],
       evidenceDir,
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
   });
 

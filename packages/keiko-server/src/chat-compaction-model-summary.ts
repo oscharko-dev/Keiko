@@ -968,7 +968,7 @@ function logSummaryFailure(
       operation: "chat.compaction.summary",
       source: "chat.compaction.model-summary",
       error,
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
     ...(failureReason === undefined ? {} : { code: failureReason }),
   });

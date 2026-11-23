@@ -6,6 +6,7 @@ import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 import type { ConnectedFileEntry } from "@oscharko-dev/keiko-contracts/connected-context";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 let root = "";
@@ -94,7 +95,7 @@ describe("primary content evidence is independent of presentation wording", () =
       const { pack } = await retrieve(content);
       expect(pack.files).toHaveLength(16);
       expect(pack.files.some((file) => file.scopePath.includes("unrelated"))).toBe(false);
-      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, (value) => value));
+      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, identityRedactor));
       for (let index = 1; index <= 16; index += 1)
         expect(prompt.includes(`${target} ${String(71000 + index)}`)).toBe(true);
       expect(pack.omitted).toEqual([]);
@@ -121,7 +122,7 @@ describe("primary content evidence is independent of presentation wording", () =
     });
     expect(pack.files.some((file) => file.scopePath === "facts/related.txt")).toBe(true);
     const prompt = JSON.stringify(
-      buildGroundedGatewayMessages("PrimaryReadingProbe", pack, (value) => value),
+      buildGroundedGatewayMessages("PrimaryReadingProbe", pack, identityRedactor),
     );
     for (let index = 1; index <= 8; index += 1)
       expect(prompt.includes(`PrimaryReadingProbe ${String(71000 + index)}`)).toBe(true);
@@ -170,7 +171,7 @@ describe("primary content evidence is independent of presentation wording", () =
       expect(
         pack.files[0]?.excerpts.every((excerpt) => !excerpt.content.includes("CompactAbsentProbe")),
       ).toBe(true);
-      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, (value) => value));
+      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, identityRedactor));
       expect(prompt).toContain("Related semantic context (not verified as an exact literal match)");
       expect(prompt).toContain("OtherReadingProbe 81234");
     },
@@ -218,7 +219,7 @@ describe("primary content evidence is independent of presentation wording", () =
         ),
       ).toBe(true);
       expect(
-        JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value)),
+        JSON.stringify(buildGroundedGatewayMessages(question, pack, identityRedactor)),
       ).toContain("dir/file.ts observed value 81234");
     },
   );

@@ -6,6 +6,7 @@
 // not-found → 404, idempotent re-delete → 404, missing-id → 400, missing-evidenceDir → 500.
 // No network — pure handler + real fs.
 
+import { identityRedactor } from "../../_support.js";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,7 +108,7 @@ beforeEach(() => {
     scope: "run",
     reviewerLabel: "alice",
     now: "2026-06-01T10:02:00.000Z",
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 });
 

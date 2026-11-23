@@ -4,6 +4,7 @@
 // sibling PRs that touch the original test file. Seeds a temp evidenceDir, calls the handler
 // directly, and verifies that an export-evidence row is (or is not) appended to the manifest.
 
+import { identityRedactor } from "../../_support.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,7 +101,7 @@ function seedExportableRun(): void {
     generatedAt: "2026-06-14T09:01:00.000Z",
     candidates: [exportCandidate()],
     evidenceDir,
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 }
 

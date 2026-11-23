@@ -8,7 +8,7 @@
 // Returns a redacted manifest plus a counts-only `redactionSummary` (matched-string count, not the
 // matched text). The summary is what the audit cross-references; redaction is irreversible.
 
-import { redact } from "@oscharko-dev/keiko-security";
+import { redact, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import { EvidenceWriteError } from "../errors.js";
 import type { QualityIntelligenceRedactionSummary } from "./manifestSchema.js";
 
@@ -116,41 +116,48 @@ function assertRedactionBounds(depth: number, onPath: boolean): void {
   }
 }
 
-function deepRedact(
-  value: unknown,
+function deepRedact<T>(
+  value: T,
   additionalSecrets: readonly string[],
   counter: QualityIntelligenceCounterState,
   depth = 0,
   seen = new WeakSet(),
-): unknown {
+): DeepRedacted<T> {
+  let rebuilt: T | string | unknown[] | Record<string, unknown> = value;
   if (typeof value === "string") {
-    return redactString(value, additionalSecrets, counter);
-  }
-  if (typeof value !== "object" || value === null) {
-    return value;
-  }
-  assertRedactionBounds(depth, seen.has(value));
-  // `seen` tracks only the current path (added before recursing into children, removed on the way
-  // back out), so two independent, non-cyclic references to the same object are not a cycle.
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return value.map((item): unknown =>
-        deepRedact(item, additionalSecrets, counter, depth + 1, seen),
-      );
+    rebuilt = redactString(value, additionalSecrets, counter);
+  } else if (typeof value === "object" && value !== null) {
+    assertRedactionBounds(depth, seen.has(value));
+    // `seen` tracks only the current path (added before recursing into children, removed on the way
+    // back out), so two independent, non-cyclic references to the same object are not a cycle.
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) {
+        rebuilt = value.map((item: unknown) =>
+          deepRedact(item, additionalSecrets, counter, depth + 1, seen),
+        );
+      } else {
+        // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
+        // plain own-property instead of silently mutating the reconstructed object's prototype.
+        // SAFETY: Object.create(null) returns a new empty object with no prototype and no
+        // properties, so it is a valid empty Record; the lib types it as any, and no typed
+        // constructor exists.
+        const out = Object.create(null) as Record<string, unknown>;
+        for (const [key, child] of Object.entries(value)) {
+          out[key] = deepRedact(child, additionalSecrets, counter, depth + 1, seen);
+        }
+        rebuilt = out;
+      }
+    } finally {
+      seen.delete(value);
     }
-    // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
-    // plain own-property instead of silently mutating the reconstructed object's prototype.
-    // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
-    // so it is a valid empty Record; the lib types it as any, and no typed constructor exists.
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const [key, child] of Object.entries(value)) {
-      out[key] = deepRedact(child, additionalSecrets, counter, depth + 1, seen);
-    }
-    return out;
-  } finally {
-    seen.delete(value);
   }
+  // SAFETY: each branch above builds one case of `DeepRedacted<T>`, the same walk as
+  // `deepRedactStrings`: a string leaf becomes the redacted string; a non-null object becomes a new
+  // array of its redacted elements or a new record of its redacted own enumerable string-keyed
+  // entries; every other value (function, number, boolean, bigint, symbol, null, undefined) stays
+  // unchanged. TypeScript cannot evaluate a conditional type over an unresolved `T`.
+  return rebuilt as DeepRedacted<T>;
 }
 
 export interface QualityIntelligenceRedactionOptions {

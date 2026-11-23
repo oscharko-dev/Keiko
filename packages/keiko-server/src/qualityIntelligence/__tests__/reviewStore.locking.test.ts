@@ -12,6 +12,7 @@
 // loaded runner, while a machine fast enough could pass it even after a partial regression toward
 // polling. Zero sleeps is the property itself, and it holds on any machine.
 
+import { identityRedactor } from "../../_support.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,7 +50,7 @@ function approveRun(evidenceDir: string): void {
     scope: "run",
     actor: { actorId: "reviewer", displayLabel: "Reviewer" },
     now: "2026-07-03T10:00:00.000Z",
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 }
 

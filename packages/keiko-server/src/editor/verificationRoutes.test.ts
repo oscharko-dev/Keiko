@@ -41,6 +41,7 @@ import type {
 } from "./verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createWorkspaceScriptTrustService } from "../workspace-script-trust.js";
+import { identityRedactor } from "../_support.js";
 
 class FakeManager implements VerificationRunnerManager {
   public readonly executed: VerificationRunInput[] = [];
@@ -331,7 +332,7 @@ describe("openVerificationSseStream (AC6)", () => {
   it("writes a ready frame first and frames events as verification:<kind>", () => {
     const fake = makeFakeSseRes();
     const manager = new FakeManager();
-    openVerificationSseStream(fake.res, manager, (value) => value);
+    openVerificationSseStream(fake.res, manager, identityRedactor);
     expect(fake.writes[0]).toContain("event: ready");
     manager.emitExternal({
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
@@ -350,14 +351,9 @@ describe("openVerificationSseStream (AC6)", () => {
       const manager = new FakeManager();
       const signals: SseBackpressureSignal[] = [];
       fake.writeReturns = false;
-      openVerificationSseStream(
-        fake.res,
-        manager,
-        (value) => value,
-        (signal) => {
-          signals.push(signal);
-        },
-      );
+      openVerificationSseStream(fake.res, manager, identityRedactor, (signal) => {
+        signals.push(signal);
+      });
 
       // A false write is flow control: the stream waits for the reader instead of ending.
       expect(eventFrames(fake)).toHaveLength(1);
@@ -385,14 +381,9 @@ describe("openVerificationSseStream (AC6)", () => {
       const fake = makeFakeSseRes();
       const manager = new FakeManager();
       const signals: SseBackpressureSignal[] = [];
-      openVerificationSseStream(
-        fake.res,
-        manager,
-        (value) => value,
-        (signal) => {
-          signals.push(signal);
-        },
-      );
+      openVerificationSseStream(fake.res, manager, identityRedactor, (signal) => {
+        signals.push(signal);
+      });
       // The client took the ready frame and goes slow only once events flow. The stalled ready
       // frame has its own case.
       expect(eventFrames(fake)).toHaveLength(1);
@@ -429,7 +420,7 @@ describe("openVerificationSseStream (AC6)", () => {
       const fake = makeFakeSseRes();
       const manager = new FakeManager();
       fake.writeReturns = false;
-      openVerificationSseStream(fake.res, manager, (value) => value);
+      openVerificationSseStream(fake.res, manager, identityRedactor);
       vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
       fake.writeReturns = true;
       fake.res.emit("drain");

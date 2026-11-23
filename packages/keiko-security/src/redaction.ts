@@ -587,23 +587,72 @@ export function createAuditRedactor(
   return (input: string): string => redact(input, literals, options);
 }
 
+// Objects whose data lives in internal slots or on the prototype, so they have no own enumerable
+// string-keyed properties of their own (a RegExp's own `lastIndex` is not enumerable). The walk
+// below turns such an instance into an empty null-prototype record.
+type SlotOnlyBuiltinObject =
+  | Date
+  | RegExp
+  | ReadonlyMap<unknown, unknown>
+  | ReadonlySet<unknown>
+  | WeakMap<object, unknown>
+  | WeakSet<object>
+  | Promise<unknown>
+  | ArrayBuffer;
+
+// Matches every function type (any return type is assignable to `void` here);
+// `deepRedactStrings` returns a function value unchanged.
+type AnyFunction = (...args: never) => void;
+
+/**
+ * The type `deepRedactStrings` returns for a value of type `T`, following its runtime walk case by
+ * case. A string (literal, template-literal and branded string types included) becomes `string`,
+ * because the redactor may rewrite any character of it. An array, readonly array or tuple becomes a
+ * new mutable array of its redacted elements; a tuple keeps its element types but not their
+ * positions. A typed array or DataView becomes a record of its index entries (a number, or a bigint
+ * for the 64-bit arrays), and another slot-only built-in (see `SlotOnlyBuiltinObject`) becomes an
+ * empty record. Any other object maps property-wise into a new mutable object: symbol keys are
+ * dropped because `Object.entries` skips them, and an optional property stays optional because an
+ * absent key stays absent. Functions, numbers, booleans, bigints, symbols, null and undefined pass
+ * through unchanged, and `unknown` stays `unknown`.
+ *
+ * TypeScript types are structural, so the type cannot tell a class instance from plain data of the
+ * same shape. An `Error` (whose `message` and `stack` are not enumerable), a user class with
+ * prototype methods, or a built-in instance given extra enumerable properties loses or gains those
+ * members at runtime. The walk is for plain JSON-like data, and a caller serializes such instances
+ * before redacting them. Arrays use `infer` rather than a homomorphic mapping because the latter
+ * makes TypeScript fail (TS2589) when it compares a recursive JSON type with its redacted form.
+ */
+export type DeepRedacted<T> = T extends string
+  ? string
+  : T extends AnyFunction
+    ? T
+    : T extends readonly (infer Element)[]
+      ? DeepRedacted<Element>[]
+      : T extends ArrayBufferView
+        ? Record<string, number | bigint>
+        : T extends SlotOnlyBuiltinObject
+          ? Record<string, never>
+          : T extends object
+            ? { -readonly [K in keyof T as K extends symbol ? never : K]: DeepRedacted<T[K]> }
+            : T;
+
 // Recursively re-applies a redactor to EVERY STRING LEAF of a plain-JSON value, rebuilding
 // arrays/objects so the input is never mutated and the JSON structure is preserved exactly. Bounded
 // by the (finite) nesting depth of an EvidenceManifest. Idempotent (redact over already-redacted
 // text is a no-op), so it is safe to apply at build time AND again as defense in depth at persist
 // time. This is what makes the audit builder truly redacted-by-construction even for embedded
 // summaries that the audit redactor would otherwise miss.
-export function deepRedactStrings(
-  value: unknown,
+export function deepRedactStrings<T>(
+  value: T,
   redactString: (input: string) => string,
-): unknown {
+): DeepRedacted<T> {
+  let rebuilt: T | string | unknown[] | Record<string, unknown> = value;
   if (typeof value === "string") {
-    return redactString(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => deepRedactStrings(item, redactString));
-  }
-  if (typeof value === "object" && value !== null) {
+    rebuilt = redactString(value);
+  } else if (Array.isArray(value)) {
+    rebuilt = value.map((item: unknown) => deepRedactStrings(item, redactString));
+  } else if (typeof value === "object" && value !== null) {
     // KEIKO-0188: use a null-prototype object so a `__proto__` key surviving from a JSON.parse
     // input becomes a plain own-property assignment instead of a prototype-pollution sink. With
     // the ordinary `{}` seed, `out["__proto__"] = child` set the prototype and the payload
@@ -612,13 +661,20 @@ export function deepRedactStrings(
     // a prototype the attacker chose.
     // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
     // so it is a valid empty Record; the lib types it as any, and no typed constructor exists.
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    const out = Object.create(null) as Record<string, unknown>;
     for (const [key, child] of Object.entries(value)) {
       out[key] = deepRedactStrings(child, redactString);
     }
-    return out;
+    rebuilt = out;
   }
-  return value;
+  // SAFETY: each branch above builds one case of `DeepRedacted<T>`. A string leaf becomes the string
+  // the redactor returned; an array becomes a new array of its redacted elements in the same order;
+  // any other non-null object becomes a new record of its redacted own enumerable string-keyed
+  // entries, which is the property-wise case for plain objects and the record case for built-ins;
+  // every other value (function, number, boolean, bigint, symbol, null, undefined) stays unchanged.
+  // TypeScript cannot evaluate a conditional type over an unresolved `T`, so this is the one
+  // assertion of the walk.
+  return rebuilt as DeepRedacted<T>;
 }
 
 function sensitiveSourceName(name: string): boolean {

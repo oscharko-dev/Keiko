@@ -377,7 +377,7 @@ function applyAdvisoryOutcome(
         operation: ADVISORY_OPERATION,
         source: ADVISORY_SOURCE,
         error: outcome.error,
-        redact: (message: string): string => String(deps.redactor(message)),
+        redact: (message: string): string => deps.redactor(message),
       }),
     );
   }
@@ -544,7 +544,7 @@ export async function enrichReviewItemsWithAdvisory(
         operation: ADVISORY_OPERATION,
         source: ADVISORY_SOURCE,
         error,
-        redact: (message: string): string => String(deps.redactor(message)),
+        redact: (message: string): string => deps.redactor(message),
       }),
     );
     return { enrichedItems: reviewItems, canceledDuringAdvisory: false };

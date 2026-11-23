@@ -54,6 +54,7 @@ import {
 import type { ManagedLspControlSnapshot } from "./lsp/managedLspControl.js";
 import { createManagedLspActivationStore } from "./lsp/managedLspActivationStore.js";
 import { createManagedLspControlService } from "./lsp/managedLspControl.js";
+import { stringLeafRedactor } from "../_support.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -178,23 +179,9 @@ function deps(
   } as unknown as UiHandlerDeps;
 }
 
-function redactEveryString(value: unknown): unknown {
-  if (typeof value === "string") {
-    if (value.startsWith("/")) {
-      return value;
-    }
-    return "[REDACTED]";
-  }
-  if (Array.isArray(value)) {
-    return value.map(redactEveryString);
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, redactEveryString(entry)]),
-    );
-  }
-  return value;
-}
+const redactEveryString = stringLeafRedactor((text) =>
+  text.startsWith("/") ? text : "[REDACTED]",
+);
 
 const stableLanguageOptions: EditorLanguageRouteOptions = { now: () => 0 };
 

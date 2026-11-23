@@ -13,6 +13,7 @@
 // NOTE: regenerate-stale exercises the full model-routed workflow. In the integration
 // test context the config has no providers, so #761 now expects a deterministic baseline run.
 
+import { identityRedactor } from "../../_support.js";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -249,7 +250,7 @@ function seedRunFromSources(args: {
     candidates: args.candidates,
     editedRevisions: args.editedRevisions,
     evidenceDir,
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
   return ingestion;
 }
@@ -301,7 +302,7 @@ beforeEach(() => {
     generatedAt: "2026-06-09T10:01:00.000Z",
     candidates: [makeCandidateRow()],
     evidenceDir,
-    redact: (v: unknown): unknown => v,
+    redact: identityRedactor,
   });
 });
 
@@ -657,7 +658,7 @@ describe("handleQiReCheck — no stored sourceFingerprints", () => {
         },
       ],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const body = {
@@ -724,7 +725,7 @@ describe("handleQiReCheck — legacy source-only fingerprints", () => {
         ]),
       ],
       evidenceDir,
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -1621,7 +1622,7 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
           kind: "human",
         },
         now: "2026-06-09T10:03:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }
 
@@ -1724,7 +1725,7 @@ describe("handleQiRegenerateStale — runState derivation on zero-drift regenera
           kind: "human",
         },
         now: "2026-06-09T10:03:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }
 
@@ -1781,7 +1782,7 @@ describe("handleQiRegenerateStale — runState derivation on zero-drift regenera
         kind: "human",
       },
       now: "2026-06-09T10:03:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -2059,7 +2060,7 @@ describe("handleQiRegenerateStale — legacy requirements runs fail closed witho
         ]),
       ],
       evidenceDir,
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });

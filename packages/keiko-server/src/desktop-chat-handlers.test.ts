@@ -58,6 +58,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   type ChatMessage,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { stringLeafRedactor } from "./_support.js";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -3594,8 +3595,7 @@ describe("desktop chat routes", () => {
       deps(fakeModel(`Here is your key: ${secretValue} — enjoy!`), {
         // Wire a redactor that replaces the known secret with a placeholder, mirroring
         // buildRedactor behaviour when an apiKey is present in the gateway config.
-        redactor: (value: unknown) =>
-          typeof value === "string" ? value.replaceAll(secretValue, "[REDACTED]") : value,
+        redactor: stringLeafRedactor((text) => text.replaceAll(secretValue, "[REDACTED]")),
       }),
     );
 

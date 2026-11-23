@@ -88,10 +88,10 @@ const TREE_CLASSIFY_CONCURRENCY = 32;
 const FILE_SEARCH_CANDIDATE_CONCURRENCY = 32;
 const STABLE_CONTENT_RETRY_DELAY_MS = 25;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
-type FilesMetadataRedactor = UiHandlerDeps["redactor"];
+// Files redacts only string metadata (paths, roots, preview text); a deps `Redactor` is one.
+type FilesMetadataRedactor = (value: string) => string;
 
-const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
-  typeof value === "string" ? redact(value) : value;
+const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: string): string => redact(value);
 
 // #2906 review (comment 3863185718): FilesEntryKind / FilesTreeEntry / FilesTreeResponse used to
 // be redeclared here as a second, independently-drifting copy of the SAME shared wire contract
@@ -1719,7 +1719,7 @@ async function readTextPreview(
 async function textPreview(
   target: ResolvedTarget,
   base: FilesPreviewBase,
-  redactor: UiHandlerDeps["redactor"],
+  redactor: FilesMetadataRedactor,
 ): Promise<FilesPreviewResponse> {
   const maxBytes =
     target.stats.size > MAX_RECURSIVE_TEXT_FILE_BYTES

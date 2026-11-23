@@ -3,6 +3,7 @@ import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connect
 import { ContextPackValidationError } from "@oscharko-dev/keiko-workflows";
 import { caughtGroundedPackValidation, inspectGroundedPack } from "./grounded-pack-validation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { identityRedactor } from "./_support.js";
 
 describe("grounded pack validation failure evidence", () => {
   it("preserves the actual validator exception and cause without inventing a violation count", () => {
@@ -14,7 +15,7 @@ describe("grounded pack validation failure evidence", () => {
     });
     const record = vi.fn<(record: ServerDiagnosticRecord) => void>();
     const failure = inspectGroundedPack(pack as ConnectedContextPack, {
-      deps: { diagnostics: { record }, redactor: (message) => message },
+      deps: { diagnostics: { record }, redactor: identityRedactor },
       correlationId: "pack-validator-exception",
       outcome: "source-skipped",
       sourceIndex: 2,

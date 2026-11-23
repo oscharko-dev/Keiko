@@ -616,7 +616,7 @@ function reportTopLevelFailure(
       operation: "server.request",
       source: "server.top-level-catch",
       error,
-      redact: (message) => String(handlerDeps.redactor(message)),
+      redact: (message) => handlerDeps.redactor(message),
     }),
   );
   if (!res.headersSent) {

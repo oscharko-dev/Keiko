@@ -35,6 +35,7 @@ import {
   type VerifiedCommitRuntimeDependencies,
 } from "./productionVerifiedCommitRuntime.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import { identityRedactor } from "../_support.js";
 
 // #3907 (owner decision 2026-10-31): the journey the Coding Workbench lab asks of a model on a Local
 // checkout of `main`. A commit there is blocked as a protected branch; the model asks Keiko for a
@@ -139,7 +140,7 @@ function workspaceInfo(workspaceRoot: string): WorkspaceInfo {
 
 function mutationDeps(): VerifiedCommitRuntimeDependencies["mutationDeps"] {
   return {
-    redactor: (value): unknown => value,
+    redactor: identityRedactor,
     evidenceStore: {
       put: (id): string => id,
       get: (): undefined => undefined,

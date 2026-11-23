@@ -2972,7 +2972,7 @@ export function mapGroundedAskError(
   // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
   // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
   const message =
-    error instanceof Error ? String(deps.redactor(error.message)) : "Local knowledge ask failed.";
+    error instanceof Error ? deps.redactor(error.message) : "Local knowledge ask failed.";
   return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
 }
 

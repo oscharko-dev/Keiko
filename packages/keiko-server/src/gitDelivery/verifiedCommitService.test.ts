@@ -60,6 +60,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { mapEvidenceMutationDeps } from "../_support.js";
 
 // #3386 AC11: the interactive staged-diff review this service owns must never reach for #3397's
 // immutable merge-base-to-head PR snapshot service. A throwing fake proves it structurally — if
@@ -288,20 +289,7 @@ beforeEach(() => {
   options = {
     context,
     snapshots,
-    mutationDeps: {
-      redactor: (value): unknown => value,
-      evidenceStore: {
-        put: (id, body): string => {
-          evidence.set(id, body);
-          return id;
-        },
-        get: (id): string | undefined => evidence.get(id),
-        list: (): readonly string[] => [...evidence.keys()],
-        delete: (id): void => {
-          evidence.delete(id);
-        },
-      },
-    },
+    mutationDeps: mapEvidenceMutationDeps(evidence),
     messageAllowed: (message): Promise<boolean> => Promise.resolve(message.startsWith("feat:")),
     execution: {
       processEnv: { PATH: process.env.PATH, HOME: root },

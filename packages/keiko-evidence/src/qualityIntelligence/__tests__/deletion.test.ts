@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, writeFile, symlink } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { deepRedactStrings, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   QI_SUBDIR,
@@ -16,7 +17,7 @@ import { deleteQualityIntelligenceRun } from "../retention.js";
 import { recordQualityIntelligenceCandidates } from "../candidatesArtifact.js";
 import type { QualityIntelligenceEvidenceManifest } from "../manifestSchema.js";
 
-const identity = (value: unknown): unknown => value;
+const identity = <T>(value: T): DeepRedacted<T> => deepRedactStrings(value, (text) => text);
 
 // Writes the always-present `.candidates.json` companion for a run (empty body is enough to prove
 // the on-disk file exists and gets swept).

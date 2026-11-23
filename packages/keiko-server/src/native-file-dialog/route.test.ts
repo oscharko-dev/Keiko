@@ -27,6 +27,7 @@ import {
   handleNativeFileDialogOpen,
   type NativeFileDialogRouteOptions,
 } from "./route.js";
+import { stringLeafRedactor } from "../_support.js";
 
 const CORRELATION_ID = "native-dialog-test-corr";
 
@@ -536,7 +537,10 @@ describe("native file dialog route", () => {
     const file = join(root, "note.txt");
     await writeFile(file, "hello");
     const { deps } = buildDeps({ adapter: fakeAdapter({ cancelled: false, paths: [file] }) });
-    const nonStringRedactor = (value: unknown): unknown => (value === file ? 42 : value);
+    // An untyped mock stands in for a JavaScript caller that breaks the Redactor contract.
+    const nonStringRedactor = vi
+      .fn()
+      .mockImplementation((value: unknown) => (value === file ? 42 : value));
     const overriddenDeps: UiHandlerDeps = { ...deps, redactor: nonStringRedactor };
 
     const result = await handleNativeFileDialogOpen(
@@ -552,8 +556,9 @@ describe("native file dialog route", () => {
     const { deps } = buildDeps({
       adapter: fakeAdapter({ cancelled: false, paths: [missingPath] }),
     });
-    const unsafeRedactor = (value: unknown): unknown =>
-      value === missingPath ? "[REDACTED]" : value;
+    const unsafeRedactor = stringLeafRedactor((text) =>
+      text === missingPath ? "[REDACTED]" : text,
+    );
     const overriddenDeps: UiHandlerDeps = { ...deps, redactor: unsafeRedactor };
 
     const result = await handleNativeFileDialogOpen(

@@ -37,6 +37,7 @@ import {
   type TerminalExecutionResult,
 } from "./index.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { identityRedactor, stringLeafRedactor } from "./_support.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;
@@ -609,19 +610,9 @@ describe("POST /api/terminal/executions", () => {
 
   it("A4 — applies Layer-2 redaction to stdout and stderr in the POST response", async () => {
     // A fake redactor that replaces any occurrence of "SECRET-VALUE" with "[REDACTED]".
-    const secretRedactor = (value: unknown): unknown => {
-      if (typeof value === "string") {
-        return value.replaceAll("SECRET-VALUE", "[REDACTED]");
-      }
-      if (typeof value === "object" && value !== null) {
-        const result: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(value)) {
-          result[k] = secretRedactor(v);
-        }
-        return result;
-      }
-      return value;
-    };
+    const secretRedactor = stringLeafRedactor((text) =>
+      text.replaceAll("SECRET-VALUE", "[REDACTED]"),
+    );
     const localTerminal = new FakeTerminalExecutionManager({
       executeResult: {
         executionId: "e-redact",
@@ -768,7 +759,7 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
       const manager = new FakeTerminalExecutionManager();
       return {
         open: (res, onBackpressure): void => {
-          openTerminalSseStream(res, manager, (value) => value, onBackpressure);
+          openTerminalSseStream(res, manager, identityRedactor, onBackpressure);
         },
         emit: (sequence): void => {
           manager.emitExternal(
@@ -783,14 +774,9 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
     const signals: SseBackpressureSignal[] = [];
-    openTerminalSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
+    openTerminalSseStream(fake.res, manager, identityRedactor, (signal) => {
+      signals.push(signal);
+    });
 
     manager.emitExternal({
       kind: "execution-completed",
@@ -820,7 +806,7 @@ describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)"
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
 
-    openTerminalSseStream(fake.res, manager, (value) => value, undefined, "corr-terminal-1");
+    openTerminalSseStream(fake.res, manager, identityRedactor, undefined, "corr-terminal-1");
     fake.emitClose();
 
     expect(sink.events).toHaveLength(1);
@@ -836,7 +822,7 @@ describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)"
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
 
-    openTerminalSseStream(fake.res, manager, (value) => value);
+    openTerminalSseStream(fake.res, manager, identityRedactor);
     fake.emitClose();
 
     expect(sink.events).toHaveLength(1);
@@ -891,7 +877,7 @@ describe("openTerminalSseStream heartbeat subscription ownership", () => {
     const trace: string[] = [];
     const destroyCounts: number[] = [];
     const signals: SseBackpressureSignal[] = [];
-    const redactor = vi.fn((value: unknown): unknown => value);
+    const redactor = vi.fn().mockImplementation(identityRedactor);
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     vi.spyOn(manager, "subscribe").mockImplementation((listener) => {

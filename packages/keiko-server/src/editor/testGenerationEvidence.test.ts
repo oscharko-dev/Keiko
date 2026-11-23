@@ -13,8 +13,9 @@ import {
   recordTestGenerationEvidence,
   testGenerationEvidenceRunId,
 } from "./testGenerationEvidence.js";
+import { identityRedactor } from "../_support.js";
 
-const REDACTOR: Redactor = (value) => value;
+const REDACTOR: Redactor = identityRedactor;
 
 function citation(sourceKind: CodingContextSourceKind, id: string): CodingContextCitation {
   return {

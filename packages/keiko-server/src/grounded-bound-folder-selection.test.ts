@@ -25,6 +25,7 @@ import {
 } from "./grounded-qa.js";
 import { fittedMultiSourcePrompt } from "./grounded-qa-multi-source.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { identityRedactor } from "./_support.js";
 
 const stores: UiStore[] = [];
 afterEach(() => {
@@ -303,7 +304,7 @@ describe("bound folder windows at existing shared selection fences", () => {
       undefined,
       [REQUIRED.atom.stableId],
     );
-    expect(buildAnswerCitations(trimmed, "[src/Novel.ts:61]", (value) => value)).toEqual([]);
+    expect(buildAnswerCitations(trimmed, "[src/Novel.ts:61]", identityRedactor)).toEqual([]);
   });
 
   it("uses the same actual-window priority under the unchanged plural source byte share", () => {

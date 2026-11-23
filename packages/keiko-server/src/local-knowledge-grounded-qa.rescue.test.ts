@@ -1,7 +1,7 @@
 // #189 citation attachment: a connector answer is cited only when the model emitted markers.
 // Missing markers are not treated as "no evidence", but the server must not claim that every
 // prompt reference was cited after the fact.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -73,6 +73,7 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { ApiError } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { identityRedactor, stringLeafRedactor } from "./_support.js";
 
 type GroundedResult = Parameters<typeof buildLocalKnowledgeCitations>[0];
 type TestGatewayConfig = NonNullable<UiHandlerDeps["config"]>;
@@ -170,6 +171,73 @@ function embeddingCapability(modelId: string): TestModelCapability {
     preferredUseCases: [],
     knownLimitations: [],
   };
+}
+
+// The chat and embedding gateway every grounded-ask case runs against; `extra` adds or replaces
+// top-level config fields and `chat` overrides fields of the chat capability.
+function askConfig(
+  embeddingModelId: string,
+  extra: Partial<TestGatewayConfig> = {},
+  chat: Partial<TestModelCapability> = {},
+): TestGatewayConfig {
+  return {
+    providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [
+      { ...chatCapability("chat-model"), ...chat },
+      embeddingCapability(embeddingModelId),
+    ],
+    ...extra,
+  };
+}
+
+function testReranker(): NonNullable<TestGatewayConfig["reranker"]> {
+  return {
+    modelId: "qwen3-reranker",
+    baseUrl: "https://reranker.example/v1",
+    apiKey: "reranker-test-key",
+    timeoutMs: 30_000,
+  };
+}
+
+function noEvidenceStore(): UiHandlerDeps["evidenceStore"] {
+  return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
+}
+
+// Handler deps over the shared rescue store; each case supplies its config, model and own fields.
+function askDeps(
+  fields: Pick<UiHandlerDeps, "config" | "modelPortFactory"> & Partial<UiHandlerDeps>,
+): UiHandlerDeps {
+  return {
+    configPresent: fields.config !== undefined,
+    evidenceStore: noEvidenceStore(),
+    env: {},
+    redactor: identityRedactor,
+    registry: createRunRegistry(),
+    store: rescueStore,
+    uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    ...fields,
+  };
+}
+
+type LocalKnowledgeAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+
+// Asks one grounded local-knowledge question and returns the answer of the expected 200 response.
+async function askLocalKnowledge(
+  chat: Parameters<typeof handleLocalKnowledgeGroundedAsk>[0],
+  content: string,
+  deps: UiHandlerDeps,
+): Promise<LocalKnowledgeAnswer> {
+  const result = await handleLocalKnowledgeGroundedAsk(
+    chat,
+    { chatId: chat.id, content, modelId: "chat-model" },
+    deps,
+    new AbortController().signal,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  // SAFETY: the grounded-ask handler answers a 200 with a local-knowledge GroundedAnswer body, and
+  // the status expectation above fails the test before any other body reaches the caller.
+  return result.body as LocalKnowledgeAnswer;
 }
 
 function answerModel(content: string, requestId: string): ModelPort {
@@ -581,30 +649,14 @@ describe("local-knowledge answer-only memory boundary", () => {
       };
       const embeddingInputs: string[] = [];
       const adapter = scriptedAdapter();
-      const deps: UiHandlerDeps = {
-        config: {
-          providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-          capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-        },
-        configPresent: true,
-        evidenceStore: {
-          put: () => "",
-          list: () => [],
-          get: () => undefined,
-          delete: () => undefined,
-        },
-        env: {},
-        redactor: (value: unknown): unknown => value,
-        registry: createRunRegistry(),
+      const deps = askDeps({
+        config: askConfig(embeddingModelId),
         modelPortFactory: () => fakeModel,
-        store: rescueStore,
-        uiDbPath: join(rescueTmp, "keiko-ui.db"),
         localKnowledgeEmbeddingRequest: (request) => {
           embeddingInputs.push(request.input);
           return adapter.request(request);
         },
-      };
+      });
 
       const result = await handleLocalKnowledgeGroundedAsk(
         chat,
@@ -686,27 +738,11 @@ describe("grounded prompt context evidence", () => {
       },
     };
     const adapter = scriptedAdapter();
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
-    };
+    });
 
     const result = await handleLocalKnowledgeGroundedAsk(
       chat,
@@ -781,30 +817,11 @@ describe("window-fitted Knowledge Pod prompt", () => {
       },
     };
     const adapter = scriptedAdapter();
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          { ...chatCapability("chat-model"), contextWindow: 3_000, maxOutputTokens: 512 },
-          embeddingCapability(embeddingModelId),
-        ],
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {}, { contextWindow: 3_000, maxOutputTokens: 512 }),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
-    };
+    });
     const result = await handleLocalKnowledgeGroundedAsk(
       chat,
       { chatId: chat.id, content: "Was sagt die Regel zu alpha?", modelId: "chat-model" },
@@ -934,36 +951,15 @@ describe("weakly supported citations", () => {
       },
     };
     const adapter = scriptedAdapter();
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            ...chatCapability("chat-model"),
-            ...(judgeVerdict === undefined ? {} : { supportsResponseFormat: true }),
-          },
-          embeddingCapability(embeddingModelId),
-        ],
-        ...(options.groundedAnswers === undefined
-          ? {}
-          : { groundedAnswers: options.groundedAnswers }),
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(
+        embeddingModelId,
+        options.groundedAnswers === undefined ? {} : { groundedAnswers: options.groundedAnswers },
+        judgeVerdict === undefined ? {} : { supportsResponseFormat: true },
+      ),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
-    };
+    });
     const result = await handleLocalKnowledgeGroundedAsk(
       chat,
       { chatId: chat.id, content: "What does the release checklist cover?", modelId: "chat-model" },
@@ -1312,69 +1308,20 @@ describe("redactText fallback — non-string redactor output strips unsafe chars
     // The non-string redactor: returns undefined cast as string to trigger the fallback branch.
     // Before the fix: redactText returned the raw original (containing RLO).
     // After the fix: redactText returns stripUnsafeFormatChars(value) — RLO is removed.
-    // Redactor is (value: unknown) => unknown; this stub deliberately returns a NON-string so the
-    // redactText fallback (return stripUnsafeFormatChars(value)) is exercised instead of the redacted path.
-    const nonStringRedactor = (_v: unknown): unknown => undefined;
+    // This stub deliberately returns a NON-string so the redactText fallback
+    // (return stripUnsafeFormatChars(value)) is exercised instead of the redacted path. An untyped
+    // mock stands in for a JavaScript caller that breaks the Redactor contract.
+    const nonStringRedactor = vi.fn().mockReturnValue(undefined);
 
     // scriptedAdapter produces deterministic vectors so embedding succeeds end-to-end.
     const adapter = scriptedAdapter();
 
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [
-          {
-            modelId: "chat-model",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-          {
-            modelId: embeddingModelId,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            id: "chat-model",
-            kind: "chat",
-            contextWindow: 64_000,
-            maxOutputTokens: 4_096,
-            toolCalling: true,
-            structuredOutput: true,
-            streaming: true,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "medium",
-            latencyClass: "standard",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-        ],
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, { capabilities: [chatCapability("chat-model")] }),
       redactor: nonStringRedactor,
-      registry: createRunRegistry(),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
-    };
+    });
 
     // Act
     const result = await handleLocalKnowledgeGroundedAsk(
@@ -1439,98 +1386,17 @@ describe("local-knowledge preview metadata persistence", () => {
     };
 
     const adapter = scriptedAdapter();
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [
-          {
-            modelId: "chat-model",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-          {
-            modelId: embeddingModelId,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            id: "chat-model",
-            kind: "chat",
-            contextWindow: 64_000,
-            maxOutputTokens: 4_096,
-            toolCalling: true,
-            structuredOutput: true,
-            streaming: true,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "medium",
-            latencyClass: "standard",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-          {
-            id: embeddingModelId,
-            kind: "embedding",
-            contextWindow: 8_191,
-            maxOutputTokens: 0,
-            toolCalling: false,
-            structuredOutput: false,
-            streaming: false,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "low",
-            latencyClass: "fast",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-        ],
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "What is in the capsule?", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "What is in the capsule?", deps);
     expect(answer.citations).toEqual([]);
     expect(rescueStore.findGroundedPreviewCitations(answer.assistantMessageId)).toEqual([]);
   });
 });
-
-type LocalKnowledgeAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
 
 function expectProviderScoreNotProjected(
   citation: LocalKnowledgeAnswer["citations"][number] | undefined,
@@ -1640,83 +1506,11 @@ describe("local-knowledge reranker diagnostics", () => {
 
     const adapter = scriptedAdapter();
     let rerankCalls = 0;
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [
-          {
-            modelId: "chat-model",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-          {
-            modelId: embeddingModelId,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            id: "chat-model",
-            kind: "chat",
-            contextWindow: 64_000,
-            maxOutputTokens: 4_096,
-            toolCalling: true,
-            structuredOutput: true,
-            streaming: true,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "medium",
-            latencyClass: "standard",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-          {
-            id: embeddingModelId,
-            kind: "embedding",
-            contextWindow: 8_191,
-            maxOutputTokens: 0,
-            toolCalling: false,
-            structuredOutput: false,
-            streaming: false,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "low",
-            latencyClass: "fast",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-        ],
-        reranker: {
-          modelId: "qwen3-reranker",
-          baseUrl: "https://reranker.example/v1",
-          apiKey: "reranker-test-key",
-          timeoutMs: 30_000,
-        },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {
+        reranker: testReranker(),
+      }),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
       rerankRequest: (request) => {
         rerankCalls += 1;
@@ -1733,20 +1527,9 @@ describe("local-knowledge reranker diagnostics", () => {
           },
         });
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(rerankCalls).toBe(1);
     expectAppliedRerankerDiagnostics(answer, seeded.capsuleId);
     expectRerankedRetrievalActivity(answer, seeded.capsuleId);
@@ -1773,32 +1556,12 @@ describe("local-knowledge reranker diagnostics", () => {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
     const adapter = scriptedAdapter();
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {
         grounding: { maxPromptReferences: 2 },
-        reranker: {
-          modelId: "qwen3-reranker",
-          baseUrl: "https://reranker.example/v1",
-          apiKey: "reranker-test-key",
-          timeoutMs: 30_000,
-        },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+        reranker: testReranker(),
+      }),
       modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "reranker-budget"),
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
       rerankRequest: (request) => {
         expect(request.topN).toBe(2);
@@ -1814,20 +1577,9 @@ describe("local-knowledge reranker diagnostics", () => {
           },
         });
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
     expect(answer.citations.map((citation) => citation.score)).not.toContain(42);
     expect(answer.citations.map((citation) => citation.score)).not.toContain(41);
@@ -1886,102 +1638,19 @@ describe("local-knowledge reranker diagnostics", () => {
     };
     const adapter = scriptedAdapter();
     let rerankCalls = 0;
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [
-          {
-            modelId: "chat-model",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-          {
-            modelId: embeddingModelId,
-            baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [
-          {
-            id: "chat-model",
-            kind: "chat",
-            contextWindow: 64_000,
-            maxOutputTokens: 4_096,
-            toolCalling: true,
-            structuredOutput: true,
-            streaming: true,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "medium",
-            latencyClass: "standard",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-          {
-            id: embeddingModelId,
-            kind: "embedding",
-            contextWindow: 8_191,
-            maxOutputTokens: 0,
-            toolCalling: false,
-            structuredOutput: false,
-            streaming: false,
-            supportsImageInput: false,
-            supportsDocumentInput: false,
-            workflowEligible: false,
-            costClass: "low",
-            latencyClass: "fast",
-            throughputHint: "test",
-            preferredUseCases: [],
-            knownLimitations: [],
-          },
-        ],
-        reranker: {
-          modelId: "qwen3-reranker",
-          baseUrl: "https://reranker.example/v1",
-          apiKey: "reranker-test-key",
-          timeoutMs: 30_000,
-        },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {
+        reranker: testReranker(),
+      }),
       modelPortFactory: () => fakeModel,
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
       rerankRequest: () => {
         rerankCalls += 1;
         throw new Error("reranker must not be called when policy denies external reranking");
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(rerankCalls).toBe(0);
     expect(answer.contextPack.reranker).toEqual({
       status: "denied",
@@ -2042,31 +1711,11 @@ describe("local-knowledge reranker diagnostics", () => {
     });
     const adapter = scriptedAdapter();
     let rerankCalls = 0;
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-        reranker: {
-          modelId: "qwen3-reranker",
-          baseUrl: "https://reranker.example/v1",
-          apiKey: "reranker-test-key",
-          timeoutMs: 30_000,
-        },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {
+        reranker: testReranker(),
+      }),
       modelPortFactory: () => answerModel("Alpha beta evidence [1].", "mixed-external-rerank-deny"),
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: adapter.request,
       rerankRequest: () => {
         rerankCalls += 1;
@@ -2074,20 +1723,9 @@ describe("local-knowledge reranker diagnostics", () => {
           "reranker must not be called when any set member denies external reranking",
         );
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     // Deny-wins: a single member that denies external reranking vetoes the provider call for the whole
     // fused candidate set, yet synthesis still proceeds over the preserved order (#1923 / #1924).
     expect(rerankCalls).toBe(0);
@@ -2122,44 +1760,16 @@ describe("local-knowledge reranker diagnostics", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-        grounding: { maxPromptReferences: 2 },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, { grounding: { maxPromptReferences: 2 } }),
       modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "no-reranker"),
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: scriptedAdapter().request,
       rerankRequest: () => {
         throw new Error("reranker must not be called without a configured reranker");
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     // Byte-diff pin (issue #2567 D5). `candidateCount` is the FULL fused reference pool (8), not
     // the provider subset capped at maxPromptReferences — the unconfigured reranker never had a
     // provider subset. This matches the pre-facade single-scope contract exactly.
@@ -2228,52 +1838,21 @@ describe("local-knowledge reranker diagnostics", () => {
         localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
       });
       let rerankCalls = 0;
-      const deps: UiHandlerDeps = {
-        config: {
-          providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-          capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      const deps = askDeps({
+        config: askConfig(embeddingModelId, {
           grounding: { maxPromptReferences: 2 },
-          reranker: {
-            modelId: "qwen3-reranker",
-            baseUrl: "https://reranker.example/v1",
-            apiKey: "reranker-test-key",
-            timeoutMs: 30_000,
-          },
-        },
-        configPresent: true,
-        evidenceStore: {
-          put: () => "",
-          list: () => [],
-          get: () => undefined,
-          delete: () => undefined,
-        },
-        env: {},
-        redactor: (value: unknown): unknown => value,
-        registry: createRunRegistry(),
+          reranker: testReranker(),
+        }),
         modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", `reranker-${kind}`),
-        store: rescueStore,
-        uiDbPath: join(rescueTmp, "keiko-ui.db"),
         localKnowledgeEmbeddingRequest: scriptedAdapter().request,
         rerankRequest: (request) => {
           rerankCalls += 1;
           expect(request.documents).toHaveLength(2);
           return Promise.resolve({ ok: false, kind });
         },
-      };
+      });
 
-      const result = await handleLocalKnowledgeGroundedAsk(
-        chat,
-        { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-        deps,
-        new AbortController().signal,
-      );
-
-      expect(result.status, JSON.stringify(result.body)).toBe(200);
-      const answer = result.body as Extract<
-        GroundedAnswer,
-        { readonly groundingKind: "local-knowledge" }
-      >;
+      const answer = await askLocalKnowledge(chat, "alpha beta", deps);
       expect(rerankCalls).toBe(1);
       expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
       // Byte-diff pin (issue #2567 D5): toEqual, NOT toMatchObject — an ADDED diagnostics field is a
@@ -2321,32 +1900,12 @@ describe("local-knowledge reranker diagnostics", () => {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
     let rerankCalls = 0;
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+    const deps = askDeps({
+      config: askConfig(embeddingModelId, {
         grounding: { maxPromptReferences: 2 },
-        reranker: {
-          modelId: "qwen3-reranker",
-          baseUrl: "https://reranker.example/v1",
-          apiKey: "reranker-test-key",
-          timeoutMs: 30_000,
-        },
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+        reranker: testReranker(),
+      }),
       modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "reranker-duplicate"),
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: scriptedAdapter().request,
       rerankRequest: () => {
         rerankCalls += 1;
@@ -2355,20 +1914,9 @@ describe("local-knowledge reranker diagnostics", () => {
           value: { modelId: "qwen3-reranker", results: [{ index: 0 }, { index: 0 }] },
         });
       },
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(rerankCalls).toBe(1);
     // Fallback is the preserved fused order, not the unusable provider ordering.
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
@@ -2447,37 +1995,14 @@ describe("local-knowledge retrieval activity", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
-    const deps: UiHandlerDeps = {
+    const deps = askDeps({
       config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
       modelPortFactory: () => {
         throw new Error("model must not be resolved for policy-denied synthesis");
       },
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(answer.noEvidence).toBe(true);
     expect(answer.noEvidenceReason).toBe("policy-denied");
     expect(answer.retrievalActivity?.pods[0]).toMatchObject({
@@ -2553,41 +2078,14 @@ describe("local-knowledge retrieval activity", () => {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
     const embeddingModelId = "text-embedding-3-small";
-    const deps: UiHandlerDeps = {
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-      },
-      configPresent: true,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
+    const deps = askDeps({
+      config: askConfig(embeddingModelId),
       modelPortFactory: () =>
         answerModel("Alpha beta unsafe scope label [1].", "unsafe-scope-label"),
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
       localKnowledgeEmbeddingRequest: scriptedAdapter().request,
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "alpha beta", deps);
     expect(answer.noEvidence).toBe(false);
     expect(answer.contextPack.scopeLabel).toBe("Knowledge Pod");
     const serialized = JSON.stringify(answer);
@@ -2616,37 +2114,14 @@ describe("local-knowledge retrieval activity", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: unsafeCapsuleId, connectedAtMs: 1 },
     });
-    const deps: UiHandlerDeps = {
+    const deps = askDeps({
       config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
       modelPortFactory: () => {
         throw new Error("model must not be called for state-failure activity");
       },
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "What is indexed?", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "What is indexed?", deps);
     expect(answer.noEvidence).toBe(true);
     expect(answer.retrievalActivity?.pods[0]).toMatchObject({
       displayName: "Knowledge Pod",
@@ -2927,37 +2402,14 @@ describe("local-knowledge retrieval activity", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule-set", capsuleSetId: setId, connectedAtMs: 1 },
     });
-    const deps: UiHandlerDeps = {
+    const deps = askDeps({
       config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
       modelPortFactory: () => {
         throw new Error("model must not be called for set state-failure activity");
       },
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "Which set members can answer?", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "Which set members can answer?", deps);
     expect(answer.noEvidenceReason).toBe("indexing-in-progress");
     expect(
       answer.retrievalActivity?.pods.find((pod) => pod.podId === ready.capsuleId),
@@ -3655,37 +3107,14 @@ describe("local-knowledge retrieval activity", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
-    const deps: UiHandlerDeps = {
+    const deps = askDeps({
       config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
-      env: {},
-      redactor: (value: unknown): unknown => value,
-      registry: createRunRegistry(),
       modelPortFactory: () => {
         throw new Error("model must not be called for state-failure activity");
       },
-      store: rescueStore,
-      uiDbPath: join(rescueTmp, "keiko-ui.db"),
-    };
+    });
 
-    const result = await handleLocalKnowledgeGroundedAsk(
-      chat,
-      { chatId: chat.id, content: "What is indexed?", modelId: "chat-model" },
-      deps,
-      new AbortController().signal,
-    );
-
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<
-      GroundedAnswer,
-      { readonly groundingKind: "local-knowledge" }
-    >;
+    const answer = await askLocalKnowledge(chat, "What is indexed?", deps);
     const activity = answer.retrievalActivity;
     expect(activity?.summary.unavailableCount).toBe(1);
     expect(activity?.summary.referenceCount).toBe(0);
@@ -3841,22 +3270,11 @@ async function askFailClosedChat(
 ): Promise<LocalKnowledgeAnswer> {
   const embeddingModelId = "text-embedding-3-small";
   const adapter = scriptedAdapter();
-  const deps: UiHandlerDeps = {
-    config: {
-      providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-      capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-    },
-    configPresent: true,
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
-    redactor: (value: unknown): unknown => value,
-    registry: createRunRegistry(),
+  const deps = askDeps({
+    config: askConfig(embeddingModelId),
     modelPortFactory: () => answerModel(assistantAnswer, requestId),
-    store: rescueStore,
-    uiDbPath: join(rescueTmp, "keiko-ui.db"),
     localKnowledgeEmbeddingRequest: adapter.request,
-  };
+  });
   const result = await handleLocalKnowledgeGroundedAsk(
     chat,
     { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
@@ -3903,33 +3321,18 @@ async function askWithNumericEntailmentJudge(
       });
     },
   };
-  const deps: UiHandlerDeps = {
-    config: {
-      providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-      capabilities: [
-        { ...chatCapability("chat-model"), supportsResponseFormat: true },
-        embeddingCapability(embeddingModelId),
-      ],
-    },
-    configPresent: true,
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
-    redactor: (value: unknown): unknown => {
-      if (typeof value !== "string" || !value.includes("alpha beta grounded evidence")) {
-        return value;
-      }
+  const deps = askDeps({
+    config: askConfig(embeddingModelId, {}, { supportsResponseFormat: true }),
+    redactor: stringLeafRedactor((value) => {
+      if (!value.includes("alpha beta grounded evidence")) return value;
       excerptRedactions += 1;
       return excerptRedactions === 1
         ? value.replace("alpha beta grounded evidence", "prompt-time grounded evidence")
         : value.replace("alpha beta grounded evidence", "later store rendering");
-    },
-    registry: createRunRegistry(),
+    }),
     modelPortFactory: () => model,
-    store: rescueStore,
-    uiDbPath: join(rescueTmp, "keiko-ui.db"),
     localKnowledgeEmbeddingRequest: adapter.request,
-  };
+  });
   const result = await handleLocalKnowledgeGroundedAsk(
     chat,
     { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
@@ -4167,14 +3570,9 @@ describe("mapGroundedAskError", () => {
     return {
       config: undefined,
       configPresent: false,
-      evidenceStore: {
-        put: () => "",
-        list: () => [],
-        get: () => undefined,
-        delete: () => undefined,
-      },
+      evidenceStore: noEvidenceStore(),
       env: {},
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
       registry: createRunRegistry(),
       modelPortFactory: () => undefined,
       store: rescueStore,
@@ -4185,11 +3583,7 @@ describe("mapGroundedAskError", () => {
     const embeddingModelId = "text-embedding-3-small";
     return {
       ...minimalDeps(),
-      config: {
-        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
-      },
+      config: askConfig(embeddingModelId),
       configPresent: true,
       env: { KEIKO_DEFAULT_API_KEY: "private-cause-canary" },
       uiDbPath: join(rescueTmp, "keiko-ui.db"),
@@ -4202,7 +3596,7 @@ describe("mapGroundedAskError", () => {
           records.push(record);
         },
       },
-      redactor: (value): unknown => String(value).replaceAll("private-cause-canary", "[REDACTED]"),
+      redactor: stringLeafRedactor((text) => text.replaceAll("private-cause-canary", "[REDACTED]")),
     };
   }
 

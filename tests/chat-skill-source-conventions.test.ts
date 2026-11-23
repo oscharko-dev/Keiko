@@ -13,6 +13,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "./support/activity-log-proof.js";
+import { identityRedactor } from "../packages/keiko-server/src/_support.js";
 
 const roots: string[] = [];
 const NOW = 1_784_653_600_000;
@@ -117,7 +118,7 @@ it("retains the requested approved conventions from the unchanged Spring skill q
   const conventions = pack.files.find((file) => file.scopePath === "docs/testing-conventions.md");
   expect(conventions).toBeDefined();
   expect(pack.omitted.some((file) => file.scopePath === "docs/testing-conventions.md")).toBe(false);
-  const messages = JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value));
+  const messages = JSON.stringify(buildGroundedGatewayMessages(question, pack, identityRedactor));
   expect(messages).toContain("org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest");
   expect(messages).toContain("org.springframework.test.context.bean.override.mockito.MockitoBean");
   expectSourceObservation(log, 1);

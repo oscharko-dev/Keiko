@@ -11,6 +11,8 @@ import {
   SSE_STALLED_READER_TIMEOUT_MS,
   type SseBackpressureSignal,
 } from "../../packages/keiko-server/src/sse-write.js";
+import type { Redactor } from "../../packages/keiko-server/src/deps.js";
+import { identityRedactor } from "../../packages/keiko-server/src/_support.js";
 
 export interface SseResponseObservation {
   res: ServerResponse;
@@ -168,7 +170,7 @@ interface SubscriptionObservationBinding<Manager, Response extends SubscriptionR
   readonly open: (
     res: ServerResponse,
     manager: Manager,
-    redactor: (value: unknown) => unknown,
+    redactor: Redactor,
     onBackpressure?: (signal: SseBackpressureSignal) => void,
     correlationId?: string,
   ) => void;
@@ -226,7 +228,7 @@ function registerPair<Manager, Response extends SubscriptionResponse>(
         unsubscribeCount += 1;
       },
     );
-    const redact = vi.fn((value: unknown): unknown => value);
+    const redact = vi.fn().mockImplementation(identityRedactor);
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     const open = binding.open;
@@ -276,16 +278,11 @@ function registerReadyStall<Manager, Response extends SubscriptionResponse>(
     fake.writeReturns = false;
     const open = binding.open;
     try {
-      open(
-        fake.res,
-        manager,
-        (value): unknown => value,
-        (signal): void => {
-          expect(fake.destroyCount).toBe(0);
-          expect(signal).toEqual({ accepted: false, frameBytes: 23 });
-          trace.push("observer");
-        },
-      );
+      open(fake.res, manager, identityRedactor, (signal): void => {
+        expect(fake.destroyCount).toBe(0);
+        expect(signal).toEqual({ accepted: false, frameBytes: 23 });
+        trace.push("observer");
+      });
       expect(trace).toEqual([]);
       vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
       expect(trace).toEqual([]);
@@ -349,7 +346,7 @@ interface BackpressureBinding<Manager> {
   readonly open: (
     res: ServerResponse,
     manager: Manager,
-    redactor: (value: unknown) => unknown,
+    redactor: Redactor,
     onBackpressure?: (signal: SseBackpressureSignal) => void,
   ) => void;
   /** Emits the run event a slow reader is handed first; `firstKind` names its kind. */
@@ -376,14 +373,9 @@ function openBackpressureStream<Manager>(
   const manager = binding.manager();
   const signals: SseBackpressureSignal[] = [];
   if (stallReady) fake.writeReturns = false;
-  binding.open(
-    fake.res,
-    manager,
-    (value) => value,
-    (signal) => {
-      signals.push(signal);
-    },
-  );
+  binding.open(fake.res, manager, identityRedactor, (signal) => {
+    signals.push(signal);
+  });
   return { fake, manager, signals };
 }
 

@@ -11,6 +11,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile, mkdir, stat, symlink } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { deepRedactStrings, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import {
   QI_SUBDIR,
   recordQualityIntelligenceRun,
@@ -20,7 +21,7 @@ import { recordQualityIntelligenceCandidates } from "../candidatesArtifact.js";
 import { enforceQualityIntelligenceRetentionPolicy } from "../retention.js";
 import type { QualityIntelligenceEvidenceManifest } from "../manifestSchema.js";
 
-const identity = (value: unknown): unknown => value;
+const identity = <T>(value: T): DeepRedacted<T> => deepRedactStrings(value, (text) => text);
 
 let evidenceDir: string;
 

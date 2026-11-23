@@ -18,6 +18,7 @@ import { createCodingAppSessionChannel } from "./coding-app-session/sessionChann
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
+import { identityRedactor } from "./_support.js";
 
 function createCloneRepositoryHandler(
   ...args: Parameters<typeof createCloneHandler>
@@ -42,7 +43,7 @@ function deps(paired = true): UiHandlerDeps {
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
-    redactor: (value: unknown) => value,
+    redactor: identityRedactor,
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,

@@ -23,6 +23,7 @@ import {
 } from "./sse.js";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { identityRedactor } from "./_support.js";
 
 describe("SSE_HEADERS", () => {
   it("disables intermediary buffering for low-latency event delivery", () => {
@@ -397,7 +398,8 @@ describe("writeNamespacedSseEvent", () => {
       setServerLogger(createServerLogger({ sink, level: "info" }));
       const write = vi.spyOn(res, "write").mockReturnValue(true);
       const event = { kind: "observed" };
-      const redactor = vi.fn((value: unknown): unknown => {
+      // An untyped mock stands in for a JavaScript caller breaking the Redactor contract.
+      const redactor = vi.fn().mockImplementation((value: unknown) => {
         expect(value).toBe(event);
         return { safe: true };
       });
@@ -433,7 +435,8 @@ describe("writeNamespacedSseEvent", () => {
         return "observed";
       },
     };
-    const redactor = vi.fn((value: unknown): unknown => {
+    // An untyped mock stands in for a JavaScript caller breaking the Redactor contract.
+    const redactor = vi.fn().mockImplementation((value: unknown) => {
       expect(value).toBe(event);
       trace.push("redact");
       return { safe: true };
@@ -480,7 +483,8 @@ describe("writeNamespacedSseEvent", () => {
         throw failure;
       },
     };
-    const redactor = vi.fn((value: unknown): unknown => {
+    // An untyped mock stands in for a JavaScript caller breaking the Redactor contract.
+    const redactor = vi.fn().mockImplementation((value: unknown) => {
       expect(value).toBe(event);
       trace.push("redact");
       return { safe: true };
@@ -541,7 +545,7 @@ describe("openPlainNamespacedSseStream", () => {
     try {
       let observed: unknown;
       try {
-        openPlainNamespacedSseStream(res, "command", (value): unknown => value, subscribe);
+        openPlainNamespacedSseStream(res, "command", identityRedactor, subscribe);
       } catch (error: unknown) {
         observed = error;
       }
@@ -571,7 +575,7 @@ describe("openPlainNamespacedSseStream", () => {
       openPlainNamespacedSseStream(
         res,
         "container",
-        (value): unknown => value,
+        identityRedactor,
         () => release,
         observer,
         "plain-heartbeat-stall",

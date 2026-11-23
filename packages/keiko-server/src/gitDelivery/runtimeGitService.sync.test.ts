@@ -20,6 +20,7 @@ import { RuntimeGitService } from "./runtimeGitService.js";
 import { GIT_SYNC_EVIDENCE_RUNID_PREFIX } from "./syncEvidence.js";
 import { foreignOriginDigest } from "./verifiedRepositoryIdentity.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
+import { mapEvidenceMutationDeps } from "../_support.js";
 
 // #3902 AC2 (PR #4064 review 4373825976): the coding runtime fetches and fast-forwards through the
 // Git sync owner, against a real fixture-owned bare remote. A second clone moves the remote ahead.
@@ -88,20 +89,7 @@ function service(runner?: GitProcessRunner): RuntimeGitService {
     },
     context,
     snapshots: createCodingRuntimeSnapshotStore(db),
-    mutationDeps: {
-      redactor: (value): unknown => value,
-      evidenceStore: {
-        put: (id, body): string => {
-          evidence.set(id, body);
-          return id;
-        },
-        get: (id): string | undefined => evidence.get(id),
-        list: (): readonly string[] => [...evidence.keys()],
-        delete: (id): void => {
-          evidence.delete(id);
-        },
-      },
-    },
+    mutationDeps: mapEvidenceMutationDeps(evidence),
     messageAllowed: (): Promise<boolean> => Promise.resolve(true),
     execution: {
       processEnv: { PATH: process.env.PATH, HOME: base },

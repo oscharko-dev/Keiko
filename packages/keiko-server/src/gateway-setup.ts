@@ -9072,7 +9072,7 @@ function applyContextWindowRefinement(
         source: "gateway-setup.adopted-context-window",
         error,
         summary: "The verified gateway context window could not be persisted.",
-        redact: (message): string => String(deps.redactor(message)),
+        redact: deps.redactor,
       }),
     );
   }

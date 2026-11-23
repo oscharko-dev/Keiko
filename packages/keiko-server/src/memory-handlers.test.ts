@@ -56,6 +56,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryCaptureDecisionAuditEvent } from "./memory-capture-projection.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { stringLeafRedactor } from "./_support.js";
 
 // Real security-layer redactor: `recordMemoryAudit` requires one by name, so a fixture must not
 // reinstate the identity default that made the evidence-redaction boundary fail open.
@@ -267,8 +268,9 @@ describe("memory handlers", () => {
       reviewerId: reviewerId("customer-secret-reviewer"),
       nowMs: 200,
     });
-    const redactCustomerSecret = (value: unknown): unknown =>
-      JSON.parse(JSON.stringify(value).replaceAll("customer-secret", "[REDACTED]")) as unknown;
+    const redactCustomerSecret = stringLeafRedactor((text) =>
+      text.replaceAll("customer-secret", "[REDACTED]"),
+    );
 
     const result = handleListMemoryTombstones(
       makeCtx("/api/memory/tombstones?limit=10", {}),

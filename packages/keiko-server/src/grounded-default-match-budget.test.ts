@@ -6,6 +6,7 @@ import { validateConnectedContextPack } from "@oscharko-dev/keiko-contracts/conn
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 const QUESTION =
@@ -74,7 +75,7 @@ describe("default connected-folder retained matches", () => {
       incomplete: false,
     });
     expect(pack.usage.filesRead).toBe(96);
-    const messages = buildGroundedGatewayMessages(QUESTION, pack, (value) => value);
+    const messages = buildGroundedGatewayMessages(QUESTION, pack, identityRedactor);
     const promptText = JSON.stringify(messages);
     for (let index = 1; index <= 96; index += 1) {
       const file = pack.files.find((entry) =>

@@ -4,6 +4,7 @@
 // handler directly. Verifies approve / bad-action / not-found / missing-id / non-JSON
 // body / run-scope approve paths. No network or SSE — pure function + real fs.
 
+import { identityRedactor } from "../../_support.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -194,7 +195,7 @@ function seedReviewCandidates(runId: string): void {
     generatedAt: "2026-06-01T10:01:00.000Z",
     candidates: REVIEW_CANDIDATE_IDS.map((id) => reviewCandidate(runId, id)),
     evidenceDir,
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 }
 
@@ -810,7 +811,7 @@ describe("handleQiReview — review persistence failures", () => {
     const lockPath = reviewLockPath("run-review-001");
     const failingDeps = {
       ...deps(evidenceDir),
-      redactor: (): unknown => {
+      redactor: (): never => {
         throw new Error("redactor failed");
       },
     };
@@ -877,7 +878,7 @@ describe("handleQiReview — run-scope approve", () => {
         candidateId,
         actor: { actorId: "candidate-reviewer", displayLabel: "Candidate reviewer" },
         now: "2026-06-01T10:30:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }
     const req = makeReq({ action: "approve" });
@@ -900,7 +901,7 @@ describe("reviewStore — store-level governance gates", () => {
         candidateIds: REVIEW_CANDIDATE_IDS,
         actor: { actorId: "reviewer", displayLabel: "Reviewer" },
         now: "2026-06-01T10:20:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }).toThrow(QualityIntelligenceReviewCandidateNotFound);
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
@@ -916,7 +917,7 @@ describe("reviewStore — store-level governance gates", () => {
         candidateIds: REVIEW_CANDIDATE_IDS,
         actor: { actorId: "reviewer", displayLabel: "Reviewer" },
         now: "2026-06-01T10:20:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }).toThrow(QualityIntelligenceReviewRunApprovalRejected);
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
@@ -930,7 +931,7 @@ describe("reviewStore — store-level governance gates", () => {
         action: "reopen",
         scope: "run",
         now: "2026-06-01T10:20:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
     }).toThrow(QualityIntelligenceReviewGovernanceRejected);
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
@@ -944,7 +945,7 @@ describe("reviewStore — store-level governance gates", () => {
       scope: "run",
       actor: { actorId: "reviewer", displayLabel: "Reviewer" },
       now: "2026-06-01T10:20:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
     applyReviewDecision({
       runId: "run-review-001",
@@ -954,7 +955,7 @@ describe("reviewStore — store-level governance gates", () => {
       actor: { actorId: "reviewer", displayLabel: "Reviewer" },
       reason: `  ${"r".repeat(600)}  `,
       now: "2026-06-01T10:21:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const review = loadRunReviewState("run-review-001", evidenceDir);
@@ -970,7 +971,7 @@ describe("reviewStore — store-level governance gates", () => {
       scope: "run",
       actor: { actorId: "reviewer", displayLabel: "Reviewer" },
       now: "2026-06-01T10:20:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const review = loadRunReviewState("run-review-001", evidenceDir);
@@ -1164,7 +1165,7 @@ describe("handleQiReview — four-eyes governance", () => {
       reviewerLabel: "Alice display",
       actor: { actorId: "alice", displayLabel: "Alice", source: "test", kind: "human" },
       now: "2026-06-01T10:30:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -1195,7 +1196,7 @@ describe("handleQiReview — four-eyes governance", () => {
       reviewerLabel: "Alice display",
       actor: { actorId: "alice", displayLabel: "Alice", source: "test", kind: "human" },
       now: "2026-06-01T10:30:00.000Z",
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
 
     const result = asResult(

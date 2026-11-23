@@ -1,6 +1,6 @@
 import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { deepRedactStrings, redactContent } from "@oscharko-dev/keiko-security";
+import { deepRedactStrings, redactContent, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import { currentRedactionSecrets, type Redactor, type UiHandlerDeps } from "./deps.js";
 
 // #4098: the deployment content policy of Chat. It is resolved once, at startup, from `KEIKO_CONTENT_REDACTION` (see `resolveContentRedactionPolicy`)
@@ -18,7 +18,7 @@ export function deploymentContentPolicy(
 export function currentContentRedactor(deps: UiHandlerDeps): Redactor {
   if (deploymentContentPolicy(deps) === "redact") return deps.redactor;
   const secrets = currentRedactionSecrets(deps);
-  return (value: unknown): unknown =>
+  return <T>(value: T): DeepRedacted<T> =>
     deepRedactStrings(value, (text) => redactContent(text, "preserve", secrets));
 }
 

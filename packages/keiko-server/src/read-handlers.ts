@@ -40,7 +40,6 @@ import {
   WorkspaceNotFoundError,
   type WorkspaceCode,
   type DiscoveryResult,
-  type WorkspaceSummary,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
@@ -451,7 +450,7 @@ async function workspaceSummaryResult(
         )
       : undefined;
     const summary = buildWorkspaceSummary(workspace, pack, stats);
-    const body = deps.redactor({ summary }) as { readonly summary: WorkspaceSummary };
+    const body = deps.redactor({ summary });
     return { status: 200, body };
   } catch (error) {
     if (error instanceof WorkspaceError) {

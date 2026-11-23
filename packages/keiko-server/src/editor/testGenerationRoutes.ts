@@ -288,7 +288,7 @@ function reportTestGenerationFailure(ctx: OutcomeContext, error: unknown): void 
       source: "editor.testGenerationRoutes",
       error,
       summary: "Editor test generation failed.",
-      redact: (message): string => String(ctx.deps.redactor(message)),
+      redact: (message): string => ctx.deps.redactor(message),
     }),
   );
 }

@@ -2173,7 +2173,7 @@ function logCompactionSummaryFailure(
       operation: "chat.compaction.summary.scheduled",
       source: "chat.compaction.model-summary",
       error,
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
   );
 }
@@ -2340,7 +2340,7 @@ export async function prepareDesktopChatPrompt(
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     signal,
     correlationId,
-    redact: (value) => String(currentContentRedactor(deps)(value)),
+    redact: (value) => currentContentRedactor(deps)(value),
     call: (summaryRequest, summarySignal) => {
       const model = bufferedModelAtProviderBoundary(
         deps,
@@ -2871,7 +2871,7 @@ async function finalizeBufferedTurn(
   const { request, modelId, memoryContext } = turn;
   // Issue #631 — redact the model's raw content before persisting and before returning it to the
   // browser, mirroring the grounded-QA path which already applies deps.redactor here.
-  const redactedContent = currentContentRedactor(deps)(result.response.content) as string;
+  const redactedContent = currentContentRedactor(deps)(result.response.content);
   assertUsableAssistantContent(redactedContent, modelId);
   const memoryActions = await collectMemoryActions(deps, request, memoryContext, writeContext);
   if (requestSignalAborted(abortSignal)) {
@@ -4495,7 +4495,7 @@ function commitRegeneratedChatTurn(
   response: NormalizedResponse,
 ): RouteResult {
   const { chat, modelId, memoryRequest } = prepared;
-  const redactedContent = currentContentRedactor(deps)(response.content) as string;
+  const redactedContent = currentContentRedactor(deps)(response.content);
   assertUsableAssistantContent(redactedContent, modelId);
   const currentAssistant = validateRegenerateCommit(deps, prepared);
   if (isRouteResult(currentAssistant)) return currentAssistant;

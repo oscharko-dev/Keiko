@@ -24,6 +24,7 @@ import {
   traceRefusalData,
   type TraceResolution,
 } from "./requirement-trace.js";
+import { stringLeafRedactor } from "./_support.js";
 
 let sink: BufferedServerLogSink;
 const fixtures: PodFixture[] = [];
@@ -169,8 +170,7 @@ describe("trace session", () => {
       "### LH-002 Thema SECRET-KEY-123",
     );
     const { open } = await session([{ capsuleId: "cap-a", text }], {
-      redactor: (value) =>
-        typeof value === "string" ? value.replaceAll("SECRET-KEY-123", "[REDACTED]") : value,
+      redactor: stringLeafRedactor((text) => text.replaceAll("SECRET-KEY-123", "[REDACTED]")),
     });
 
     const resolution = open().resolve(["LH-002"]);

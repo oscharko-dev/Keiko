@@ -2303,7 +2303,7 @@ function emitGatewayFailureDiagnostic(
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
   );
 }
@@ -2463,7 +2463,7 @@ function runRetryTraceStep(
         operation: CODING_SIDECAR_GATEWAY_ROUTE,
         source: "coding-sidecar-gateway.retry-observer",
         error,
-        redact: (message) => String(deps.redactor(message)),
+        redact: (message) => deps.redactor(message),
       }),
     );
   }
@@ -2783,7 +2783,7 @@ function emitGatewayStreamFailureDiagnostic(
       source: "coding-sidecar-gateway.stream",
       error,
       summary: "The coding sidecar gateway stream failed mid-response.",
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
   );
 }

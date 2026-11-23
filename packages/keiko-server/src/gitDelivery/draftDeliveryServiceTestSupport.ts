@@ -29,6 +29,7 @@ import {
 import { runMigrations } from "../store/schema.js";
 import { foreignOriginDigest } from "./verifiedRepositoryIdentity.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { deepRedactStrings } from "@oscharko-dev/keiko-security";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
 import type {
@@ -381,7 +382,7 @@ export class DraftDeliveryFixture {
   }
   private makeMutationDeps(): DraftDeliveryServiceOptions["mutationDeps"] {
     return {
-      redactor: <T>(value: T): T => value,
+      redactor: (value) => deepRedactStrings(value, (text) => text),
       evidenceStore: {
         put: (id, body): string => {
           this.evidence.set(id, body);

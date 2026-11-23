@@ -22,6 +22,7 @@ import {
   type JiraChatAttachmentDeps,
   type JiraChatAttachmentReview,
 } from "./jiraChatAttachment.js";
+import { identityRedactor } from "../_support.js";
 
 let root: string;
 let outside: string;
@@ -38,7 +39,7 @@ let configuredKey = CONFIGURED_SECRET;
 function deps(): JiraChatAttachmentDeps {
   return {
     store,
-    redactor: (value: unknown) => value,
+    redactor: identityRedactor,
     managedTaskWorkspaceRoot: undefined,
     env: { KEIKO_DEFAULT_API_KEY: configuredKey },
     config: undefined,

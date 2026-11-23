@@ -478,7 +478,7 @@ function reportInlineModelFailure(
       source: "editor.inlineCompletionRoutes",
       error,
       summary: "The editor inline-completion model tier failed.",
-      redact: (message): string => String(deps.redactor(message)),
+      redact: deps.redactor,
     }),
   );
 }

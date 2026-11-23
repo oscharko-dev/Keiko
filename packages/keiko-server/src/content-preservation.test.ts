@@ -64,7 +64,7 @@ function createFixture(
   const dbPath = join(root, "private.sqlite");
   writeFileSync(join(root, "customer.txt"), CONTENT);
   const redactor = buildRedactor({ KEIKO_DEFAULT_API_KEY: PROVIDER_SECRET });
-  const redactString = (value: string): string => String(redactor(value));
+  const redactString = (value: string): string => redactor(value);
   const store = createNodeUiStore(dbPath, {
     redactString,
     ...(policy === "preserve" && options.composePreservingStore !== false
@@ -159,7 +159,7 @@ describe("Chat content policy resolution (#4098)", () => {
       const message = fixture.store.createMessage({
         chatId: fixture.chatId,
         role: "user",
-        content: String(currentContentRedactor(fixture.deps)(CONTENT + PROVIDER_SECRET)),
+        content: currentContentRedactor(fixture.deps)(CONTENT + PROVIDER_SECRET),
         timestamp: 1,
         runId: undefined,
         workflowId: undefined,
@@ -210,9 +210,7 @@ describe("Chat content policy resolution (#4098)", () => {
     try {
       expect(deploymentContentPolicy(fixture.deps)).toBe("redact");
       expect(currentContentRedactor(fixture.deps)).toBe(fixture.deps.redactor);
-      expect(String(currentContentRedactor(fixture.deps)(CONTENT))).not.toContain(
-        "customer-owned-example",
-      );
+      expect(currentContentRedactor(fixture.deps)(CONTENT)).not.toContain("customer-owned-example");
     } finally {
       disposeFixture(fixture);
     }
@@ -240,7 +238,7 @@ describe("Chat content policy resolution (#4098)", () => {
       } finally {
         reopened.close();
       }
-      expect(String(fixture.deps.redactor(CONTENT))).not.toContain("customer-owned-example");
+      expect(fixture.deps.redactor(CONTENT)).not.toContain("customer-owned-example");
     } finally {
       if (!closed) fixture.store.close();
       rmSync(fixture.root, { recursive: true, force: true });

@@ -958,7 +958,7 @@ async function pipeAudioStream(
           operation: "voice.speech.stream",
           source: "voice.speech",
           error,
-          redact: (message: string): string => String(deps.redactor(message)),
+          redact: (message: string): string => deps.redactor(message),
         }),
       );
     }

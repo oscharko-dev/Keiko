@@ -2102,7 +2102,7 @@ function defaultRunner(
 
 export function redactString(redactor: Redactor, value: string): string {
   // GRD-001: strip Trojan-source / invisible format chars before redaction (see redactedString).
-  return redactor(stripUnsafeFormatChars(value)) as string;
+  return redactor(stripUnsafeFormatChars(value));
 }
 
 export function buildCitations(
@@ -2131,7 +2131,7 @@ export function buildUncertainty(
   // reach the browser even when the pack assembler skips its own redaction step.
   return pack.uncertainty.map((u) => ({
     kind: u.kind,
-    claim: redactor(u.claim) as string,
+    claim: redactor(u.claim),
   }));
 }
 

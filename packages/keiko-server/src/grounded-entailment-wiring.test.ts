@@ -10,6 +10,7 @@ import {
   appendGroundedAnswerNumericEntailment,
 } from "./grounded-qa.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
+import { identityRedactor, stringLeafRedactor } from "./_support.js";
 
 function stageReturning(markers: readonly UncertaintyMarker[]): EntailmentStage {
   return {
@@ -18,7 +19,6 @@ function stageReturning(markers: readonly UncertaintyMarker[]): EntailmentStage 
   };
 }
 
-const identityRedactor: Redactor = (value: unknown): unknown => value;
 const NO_PACKS: readonly ConnectedContextPack[] = [];
 
 describe("appendGroundedAnswerEntailment", () => {
@@ -42,7 +42,7 @@ describe("appendGroundedAnswerEntailment", () => {
       impactedAtomIds: [],
       emittedAtMs: 0,
     };
-    const redactor: Redactor = (value: unknown): unknown => `[R]${String(value)}`;
+    const redactor: Redactor = stringLeafRedactor((text) => `[R]${text}`);
     const result = await appendGroundedAnswerEntailment(
       answer,
       stageReturning([marker]),

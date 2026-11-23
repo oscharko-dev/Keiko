@@ -9,12 +9,13 @@ import { redactedEventJson } from "./sse-frame-cache.js";
 import { frameMessageEvent } from "./sse.js";
 import { QueueEventSink, type SseWriter, type StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
+import { identityRedactor } from "./_support.js";
 
 function countingRedactor(): { readonly redactor: Redactor; readonly calls: { count: number } } {
   const calls = { count: 0 };
   const redactor: Redactor = (value) => {
     calls.count += 1;
-    return value;
+    return identityRedactor(value);
   };
   return { redactor, calls };
 }

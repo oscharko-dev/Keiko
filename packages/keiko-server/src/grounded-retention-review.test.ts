@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 let root = "";
 beforeEach((): void => {
@@ -89,7 +90,7 @@ describe("retained evidence review regressions", () => {
           "No verified exact content match for the requested target; retained semantic evidence provides related context only.",
       }),
     );
-    const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value));
+    const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, identityRedactor));
     expect(prompt).toContain("Related semantic context (not verified as an exact literal match)");
     expect(prompt).toContain("No verified exact content match for the requested target");
   });

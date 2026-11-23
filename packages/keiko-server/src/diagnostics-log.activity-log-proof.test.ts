@@ -31,6 +31,7 @@ import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connect
 import { inspectGroundedPack } from "./grounded-pack-validation.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
+import { identityRedactor } from "./_support.js";
 
 describe("server.diagnostic.failure activity log proof (#3532)", () => {
   let stateDir: string;
@@ -129,7 +130,7 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
       const failure = inspectGroundedPack(
         { customerBody: "private-validation-canary" } as unknown as ConnectedContextPack,
         {
-          deps: { diagnostics: defaultServerDiagnosticSink, redactor: (value) => value },
+          deps: { diagnostics: defaultServerDiagnosticSink, redactor: identityRedactor },
           correlationId: "pack-validation-proof",
           outcome,
           sourceIndex: 2,

@@ -24,6 +24,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { identityRedactor } from "../_support.js";
 
 const DIGEST = "a".repeat(64);
 const MISMATCHED_DIGEST = "b".repeat(64);
@@ -88,7 +89,7 @@ function makeDependencies(events: ServerLogEvent[], repository: string): DraftDe
       adoptDraftDeliveryFromPredecessor: neverCalled("snapshots.adoptDraftDeliveryFromPredecessor"),
     },
     mutationDeps: {
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
       evidenceStore: createInMemoryEvidenceStore(),
     },
     execution: {

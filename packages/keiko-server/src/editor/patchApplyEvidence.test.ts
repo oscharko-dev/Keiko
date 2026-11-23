@@ -5,8 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EditorPatchVerificationSummary } from "@oscharko-dev/keiko-contracts";
 import { recordPatchApplyEvidence, recordPatchVerificationEvidence } from "./patchApplyEvidence.js";
-
-const identity = (value: unknown): unknown => value;
+import { identityRedactor } from "../_support.js";
 
 function summary(): EditorPatchVerificationSummary {
   return {
@@ -28,7 +27,7 @@ describe("recordPatchApplyEvidence", () => {
     const store = createInMemoryEvidenceStore();
     const runId = recordPatchApplyEvidence(
       store,
-      identity,
+      identityRedactor,
       {
         patchId: "p-1",
         decision: "apply",
@@ -54,7 +53,7 @@ describe("recordPatchApplyEvidence", () => {
     const store = createInMemoryEvidenceStore();
     const runId = recordPatchApplyEvidence(
       store,
-      identity,
+      identityRedactor,
       {
         patchId: "p-2",
         decision: "apply",
@@ -76,7 +75,7 @@ describe("recordPatchVerificationEvidence", () => {
     const store = createInMemoryEvidenceStore();
     const runId = recordPatchVerificationEvidence(
       store,
-      identity,
+      identityRedactor,
       {
         patchId: "p-1",
         rootRealPath: "/Users/dev/secret-project",
@@ -106,7 +105,7 @@ describe("recordPatchVerificationEvidence", () => {
     const store = createInMemoryEvidenceStore();
     const applyId = recordPatchApplyEvidence(
       store,
-      identity,
+      identityRedactor,
       {
         patchId: "corr-9",
         decision: "apply",
@@ -118,7 +117,7 @@ describe("recordPatchVerificationEvidence", () => {
     );
     const verifyId = recordPatchVerificationEvidence(
       store,
-      identity,
+      identityRedactor,
       { patchId: "corr-9", rootRealPath: "/r", command: "npx vitest run", summary: summary() },
       1_000,
     );

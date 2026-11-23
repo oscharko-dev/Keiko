@@ -28,6 +28,7 @@ import type {
   MemoryRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { DeepRedacted } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -97,8 +98,8 @@ function loadHealthScanInputs(vault: MemoryVaultStore): HealthScanInputs {
 function redactHealthScanResult(
   deps: UiHandlerDeps,
   result: MemoryHealthScanResultWire,
-): MemoryHealthScanResultWire {
-  return deps.redactor(result) as MemoryHealthScanResultWire;
+): DeepRedacted<MemoryHealthScanResultWire> {
+  return deps.redactor(result);
 }
 
 export function handleGetMemoryHealthScan(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {

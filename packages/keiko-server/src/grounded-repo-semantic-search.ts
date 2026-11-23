@@ -1187,7 +1187,7 @@ function refreshedTextRedactor(
   contentRedaction: ContentRedactionPolicy | undefined,
 ): (text: string) => string {
   const redactor = contentRedaction === "preserve" ? currentContentRedactor(deps) : deps.redactor;
-  return (text) => String(redactor(text));
+  return (text) => redactor(text);
 }
 
 export function configuredRepoSemanticSearchProviderFor(

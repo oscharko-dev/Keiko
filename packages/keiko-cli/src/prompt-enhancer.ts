@@ -13,7 +13,7 @@ import type {
   PromptEnhancementWireResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
-import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { keikoApiKeySecretValues, type DeepRedacted } from "@oscharko-dev/keiko-security";
 // GEN-PERF-CLI-001 — gateway/harness/workflows/evidence load at dispatch; the
 // contracts + security leaves above are cheap and stay static.
 import type { ProcessServerLogSink } from "@oscharko-dev/keiko-server";
@@ -256,7 +256,7 @@ function promptEnhancerHasOpaqueRedactionSecret(
   );
 }
 
-function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
+function renderHuman(result: DeepRedacted<PromptEnhancementWireResponse>, io: CliIo): void {
   const winner = result.candidates.scorecards.find(
     (scorecard) => scorecard.candidateId === result.candidates.winnerCandidateId,
   );
@@ -290,7 +290,7 @@ function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
 // The critic only scores structured Enhanced Prompt candidates. When a model rewrote the prompt,
 // these scores and the profile in the header describe the deterministic baseline it was refined
 // from, so say that instead of letting the reader attribute them to the text printed below.
-function renderScorecards(result: PromptEnhancementWireResponse, io: CliIo): void {
+function renderScorecards(result: DeepRedacted<PromptEnhancementWireResponse>, io: CliIo): void {
   io.out(
     result.modelRouting.executionStatus === "model-applied"
       ? "\nCandidate scorecards (deterministic baseline the model refined; winner first):\n"
@@ -427,10 +427,7 @@ function emitResult(
     { additionalSecrets: promptEnhancerRedactionSecrets(env, config) },
     env,
   );
-  const redactedResult = modules.evidence.deepRedactStrings(
-    result,
-    redactFn,
-  ) as PromptEnhancementWireResponse;
+  const redactedResult = modules.evidence.deepRedactStrings(result, redactFn);
   if (flags.json) {
     io.out(`${JSON.stringify(redactedResult, null, 2)}\n`);
   } else {

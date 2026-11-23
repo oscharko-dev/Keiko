@@ -33,6 +33,7 @@ import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
+import { identityRedactor } from "../_support.js";
 
 const databases: DatabaseSync[] = [];
 afterEach(() => {
@@ -141,7 +142,7 @@ function dependencies(
   const shared = {
     snapshots,
     mutationDeps: {
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
       evidenceStore: {
         put: (): string => "evidence",
         get: (): undefined => undefined,

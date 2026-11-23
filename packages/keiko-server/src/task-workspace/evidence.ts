@@ -137,7 +137,7 @@ export function appendWorkspaceLifecycleEvidence(
   onPersistFailure: (error: unknown) => void,
 ): string | undefined {
   try {
-    const safe = deepRedactStrings(record, redact) as WorkspaceLifecycleEvidenceRecord;
+    const safe = deepRedactStrings(record, redact);
     return store.put(safe.event.eventId, JSON.stringify(safe, null, 2));
   } catch (error) {
     onPersistFailure(error);

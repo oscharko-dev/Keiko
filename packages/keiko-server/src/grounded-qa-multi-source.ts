@@ -2205,7 +2205,7 @@ export function recordPluralCitationRepairFailure(
       operation: "POST /api/chats/messages/grounded",
       source: "grounded.qa.citation-repair",
       error,
-      redact: (message): string => deps.redactor(message) as string,
+      redact: deps.redactor,
     }),
     code: "GROUNDED_CITATION_REPAIR_FAILED",
   });

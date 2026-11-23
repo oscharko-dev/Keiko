@@ -42,7 +42,7 @@ export function emitGatewayErrorDiagnostic(
       operation,
       source,
       error,
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
   );
 }

@@ -863,7 +863,7 @@ export function defaultGitDeliveryActionId(command: unknown, nowMs: number): str
 // String-leaf redactor for the evidence ledger, reusing the deps payload redactor (deepRedactStrings
 // applies the inner audit redactString to a top-level string leaf). No new regex.
 function redactStringFor(deps: Pick<UiHandlerDeps, "redactor">): (input: string) => string {
-  return (input: string): string => deps.redactor(input) as string;
+  return (input: string): string => deps.redactor(input);
 }
 
 export function persistGitDeliveryEvidence(

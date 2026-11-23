@@ -129,7 +129,7 @@ export function recordGroundedPackValidation(
       source: "grounded.qa.pack-validation",
       error: failure.error,
       summary: "grounded-context-pack-validation-failed",
-      redact: (message): string => deps.redactor(message) as string,
+      redact: deps.redactor,
     }),
     code: "GROUNDED_PACK_VALIDATION_FAILED",
     diagnosticStage: "grounded-pack-validation",

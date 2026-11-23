@@ -5,6 +5,7 @@ import {
   emitGatewayErrorDiagnostic,
   type GatewayErrorDiagnosticDeps,
 } from "./gateway-error-diagnostic.js";
+import { identityRedactor } from "./_support.js";
 
 function capturingDeps(): {
   readonly deps: GatewayErrorDiagnosticDeps;
@@ -19,7 +20,7 @@ function capturingDeps(): {
           events.push(record);
         },
       },
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
     },
   };
 }
@@ -62,7 +63,7 @@ describe("emitGatewayErrorDiagnostic", () => {
   it("never throws when no diagnostics sink is configured", () => {
     const deps: GatewayErrorDiagnosticDeps = {
       diagnostics: undefined,
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
     };
 
     expect(() => {

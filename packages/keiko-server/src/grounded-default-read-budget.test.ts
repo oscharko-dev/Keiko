@@ -14,6 +14,7 @@ import { buildRedactor } from "./deps.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { retrieveConnectedContextPack, type OrchestratorInput } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 let root = "";
@@ -158,7 +159,7 @@ describe("default connected-folder file reads", () => {
     const messages = buildGroundedGatewayMessages(
       "List every FactProbe value",
       pack,
-      (value) => value,
+      identityRedactor,
     );
     expect(countGatewayPromptTokens({ messages })).toBeLessThan(pack.budget.modelInputTokensMax);
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });

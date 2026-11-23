@@ -11,6 +11,7 @@
 // "covered" verdict, the review-integrity failure fails closed instead of falling back to an
 // unscoped export, and the export-evidence row records which scope produced the artifact.
 
+import { identityRedactor } from "../../_support.js";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,7 +135,7 @@ function seedRun(): void {
       candidate("tc-open", "Never reviewed case"),
     ] as unknown as Parameters<typeof recordQualityIntelligenceCandidates>[0]["candidates"],
     evidenceDir,
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 }
 
@@ -147,7 +148,7 @@ function decide(action: "approve" | "reject", candidateId: string): void {
     candidateId,
     reviewerLabel: "auditor",
     now: new Date().toISOString(),
-    redact: (v: unknown): unknown => v,
+    redact: identityRedactor,
   });
 }
 
@@ -185,7 +186,7 @@ describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
           { ...candidate("tc-needs-review", "Unverified case", "needs-review"), runId },
         ] as unknown as Parameters<typeof recordQualityIntelligenceCandidates>[0]["candidates"],
         evidenceDir,
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
       if (approvedOnly) {
         applyReviewDecision({
@@ -196,7 +197,7 @@ describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
           candidateId: "tc-needs-review",
           reviewerLabel: "auditor",
           now: "2026-07-01T09:02:00.000Z",
-          redact: (value: unknown): unknown => value,
+          redact: identityRedactor,
         });
       }
 
@@ -283,7 +284,7 @@ describe("handleQiTraceabilityExport — approvedOnly scope (CSV)", () => {
       scope: "run",
       reviewerLabel: "auditor",
       now: new Date().toISOString(),
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const result = await handleQiTraceabilityExport(
