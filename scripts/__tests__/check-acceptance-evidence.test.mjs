@@ -187,6 +187,35 @@ describe("acceptanceEvidenceFailures body-free scan (#4492 AC6)", () => {
     expect(JSON.stringify(failures)).not.toContain(FILLER);
   });
 
+  it("names a credential-shaped key by position, even when its value is a closed token", () => {
+    const failures = acceptanceEvidenceFailures(withObserved({ [`${"sk"}-proj-${FILLER}`]: "ok" }));
+    expect(failures).toEqual(["body-free:/cases/0/observed/<key>"]);
+  });
+
+  it("prints a credential-shaped key on neither stream of runCheck", () => {
+    const key = `${"sk"}-proj-${FILLER}`;
+    const lines = { log: [], error: [] };
+    const io = { log: (l) => lines.log.push(l), error: (l) => lines.error.push(l) };
+    const evidence = {
+      ...withObserved({ [key]: BODY }),
+      containerRuntime: { ...NO_RUNTIME, [key]: true },
+    };
+    const root = mkdtempSync(join(tmpdir(), "acceptance-evidence-"));
+    try {
+      const file = join(root, "evidence.json");
+      writeFileSync(file, JSON.stringify(evidence));
+      expect(runCheck(["node", "check", file], io)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    const printed = [...lines.log, ...lines.error].join("\n");
+    expect(printed).not.toContain(FILLER);
+    expect(printed).not.toContain("jane");
+    expect(lines.log).toContain("check-acceptance-evidence: container runtime signs: <sign>");
+    expect(lines.error[0]).toContain("body-free:/containerRuntime/<key>");
+    expect(lines.error[0]).toContain("body-free:/cases/0/observed/<key>");
+  });
+
   it("fails a content-named key even when its value is a closed token", () => {
     const failures = acceptanceEvidenceFailures(withObserved({ prompt: "ok", taskPath: "ok" }));
     expect(failures).toEqual([

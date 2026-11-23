@@ -20,7 +20,8 @@ const SCHEMA_VERSION = 4;
 
 // The signs the acceptance test records (`containerRuntimeFacts`). A sign it stopped recording
 // counts as present, so a writer that drops or renames one fails closed instead of shrinking the
-// check; a sign it adds counts whenever it is not `false`.
+// check; a sign it adds counts whenever it is not `false`, and is printed as `<sign>` unless its
+// key is printable.
 const CONTAINER_RUNTIME_SIGNS = [
   "dockerOnPath",
   "podmanOnPath",
@@ -35,7 +36,7 @@ function presentSigns(containerRuntime) {
   if (typeof containerRuntime !== "object" || containerRuntime === null) return ["unrecorded"];
   const recorded = Object.entries(containerRuntime)
     .filter(([, present]) => present !== false)
-    .map(([sign]) => sign);
+    .map(([sign]) => (printableKey(sign) ? sign : "<sign>"));
   const unrecorded = CONTAINER_RUNTIME_SIGNS.filter(
     (sign) => !Object.hasOwn(containerRuntime, sign),
   );
@@ -60,6 +61,11 @@ function metCount(evidence) {
 // shaped like a credential (`sk-…`, a JWT), so every string also passes the credential detector.
 const CLOSED_TOKEN = /^[A-Za-z0-9._:+=-]{1,128}$/u;
 const KEY_TOKEN = /^[A-Za-z0-9._:+=-]{1,64}$/u;
+
+/** A key is printed only as one closed token that is not shaped like a credential (`sk-…`). */
+function printableKey(key) {
+  return KEY_TOKEN.test(key) && !containsCredentialShape(key);
+}
 const TOKEN_LIST_POINTER = /^\/cases\/\d+\/observed\/governedVerifications\/\d+$/u;
 const MAX_TOKEN_LIST = 8;
 const CONTENT_WORDS = [
@@ -102,7 +108,8 @@ function* entriesOf(node) {
   }
   if (typeof node === "object" && node !== null) {
     for (const [key, value] of Object.entries(node)) {
-      yield [KEY_TOKEN.test(key) ? key : "<key>", value, !KEY_TOKEN.test(key) || contentKey(key)];
+      const printable = printableKey(key);
+      yield [printable ? key : "<key>", value, !printable || contentKey(key)];
     }
   }
 }
