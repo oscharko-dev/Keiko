@@ -1141,7 +1141,7 @@ function reportProbeFailure(
     source: `gateway-readiness.${name}`,
     error: failure,
     summary: "A gateway readiness probe could not be completed.",
-    redact: (message): string => deps.redactor(message),
+    redact: deps.redactor,
   });
   // #4115: a probe that outwaited a busy provider is a warning, not a gateway error.
   emitServerDiagnostic(
@@ -1167,7 +1167,7 @@ function reportBusyStatus(
       source: `gateway-readiness.${name}`,
       error: new Error(unsuccessfulEvidence("Gateway", response)),
       summary: "A gateway readiness probe could not be completed.",
-      redact: (message): string => deps.redactor(message),
+      redact: deps.redactor,
     }),
     diagnosticOutcome: "provider-busy",
   });
@@ -2166,7 +2166,7 @@ function reconcileToolCallingReadiness(
         source: "gateway-readiness.capability-reconcile",
         error,
         summary: "Gateway tool-calling verification could not be persisted.",
-        redact: (message): string => deps.redactor(message),
+        redact: deps.redactor,
       }),
     );
   }
@@ -2267,7 +2267,7 @@ function reconcileContextWindowReadiness(
         source: "gateway-readiness.context-window-reconcile",
         error,
         summary: "The verified gateway context window could not be persisted.",
-        redact: (message): string => deps.redactor(message),
+        redact: deps.redactor,
       }),
     );
   }
@@ -2543,7 +2543,7 @@ async function runWorkbenchProbe(
         source: "gateway-readiness.workbench-probe",
         error,
         summary: "A gateway readiness probe could not be completed.",
-        redact: (message): string => deps.redactor(message),
+        redact: deps.redactor,
       }),
     );
     return "inconclusive";
@@ -2837,7 +2837,7 @@ function enqueueConversationProbe(
             source: "gateway-readiness.queue",
             error,
             summary: "A gateway readiness probe could not be completed.",
-            redact: (message): string => deps.redactor(message),
+            redact: deps.redactor,
           }),
         );
         reject(error instanceof Error ? error : new TypeError("Readiness initialization failed"));
@@ -2915,7 +2915,7 @@ function checkConversationModelOnce(
           source: "gateway-readiness.initialization",
           error,
           summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => deps.redactor(message),
+          redact: deps.redactor,
         }),
       );
     },
@@ -3066,7 +3066,7 @@ async function reprobeExpiredNotReadyModel(
           source: "gateway-readiness.conversation-request",
           error,
           summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => deps.redactor(message),
+          redact: deps.redactor,
         }),
       );
     },
@@ -3213,7 +3213,7 @@ async function observeOnDemandProbe(
         source: "gateway-readiness.on-demand",
         error,
         summary: "A gateway readiness probe could not be completed.",
-        redact: (message): string => deps.redactor(message),
+        redact: deps.redactor,
       }),
     );
   } finally {

@@ -280,7 +280,7 @@ function recordUnexpectedFailure(deps: UiHandlerDeps, correlationId: string, err
       source: "git-repository-initialization-route",
       error,
       summary: "server-operation-failed",
-      redact: (value): string => deps.redactor(value),
+      redact: deps.redactor,
     }),
   );
 }

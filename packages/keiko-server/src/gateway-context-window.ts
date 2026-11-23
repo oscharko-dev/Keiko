@@ -208,7 +208,7 @@ function emitContextWindowDiagnostic(
       ...correlation,
       operation: "gateway.context-window",
       ...failure,
-      redact: (message): string => deps.redactor(message),
+      redact: deps.redactor,
     }),
   );
 }

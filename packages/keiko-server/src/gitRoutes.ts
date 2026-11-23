@@ -1505,7 +1505,7 @@ function gitReadErrorBody(
       source: "git-routes",
       error,
       summary,
-      redact: (value): string => deps.redactor(value),
+      redact: deps.redactor,
     }),
   );
   return errorBody(code, message, correlationId);
