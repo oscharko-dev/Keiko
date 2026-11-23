@@ -760,6 +760,28 @@ describe("mode selection, setup plans, and mutation failures", () => {
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
 
+  it("marks a cancelled Start as idle but not succeeded, and the next action starts clean", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "req-1",
+    });
+    const cancelled = codingWorkbenchRuntimeReducer(pending, { kind: "mutation-cancelled" });
+    expect(cancelled.mutation).toEqual({
+      status: "idle",
+      kind: null,
+      requestId: null,
+      error: null,
+      cancelled: true,
+    });
+    const next = codingWorkbenchRuntimeReducer(cancelled, {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "req-2",
+    });
+    expect(next.mutation.cancelled).toBeUndefined();
+  });
+
   // Stability audit item 7: a failed Stop/Approve alert outranks every other alert, so it must not
   // outlive the server state that made it stale.
   describe("a failed action superseded by a newer snapshot", () => {
