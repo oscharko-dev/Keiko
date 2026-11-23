@@ -10510,6 +10510,34 @@ describe("coding runtime lifecycle races", () => {
     expectRecordedLifecycleFailure(f.diagnosticRecords, "reconcile-failed", "RangeError");
   });
 
+  it("threads a production-shaped run id into a recorded lifecycle failure", async () => {
+    const runId = `run-${"7".repeat(39)}`;
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const captured = captureDiagnostics();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      captured.diagnostics,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (): string => runId,
+      createCodingRuntimeSnapshotStore(db),
+    );
+    f.manager.start.mockRejectedValueOnce(new Error("start failed"));
+    f.manager.reconcile.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    await f.orchestrator.start(start);
+
+    const line = captured.records.find(
+      (record) => record.code === "stage=lifecycle:reason=reconcile-failed",
+    );
+    expect(line?.correlationId).toBe(runId);
+  });
+
   // Audit finding 6: a failed stop at an undo window's close left the manager in recovery-required
   // with its slot taken, and every later start was refused with runtime-already-running.
   it("reaps a settled run's stale runtime slot before the next start", async () => {
