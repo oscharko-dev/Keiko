@@ -10,16 +10,29 @@ name: npm folder package qualification
 # integrity npm reports), so a pull request for an unpublished root version ends green with a
 # notice; a manual run and the publication workflow (npm-folder-publish.yml) require the version.
 #
+# The standard-account job (#4520) installs and starts the three macOS delivery forms of the same
+# version, the npm package, the npm folder package and the standalone folder package, as a standard
+# account it creates: from an empty state, a coding run that settles succeeded in each, and nothing
+# created or changed outside the account's own folders. It also records what the download mark a
+# browser sets does to the standalone folder (scripts/testing/qualify-macos-standard-account-forms.mjs,
+# scripts/testing/standard-account-footprint.mjs).
+#
 # No credentials, no secrets: the portable archive is read from the public release over HTTPS.
 on:
   pull_request:
     branches:
       - dev
     paths:
+      - ".github/actions/macos-standard-account/**"
       - ".github/workflows/npm-folder-qualify.yml"
       - "scripts/build-standalone-npm-package.mjs"
+      - "scripts/lib/customer-shape-litellm-twin.mjs"
       - "scripts/standalone/**"
+      - "scripts/testing/coding-workbench-lab/lab-common.mjs"
+      - "scripts/testing/coding-workbench-lab/wb-run.mjs"
+      - "scripts/testing/qualify-macos-standard-account-forms.mjs"
       - "scripts/testing/qualify-npm-folder-package.mjs"
+      - "scripts/testing/standard-account-footprint.mjs"
   workflow_dispatch:
     inputs:
       version:
@@ -161,6 +174,78 @@ jobs:
         with:
           name: npm-folder-${{ matrix.target }}
           path: qualification-out
+          overwrite: true
+          if-no-files-found: warn
+          retention-days: 30
+
+  standard-account-forms:
+    # #4520: a person without administrator rights installs and starts each macOS delivery form.
+    # The forms run as the standard account the action creates, which may not use sudo; the job
+    # passes only when the evidence certifies that and every form passed, and when nothing outside
+    # the account's home and its per-user folder was created or changed.
+    name: macOS delivery forms as a standard account
+    needs: resolve
+    if: needs.resolve.outputs.publishable == 'true'
+    runs-on: macos-15
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify the governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies and build the workspace packages the qualification loads
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build:packages
+      - name: Create the standard account the forms are installed as
+        uses: ./.github/actions/macos-standard-account
+      - name: Mark the moment before the standard account acts
+        run: |
+          mkdir -p "$RUNNER_TEMP/standard-account-evidence"
+          touch "$RUNNER_TEMP/footprint.marker"
+          sleep 1
+      - name: Install and start the three forms as the standard account
+        env:
+          KEIKO_QUALIFY_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
+          sudo -u keikoqa -H /usr/bin/env -i \
+            HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
+            TMPDIR="${temp}" \
+            PATH=/Users/keikoqa/.local/node/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            KEIKO_QUALIFY_VERSION="${KEIKO_QUALIFY_VERSION}" \
+            /bin/sh -s <<'FORMS'
+          cd "$HOME/keiko" || exit 1
+          echo "groups: $(id -Gn)"
+          node scripts/testing/qualify-macos-standard-account-forms.mjs \
+            --version "$KEIKO_QUALIFY_VERSION" --out-dir "$HOME/forms-evidence"
+          FORMS
+      - name: Check that nothing outside the account's own folders was created or changed
+        if: ${{ !cancelled() }}
+        run: |
+          sudo "$(command -v node)" scripts/testing/standard-account-footprint.mjs \
+            --account keikoqa --marker "$RUNNER_TEMP/footprint.marker" \
+            --evidence "$RUNNER_TEMP/standard-account-evidence/footprint.json"
+      - name: Collect the evidence
+        if: ${{ !cancelled() }}
+        run: |
+          if sudo test -d /Users/keikoqa/forms-evidence; then
+            sudo cp -R /Users/keikoqa/forms-evidence/. "$RUNNER_TEMP/standard-account-evidence/"
+          fi
+          sudo chown -R "$(id -u)" "$RUNNER_TEMP/standard-account-evidence"
+      - name: Upload the evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-delivery-forms-standard-account
+          path: ${{ runner.temp }}/standard-account-evidence
           overwrite: true
           if-no-files-found: warn
           retention-days: 30

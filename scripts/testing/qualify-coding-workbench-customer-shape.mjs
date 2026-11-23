@@ -17,7 +17,6 @@ import { basename, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { chromium, expect } from "@playwright/test";
 import { encodeCodingAppSessionPairingFragment } from "../../packages/keiko-contracts/dist/coding-app-session.js";
-import { toolCallingConfigurationFingerprint } from "../../packages/keiko-model-gateway/dist/index.js";
 import { mintLauncherPairingAttestation } from "../../packages/keiko-server/dist/index.js";
 import {
   installIntoWithYarn,
@@ -32,6 +31,7 @@ import {
   CUSTOMER_SHAPE_MODEL,
   CUSTOMER_SHAPE_REPLY,
   startCustomerShapeLiteLlmTwin,
+  writeCustomerShapeGatewayConfig,
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
   completedTurnEvidence,
@@ -97,49 +97,6 @@ function createRepository(root, remote) {
     { cwd: root },
   );
   run("git", ["remote", "add", "origin", remote], { cwd: root });
-}
-
-function writeGatewayConfig(path, baseUrl) {
-  const provider = {
-    modelId: CUSTOMER_SHAPE_MODEL,
-    baseUrl,
-    apiKeyHeaderName: "x-litellm-key",
-    timeoutMs: 30_000,
-    maxRetries: 0,
-    retryBaseDelayMs: 1,
-    apiKeySecretRef: `cred:${CUSTOMER_SHAPE_MODEL}`,
-  };
-  const config = {
-    schemaVersion: 2,
-    providers: [provider],
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-    capabilities: [
-      {
-        id: CUSTOMER_SHAPE_MODEL,
-        kind: "chat",
-        contextWindow: 32_000,
-        maxOutputTokens: 4_096,
-        toolCalling: true,
-        toolCallingVerification: {
-          status: "verified",
-          checkedAt: new Date().toISOString(),
-          probe: "gateway-tool-calling-v1",
-          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
-        },
-        structuredOutput: true,
-        streaming: true,
-        supportsImageInput: false,
-        supportsDocumentInput: false,
-        workflowEligible: true,
-        costClass: "low",
-        latencyClass: "standard",
-        throughputHint: "synthetic",
-        preferredUseCases: ["Coding"],
-        knownLimitations: [],
-      },
-    ],
-  };
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 }
 
 function lifecycle(project, stateDir, port, configPath, pairingSecret) {
@@ -754,7 +711,7 @@ async function main() {
   let artifact;
   try {
     const configPath = join(project, "gateway.json");
-    writeGatewayConfig(configPath, twin.baseUrl);
+    writeCustomerShapeGatewayConfig(configPath, twin.baseUrl);
     const repository = join(project, "synthetic-repository");
     createRepository(repository, "https://code.example.invalid/team/synthetic.git");
     const scpRepository = join(project, "synthetic-scp-repository");

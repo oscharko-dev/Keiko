@@ -39,10 +39,12 @@ the product release `v<version>`; see the
 ## The Download Mark
 
 A ZIP downloaded with a browser carries the operating system's download mark, and the built-in
-unzip passes it on to the start files, which carry no vendor signature. The
+unzip passes it on to every extracted file, the folder's Node.js runtime included, which carries
+no vendor signature, so macOS does not run it. The
 [download mark section of the folder package](standalone-folder-package.md#the-download-mark)
-applies unchanged: remove the mark from the ZIP before extracting it, or distribute the folder
-through an internal share.
+applies unchanged: distribute the folder through an internal share, or remove the mark from the
+ZIP before extracting it. What Keiko loads from the npm registry at the first start carries no
+mark.
 
 ```bash
 xattr -d com.apple.quarantine keiko-macos-arm64.npm.zip
@@ -55,7 +57,7 @@ Unblock-File .\keiko-windows-x64.npm.zip
 ## What A Person Does
 
 1. Download the ZIP for your computer, see [Which File Do I Need](#which-file-do-i-need).
-2. Remove the download mark, see [The Download Mark](#the-download-mark).
+2. If a browser downloaded it, remove the download mark, see [The Download Mark](#the-download-mark).
 3. Extract the folder, for example into Documents.
 4. Double-click `Start Keiko`. The first start loads Keiko from the registry, which can take a few
    minutes; Keiko then opens in the browser.

@@ -16,7 +16,9 @@ notice.
 One of these, after a double-click on `Start Keiko`:
 
 1. macOS reports that the file "cannot be opened" or "cannot be verified", or Windows shows
-   "Windows protected your PC". No Keiko window appears.
+   "Windows protected your PC". No Keiko window appears. Started from a terminal on macOS, the
+   start file prints nothing and does not end: macOS holds the folder's Node.js runtime before it
+   runs.
 2. The start window prints `Keiko is incomplete: files are missing in the folder "system".` or
    `keiko portable launch: portable setup manifest is unavailable`, then
    `Keiko could not start.`
@@ -87,12 +89,13 @@ started in place.
 
 **Resolution**
 
-1. Take the folder again from the place the administrator named. An administrator removes the mark
-   from the archive before extracting it (`xattr -d com.apple.quarantine <archive>` on macOS,
-   `Unblock-File <archive>` on Windows) or builds the package with
-   `scripts/build-standalone-package.mjs`, whose output carries none. If the organization's
-   application control blocks Keiko, only that organization can allow it. Do not disable
-   Gatekeeper or SmartScreen.
+1. Take the folder again from the place the administrator named: a copy from a file share carries
+   no mark. Whoever downloaded the archive with a browser removes the mark from the archive before
+   extracting it (`xattr -d com.apple.quarantine <archive>` on macOS, `Unblock-File <archive>` on
+   Windows), or builds the package with `scripts/build-standalone-package.mjs`, whose output
+   carries none; see [The Download Mark](../release/standalone-folder-package.md#the-download-mark).
+   If the organization's application control blocks Keiko, only that organization can allow it.
+   Do not disable Gatekeeper or SmartScreen.
 2. Delete the folder and extract the whole archive again. Start Keiko from the extracted folder
    and leave `system` as it is.
 3. Stop the other Keiko with its own `Stop Keiko`, or end the other program, and start again.

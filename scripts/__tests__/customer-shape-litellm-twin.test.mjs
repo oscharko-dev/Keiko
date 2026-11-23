@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import * as timers from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +13,7 @@ import {
   failTransportResponse,
   transportWait,
   startCustomerShapeLiteLlmTwin,
+  writeCustomerShapeGatewayConfig,
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
   completedTurnEvidence,
@@ -878,6 +882,31 @@ describe("synthetic gateway transport profile", () => {
     } finally {
       clock.mockRestore();
       await twin.close();
+    }
+  });
+});
+
+describe("writeCustomerShapeGatewayConfig", () => {
+  it("names the twin's model and endpoint, keeps the key out and is private to the account", () => {
+    const folder = mkdtempSync(join(tmpdir(), "customer-shape-config-"));
+    try {
+      const path = join(folder, "gateway.json");
+      writeCustomerShapeGatewayConfig(path, "http://127.0.0.1:4100/v1");
+      const config = JSON.parse(readFileSync(path, "utf8"));
+      const [provider] = config.providers;
+      const [capability] = config.capabilities;
+      expect(provider).toMatchObject({
+        modelId: "gemma-4-31b-it",
+        baseUrl: "http://127.0.0.1:4100/v1",
+        apiKeyHeaderName: "x-litellm-key",
+        apiKeySecretRef: "cred:gemma-4-31b-it",
+      });
+      expect(capability).toMatchObject({ id: "gemma-4-31b-it", kind: "chat", toolCalling: true });
+      expect(capability.toolCallingVerification.status).toBe("verified");
+      expect(readFileSync(path, "utf8")).not.toContain(CUSTOMER_SHAPE_API_KEY);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
     }
   });
 });

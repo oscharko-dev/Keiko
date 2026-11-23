@@ -69,6 +69,8 @@ The desktop packages include the Node.js runtime and launch Keiko without a sepa
 
 Keiko is an open-source project and does not yet buy Apple and Microsoft code-signing certificates, so macOS and Windows ask once before the first launch: on macOS **System Settings → Privacy & Security → Open Anyway**, on Windows SmartScreen **More info → Run anyway**. Every release states this plainly. Keiko then opens at `http://127.0.0.1:1983`.
 
+Without administrator rights on a Mac, use the [npm package](#on-a-mac-without-administrator-rights), the [standalone folder package](docs/release/standalone-folder-package.md) or the [npm folder package](docs/release/standalone-npm-package.md). The portable desktop package above is not for that: its setup copies Keiko to `/Applications`, which needs an administrator. A browser marks every download, and macOS does not run a marked copy of the unsigned Keiko, so a folder package comes from an internal file share or has its download mark removed before it is extracted ([The Download Mark](docs/release/standalone-folder-package.md#the-download-mark)). What npm installs carries no mark.
+
 On Windows the desktop package brings everything the Coding Workbench needs: the coding runtime, its native helpers and the `KeikoRuntimeGateway` service. The first launch sets the service up and Windows asks for approval once; nothing else needs installing, configuring or unpacking. Updates run from **Review updates** in Keiko, and the relaunched version updates the service the same way. If the approval was declined, the Coding Workbench offers **Repair**.
 
 ## Install with npm
@@ -94,13 +96,32 @@ npm install -g @oscharko-dev/keiko
 keiko start
 ```
 
+### On a Mac without administrator rights
+
+The Node.js installer from nodejs.org needs an administrator, and a global npm install into a system folder needs `sudo`. Neither is needed: unpack the Node.js archive from nodejs.org into your own folder, and npm installs Keiko there too. Use `NODE_ARCH=arm64` on Apple silicon and `NODE_ARCH=x64` on an Intel Mac, and any Node.js 26 release from 26.13.1 on. The download is checked against the checksum file nodejs.org publishes, and `curl` sets no download mark.
+
+```bash
+cd "$HOME/Downloads"
+NODE_VERSION=26.13.1
+NODE_ARCH=arm64
+curl -fsSLO "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz"
+curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" | shasum -a 256 -c -
+mkdir -p "$HOME/.local/nodejs"
+tar -xzf "node-v$NODE_VERSION-darwin-$NODE_ARCH.tar.gz" -C "$HOME/.local/nodejs" --strip-components 1
+echo 'export PATH="$HOME/.local/nodejs/bin:$PATH"' >> "$HOME/.zprofile"
+export PATH="$HOME/.local/nodejs/bin:$PATH"
+npm install -g @oscharko-dev/keiko
+```
+
+Then start Keiko with `keiko start`. New Terminal windows find `node`, `npm` and `keiko` through the line added to `~/.zprofile`. A hosted macOS job runs these lines as a standard account it creates, starts Keiko and completes a coding run ([macOS delivery forms without administrator rights](docs/qa/macos-delivery-forms-standard-account.md)).
+
 Connected folders do not need Git metadata or a `package.json`. Run `npx keiko init` only if you want to add optional commands to an existing Node.js project. `npx keiko start` and `npx keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `npx keiko stop` shuts it down, and `npx keiko start --port <n>` picks another port. Requires Node.js `>=26.13.1 <27`; the desktop packages bring their own runtime. On macOS (Apple Silicon or Intel) and on Windows x64, npm selects the optional coding-runtime package for the computer, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks. Update an npm installation with `keiko update apply`, then `keiko restart`.
 
 ## Honest limits
 
 - The Linux package is a community tier. It keeps what it does today, but new features that depend on the operating system are built and qualified for macOS and Windows first and may not reach Linux ([ADR-0183](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0183-linux-desktop-community-tier.md)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
-- On macOS, Keiko runs OpenCode in its own Seatbelt profile, enforced by the operating system. It needs no administrator rights and no Docker or Podman. A run's shell writes only inside the opened folder. It cannot read `.env` files, SSH or cloud credentials, the Keychain or the clipboard, and no provider key is passed to it. Below Full access the kernel refuses internet and local-network connections before any packet leaves; loopback, which includes the computer's own addresses, stays open. Keiko refuses `git commit`, `git push` and `gh pr create` typed into the shell and points the model to its governed delivery tools; a script or low-level Git can still write local history in an opened folder. No process a run started outlives its runtime. macOS lets the shell read the start environment of the account's other programs, Keiko's own included, so a provider key should not be handed to Keiko as a variable when it starts. Each sentence, its proof and its limits: [The macOS coding boundary](https://github.com/oscharko-dev/Keiko/blob/dev/docs/coding-runtime/macos-native-boundary.md).
+- On macOS, Keiko runs OpenCode in its own Seatbelt profile, enforced by the operating system. It needs no administrator rights and no Docker or Podman, in the npm package and both folder packages; the portable desktop package's setup needs an administrator. A run's shell writes only inside the opened folder. It cannot read `.env` files, SSH or cloud credentials, the Keychain or the clipboard, and no provider key is passed to it. Below Full access the kernel refuses internet and local-network connections before any packet leaves; loopback, which includes the computer's own addresses, stays open. Keiko refuses `git commit`, `git push` and `gh pr create` typed into the shell and points the model to its governed delivery tools; a script or low-level Git can still write local history in an opened folder. No process a run started outlives its runtime. macOS lets the shell read the start environment of the account's other programs, Keiko's own included, so a provider key should not be handed to Keiko as a variable when it starts. Each sentence, its proof and its limits: [The macOS coding boundary](https://github.com/oscharko-dev/Keiko/blob/dev/docs/coding-runtime/macos-native-boundary.md).
 - Windows Coding runs as the signed-in standard user, without administrator rights and without a service: a supervisor confines each run. Keiko must be started in a signed-in desktop session. The Windows packages carry an unsigned evaluation runtime; a Windows guest has completed coding runs from the npm and the folder package, and the qualification on real Windows hardware remains open ([#4068](https://github.com/oscharko-dev/Keiko/issues/4068)). On Windows a run can verify its change only with Docker or Podman; without one the change is kept and reported as not verified. On macOS a run verifies its change with the project's own check in its sandboxed shell and needs no container runtime.
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
