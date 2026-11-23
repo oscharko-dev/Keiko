@@ -153,6 +153,30 @@ describe("paired coding history routes", () => {
     expect((await updateCodingHistory({ ...context(), params: {} }, deps)).status).toBe(404);
   });
 
+  it("logs each history refusal under the request's correlation id with a closed kind", async () => {
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    const refusals = (): Record<string, unknown>[] =>
+      sink.events
+        .filter((event) => event.correlationId === "history-route-test")
+        .map((event) => JSON.parse(formatActivityLogProofLine(event)) as Record<string, unknown>);
+
+    expect(readCodingHistory(context("{}", "unknown"), deps).status).toBe(404);
+    expect(await updateCodingHistory(context('{"title":"x"}', "unknown"), deps)).toMatchObject({
+      status: 404,
+    });
+    live.mockReturnValue(true);
+    expect((await updateCodingHistory(context('{"status":"completed"}'), deps)).status).toBe(409);
+    expect((await updateCodingHistory(context('{"extra":true}'), deps)).status).toBe(400);
+
+    expect(refusals().map((line) => [line.op, line.errorKind])).toEqual([
+      ["coding-runtime.history", "unavailable"],
+      ["coding-runtime.history", "unavailable"],
+      ["coding-runtime.history", "conflict"],
+      ["coding-runtime.history", "invalid-request"],
+    ]);
+  });
+
   it("renames, completes and reopens the durable task", async () => {
     for (const patch of [{ title: "New title" }, { status: "completed" }, { status: "active" }]) {
       const result = await updateCodingHistory(context(JSON.stringify(patch)), deps);

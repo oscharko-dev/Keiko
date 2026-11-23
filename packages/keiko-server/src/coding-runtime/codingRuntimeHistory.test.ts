@@ -444,16 +444,16 @@ describe("paired coding conversation history", () => {
         requestId: "title-request",
         taskIntent: intent,
         requestedMode: "governed-assist" as const,
-      } as Parameters<CodingRuntimeHistory["begin"]>[0],
+      },
       activeWorkspace(),
       "title-run",
     );
     const title = history.forRun("title-run")?.title ?? "";
     expect(title).not.toMatch(/[\n\r\t\u202E]/u);
     expect(title.startsWith("Fix the bug evil a")).toBe(true);
-    expect([...title]).toHaveLength(100);
+    expect(Array.from(title)).toHaveLength(100);
     expect(title.endsWith("\u{1F600}")).toBe(true);
-    expect(title.isWellFormed()).toBe(true);
+    expect(title).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   it("preserves a completed conversation when a continuation's intent cannot be written", () => {
@@ -588,6 +588,43 @@ describe("paired coding conversation history", () => {
     ]);
     expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_TITLE");
   });
+
+  it("updates a task without reading its whole conversation, and logs a missing run capture", () => {
+    const { history, id, sink } = fixture();
+    history.update(id, { status: "completed" }, "update-no-read");
+    const events = sink.events.filter((event) => event.correlationId === "update-no-read");
+    expect(events.map((event) => event.extra?.event)).toEqual(["updated"]);
+
+    history.capture("run-without-task", completedFeed());
+    const missing = sink.events.at(-1);
+    if (missing === undefined) throw new Error("Missing event");
+    expect(JSON.parse(formatActivityLogProofLine(missing))).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: "run-without-task",
+      event: "unavailable",
+      errorKind: "unavailable",
+    });
+  });
+
+  it.each(["unavailable", "conflict", "invalid-request"] as const)(
+    "records a refused history request with the closed kind %s",
+    (kind) => {
+      const { history, id, sink } = fixture();
+      history.refuse("refusal-correlation", kind, id);
+      const event = sink.events.at(-1);
+      if (event === undefined) throw new Error("Missing event");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.history.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({
+        correlationId: "refusal-correlation",
+        errorKind: kind,
+        conversationId: id,
+      });
+    },
+  );
 
   it("keeps bounded continuation context valid JSON and marks omitted history", () => {
     const { history, id, sink } = fixture();

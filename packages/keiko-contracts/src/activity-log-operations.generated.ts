@@ -11509,6 +11509,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "updated",
           "failed",
           "unavailable",
+          "refused",
         ],
       },
       conversationId: {

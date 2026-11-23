@@ -27,8 +27,14 @@ import type {
   CodingTaskImportResult,
 } from "./codingTaskImport.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 
-function unavailable(ctx: RouteContext): RouteResult {
+function unavailable(
+  ctx: RouteContext,
+  history?: CodingRuntimeHistory,
+  conversationId?: string,
+): RouteResult {
+  history?.refuse(ctx.correlationId ?? UNKNOWN_CORRELATION_ID, "unavailable", conversationId);
   return {
     status: 404,
     body: errorBody("CODING_HISTORY_UNAVAILABLE", "Coding task not available.", ctx.correlationId),
@@ -36,8 +42,8 @@ function unavailable(ctx: RouteContext): RouteResult {
 }
 
 export function listCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   const history = deps.codingRuntimeOrchestrator?.getHistory();
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
   if (history === undefined) return unavailable(ctx);
   return {
     status: 200,
@@ -46,12 +52,11 @@ export function listCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): Route
 }
 
 export function readCodingHistory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
-  const detail = deps.codingRuntimeOrchestrator
-    ?.getHistory()
-    ?.detail(ctx.params.id ?? "", ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+  const history = deps.codingRuntimeOrchestrator?.getHistory();
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
+  const detail = history?.detail(ctx.params.id ?? "", ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
   return detail === undefined
-    ? unavailable(ctx)
+    ? unavailable(ctx, history, ctx.params.id)
     : {
         status: 200,
         body: {
@@ -277,23 +282,38 @@ export async function updateCodingHistory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   const history = deps.codingRuntimeOrchestrator?.getHistory();
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx, history);
   const id = ctx.params.id ?? "";
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-  if (history?.detail(id, correlationId) === undefined) return unavailable(ctx);
+  if (history?.exists(id) !== true) return unavailable(ctx, history, id);
   const outcome = await readJsonRequestBodyOutcome(ctx.req, 4096, ctx.correlationId);
   if (outcome.kind === "rejected") return outcome.response;
   const raw = outcome.value;
+  const refusal = updateRefusal(raw, ctx, deps);
+  if (refusal !== undefined) {
+    history.refuse(correlationId, refusal.kind, id);
+    return refusal.result;
+  }
+  const task = history.update(id, raw, correlationId);
+  return task === undefined ? unavailable(ctx, history, id) : { status: 200, body: { task } };
+}
+
+function updateRefusal(
+  raw: Record<string, unknown>,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): { readonly kind: "conflict" | "invalid-request"; readonly result: RouteResult } | undefined {
   const blocked = updateBlocked(raw, ctx, deps);
-  if (blocked !== undefined) return blocked;
-  if (!validPatch(raw))
-    return {
+  if (blocked !== undefined) return { kind: "conflict", result: blocked };
+  if (validPatch(raw)) return undefined;
+  return {
+    kind: "invalid-request",
+    result: {
       status: 400,
       body: errorBody("INVALID_REQUEST", "Invalid coding task update.", ctx.correlationId),
-    };
-  const task = history.update(id, raw, correlationId);
-  return { status: 200, body: { task } };
+    },
+  };
 }
 
 function updateBlocked(

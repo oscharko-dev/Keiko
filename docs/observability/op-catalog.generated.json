@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4ced5d0e7d7349589edff6e2ce6958aef0d253fc1c69510d9b40f0bd7c7881c4",
+    "catalogDigest": "b30165cd38cd71f68e28e2bc1d42afa5b7afce383499cca727869306160874b5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11232,7 +11232,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1019",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:5582"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:5583"
         ]
       },
       {
@@ -11971,7 +11971,8 @@
               "read",
               "updated",
               "failed",
-              "unavailable"
+              "unavailable",
+              "refused"
             ]
           },
           "conversationId": {
@@ -12074,7 +12075,7 @@
         "proofIds": ["coding-runtime.history.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:44",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:176"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:189"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16827,7 +16828,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:987",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:4654"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:4655"
         ]
       },
       {
@@ -123009,7 +123010,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1372",
+      "site": "packages/keiko-server/src/store-handlers.ts:1383",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

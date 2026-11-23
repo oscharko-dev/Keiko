@@ -862,6 +862,15 @@ function messagesBeforeRun(
   const listed = store.listMessages(id, 200);
   return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
 }
+function hasTasksForProject(db: DatabaseSync, projectPath: string): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 AS found FROM coding_history_tasks t JOIN chats c ON c.id = t.chat_id WHERE c.project_path = ? LIMIT 1",
+    )
+    .get(projectPath);
+  return row !== undefined;
+}
+
 export function createCodingHistoryStore(
   db: DatabaseSync,
   store: UiStore,
@@ -887,12 +896,7 @@ export function createCodingHistoryStore(
       const row = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
       return typeof row?.chat_id === "string" ? readTask(db, store, row.chat_id) : undefined;
     },
-    hasTasksForProject: (projectPath): boolean =>
-      db
-        .prepare(
-          "SELECT 1 AS found FROM coding_history_tasks t JOIN chats c ON c.id = t.chat_id WHERE c.project_path = ? LIMIT 1",
-        )
-        .get(projectPath) !== undefined,
+    hasTasksForProject: (projectPath) => hasTasksForProject(db, projectPath),
     intentMessageId: (runId) => readIntentMessageId(db, runId),
     bindNativeTurn: (runId, nativeMessageId, text) =>
       bindNativeTurn(db, store, now, runId, nativeMessageId, text),

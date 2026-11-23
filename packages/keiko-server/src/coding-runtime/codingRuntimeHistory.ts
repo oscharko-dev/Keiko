@@ -64,6 +64,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
         "updated",
         "failed",
         "unavailable",
+        "refused",
       ],
     },
     conversationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -130,7 +131,11 @@ type HistoryEvent =
   | "read"
   | "updated"
   | "failed"
-  | "unavailable";
+  | "unavailable"
+  | "refused";
+
+/** The closed kinds a refused history request carries (HTTP 404, 409 and 400). */
+export type CodingHistoryRefusalKind = "unavailable" | "conflict" | "invalid-request";
 
 interface HistoryLogInput {
   readonly correlationId: string;
@@ -147,6 +152,7 @@ interface HistoryLogInput {
   readonly previousStatus?: "active" | "completed";
   readonly status?: "active" | "completed";
   readonly titleChanged?: boolean;
+  readonly refusalKind?: CodingHistoryRefusalKind;
   readonly error?: unknown;
 }
 
@@ -164,14 +170,22 @@ function historyError(error: unknown): {
       };
 }
 
+function historyErrorKind(
+  refusalKind: CodingHistoryRefusalKind | undefined,
+  error: unknown,
+): CodingHistoryRefusalKind | "internal" {
+  if (refusalKind !== undefined) return refusalKind;
+  return error === undefined ? "unavailable" : "internal";
+}
+
 function recordHistory(
   log: ServerLogSink | undefined,
   event: HistoryEvent,
   input: HistoryLogInput,
 ): void {
-  const failed = event === "failed" || event === "unavailable";
+  const failed = event === "failed" || event === "unavailable" || event === "refused";
   const incomplete = failed || input.truncated === true;
-  const { correlationId, messageCount = 0, truncated = false, error, ...ids } = input;
+  const { correlationId, messageCount = 0, truncated = false, error, refusalKind, ...ids } = input;
   log?.write(
     activityLogEvent(
       HISTORY_OPERATION,
@@ -180,7 +194,7 @@ function recordHistory(
         ...(failed
           ? ({
               level: "warn",
-              errorKind: error === undefined ? "unavailable" : "internal",
+              errorKind: historyErrorKind(refusalKind, error),
             } as const)
           : {}),
       },
@@ -207,7 +221,7 @@ const TASK_TITLE_MAX_CODE_POINTS = 100;
 /** One clean line: unsafe characters dropped, whitespace collapsed, cut by code point. */
 function taskTitle(intent: string): string {
   const line = stripUnsafeFormatChars(intent).replace(/\s+/gu, " ").trim();
-  return [...line].slice(0, TASK_TITLE_MAX_CODE_POINTS).join("").trim();
+  return Array.from(line).slice(0, TASK_TITLE_MAX_CODE_POINTS).join("").trim();
 }
 
 function digest(value: string): string {
@@ -356,6 +370,25 @@ export class CodingRuntimeHistory {
         truncated: detail.truncated,
       });
     return detail;
+  }
+
+  /** Whether the operator owns the task; a cheap lookup that reads no conversation. */
+  public exists(id: string): boolean {
+    const operator = this.operator();
+    return operator !== undefined && this.store.codingHistory?.get(id, operator) !== undefined;
+  }
+
+  /** Records a refused history request under the request's correlation id (body-free). */
+  public refuse(
+    correlationId: string,
+    refusalKind: CodingHistoryRefusalKind,
+    conversationId?: string,
+  ): void {
+    recordHistory(this.log, "refused", {
+      correlationId,
+      refusalKind,
+      ...(conversationId === undefined ? {} : { conversationId }),
+    });
   }
 
   /**
@@ -665,7 +698,14 @@ export class CodingRuntimeHistory {
     content: CodingSafeActivityContent | null | undefined,
   ): void {
     const task = this.forRun(runId);
-    if (task === undefined) return;
+    if (task === undefined) {
+      recordHistory(this.log, "unavailable", {
+        correlationId: runId,
+        runId,
+        captureSource: "display-projection",
+      });
+      return;
+    }
     const feed = content?.feed;
     if (feed?.availability !== "available" || feed.runId !== runId) {
       recordHistory(this.log, "unavailable", {
@@ -715,16 +755,17 @@ export class CodingRuntimeHistory {
     patch: { readonly title?: string; readonly status?: "active" | "completed" },
     correlationId: string,
   ): CodingHistoryTask | undefined {
-    const before = this.detail(id, correlationId);
+    const operator = this.operator();
+    const before = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
     if (before === undefined) return undefined;
     const task = this.store.codingHistory?.update(id, patch);
     if (task !== undefined)
       recordHistory(this.log, "updated", {
         correlationId,
         conversationId: id,
-        previousStatus: before.task.status,
+        previousStatus: before.status,
         status: task.status,
-        titleChanged: before.task.title !== task.title,
+        titleChanged: before.title !== task.title,
       });
     return task;
   }
