@@ -595,7 +595,7 @@ export const applyQualityIntelligenceCandidateEdit = (
     editorLabel: redactKeepingShape(
       input.redact,
       input.provenance.editorLabel,
-      isString,
+      isNonEmptyString,
       "editorLabel",
     ),
   };

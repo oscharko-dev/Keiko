@@ -452,10 +452,12 @@ async function* bodyChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uin
   const reader = body.getReader();
   let leftAtChunk = false;
   try {
-    for (let next = await reader.read(); !next.done; next = await reader.read()) {
+    let next = await reader.read();
+    while (!next.done) {
       leftAtChunk = true;
       yield next.value;
       leftAtChunk = false;
+      next = await reader.read(); // NOSONAR typescript:S9382 -- each read waits for the previous chunk
     }
   } finally {
     if (leftAtChunk) await reader.cancel();

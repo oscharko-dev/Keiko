@@ -1290,7 +1290,7 @@ async function runOcrForImageOnlyPdf(
       mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
       pageNumber: page.pageNumber,
     };
-    const result: InternalParserResult = await ocrParser.parseAsync(input, options);
+    const result: InternalParserResult = await ocrParser.parseAsync(input, options); // NOSONAR typescript:S9382 -- each page advances the shared text cursor in page order
     parser = result.parser;
     diagnostics.push(...result.diagnostics);
     const text = result.normalizedText?.trim() ?? "";
