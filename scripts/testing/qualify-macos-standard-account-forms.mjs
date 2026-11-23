@@ -178,11 +178,17 @@ export function nodeUserInstallScript({ nodeVersion, nodeArch, keikoVersion }) {
 
 /** The account's groups and whether it may use sudo: what makes a run certify the promise. */
 export function accountFacts(run = spawnSync) {
-  const groups = String(run("id", ["-Gn"], { encoding: "utf8" }).stdout ?? "")
+  const id = run("id", ["-Gn"], { encoding: "utf8" });
+  const groups = String(id.stdout ?? "")
     .trim()
     .split(/\s+/u)
     .filter(Boolean);
+  if (id.error !== undefined || id.status !== 0 || groups.length === 0) {
+    refuse("the account's groups could not be read");
+  }
   const sudo = run("sudo", ["-n", "true"], { encoding: "utf8", timeout: 10_000 });
+  // A sudo that could not start or ran out of time refused nothing; only its own answer counts.
+  if (sudo.error !== undefined || sudo.status === null) refuse("sudo could not be asked");
   return {
     groups,
     administrator: groups.includes("admin"),
@@ -221,9 +227,8 @@ export function markedOutcome({ healthy, codingRun }) {
 }
 
 /**
- * Whether Gatekeeper assesses programs on this Mac (`spctl --status`). It is on by default; a
- * hosted CI image turns it off, and there a marked copy runs whatever the mark says, so its start
- * observes nothing about the mark.
+ * Whether Gatekeeper assesses programs on this Mac (`spctl --status`), recorded beside the outcome.
+ * It was on on the hosted runner too, and the marked copy still ran there (#4520).
  */
 export function gatekeeperState(run = spawnSync) {
   const result = run("/usr/sbin/spctl", ["--status"], { encoding: "utf8" });
@@ -231,6 +236,16 @@ export function gatekeeperState(run = spawnSync) {
   if (/assessments enabled/u.test(text)) return "enabled";
   if (/assessments disabled/u.test(text)) return "disabled";
   return "unknown";
+}
+
+/**
+ * Whether the account owns this Mac's desktop session (the owner of `/dev/console`). Where it does,
+ * macOS held a marked copy with its "Not Opened" dialog; where it does not, as for the account on a
+ * hosted runner, the marked copy ran. A pinned outcome therefore holds only in a desktop session.
+ */
+export function desktopSession(account = userInfo().username, run = spawnSync) {
+  const owner = run("/usr/bin/stat", ["-f", "%Su", "/dev/console"], { encoding: "utf8" });
+  return owner.status === 0 && String(owner.stdout ?? "").trim() === account;
 }
 
 /** A form passed only when its checks ran through to a coding run that settled `succeeded`. */
@@ -242,28 +257,34 @@ function formPassed(entry) {
 }
 
 /**
+ * Whether the marked-download observation holds. It needs a mark on the extracted files, without
+ * which it shows nothing about the mark, and a pinned outcome holds only in a desktop session.
+ */
+function markedMatches(marked, expectMarked) {
+  if (marked === undefined || marked.markedEntryCount === 0) return false;
+  if (!MARKED_OUTCOMES.includes(marked.outcome)) return false;
+  if (expectMarked === "record") return true;
+  return marked.desktopSession === true && expectMarked === marked.outcome;
+}
+
+/**
  * The body-free evidence: closed values, counts, digests and durations. A pinned marked outcome
- * holds only where Gatekeeper assesses programs; `record` records whatever the start showed.
+ * holds only in the account's desktop session; `record` records whatever the start showed. Only a
+ * run under `--account standard` certifies; a rehearsal under another account never does.
  */
 export function buildFormsEvidence({ options, account, forms, marked, runner }) {
   const formsPassed = FORMS.every((form) =>
     forms.some((entry) => entry.form === form && formPassed(entry)),
   );
-  // An observation of a marked copy needs a mark on the extracted files; without one it shows
-  // nothing about the mark.
-  const markedMatches =
-    marked !== undefined &&
-    marked.markedEntryCount > 0 &&
-    MARKED_OUTCOMES.includes(marked.outcome) &&
-    (options.expectMarked === "record" ||
-      (marked.gatekeeper === "enabled" && options.expectMarked === marked.outcome));
-  const passed = formsPassed && markedMatches;
-  const standard = !account.administrator && account.sudo === "refused";
+  const passed = formsPassed && markedMatches(marked, options.expectMarked);
+  const standard =
+    options.account === "standard" && !account.administrator && account.sudo === "refused";
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     kind: EVIDENCE_KIND,
     version: options.version,
     nodeVersion: options.nodeVersion,
+    accountMode: options.account,
     account,
     runner,
     passed,
@@ -392,7 +413,8 @@ function npmForm(context) {
           logPath: join(context.work, "npm-install.log"),
           timeoutMs: INSTALL_TIMEOUT_MS,
         });
-        ensure(result.status === 0, `exit ${String(result.status)}: ${tail(result.output)}`);
+        if (result.status !== 0) console.log(`npm-install: ${tail(result.output)}`);
+        ensure(result.status === 0, `exit ${String(result.status)}`);
         ensure(existsSync(keiko), "npm installed no keiko command");
       });
     },
@@ -492,7 +514,9 @@ function runCommand(spec, env, context, name, timeoutMs) {
 /** Runs a start or stop file and requires it to exit 0. */
 async function runSucceeded(spec, env, context, name, timeoutMs) {
   const result = await runCommand(spec, env, context, name, timeoutMs);
-  ensure(result.status === 0, `exit ${String(result.status)}: ${tail(result.output)}`);
+  // The output goes to the job log only; the evidence keeps the closed exit status.
+  if (result.status !== 0) console.log(`${name}: ${tail(result.output)}`);
+  ensure(result.status === 0, `exit ${String(result.status)}`);
   return result;
 }
 
@@ -550,7 +574,13 @@ async function stopChecks(form, checks, env, context) {
 function keepActivityLog(form, context) {
   const logs = join(form.stateDir, "logs");
   if (!existsSync(logs)) return;
-  cpSync(logs, join(context.logDir, form.form), { recursive: true });
+  try {
+    cpSync(logs, join(context.logDir, form.form), { recursive: true });
+  } catch (error) {
+    // The log is the record, not a check: a copy that failed is said, and the form's verdict stands.
+    const detail = error instanceof Error ? error.message : String(error);
+    console.log(`${form.form}: the Activity Log could not be kept (${detail})`);
+  }
 }
 
 /** Ends whatever a failed form left running, so the next form starts from an empty state. */
@@ -607,8 +637,15 @@ async function qualifyMarkedDownload(context) {
   if (markedEntries === 0)
     refuse("the extracted copy carries no download mark: nothing to observe");
   const gatekeeper = gatekeeperState();
-  console.log(`marked-download: ${String(markedEntries)} marked entries; Gatekeeper ${gatekeeper}`);
-  return { gatekeeper, ...(await observeMarkedStart(form, context, markedEntries)) };
+  const desktop = desktopSession();
+  console.log(
+    `marked-download: ${String(markedEntries)} marked entries; Gatekeeper ${gatekeeper}; desktop session ${desktop ? "yes" : "no"}`,
+  );
+  return {
+    gatekeeper,
+    desktopSession: desktop,
+    ...(await observeMarkedStart(form, context, markedEntries)),
+  };
 }
 
 // A coding run of the marked copy: its failure is the observation, recorded with its reason.

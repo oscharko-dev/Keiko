@@ -8,9 +8,9 @@
 // and the per-user folder macOS assigns it under /var/folders (its temporary and cache folders). Of
 // the rest, an entry counts against the promise when the account owns it: the account created or
 // replaced it. Two kinds of change are listed but not attributed:
-//   - an entry the account owns inside a folder macOS's own services (trustd, sfanalytics, mds)
-//     keep for that account below /private/var, named after its GeneratedUID or its uid: like
-//     /var/folders, an area the system assigns the account, not one a program it runs chooses;
+//   - an entry the account owns inside one of the three folders macOS's own services keep for it
+//     (trustd's and sfanalytics' under its GeneratedUID, mds's under its uid; see inSystemArea):
+//     like /var/folders, an area the system assigns the account, not one a program it runs chooses;
 //   - a regular file of another account that the account may also write by its mode bits: a change
 //     to it cannot be told apart from that account's own change (on a hosted runner, the runner
 //     account works through the whole job).
@@ -88,7 +88,9 @@ function directoryValue(run, account, key) {
  */
 export function accountAreas(account, run = output) {
   const uid = Number(run("id", ["-u", account]));
-  const gids = run("id", ["-G", account]).split(/\s+/u).map(Number);
+  const gids = run("id", ["-G", account])
+    .split(/\s+/u)
+    .map((gid) => Number(gid));
   const home = directoryValue(run, account, "NFSHomeDirectory");
   const guid = directoryValue(run, account, "GeneratedUID");
   // DARWIN_USER_DIR is <per-user folder>/0/; its parent also holds the T (temporary) and C
@@ -112,18 +114,25 @@ export function writableBy(stats, { uid, gids }) {
 }
 
 /**
- * Whether an entry lies below /private/var in a folder named after the account's GeneratedUID or
- * its uid: there macOS's own services keep what they hold for that account (trustd its trust
- * cache, sfanalytics its analytics, mds its messages) and create it as the account.
+ * Whether an entry lies in one of the folders macOS's own services keep for the account and create
+ * as the account: trustd's trust cache and sfanalytics' analytics under its GeneratedUID, mds's
+ * messages under its uid. Only these exact parents count; anything else the account owns below
+ * /private/var, `/private/var/tmp/<uid>` included, is `owned`.
  */
 export function inSystemArea(path, { uid, guid }, volume = DATA_VOLUME) {
-  const prefix = `${volume}/private/var/`;
-  if (!path.startsWith(prefix)) return false;
-  const named = new Set([guid.toUpperCase(), String(uid)]);
-  return path
-    .slice(prefix.length)
-    .split("/")
-    .some((segment) => named.has(segment.toUpperCase()));
+  // The data volume compares names without case, and a GeneratedUID is the same in either case.
+  const entry = path.toUpperCase();
+  const parents = [
+    `${volume}/private/var/protected/trustd/private/${guid}`,
+    `${volume}/private/var/protected/sfanalytics/${guid}`,
+    `${volume}/private/var/db/mds/messages/${String(uid)}`,
+  ].map((parent) => parent.toUpperCase());
+  return parents.some((parent) => entry === parent || entry.startsWith(`${parent}/`));
+}
+
+/** A walk passes without a violation, and only when it read every folder: one it could not read hides what is in it. */
+export function walkPassed(violationCount, unreadableFolderCount) {
+  return violationCount === 0 && unreadableFolderCount === 0;
 }
 
 /** The entry's own metadata, or undefined when it is no longer there. */
@@ -249,7 +258,7 @@ function runFootprint(options) {
     counts: summary.counts,
     violationCount: summary.violationCount,
     listed: summary.listed,
-    passed: summary.violationCount === 0,
+    passed: walkPassed(summary.violationCount, unreadable),
     durationMs: Math.round(performance.now() - started),
   };
 }

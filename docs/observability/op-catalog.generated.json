@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9991d561bad4cdea1616923b5652891a2aa67ca653e046146765eadf2a6fded",
+    "catalogDigest": "ce45248e2db21fb0464f92e56b6dfb1864a0bbc1d62336f9375ae19eb368fd09",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32764,9 +32764,9 @@
         "failureClasses": ["runtime-git-identity"],
         "proofIds": ["git.runtime-identity.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:20",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:27",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:179"
+          "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:185"
         ]
       },
       {
@@ -125883,7 +125883,7 @@
     {
       "op": "git.runtime-identity",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:23",
+      "site": "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.ts:30",
       "package": "keiko-server"
     },
     {

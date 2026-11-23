@@ -23,6 +23,7 @@ import {
   onDataVolume,
   parseFootprintArgs,
   summarize,
+  walkPassed,
   writableBy,
 } from "../testing/standard-account-footprint.mjs";
 
@@ -72,9 +73,10 @@ describe("writableBy", () => {
 });
 
 describe("inSystemArea", () => {
-  it("names a folder below /private/var named after the account's GeneratedUID or uid", () => {
+  it("names the folders trustd, sfanalytics and mds keep for the account", () => {
     for (const path of [
       `${DATA_VOLUME}/private/var/protected/trustd/private/${GUID}`,
+      `${DATA_VOLUME}/private/var/protected/trustd/private/${GUID}/ocspcache.sqlite3`,
       `${DATA_VOLUME}/private/var/protected/sfanalytics/${GUID.toLowerCase()}/trust_analytics.db`,
       `${DATA_VOLUME}/private/var/db/mds/messages/501/se_SecurityMessages`,
     ]) {
@@ -82,8 +84,13 @@ describe("inSystemArea", () => {
     }
   });
 
-  it("names no folder outside /private/var, of another account, or by a partial match", () => {
+  it("names no other folder, even one named after the account", () => {
     for (const path of [
+      `${DATA_VOLUME}/private/var/tmp/501/output`,
+      `${DATA_VOLUME}/private/var/tmp/${GUID}/output`,
+      `${DATA_VOLUME}/private/var/protected/trustd/${GUID}/x`,
+      `${DATA_VOLUME}/private/var/protected/sfanalytics/${GUID}-old/x`,
+      `${DATA_VOLUME}/private/var/db/mds/messages/5010/x`,
       `${DATA_VOLUME}/Users/Shared/${GUID}/x`,
       `${DATA_VOLUME}/Library/501/x`,
       `${DATA_VOLUME}/private/var/db/mds/messages/502/se_SecurityMessages`,
@@ -93,6 +100,14 @@ describe("inSystemArea", () => {
     ]) {
       expect(inSystemArea(path, ACCOUNT)).toBe(false);
     }
+  });
+});
+
+describe("walkPassed", () => {
+  it("passes only without a violation and with every folder read", () => {
+    expect(walkPassed(0, 0)).toBe(true);
+    expect(walkPassed(1, 0)).toBe(false);
+    expect(walkPassed(0, 1)).toBe(false);
   });
 });
 

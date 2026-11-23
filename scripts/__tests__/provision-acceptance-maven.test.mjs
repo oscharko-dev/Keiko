@@ -128,6 +128,10 @@ printf '%s\\n' "$@" > "$repo/arguments.txt"`;
     buildCache(where);
     const passed = readFileSync(join(where.cacheDirectory, "arguments.txt"), "utf8").split("\n");
     expect(passed).toEqual(expect.arrayContaining([...MAVEN_RETRY_ARGUMENTS]));
+    // Maven 3.9 (Resolver 1) and Maven 4 (Resolver 2) each read only their own names.
+    for (const family of ["connector", "transport"]) {
+      expect(passed).toContain(`-Daether.${family}.http.retryHandler.count=6`);
+    }
     expect(passed.at(-2)).toBe("test");
   });
 

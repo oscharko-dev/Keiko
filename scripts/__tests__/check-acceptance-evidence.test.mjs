@@ -39,6 +39,54 @@ const CERTIFYING = {
   ],
 };
 
+// The shape productionOpenCodeBackend.acceptance.test.ts writes per case (EvidenceEntry with an
+// AcceptanceObservation): closed values, counts, and closed `a:b:c` or `state step` lines.
+const OBSERVED = {
+  state: "succeeded",
+  settledState: "succeeded",
+  failureCode: null,
+  verificationBlockedReason: "verification-command-denied",
+  approvalCount: 2,
+  denialCount: 1,
+  testerCheckExitCode: 0,
+  runCheckCount: 1,
+  outsideSourceUnchanged: true,
+  editLanded: true,
+  confinement: [
+    {
+      backend: "seatbelt",
+      profile: "keiko-native",
+      egressDisposition: "loopback-only",
+      workspaceAccess: "read-write",
+    },
+  ],
+  verificationSummaries: ["test:failed", "test:passed"],
+  continuations: ["completed"],
+  buildSettings: [{ launchMode: "native", relayRefusalReasons: ["none"], relayMavenBoundCount: 0 }],
+  repositoryRequests: { 200: 3, 401: 1 },
+  relayLines: ["request:allowed:-"],
+  governedVerifications: ["not-run test:isolation-unavailable"],
+  dependencyBootstraps: ["host-shell:installed:-:refused=0"],
+  credentialFootprint: {
+    scanCount: 4,
+    settingsFilesScanned: 2,
+    leakedFileCount: 0,
+    leakedLogLineCount: 0,
+  },
+  durationMs: 1234,
+};
+const REAL_CASE = {
+  caseId: "verify-supervised-coding",
+  acceptanceCase: { mode: "supervised-coding", variant: "fixed", check: "verify" },
+  observed: OBSERVED,
+  metExpectation: true,
+};
+const REAL_SHAPE = { ...CERTIFYING, cases: [REAL_CASE] };
+
+function withObserved(patch) {
+  return { ...REAL_SHAPE, cases: [{ ...REAL_CASE, observed: { ...OBSERVED, ...patch } }] };
+}
+
 describe("acceptanceEvidenceFailures (#4519)", () => {
   it("certifies a standard user without a container runtime whose cases all met", () => {
     expect(acceptanceEvidenceFailures(CERTIFYING)).toEqual([]);
@@ -100,6 +148,70 @@ describe("acceptanceEvidenceFailures (#4519)", () => {
   it("does not certify a run whose own verdict is false even when every fact agrees", () => {
     expect(acceptanceEvidenceFailures({ ...CERTIFYING, certifiesPromise: false })).toEqual([
       "not-certified",
+    ]);
+  });
+});
+
+describe("acceptanceEvidenceFailures body-free scan (#4492 AC6)", () => {
+  const BODY = "/Users/jane/work/invoice.js";
+
+  it("passes evidence of the producer's real shape", () => {
+    expect(acceptanceEvidenceFailures(REAL_SHAPE)).toEqual([]);
+  });
+
+  it.each([
+    ["a task text in a nested field", { dependencyBootstraps: ["Fix the invoice total please"] }],
+    ["an absolute path", { relayLines: ["/Users/jane/project/src/invoice.js"] }],
+    ["a home-relative path", { relayLines: ["~/project/src/invoice.js"] }],
+    ["a Windows path", { relayLines: ["C:\\Users\\jane\\invoice.js"] }],
+    ["a model answer with spaces", { state: "I changed the total to add VAT" }],
+    ["a newline", { state: "succeeded\nsecond" }],
+    ["an over-long string", { state: "a".repeat(129) }],
+    ["a string inside an array", { verificationSummaries: ["test:passed", "see /etc/hosts"] }],
+  ])("fails %s, naming the pointer and never the value", (_name, patch) => {
+    const failures = acceptanceEvidenceFailures(withObserved(patch));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/^body-free:\/cases\/0\/observed\/[A-Za-z]+(\/\d+)?$/u);
+    expect(JSON.stringify(failures)).not.toMatch(/invoice|jane|VAT|hosts|second|aaaa|Users/u);
+  });
+
+  it("fails a content-named key even when its value is a closed token", () => {
+    const failures = acceptanceEvidenceFailures(withObserved({ prompt: "ok", taskPath: "ok" }));
+    expect(failures).toEqual([
+      "body-free:/cases/0/observed/prompt",
+      "body-free:/cases/0/observed/taskPath",
+    ]);
+  });
+
+  it("names a hostile key by position, never by its text", () => {
+    const failures = acceptanceEvidenceFailures(withObserved({ [BODY]: 1 }));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).not.toContain("Users");
+    expect(failures[0]).toMatch(/^body-free:\/cases\/0\/observed\/<key>$/u);
+  });
+
+  it("fails a body inside the top-level facts and unreadable nesting", () => {
+    expect(acceptanceEvidenceFailures({ ...REAL_SHAPE, node: "26 /usr/bin/node" })).toEqual([
+      "body-free:/node",
+    ]);
+    expect(acceptanceEvidenceFailures({ ...REAL_SHAPE, extra: [[BODY]] })).toEqual([
+      "body-free:/extra/0/0",
+    ]);
+  });
+
+  it("reports the failure through runCheck without echoing the value", () => {
+    const lines = { log: [], error: [] };
+    const io = { log: (l) => lines.log.push(l), error: (l) => lines.error.push(l) };
+    const root = mkdtempSync(join(tmpdir(), "acceptance-evidence-"));
+    try {
+      const file = join(root, "evidence.json");
+      writeFileSync(file, JSON.stringify(withObserved({ state: BODY })));
+      expect(runCheck(["node", "check", file], io)).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    expect(lines.error).toEqual([
+      "check-acceptance-evidence: FAIL does not certify the promise: body-free:/cases/0/observed/state",
     ]);
   });
 });

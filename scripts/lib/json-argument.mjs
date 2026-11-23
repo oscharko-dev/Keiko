@@ -10,12 +10,16 @@
 
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { resolve, sep } from "node:path";
+import { isAbsolute, parse, relative, resolve, sep } from "node:path";
 
 import { readJsonFile } from "./json.mjs";
 
-function permittedRoots() {
-  return [process.cwd(), homedir(), tmpdir()].map((root) => realpathSync(root));
+/**
+ * The canonical permitted folders. A filesystem root is none of them: a working directory of `/`,
+ * as in a container, would otherwise admit every `.json` file on the machine.
+ */
+export function permittedRoots(folders = [process.cwd(), homedir(), tmpdir()]) {
+  return folders.map((folder) => realpathSync(folder)).filter((root) => root !== parse(root).root);
 }
 
 /**
@@ -25,8 +29,12 @@ function permittedRoots() {
 export function permittedJsonPath(file, roots = permittedRoots()) {
   const candidate = realpathSync(resolve(file));
   if (!candidate.endsWith(".json")) return undefined;
+  // `relative` holds for any root, the filesystem root included: a path inside it never climbs out
+  // through `..` and is never absolute (another drive on Windows), and the root itself is no file.
   for (const root of roots) {
-    if (candidate.startsWith(`${root}${sep}`)) return candidate;
+    const inside = relative(root, candidate);
+    const climbs = inside === ".." || inside.startsWith(`..${sep}`);
+    if (inside !== "" && !climbs && !isAbsolute(inside)) return candidate;
   }
   return undefined;
 }

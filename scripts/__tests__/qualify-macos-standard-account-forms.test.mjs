@@ -15,6 +15,7 @@ import {
   assertDisposableHome,
   browserDownloadMark,
   buildFormsEvidence,
+  desktopSession,
   gatekeeperState,
   markedEntryCount,
   markedOutcome,
@@ -31,7 +32,12 @@ const read = (path) => readFileSync(resolve(root, path), "utf8");
 
 const STANDARD = { groups: ["staff", "everyone"], administrator: false, sudo: "refused" };
 const ADMINISTRATOR = { groups: ["staff", "admin"], administrator: true, sudo: "refused" };
-const OPTIONS = { version: "1.5.6", nodeVersion: "26.13.1", expectMarked: "record" };
+const OPTIONS = {
+  version: "1.5.6",
+  nodeVersion: "26.13.1",
+  expectMarked: "record",
+  account: "standard",
+};
 
 function passedForms() {
   const checks = [{ name: "coding-run-succeeded", result: "pass", durationMs: 1 }];
@@ -40,6 +46,7 @@ function passedForms() {
 
 const MARKED = {
   gatekeeper: "enabled",
+  desktopSession: true,
   markedEntryCount: 12,
   startExit: 1,
   outcome: "start-refused",
@@ -137,6 +144,24 @@ describe("accountFacts", () => {
     });
     expect(accountFacts(run)).toMatchObject({ administrator: true, sudo: "available" });
   });
+
+  it("refuses an account whose groups or sudo answer could not be read", () => {
+    const refused = [
+      { "id -Gn": { status: 1, stdout: "" }, "sudo -n true": { status: 1, stdout: "" } },
+      { "id -Gn": { status: 0, stdout: "\n" }, "sudo -n true": { status: 1, stdout: "" } },
+      {
+        "id -Gn": { status: null, stdout: "", error: new Error("ENOENT") },
+        "sudo -n true": { status: 1, stdout: "" },
+      },
+      {
+        "id -Gn": { status: 0, stdout: "staff\n" },
+        "sudo -n true": { status: null, stdout: "", error: new Error("ETIMEDOUT") },
+      },
+      { "id -Gn": { status: 0, stdout: "staff\n" }, "sudo -n true": { status: null, stdout: "" } },
+    ];
+    for (const outputs of refused)
+      expect(() => accountFacts(fakeRun(outputs))).toThrow(FormsRefusal);
+  });
 });
 
 describe("download mark", () => {
@@ -173,6 +198,17 @@ describe("buildFormsEvidence", () => {
       runner,
     });
     expect(evidence).toMatchObject({ passed: true, certifies: true, version: "1.5.6" });
+  });
+
+  it("never certifies a rehearsal under --account any, even of a standard account", () => {
+    const evidence = buildFormsEvidence({
+      options: { ...OPTIONS, account: "any" },
+      account: STANDARD,
+      forms: passedForms(),
+      marked: MARKED,
+      runner,
+    });
+    expect(evidence).toMatchObject({ passed: true, certifies: false, accountMode: "any" });
   });
 
   it("never certifies an administrator or an account that may use sudo", () => {
@@ -226,20 +262,18 @@ describe("buildFormsEvidence", () => {
     expect(evidence.passed).toBe(false);
   });
 
-  it("holds a pinned outcome only where Gatekeeper assesses programs", () => {
+  it("holds a pinned outcome only in the account's desktop session", () => {
     const options = { ...OPTIONS, expectMarked: MARKED.outcome };
     const evidence = (marked) =>
       buildFormsEvidence({ options, account: STANDARD, forms: passedForms(), marked, runner });
     expect(evidence(MARKED).passed).toBe(true);
-    for (const gatekeeper of ["disabled", "unknown"]) {
-      expect(evidence({ ...MARKED, gatekeeper }).passed).toBe(false);
-    }
-    // Recording observes whatever the start showed, also where Gatekeeper is off.
+    expect(evidence({ ...MARKED, desktopSession: false }).passed).toBe(false);
+    // Recording observes whatever the start showed, also without a desktop session.
     const recorded = buildFormsEvidence({
       options: OPTIONS,
       account: STANDARD,
       forms: passedForms(),
-      marked: { ...MARKED, gatekeeper: "disabled", outcome: "started-coding-run-succeeded" },
+      marked: { ...MARKED, desktopSession: false, outcome: "started-coding-run-succeeded" },
       runner,
     });
     expect(recorded.passed).toBe(true);
@@ -259,6 +293,19 @@ describe("gatekeeperState", () => {
   it("names anything else unknown, never enabled", () => {
     expect(gatekeeperState(answer(""))).toBe("unknown");
     expect(gatekeeperState(() => ({ error: new Error("ENOENT") }))).toBe("unknown");
+  });
+});
+
+describe("desktopSession", () => {
+  const owner =
+    (stdout, status = 0) =>
+    () => ({ stdout, stderr: "", status });
+
+  it("is the account's own only where it owns the console", () => {
+    expect(desktopSession("keikoqa", owner("keikoqa\n"))).toBe(true);
+    expect(desktopSession("keikoqa", owner("runner\n"))).toBe(false);
+    expect(desktopSession("keikoqa", owner("keikoqa\n", 1))).toBe(false);
+    expect(desktopSession("keikoqa", () => ({ error: new Error("ENOENT") }))).toBe(false);
   });
 });
 

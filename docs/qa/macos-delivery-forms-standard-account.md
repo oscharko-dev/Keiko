@@ -37,23 +37,27 @@ pass.
 
 Then a copy of the standalone archive gets the mark a browser writes (`com.apple.quarantine`) and
 is extracted with `ditto`, which carries the mark to every extracted file. The record names how
-many entries carry it, whether Gatekeeper assesses programs on that Mac (`spctl --status`), and
-what the start did: `start-refused`, `started-coding-run-failed` or `started-coding-run-succeeded`.
-An extracted copy without a mark observes nothing and fails the job. A hosted macOS image turns
-Gatekeeper off, so there the mark changes nothing and the outcome says nothing about a Mac where
-Gatekeeper is on; a pinned outcome (`--expect-marked`) holds only where it is on.
+many entries carry it, whether Gatekeeper assesses programs on that Mac (`spctl --status`), whether
+the account owns the desktop session (the owner of `/dev/console`), and what the start did:
+`start-refused`, `started-coding-run-failed` or `started-coding-run-succeeded`. An extracted copy
+without a mark observes nothing and fails the job. On the hosted runner Gatekeeper is on, but the
+account has no desktop session, and there the marked copy runs: that outcome says nothing about a
+person at a Mac. A pinned outcome (`--expect-marked`) holds only in the account's own desktop
+session, the only setting in which macOS was seen to hold a marked copy.
 
 After the forms, `scripts/testing/standard-account-footprint.mjs` walks the whole writable data
 volume (`/System/Volumes/Data`) as root and lists every entry changed after a marker the job wrote
 before the account acted. It ignores the account's home and the per-user folder macOS assigns it
 under `/var/folders` (its temporary and cache folders). An entry counts against the promise when
-the account owns it: the account created or replaced it, and the job fails. Two kinds of change
-are listed in full but not attributed:
+the account owns it: the account created or replaced it, and the job fails. A folder the walk could
+not read also fails it. Two kinds of change are listed in full but not attributed:
 
-- An entry the account owns in a folder below `/private/var` that macOS's own services name after
-  the account's GeneratedUID or uid (trustd's trust cache, sfanalytics, mds messages). Like
-  `/var/folders`, the system assigns that folder to the account; no program the account runs
-  chooses it.
+- An entry the account owns in one of three folders macOS's own services keep for it: trustd's
+  trust cache (`/private/var/protected/trustd/private/<GeneratedUID>`), sfanalytics
+  (`/private/var/protected/sfanalytics/<GeneratedUID>`) and mds messages
+  (`/private/var/db/mds/messages/<uid>`). Like `/var/folders`, the system assigns these folders to
+  the account; no program the account runs chooses them. Any other entry the account owns below
+  `/private/var`, `/private/var/tmp/<uid>` included, counts against the promise.
 - A regular file of another account that the account may also write. A change to it cannot be told
   apart from that account's own change, and on a hosted runner the runner account works through
   the whole job. A program the account runs that wrote outside its areas would create a file there,
@@ -67,20 +71,19 @@ To be filled from the job's run on the pull request.
 
 - **The desktop session.** The account acts without a desktop session or a terminal, so a step
   that asked for an administrator would fail, not wait. A dialog that only a desktop session
-  shows, such as Finder's approval of a marked program, is not exercised: the standard-user proof
-  comes only from the hosted runner (owner decision 2026-11-23).
+  shows, such as macOS's "Not Opened" dialog for a marked program, is not exercised: the
+  standard-user proof comes only from the hosted runner (owner decision 2026-11-23).
 - **The login keychain.** The account has no login session, so Keiko runs with
   `KEIKO_OS_KEYCHAIN=off`; the keychain lies in the account's home in any case.
 - **An internal file share.** A copy taken from a share carries no mark; the job stands in for it
   with a copy that carries none, written by the download and the builder.
-- **Folders root cannot read, and other volumes.** A folder that even root cannot read (protected
-  by the system's privacy controls) is counted, not walked; a standard account cannot write there
-  either. The walk stays on the data volume, so an external disk or a mounted share is not
-  examined.
+- **Other volumes.** The walk stays on the data volume, so an external disk or a mounted share is
+  not examined. A folder that even root cannot read fails the walk instead of being skipped.
 - **Intel Macs.** The job runs on Apple silicon (`macos-15`).
 - **Changes to files other accounts also write.** The footprint walk lists them; it cannot tell
   whether the account or their owner changed one. It proves that the account created nothing
   outside its areas.
-- **The marked download where Gatekeeper is on, as a standard account.** The hosted image has
-  Gatekeeper off. The observation with Gatekeeper on comes from a Mac where an administrator ran the
-  same qualification (`--account any`): macOS held the folder's Node.js before it ran.
+- **The marked download in a standard account's desktop session.** The hosted runner's account
+  has none. The observation in a desktop session comes from a Mac where an administrator ran the
+  same qualification (`--account any`, Gatekeeper on): macOS held the folder's Node.js before it
+  ran and showed "“Keiko” Not Opened", and the start never reported health.

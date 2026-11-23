@@ -178,7 +178,9 @@ It records no path, no task text, no model answer and no other content.
 [`scripts/check-acceptance-evidence.mjs`](../../scripts/check-acceptance-evidence.mjs) reads that
 file, prints the platform, the user class, every sign of a container runtime and the case count,
 and passes only when the evidence certifies the promise. It recomputes each precondition from the
-facts instead of trusting `certifiesPromise`, and it names every precondition that failed.
+facts instead of trusting `certifiesPromise`, and it names every precondition that failed. It also
+fails on any string that is not a closed token (a path, a task text or a model answer), and on any
+key that names content, naming the JSON pointer and never the value (#4492 AC6).
 
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)
@@ -525,8 +527,11 @@ The record is body-free: no task text, path or model answer.
 | 6    | npm package only an authenticated internal registry serves | own folder       | Supervised workspace             | `dev`: failed, the relay defect of #4530. #4537: `succeeded`, all five criteria                                                     |
 | 7    | Maven, dependencies only from an authenticated repository  | own folder       | Supervised workspace             | `succeeded`, all five criteria                                                                                                      |
 
-No case changed anything outside `src/` (`node_modules` and `package-lock.json` excluded for npm,
-`target` for Maven).
+Criterion 3 was checked with `git status --porcelain --ignored` on everything outside `src/` and
+`.acceptance-checks`, and outside `target` for Maven. In every npm case the check also left out
+`node_modules` and `package-lock.json`: in case 5 Keiko's dependency installation creates them.
+No case changed anything else outside `src/`. That an installed `node_modules` stayed unchanged
+is therefore not established by this record.
 
 Two code defects surfaced and were repaired in #4537, each with a test that failed first:
 
