@@ -456,13 +456,13 @@ export async function silentNativeChildren(
 ): Promise<ReadonlySet<string>> {
   if (owed.size === 0 || parentMessages.at(-1)?.type !== "idle") return new Set();
   const active = await client.active(signal);
-  const silent = new Set<string>();
-  for (const child of owed) {
-    if (Object.hasOwn(active, child)) continue;
-    const newest = (await client.recentMessages(child, signal)).messages.at(-1);
-    if (newest?.type === "assistant" && newest.finish === "error") silent.add(child);
-  }
-  return silent;
+  const ended = [...owed].filter((child) => !Object.hasOwn(active, child));
+  const reads = await Promise.all(ended.map((child) => client.recentMessages(child, signal)));
+  return new Set(ended.filter((_child, index) => interruptedStep(reads[index]?.messages.at(-1))));
+}
+
+function interruptedStep(newest: Readonly<Record<string, unknown>> | undefined): boolean {
+  return newest?.type === "assistant" && newest.finish === "error";
 }
 
 /**

@@ -122,11 +122,15 @@ function insertSchedule(database: DatabaseSync, row: ScheduleRow, index: number)
     )
     .run(
       row.id,
-      ...[row.session_id, row.status, row.name, row.trigger, row.action].map(orNull),
-      ...[row.next_due_at, row.retry_at].map(orNull),
+      ...[row.session_id, row.status, row.name, row.trigger, row.action].map((value) =>
+        orNull(value),
+      ),
+      ...[row.next_due_at, row.retry_at].map((value) => orNull(value)),
       row.run_count ?? 0,
       row.failures ?? 0,
-      ...[row.expires_at, row.state, row.event_position, row.last_output].map(orNull),
+      ...[row.expires_at, row.state, row.event_position, row.last_output].map((value) =>
+        orNull(value),
+      ),
       index,
       index,
     );
