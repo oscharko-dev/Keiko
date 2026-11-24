@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { mapWithConcurrency } from "@oscharko-dev/keiko-contracts/runtime/bounded-concurrency";
 import {
   isValidScopePath,
   type RetrievalQuery,
@@ -37,8 +38,14 @@ import {
   type SearchPolicyMode,
 } from "./repoSearchPolicy.js";
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
-import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import type { DiscoveredFile, WorkspaceInfo, WorkspacePathCase } from "./types.js";
+import { isCaseInsensitivePathCase, workspacePathCase } from "./pathCase.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
+import { splitSourceLines } from "./sourceLines.js";
+import {
+  normalizeWorkspaceIndexContent,
+  type WorkspaceIndexRecordContent,
+} from "./workspaceIndexContent.js";
 import {
   normalizeWorkspaceIndexQueryMatch,
   type WorkspaceIndexQueryMatch,
@@ -48,7 +55,10 @@ type MaybePromise<T> = T | Promise<T>;
 
 // Matching authority changes with decoding semantics, even when source bytes and stat metadata
 // stay unchanged. Older records cannot certify the current source privacy projection.
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 16;
+// Version 17 (#4457) adds the query-independent content shards beside the query-match shards.
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 17;
+// Query-match and content shards share one path-hash partition of this size.
+export const WORKSPACE_INDEX_SHARD_COUNT = 16;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];
@@ -60,6 +70,9 @@ export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
 
 export interface WorkspaceIndexScopeKey {
   readonly queryMatchShard?: number | undefined;
+  // #4457: a content shard keys its storage by the lane-text policy fingerprint as well.
+  readonly contentShard?: number | undefined;
+  readonly contentPolicySha256?: string | undefined;
   readonly workspaceRoot: string;
   readonly relativePaths: readonly string[];
   readonly ignorePolicySha256: string;
@@ -120,10 +133,13 @@ export interface WorkspaceIndexRecord extends WorkspaceIndexDiscoveredFile {
   readonly fingerprint?: string | undefined;
   readonly lexical?: WorkspaceIndexLexicalRecord | undefined;
   readonly queryMatch?: WorkspaceIndexQueryMatch | undefined;
+  /** Present only in content shards: the redacted evidence-lane text of a text record. */
+  readonly content?: WorkspaceIndexRecordContent | undefined;
 }
 
 export interface WorkspaceIndexSnapshot {
   readonly queryMatchShard?: number | undefined;
+  readonly contentShard?: number | undefined;
   readonly version: number;
   readonly relativePaths: readonly string[];
   readonly ignorePolicySha256: string;
@@ -196,6 +212,7 @@ export interface WorkspaceIndexPreparationReport {
   readonly discoveredEntries: number;
   readonly retainedEntries: number;
   readonly indexedRecords: number;
+  /** Files settled without a read: a stored query match or, since #4457, stored lane text. */
   readonly reusedRecords: number;
   readonly staleRecords: number;
   readonly skippedEntries: number;
@@ -226,7 +243,7 @@ interface ScopeShape {
 
 interface ScopeKeyShape {
   readonly relativePaths: readonly string[];
-  readonly workspace?: Pick<WorkspaceInfo, "ignoreLines"> | undefined;
+  readonly workspace?: Pick<WorkspaceInfo, "ignoreLines" | "pathCase"> | undefined;
   readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
 }
 
@@ -264,6 +281,9 @@ const FILE_WORKSPACE_INDEX_ENVELOPE_VERSION = 2;
 const FILE_WORKSPACE_INDEX_LOCATOR_SALT = "keiko-workspace-index:file-locator-salt:v2";
 const FILE_WORKSPACE_INDEX_LOCATOR_INFO = "keiko-workspace-index:scope-locator:v2";
 const FILE_WORKSPACE_INDEX_GENERATION_INFO = "keiko-workspace-index:key-generation:v2";
+// Snapshot prune candidates are independent metadata probes, so they run in a bounded fan-out at
+// the same width the Files tree classifier uses for directory entries, rather than one at a time.
+const SNAPSHOT_PRUNE_PROBE_CONCURRENCY = 32;
 const FILE_WORKSPACE_INDEX_TEMP_MAX_AGE_MS = 15 * 60 * 1000;
 const FILE_WORKSPACE_INDEX_TEMP_PRESSURE_MIN_AGE_MS = 30 * 1000;
 const FILE_WORKSPACE_INDEX_MAX_TEMP_FILES = 32;
@@ -281,9 +301,16 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function workspaceIgnorePolicyFingerprint(ignoreLines: readonly string[]): string {
+// The letter-case rule (#4436) decides what both `.gitignore` rules and candidate path globs
+// match, so it belongs to this identity. A case-sensitive rule keeps the existing fingerprint;
+// snapshots that were built case-sensitively for a case-insensitive workspace are rebuilt.
+export function workspaceIgnorePolicyFingerprint(
+  ignoreLines: readonly string[],
+  pathCase: WorkspacePathCase = "case-sensitive",
+): string {
   const hash = createHash("sha256");
   hash.update("keiko-workspace-index:ignore-policy:v1\0");
+  if (isCaseInsensitivePathCase(pathCase)) hash.update("path-case:case-insensitive\0");
   for (const line of ignoreLines) {
     const encoded = Buffer.from(line, "utf8");
     hash.update(`${String(encoded.byteLength)}:`);
@@ -514,7 +541,26 @@ function normalizeDirectorySnapshot(
   };
 }
 
-function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
+type WorkspaceIndexRecordLayer = "match" | "content";
+
+function normalizeContentRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
+  const base = normalizeDiscoveredFile(record);
+  if (base === undefined) return undefined;
+  // A content shard proves only what one redacting read observed: the lane text or binary bytes.
+  if (record.kind === "binary") return { ...base, kind: "binary" };
+  if (record.kind !== "text") return undefined;
+  const content = normalizeWorkspaceIndexContent(record.content);
+  return content === undefined ? undefined : { ...base, kind: "text", content };
+}
+
+function normalizeRecord(
+  record: WorkspaceIndexRecord,
+  layer: WorkspaceIndexRecordLayer = "match",
+): WorkspaceIndexRecord | undefined {
+  return layer === "content" ? normalizeContentRecord(record) : normalizeMatchRecord(record);
+}
+
+function normalizeMatchRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
   const base = normalizeDiscoveredFile(record);
   if (base === undefined) {
     return undefined;
@@ -636,8 +682,19 @@ interface NormalizedWorkspaceIndexHeader {
   readonly candidatePathPolicySha256: string;
 }
 
-function validQueryMatchShard(value: number | undefined): boolean {
-  return value === undefined || (Number.isSafeInteger(value) && value >= 0 && value < 16);
+function validShardNumber(value: number | undefined): boolean {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) && value >= 0 && value < WORKSPACE_INDEX_SHARD_COUNT)
+  );
+}
+
+function validShardLayer(snapshot: WorkspaceIndexSnapshot): boolean {
+  return (
+    validShardNumber(snapshot.queryMatchShard) &&
+    validShardNumber(snapshot.contentShard) &&
+    (snapshot.queryMatchShard === undefined || snapshot.contentShard === undefined)
+  );
 }
 
 function validWorkspaceIndexVersion(snapshot: WorkspaceIndexSnapshot): boolean {
@@ -645,8 +702,24 @@ function validWorkspaceIndexVersion(snapshot: WorkspaceIndexSnapshot): boolean {
     normalizeWholeNumber(snapshot.version) === WORKSPACE_INDEX_SNAPSHOT_VERSION &&
     typeof snapshot.applyGitignore === "boolean" &&
     typeof snapshot.omitLowValueWorkspaceFiles === "boolean" &&
-    validQueryMatchShard(snapshot.queryMatchShard)
+    validShardLayer(snapshot)
   );
+}
+
+function snapshotShardFields(
+  snapshot: Pick<WorkspaceIndexSnapshot, "queryMatchShard" | "contentShard">,
+): Pick<WorkspaceIndexSnapshot, "queryMatchShard" | "contentShard"> {
+  return {
+    ...(snapshot.queryMatchShard === undefined
+      ? {}
+      : { queryMatchShard: snapshot.queryMatchShard }),
+    ...(snapshot.contentShard === undefined ? {} : { contentShard: snapshot.contentShard }),
+  };
+}
+
+/** Content snapshots stay out of the parsed-snapshot cache so their text is not held process-wide. */
+export function isWorkspaceIndexContentSnapshot(snapshot: WorkspaceIndexSnapshot): boolean {
+  return snapshot.contentShard !== undefined;
 }
 
 function normalizeWorkspaceIndexHeader(
@@ -686,17 +759,16 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
   }
   const relativePaths = normalizeRelativePaths(snapshot.relativePaths);
   const allowedPaths = new Set(discovery.files.map((file) => file.scopePath));
+  const layer = snapshot.contentShard === undefined ? "match" : "content";
   const records = dedupeRecords(
     snapshot.records
-      .map((record) => normalizeRecord(record))
+      .map((record) => normalizeRecord(record, layer))
       .filter((record): record is WorkspaceIndexRecord => record !== undefined),
     allowedPaths,
   );
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    ...(snapshot.queryMatchShard === undefined
-      ? {}
-      : { queryMatchShard: snapshot.queryMatchShard }),
+    ...snapshotShardFields(snapshot),
     relativePaths,
     ignorePolicySha256,
     candidatePathPolicySha256,
@@ -726,8 +798,25 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
         ? {}
         : { queryMatchShard: scopeKey.queryMatchShard }),
       ...(scopeKey.contentRedaction === "preserve" ? { contentRedaction: "preserve" } : {}),
+      ...(scopeKey.contentShard === undefined
+        ? {}
+        : {
+            contentShard: scopeKey.contentShard,
+            contentPolicySha256: scopeKey.contentPolicySha256 ?? "",
+          }),
     }),
   )}`;
+}
+
+function snapshotShardMatchesScopeKey(
+  snapshot: WorkspaceIndexSnapshot,
+  scopeKey: WorkspaceIndexScopeKey,
+): boolean {
+  return (
+    snapshot.queryMatchShard === scopeKey.queryMatchShard &&
+    snapshot.contentShard === scopeKey.contentShard &&
+    (scopeKey.contentShard === undefined || scopeKey.contentPolicySha256 !== undefined)
+  );
 }
 
 function snapshotMatchesScopeKey(
@@ -736,7 +825,7 @@ function snapshotMatchesScopeKey(
 ): boolean {
   const relativePaths = normalizeRelativePaths(scopeKey.relativePaths);
   return (
-    snapshot.queryMatchShard === scopeKey.queryMatchShard &&
+    snapshotShardMatchesScopeKey(snapshot, scopeKey) &&
     snapshot.ignorePolicySha256 === scopeKey.ignorePolicySha256 &&
     snapshot.candidatePathPolicySha256 === scopeKey.candidatePathPolicySha256 &&
     snapshot.policyMode === scopeKey.policyMode &&
@@ -759,7 +848,10 @@ export function buildWorkspaceIndexScopeKey(
   return {
     workspaceRoot: scope.workspace.root,
     relativePaths: normalizeRelativePaths(scope.relativePaths),
-    ignorePolicySha256: workspaceIgnorePolicyFingerprint(scope.workspace.ignoreLines),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(
+      scope.workspace.ignoreLines,
+      workspacePathCase(scope.workspace),
+    ),
     candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(candidatePathGlobs),
     policyMode: policy.policyMode,
     applyGitignore: policy.applyGitignore,
@@ -890,13 +982,39 @@ function parseRuntimeDirMarker(raw: string): string | undefined {
   return isRuntimeDirMarker(marker) ? marker : undefined;
 }
 
+function storeFileLinkRefusal(): Error {
+  return Object.assign(new Error("workspace index file is not the named regular entry"), {
+    code: "ELOOP",
+  });
+}
+
+// Windows has no O_NOFOLLOW; Node leaves the constant undefined there and the open follows a link.
+const STORE_READ_FLAGS =
+  process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+
+// The flag refuses a link in the open itself, but only where it exists. So the link is refused by
+// name first, and the opened file must be the entry that was named, which also refuses an entry
+// swapped in between the two. One path on every platform; both callers read a refusal as "no file".
+async function openStoreFileNoFollow(path: string): Promise<FileHandle> {
+  const named = await lstat(path, { bigint: true });
+  if (named.isSymbolicLink()) throw storeFileLinkRefusal();
+  const handle = await open(path, STORE_READ_FLAGS);
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (opened.dev !== named.dev || opened.ino !== named.ino) throw storeFileLinkRefusal();
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
 async function readRuntimeDirMarker(realPath: string): Promise<string | undefined> {
   let handle: FileHandle | undefined;
   try {
-    handle = await open(
-      runtimeDirMarkerPath(realPath),
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-    );
+    handle = await openStoreFileNoFollow(runtimeDirMarkerPath(realPath));
     const markerStat = await handle.stat();
     if (!markerStat.isFile() || markerStat.size > 128) {
       return undefined;
@@ -1172,7 +1290,7 @@ async function safeReadSnapshotFile(
   let handle: FileHandle | undefined;
   try {
     if (!snapshotOperationActive(isActive)) return undefined;
-    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await openStoreFileNoFollow(path);
     if (!snapshotOperationActive(isActive)) return undefined;
     const fileStat = await handle.stat();
     if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
@@ -1483,13 +1601,19 @@ async function listSnapshotPruneCandidates(
   } catch {
     return [];
   }
-  const candidates: SnapshotPruneCandidate[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSafeWorkspaceIndexSegment(entry.name)) continue;
-    const candidate = await inspectSnapshotPruneCandidate(runtimeDir, entry.name);
-    if (candidate !== undefined) candidates.push(candidate);
-  }
-  return candidates;
+  const segments = entries
+    .filter((entry) => entry.isFile() && isSafeWorkspaceIndexSegment(entry.name))
+    .map((entry) => entry.name);
+  // Each probe only lstats its own segment: no shared budget, no ordering, and the retention
+  // comparison below sorts the result, so the order-preserving pool keeps the previous listing.
+  const inspected = await mapWithConcurrency(
+    segments,
+    SNAPSHOT_PRUNE_PROBE_CONCURRENCY,
+    (segment) => inspectSnapshotPruneCandidate(runtimeDir, segment),
+  );
+  return inspected.filter(
+    (candidate): candidate is SnapshotPruneCandidate => candidate !== undefined,
+  );
 }
 
 async function removePruneCandidates(
@@ -1501,7 +1625,12 @@ async function removePruneCandidates(
   for (const candidate of candidates) {
     assertWorkspaceIndexGenerationActive(config);
     if (!(await runtimeDirStillGuarded(safeRuntimeDir, guarded))) return;
-    if (!(await removeExactSnapshotFile(candidate))) {
+    // Irreversible removals, each behind the generation and directory guard re-checked above.
+    if (
+      !(await /* NOSONAR typescript:S9382 -- removals stop at the first identity change. */ removeExactSnapshotFile(
+        candidate,
+      ))
+    ) {
       throw new Error("workspace index prune candidate identity changed");
     }
   }
@@ -1638,7 +1767,7 @@ async function committedSnapshotMatches(
   let handle: FileHandle | undefined;
   try {
     if (!snapshotOperationActive(isActive)) return false;
-    handle = await open(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await open(snapshot.path, STORE_READ_FLAGS);
     if (!snapshotOperationActive(isActive)) return false;
     const stat = await handle.stat();
     const expected = Buffer.from(expectedRaw, "utf8");
@@ -1790,6 +1919,8 @@ function parseAndCacheStoredSnapshot(
   if (!workspaceIndexGenerationIsActive(config)) return undefined;
   const snapshot = parsed.status === "loaded" ? parsed.snapshot : undefined;
   if (parsed.status === "rejected") config.onLoadFailure?.({ reason: parsed.reason });
+  // #4457: decrypted lane text lives only as long as the request that loaded it.
+  if (snapshot !== undefined && isWorkspaceIndexContentSnapshot(snapshot)) return snapshot;
   writeParsedSnapshotCache(path, {
     fingerprint: read.fingerprint,
     encryptionKeyId: config.encryptionKeyId,
@@ -2389,7 +2520,7 @@ export function buildWorkspaceIndexLexicalRecord(
   content: string,
   scopePath?: string,
 ): WorkspaceIndexLexicalRecord {
-  const lines = content.split("\n");
+  const lines = splitSourceLines(content);
   const sourceLines = repositorySourceLines(content, scopePath);
   const lexicalLines: WorkspaceIndexLexicalLine[] = [];
   const preparedLines: { readonly index: number; readonly value: PreparedLexicalLine }[] = [];
@@ -3204,6 +3335,7 @@ export function workspaceIndexCandidateSet(
 
 export interface BuildWorkspaceIndexSnapshotInput {
   readonly queryMatchShard?: number | undefined;
+  readonly contentShard?: number | undefined;
   readonly scope: ScopeKeyShape;
   readonly policy: PolicyShape;
   readonly maxBytesPerFileScanned: number;
@@ -3225,17 +3357,21 @@ export function buildWorkspaceIndexSnapshot(
     truncated: false,
   };
   const allowedPaths = new Set(discovery.files.map((file) => file.scopePath));
+  const layer = input.contentShard === undefined ? "match" : "content";
   const records = dedupeRecords(
     [...input.records]
-      .map((record) => normalizeRecord(record))
+      .map((record) => normalizeRecord(record, layer))
       .filter((record): record is WorkspaceIndexRecord => record !== undefined),
     allowedPaths,
   );
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    ...(input.queryMatchShard === undefined ? {} : { queryMatchShard: input.queryMatchShard }),
+    ...snapshotShardFields(input),
     relativePaths: normalizeRelativePaths(input.scope.relativePaths),
-    ignorePolicySha256: workspaceIgnorePolicyFingerprint(input.scope.workspace?.ignoreLines ?? []),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(
+      input.scope.workspace?.ignoreLines ?? [],
+      workspacePathCase(input.scope.workspace),
+    ),
     candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(
       input.scope.candidatePathGlobs,
     ),

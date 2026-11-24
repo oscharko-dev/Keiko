@@ -1,11 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ASSURED_COMMAND_RULES,
   candidateFileText,
   candidateWritePath,
+  copyIntoDisposableRoot,
   planGateCommands,
   relativizeCoverageSummary,
   targetSourceRelPath,
@@ -16,6 +27,13 @@ import type {
   EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 describe("targetSourceRelPath", () => {
   it("returns the document path for a single-document target", () => {
@@ -241,6 +259,62 @@ describe("writeCandidateInto", () => {
       expect(() => candidateWritePath(root, "tests/escape/generated.test.ts")).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+// #4429: a directory JUNCTION is the link any Windows user can create without the symbolic-link
+// privilege; elsewhere the same fixture is a directory symlink.
+const DIRECTORY_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
+
+describe("copyIntoDisposableRoot", () => {
+  // #4429: the disposable mutation-testing copy must never hold a link out of itself, nor the files
+  // behind one. Before the fix Node's `cpSync` re-created a nested junction as a symbolic link to the
+  // outside target (EPERM without the privilege, so the run failed; with it, or on Linux, a link out
+  // of the sandbox root), and its native path copies a junction's target files in as ordinary ones.
+  it("skips a nested directory link so no outside content reaches the disposable root", () => {
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), "keiko-assured-workspace-")));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-assured-outside-")));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-assured-root-")));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      writeFileSync(join(outside, "secret.txt"), "outside content\n");
+      mkdirSync(join(workspace, "src", "nested"), { recursive: true });
+      writeFileSync(join(workspace, "src", "index.ts"), "export const x = 1;\n");
+      symlinkSync(outside, join(workspace, "src", "nested", "outside-link"), DIRECTORY_LINK_TYPE);
+
+      // The workspace root, src, src/index.ts and src/nested are copied; the link is skipped.
+      expect(copyIntoDisposableRoot(workspace, root, "assured-copy-000001")).toEqual({
+        copiedEntryCount: 4,
+        skippedLinkCount: 1,
+      });
+
+      expect(readFileSync(join(root, "src", "index.ts"), "utf8")).toBe("export const x = 1;\n");
+      expect(lstatSync(join(root, "src", "nested")).isDirectory()).toBe(true);
+      expect(existsSync(join(root, "src", "nested", "outside-link"))).toBe(false);
+      expect(() => lstatSync(join(root, "src", "nested", "outside-link"))).toThrow();
+      expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("outside content\n");
+
+      const lines = sink.events
+        .filter((event) => event.op === "editor.assured-copy.completed")
+        .map(formatActivityLogProofLine);
+      expect(lines).toHaveLength(1);
+      expectActivityLogProof("editor.assured-copy.completed.links-skipped", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        level: "info",
+        correlationId: "assured-copy-000001",
+        outcome: "copied",
+        copiedEntryCount: 4,
+        skippedLinkCount: 1,
+      });
+      expect(lines[0]).not.toContain("outside-link");
+      expect(lines[0]).not.toContain("keiko-assured");
+    } finally {
+      resetServerLogger();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(workspace, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
   });

@@ -14,6 +14,7 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -40,8 +41,10 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
+import { recordAssuredCopyCompleted, type AssuredCopyCounts } from "./assuredCopyEvidence.js";
 import type { AssuredPreFilterOutcome } from "./assuredPreFilter.js";
 import type { SandboxedCommand, SandboxedRunResult } from "./assuredGateRunner.js";
 import {
@@ -64,6 +67,8 @@ export interface AssuredPreFilterArgs {
   readonly signal: AbortSignal;
   // The toolchain to verify under; defaults to "vitest" (the #1202 behaviour) when absent.
   readonly verification?: AssuredVerificationKind | undefined;
+  // The test-generation request's correlation, carried onto the disposable-copy evidence.
+  readonly correlationId?: string | undefined;
 }
 
 export type AssuredPreFilterPort = (args: AssuredPreFilterArgs) => Promise<AssuredPreFilterOutcome>;
@@ -345,6 +350,67 @@ function isExcludedFromCopy(src: string): boolean {
   );
 }
 
+// #4429: the disposable root holds no link (symbolic link or Windows directory junction). Node's
+// `cpSync` copies a link differently by path and platform: its native copy turns a junction into a
+// real directory holding the target's files, which copies outside content into the sandbox; the
+// filtered copy re-creates it as an absolute link out of the root, EPERM without the symbolic-link
+// privilege. Every sandbox backend mounts only the disposable root, so a link copied in was never
+// readable there. `lstat` classifies a junction like a symbolic link, so this filter skips each link
+// before `cpSync` acts on it, on every platform; an entry that vanished mid-copy throws.
+export function copyIntoDisposableRoot(
+  realRoot: string,
+  root: string,
+  correlationId: string | undefined,
+): AssuredCopyCounts {
+  let copiedEntryCount = 0;
+  let skippedLinkCount = 0;
+  cpSync(realRoot, root, {
+    recursive: true,
+    dereference: false,
+    filter: (src) => {
+      if (isExcludedFromCopy(src)) return false;
+      if (lstatSync(src).isSymbolicLink()) {
+        skippedLinkCount += 1;
+        return false;
+      }
+      copiedEntryCount += 1;
+      return true;
+    },
+  });
+  const counts = { copiedEntryCount, skippedLinkCount };
+  recordAssuredCopyCompleted(counts, correlationId);
+  return counts;
+}
+
+function removeDisposableRootAfterFailure(root: string, correlationId: string | undefined): void {
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch (error) {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(correlationId),
+        operation: "editor.assured-copy.cleanup-failed",
+        source: "editor.assured-copy",
+        error,
+        redact: () => "A failed disposable copy could not be removed.",
+      }),
+    );
+  }
+}
+
+function makeDisposableRoot(args: AssuredPreFilterArgs): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-assured-"));
+  try {
+    copyIntoDisposableRoot(args.realRoot, root, args.correlationId);
+    writeMutationConfig(root, args.request.target);
+  } catch (error) {
+    removeDisposableRootAfterFailure(root, args.correlationId);
+    throw error;
+  }
+  return root;
+}
+
 function isUnsafeRelativePath(path: string): boolean {
   return (
     path.length === 0 ||
@@ -415,12 +481,7 @@ function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExe
   const cmds = planGateCommands(args.verification);
   return {
     enforced,
-    makeRoot: (): Promise<string> => {
-      const root = mkdtempSync(join(tmpdir(), "keiko-assured-"));
-      cpSync(args.realRoot, root, { recursive: true, filter: (src) => !isExcludedFromCopy(src) });
-      writeMutationConfig(root, args.request.target);
-      return Promise.resolve(root);
-    },
+    makeRoot: (): Promise<string> => Promise.resolve(makeDisposableRoot(args)),
     measureBaseline: (root): Promise<void> =>
       runSandboxed(root, cmds.baseline, args.signal).then(() => undefined),
     applyCandidate: (root): Promise<void> => {

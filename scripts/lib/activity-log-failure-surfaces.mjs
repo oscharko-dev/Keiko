@@ -141,6 +141,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "editor", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "evidence-retention-log", surface: "runtime-packages" },
   { owner: "keiko-server", emitterPrefix: "figmaSnapshotRoutes", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "files-copy-log", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "files-search-activity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-instance-cache", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "conversation-readiness-log", surface: "model-gateway" },

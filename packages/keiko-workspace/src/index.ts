@@ -31,6 +31,7 @@ export type {
   TestFramework,
   WorkspaceInfo,
   WorkspaceLanguage,
+  WorkspacePathCase,
   WorkspaceSummary,
 } from "./types.js";
 
@@ -72,6 +73,7 @@ export {
 
 export {
   compileIgnore,
+  compileWorkspaceIgnore,
   DEFAULT_DENY_PATTERNS,
   isDenied,
   isIgnored,
@@ -79,7 +81,11 @@ export {
   type IgnoreMatcher,
 } from "./ignore.js";
 
+export { isSystemNoiseEntry, isWindowsDriveRoot } from "./systemNoise.js";
+
 export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
+
+export { isCaseInsensitivePathCase, platformPathCase, workspacePathCase } from "./pathCase.js";
 
 export {
   discoverFiles,

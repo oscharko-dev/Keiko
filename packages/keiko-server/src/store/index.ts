@@ -41,6 +41,7 @@ export {
   projectExists,
 } from "./errors.js";
 export {
+  canonicalProjectPathKey,
   classifyPathShape,
   validateProjectPath,
   type PathShape,

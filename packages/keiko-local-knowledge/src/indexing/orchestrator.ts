@@ -769,7 +769,7 @@ async function prepareChunksToEmbed(
   const rows = selectChunkProjections(state, documentId);
   const chunks: ChunkToEmbed[] = [];
   for (const row of rows) {
-    chunks.push(await contextualizedChunkToEmbed(state, documentId, row, sourceText));
+    chunks.push(await contextualizedChunkToEmbed(state, documentId, row, sourceText)); // NOSONAR typescript:S9382 -- one metered context-model call per chunk, each followed by its synchronous write; a fan-out would issue a document's calls at once
   }
   const degraded = state.options.store._internal.db
     .prepare(
@@ -2302,6 +2302,8 @@ function logSourceCompleted(
     walkCompleted: progress.completed,
     cancelled: progress.cancelled,
     sawScopeError: progress.sawScopeError,
+    vanishedEntryCount: progress.vanishedEntries,
+    directoryRetryCount: progress.directoryRetries,
   });
 }
 
@@ -2314,6 +2316,8 @@ async function* runOneSource(
     cancelled: false,
     sawScopeError: false,
     completed: false,
+    vanishedEntries: 0,
+    directoryRetries: 0,
     discoveredPaths: new Set<string>(),
   };
   const sourceDigest = logDigest(String(source.id));
@@ -2353,6 +2357,8 @@ interface SourceRunProgress {
   cancelled: boolean;
   sawScopeError: boolean;
   completed: boolean;
+  vanishedEntries: number;
+  directoryRetries: number;
   readonly discoveredPaths: Set<string>;
 }
 
@@ -2382,6 +2388,8 @@ function observeSourceEvent(progress: SourceRunProgress, evt: ExtractionEvent): 
   }
   if (evt.kind === "completed") {
     progress.completed = true;
+    progress.vanishedEntries = evt.totalVanished ?? 0;
+    progress.directoryRetries = evt.totalDirectoryRetries ?? 0;
   }
 }
 

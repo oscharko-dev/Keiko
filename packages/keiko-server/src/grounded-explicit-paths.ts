@@ -30,7 +30,7 @@ import {
   discoverWorkspacePaths,
   PathEscapeError,
   RepoSearchUnsupportedFileError,
-  compileIgnore,
+  compileWorkspaceIgnore,
   containedRealPathInfo,
   findFiles,
   isDenied,
@@ -225,7 +225,7 @@ function relativePathPolicyRejection(
     return "generated";
   if (
     !humanSelectedPath(path, inputs) &&
-    isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false)
+    isIgnored(compileWorkspaceIgnore(inputs.searchScope.workspace), path, false)
   )
     return "ignored";
   return undefined;
@@ -495,26 +495,29 @@ async function basenamePaths(
   const paths = new Set<string>();
   for (const [index, directory] of directories.entries()) {
     if (index > 0 && !inputs.tryReserveSearchCall()) break;
-    const result = await discoverWorkspacePaths(
-      // This is metadata discovery only. Original ignore/generated policy is applied by
-      // admission before any classification probe, including ignored basename accounting.
-      { ...inputs.searchScope.workspace, ignoreLines: [] },
-      {
-        mode: "glob",
-        directory,
-        query: "**/*",
-        maxResults: BASENAME_MATCH_CAP,
-      },
-      {
-        nowMs: inputs.nowMs,
-        deadlineAtMs: inputs.deadlineAtMs,
-        signal: inputs.signal,
-        ...(isDocumentStem(reference)
-          ? { documentStem: reference.path }
-          : { exactBasename: reference.path }),
-      },
-      inputs.fs,
-    );
+    // Each directory first reserves a call from the shared basename-search grant above, so what
+    // this one spends decides whether the next one runs at all.
+    const result =
+      await /* NOSONAR typescript:S9382 -- directories share one reserved search-call grant. */ discoverWorkspacePaths(
+        // This is metadata discovery only. Original ignore/generated policy is applied by
+        // admission before any classification probe, including ignored basename accounting.
+        { ...inputs.searchScope.workspace, ignoreLines: [] },
+        {
+          mode: "glob",
+          directory,
+          query: "**/*",
+          maxResults: BASENAME_MATCH_CAP,
+        },
+        {
+          nowMs: inputs.nowMs,
+          deadlineAtMs: inputs.deadlineAtMs,
+          signal: inputs.signal,
+          ...(isDocumentStem(reference)
+            ? { documentStem: reference.path }
+            : { exactBasename: reference.path }),
+        },
+        inputs.fs,
+      );
     for (const entry of result.entries) if (entry.kind === "file") paths.add(entry.relativePath);
   }
   return [...paths].sort(compareStrings).slice(0, BASENAME_MATCH_CAP);
@@ -556,7 +559,9 @@ async function admitBasename(
   state.basenameMatches += matchCount;
   for (const path of paths) {
     if (admissionStopped(inputs)) break;
-    await admitReference(
+    // Admissions accumulate into one state: the seen set dedupes against the paths admitted
+    // before, and the stop check above reads the budget they spent.
+    await /* NOSONAR typescript:S9382 -- paths share one admission state and budget. */ admitReference(
       { ...reference, path },
       inputs,
       state,
@@ -596,9 +601,11 @@ export async function admitExplicitPaths(inputs: AdmissionInputs): Promise<Expli
   const references = inputs.references ?? explicitPathReferences(inputs.query.text);
   for (const reference of references) {
     if (admissionStopped(inputs)) break;
+    // One reference at a time: each adds to the shared admission state, and the stop check above
+    // reads the search-call and deadline budget the earlier references spent.
     if (!reference.path.includes("/") && !isDenied(reference.path))
-      await admitBasename(reference, inputs, state);
-    else await admitReference(reference, inputs, state);
+      await admitBasename(reference, inputs, state); // NOSONAR typescript:S9382 -- shared admission state and budget, as described above
+    else await admitReference(reference, inputs, state); // NOSONAR typescript:S9382 -- shared admission state and budget, as described above
   }
   return {
     selections: state.selections,

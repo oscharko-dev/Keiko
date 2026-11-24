@@ -2,6 +2,7 @@ import { createHash, createHmac, hkdfSync } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
+  promises as fsPromises,
   readdirSync,
   readFileSync,
   renameSync,
@@ -12,12 +13,13 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { openString, sealString } from "@oscharko-dev/keiko-security";
-import { describe, expect, it } from "vitest";
-import { memFs } from "./_memfs.js";
+import { describe, expect, it, vi } from "vitest";
+import { DIRECTORY_LINK_TYPE, memFs, memoryFixturePath } from "./_memfs.js";
 import { PathDeniedError } from "./errors.js";
 import {
   nodeWorkspaceFs,
@@ -149,7 +151,8 @@ function makeErrnoError(code: string, path: string): Error & { code: string } {
   return err;
 }
 
-function absoluteToRelative(absolutePath: string): string | undefined {
+function absoluteToRelative(nativePath: string): string | undefined {
+  const absolutePath = memoryFixturePath(nativePath);
   if (absolutePath === MEM_ROOT) {
     return "";
   }
@@ -402,7 +405,7 @@ function createTrackedFs(
       },
       realPath: (absolutePath: string): string => {
         counters.realPath += 1;
-        return absolutePath;
+        return memoryFixturePath(absolutePath);
       },
       exists: (absolutePath: string): boolean => {
         counters.exists += 1;
@@ -1131,7 +1134,7 @@ describe("workspaceIndex", () => {
     const replacedFs: WorkspaceFs = {
       ...base,
       realPath: (absolutePath): string =>
-        absolutePath === directoryPath ? realPath : base.realPath(absolutePath),
+        memoryFixturePath(absolutePath) === directoryPath ? realPath : base.realPath(absolutePath),
       stat: (absolutePath): WorkspaceStat => {
         touchedPaths.push(absolutePath);
         return base.stat(absolutePath);
@@ -1156,17 +1159,18 @@ describe("workspaceIndex", () => {
     const guardedFs: WorkspaceFs = {
       ...base,
       realPath: (absolutePath): string => {
-        if (ancestorReplaced && absolutePath.startsWith(`${MEM_ROOT}/safe`)) {
-          return absolutePath.replace(`${MEM_ROOT}/safe`, "/outside");
+        const fixturePath = memoryFixturePath(absolutePath);
+        if (ancestorReplaced && fixturePath.startsWith(`${MEM_ROOT}/safe`)) {
+          return fixturePath.replace(`${MEM_ROOT}/safe`, "/outside");
         }
         const canonical = base.realPath(absolutePath);
-        if (scanReadComplete && absolutePath === `${MEM_ROOT}/safe/src/a.ts`) {
+        if (scanReadComplete && fixturePath === `${MEM_ROOT}/safe/src/a.ts`) {
           ancestorReplaced = true;
         }
         return canonical;
       },
       readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
-        directoryReads.push(absolutePath);
+        directoryReads.push(memoryFixturePath(absolutePath));
         return base.readDir(absolutePath, maxEntries);
       },
       readFileBytes: async (
@@ -1524,15 +1528,16 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readFileBytes).toBe(4);
   });
 
-  it("does not fingerprint selected directories that resolve to denied real paths", async (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
-    }
+  it("does not fingerprint selected directories that resolve to denied real paths", async () => {
     const workspaceRoot = tempRuntimeDir();
     try {
       mkdirSync(join(workspaceRoot, ".keiko"), { recursive: true });
       writeFileSync(join(workspaceRoot, ".keiko", "secret.txt"), "needle\n", "utf8");
-      symlinkSync(join(workspaceRoot, ".keiko"), join(workspaceRoot, "safe-link"), "dir");
+      symlinkSync(
+        join(workspaceRoot, ".keiko"),
+        join(workspaceRoot, "safe-link"),
+        DIRECTORY_LINK_TYPE,
+      );
       const currentScope: SearchScope = {
         workspace: { ...workspace(), root: workspaceRoot },
         scopeId: "scope-1",
@@ -1554,10 +1559,7 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("rejects cached records whose selected path is an internal symlink alias", (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
-    }
+  it("rejects cached records whose selected path is an internal symlink alias", () => {
     const workspaceRoot = tempRuntimeDir();
     const content = "export const internalTarget = 'needle';\n";
     try {
@@ -1601,7 +1603,9 @@ describe("workspaceIndex", () => {
         throw new Error("exists must not run before containment");
       },
       realPath: (absolutePath): string =>
-        absolutePath === `${MEM_ROOT}/src/app.ts` ? "/outside/app.ts" : absolutePath,
+        memoryFixturePath(absolutePath) === `${MEM_ROOT}/src/app.ts`
+          ? "/outside/app.ts"
+          : base.realPath(absolutePath),
       stat: (absolutePath): WorkspaceStat => {
         statCalls += 1;
         return base.stat(absolutePath);
@@ -1817,69 +1821,66 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readDir).toBe(0);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "does not serve a warm fixed-file record after its root is retargeted under a denied component",
-    async () => {
-      const runtimeDir = tempRuntimeDir();
-      try {
-        const safeRoot = join(runtimeDir, "safe-root");
-        const lexicalRoot = join(runtimeDir, "workspace");
-        const deniedParent = join(runtimeDir, ".git");
-        const deniedRoot = join(deniedParent, "retargeted-root");
-        const scopePath = "src/app.ts";
-        mkdirSync(join(safeRoot, "src"), { recursive: true });
-        writeFileSync(join(safeRoot, scopePath), "export const app = 'needle';\n", "utf8");
-        symlinkSync(safeRoot, lexicalRoot, "dir");
-        const currentScope: SearchScope = {
-          ...scope(),
-          workspace: { ...workspace(), root: lexicalRoot },
-          relativePaths: [scopePath],
-        };
-        let savedSnapshot: WorkspaceIndexSnapshot | undefined;
-        const store: WorkspaceIndexStore = {
-          loadSnapshot: (): WorkspaceIndexSnapshot | undefined => savedSnapshot,
-          saveSnapshot: (_key: string, snapshot: WorkspaceIndexSnapshot): void => {
-            savedSnapshot = snapshot;
-          },
-        };
+  it("does not serve a warm fixed-file record after its root is retargeted under a denied component", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const safeRoot = join(runtimeDir, "safe-root");
+      const lexicalRoot = join(runtimeDir, "workspace");
+      const deniedParent = join(runtimeDir, ".git");
+      const deniedRoot = join(deniedParent, "retargeted-root");
+      const scopePath = "src/app.ts";
+      mkdirSync(join(safeRoot, "src"), { recursive: true });
+      writeFileSync(join(safeRoot, scopePath), "export const app = 'needle';\n", "utf8");
+      symlinkSync(safeRoot, lexicalRoot, DIRECTORY_LINK_TYPE);
+      const currentScope: SearchScope = {
+        ...scope(),
+        workspace: { ...workspace(), root: lexicalRoot },
+        relativePaths: [scopePath],
+      };
+      let savedSnapshot: WorkspaceIndexSnapshot | undefined;
+      const store: WorkspaceIndexStore = {
+        loadSnapshot: (): WorkspaceIndexSnapshot | undefined => savedSnapshot,
+        saveSnapshot: (_key: string, snapshot: WorkspaceIndexSnapshot): void => {
+          savedSnapshot = snapshot;
+        },
+      };
 
-        const cold = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
+      const cold = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
+        fs: nodeWorkspaceFs,
+        nowMs: FIXED_NOW,
+        workspaceIndex: createWorkspaceIndex(store),
+      });
+      expect(cold.atoms.map((atom) => atom.scopePath)).toEqual([scopePath]);
+      const cachedSnapshot = savedSnapshot;
+      if (cachedSnapshot === undefined) throw new Error("expected persisted fixed-file snapshot");
+      const cachedFile = cachedSnapshot.discovery.files[0];
+      if (cachedFile === undefined) throw new Error("expected persisted fixed-file metadata");
+
+      mkdirSync(deniedParent);
+      renameSync(safeRoot, deniedRoot);
+      unlinkSync(lexicalRoot);
+      symlinkSync(deniedRoot, lexicalRoot, DIRECTORY_LINK_TYPE);
+      expect(
+        workspaceIndexFileMetadata(scopePath, nodeWorkspaceFs.stat(join(deniedRoot, scopePath))),
+      ).toEqual(cachedFile);
+      expect(
+        isWorkspaceIndexSnapshotFresh(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
+      ).toBe(false);
+      expect(() =>
+        prepareWorkspaceIndexSnapshot(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
+      ).toThrow(PathDeniedError);
+
+      await expect(
+        searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
           fs: nodeWorkspaceFs,
           nowMs: FIXED_NOW,
           workspaceIndex: createWorkspaceIndex(store),
-        });
-        expect(cold.atoms.map((atom) => atom.scopePath)).toEqual([scopePath]);
-        const cachedSnapshot = savedSnapshot;
-        if (cachedSnapshot === undefined) throw new Error("expected persisted fixed-file snapshot");
-        const cachedFile = cachedSnapshot.discovery.files[0];
-        if (cachedFile === undefined) throw new Error("expected persisted fixed-file metadata");
-
-        mkdirSync(deniedParent);
-        renameSync(safeRoot, deniedRoot);
-        unlinkSync(lexicalRoot);
-        symlinkSync(deniedRoot, lexicalRoot, "dir");
-        expect(
-          workspaceIndexFileMetadata(scopePath, nodeWorkspaceFs.stat(join(deniedRoot, scopePath))),
-        ).toEqual(cachedFile);
-        expect(
-          isWorkspaceIndexSnapshotFresh(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
-        ).toBe(false);
-        expect(() =>
-          prepareWorkspaceIndexSnapshot(cachedSnapshot, currentScope.workspace, nodeWorkspaceFs),
-        ).toThrow(PathDeniedError);
-
-        await expect(
-          searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
-            fs: nodeWorkspaceFs,
-            nowMs: FIXED_NOW,
-            workspaceIndex: createWorkspaceIndex(store),
-          }),
-        ).rejects.toBeInstanceOf(PathDeniedError);
-      } finally {
-        removeRuntimeDir(runtimeDir);
-      }
-    },
-  );
+        }),
+      ).rejects.toBeInstanceOf(PathDeniedError);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
 
   it("does not persist an explicit directory when membership changes after discovery", async () => {
     const tracked = createTrackedFs({
@@ -1890,7 +1891,7 @@ describe("workspaceIndex", () => {
       ...tracked.fs,
       readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
         const entries = tracked.fs.readDir(absolutePath, maxEntries);
-        if (absolutePath === `${MEM_ROOT}/src` && firstSourceRead) {
+        if (memoryFixturePath(absolutePath) === `${MEM_ROOT}/src` && firstSourceRead) {
           firstSourceRead = false;
           tracked.writeFile("src/raced.ts", "export const raced = true;\n");
         }
@@ -2364,34 +2365,35 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes owner-only file-backed runtime directories and snapshots", async (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
-    }
-    const runtimeDir = tempRuntimeDir();
-    try {
-      const tracked = createTrackedFs({
-        "src/app.ts": "export const token = 'needle';\n",
-      });
-      const currentScope = scope();
-      const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
+  // POSIX mode bits only: Windows reports a synthesized mode and protects these files by ACL (#4432).
+  it.skipIf(process.platform === "win32")(
+    "writes owner-only file-backed runtime directories and snapshots",
+    async () => {
+      const runtimeDir = tempRuntimeDir();
+      try {
+        const tracked = createTrackedFs({
+          "src/app.ts": "export const token = 'needle';\n",
+        });
+        const currentScope = scope();
+        const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
-      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
-        fs: tracked.fs,
-        nowMs: FIXED_NOW,
-        workspaceIndex: index,
-      });
+        await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
+          fs: tracked.fs,
+          nowMs: FIXED_NOW,
+          workspaceIndex: index,
+        });
 
-      const [fileName] = runtimeFiles(runtimeDir);
-      if (fileName === undefined) {
-        throw new Error("expected persisted snapshot file");
+        const [fileName] = runtimeFiles(runtimeDir);
+        if (fileName === undefined) {
+          throw new Error("expected persisted snapshot file");
+        }
+        expect(statSync(runtimeDir).mode & 0o777).toBe(0o700);
+        expect(statSync(join(runtimeDir, fileName)).mode & 0o777).toBe(0o600);
+      } finally {
+        removeRuntimeDir(runtimeDir);
       }
-      expect(statSync(runtimeDir).mode & 0o777).toBe(0o700);
-      expect(statSync(join(runtimeDir, fileName)).mode & 0o777).toBe(0o600);
-    } finally {
-      removeRuntimeDir(runtimeDir);
-    }
-  });
+    },
+  );
 
   it("rejects workspace-local file-backed runtime directories unless explicitly allowed", () => {
     expect(() =>
@@ -2409,14 +2411,11 @@ describe("workspaceIndex", () => {
     ).not.toThrow();
   });
 
-  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
-    }
+  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", () => {
     const workspaceRoot = tempRuntimeDir();
     const outsideRoot = tempRuntimeDir();
     try {
-      symlinkSync(workspaceRoot, join(outsideRoot, "workspace-link"), "dir");
+      symlinkSync(workspaceRoot, join(outsideRoot, "workspace-link"), DIRECTORY_LINK_TYPE);
 
       expect(() =>
         createFileWorkspaceIndexStore({
@@ -2430,10 +2429,7 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not load symlinked file-backed snapshot paths", async (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
-    }
+  it("does not load symlinked file-backed snapshot paths", async () => {
     const runtimeDir = tempRuntimeDir();
     const targetDir = tempRuntimeDir();
     try {
@@ -2456,10 +2452,47 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async (ctx) => {
-    if (process.platform === "win32") {
-      ctx.skip();
+  // Windows has no O_NOFOLLOW, so the store binds the opened file to the entry it named. A file
+  // that takes the name between the two is another file, on every platform.
+  it("does not load a snapshot file replaced between the name check and the open", async () => {
+    const runtimeDir = tempRuntimeDir();
+    const movedDir = tempRuntimeDir();
+    const originalOpen = fsPromises.open;
+    try {
+      const store = createFileWorkspaceIndexStore({ runtimeDir });
+      await store.saveSnapshot("safe-key", sampleSnapshot("needle"));
+      const [fileName] = runtimeFiles(runtimeDir);
+      if (fileName === undefined) {
+        throw new Error("expected persisted snapshot file");
+      }
+      const snapshotPath = join(runtimeDir, fileName);
+      let swapped = false;
+      const openSpy = vi.spyOn(fsPromises, "open").mockImplementation(async (path, flags, mode) => {
+        if (!swapped && basename(String(path)) === fileName) {
+          swapped = true;
+          const sameBytes = readFileSync(snapshotPath);
+          renameSync(snapshotPath, join(movedDir, fileName));
+          writeFileSync(snapshotPath, sameBytes);
+        }
+        return await originalOpen(path, flags, mode);
+      });
+      syncBuiltinESMExports();
+      try {
+        await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeUndefined();
+      } finally {
+        openSpy.mockRestore();
+        syncBuiltinESMExports();
+      }
+      expect(swapped).toBe(true);
+      // Positive control: the same bytes under the same name load once nothing moves under the read.
+      await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeDefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+      removeRuntimeDir(movedDir);
     }
+  });
+
+  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async () => {
     const runtimeDir = tempRuntimeDir();
     const workspaceRoot = tempRuntimeDir();
     try {
@@ -2469,7 +2502,7 @@ describe("workspaceIndex", () => {
 
       removeRuntimeDir(runtimeDir);
       mkdirSync(workspaceStateDir, { recursive: true });
-      symlinkSync(workspaceStateDir, runtimeDir, "dir");
+      symlinkSync(workspaceStateDir, runtimeDir, DIRECTORY_LINK_TYPE);
 
       await store.saveSnapshot("poc-key", sampleSnapshot("needle"));
 

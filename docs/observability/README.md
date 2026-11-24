@@ -684,15 +684,21 @@ and invalid explicit values fail closed with an invalid configuration observatio
 synthesis shares its one extra slot with either marker repair or follow-up, within the original
 remaining budgets. See [ADR-0180](../adr/ADR-0180-bounded-connected-folder-follow-up.md).
 
-| Reason                            | Triggering evidence                                                                                              |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `declared-unread-in-scope`        | Positive `declaredUnreadInScopeCount` without a confirmed answered follow-up.                                    |
-| `explicit-path-rejected`          | Positive `explicitPathRejectedCount`, with observed closed `explicitPathRejectionReasons`.                       |
-| `low-confidence-selection`        | `keepOneFallbackApplied: true`.                                                                                  |
-| `basename-dedup-demoted-explicit` | Positive `addressedBasenameDedupDemotedCount`; ordinary basename diversity alone is valid.                       |
-| `follow-up-still-insufficient`    | Positive `followUpPassCount` with `followUpOutcome: still-insufficient`.                                         |
-| `semantic-unavailable-with-miss`  | Semantic provider unavailable/rejected together with an observed miss or an empty targeted/diagnostic selection. |
-| `intent-overview-on-follow-up`    | `retrievalIntent: repository-overview` with a non-`none` `continuityReferentSource` in the same query.           |
+| Reason                            | Triggering evidence                                                                                               |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `declared-unread-in-scope`        | Positive `declaredUnreadInScopeCount` without a confirmed answered follow-up.                                     |
+| `explicit-path-rejected`          | Positive `explicitPathRejectedCount`, with observed closed `explicitPathRejectionReasons`.                        |
+| `low-confidence-selection`        | `keepOneFallbackApplied: true`.                                                                                   |
+| `basename-dedup-demoted-explicit` | Positive `addressedBasenameDedupDemotedCount`; ordinary basename diversity alone is valid.                        |
+| `follow-up-still-insufficient`    | Positive `followUpPassCount` with `followUpOutcome: still-insufficient`.                                          |
+| `semantic-unavailable-with-miss`  | Semantic provider unavailable/rejected together with an observed miss or an empty targeted/diagnostic selection.  |
+| `intent-overview-on-follow-up`    | `retrievalIntent: repository-overview` with a non-`none` `continuityReferentSource` in the same query.            |
+| `discovery-dropped-entries`       | A positive locked/protected entry, unreadable or oversized directory, skipped link or unrepresentable path count. |
+
+`discovery-dropped-entries` reads the `discovery*Count` fields of
+`search.connected-context.evidence-details` (#4431), so a support report tells a file the walk could
+not consider from one it judged irrelevant. Denied and ignored counts are ordinary policy exclusions:
+they accompany the finding as context and never establish it on their own.
 
 Missing historical fields remain unknown. An unconfigured semantic provider with a successful
 lexical answer produces no finding. Positive general `basenameDedupDemotedCount` does not establish

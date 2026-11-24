@@ -514,6 +514,14 @@ jobs:
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
         # evidence, and generated-artifact leakage over fixed synthetic enterprise fixtures.
         run: npm run check:retrieval-quality
+      - name: Connected retrieval scale gate (epic #4429)
+        # Writes one deterministic 20,000-file corpus with planted facts and same-wording decoys and
+        # asks every question through the real connected-context pipeline built by `npm run
+        # typecheck` above. Each answer must cite the target file and quote the expected value, and
+        # a removed target MUST fail the regression probe. p95 grows with the file count; measured
+        # ~20s per question on Linux, so 7 questions plus the probe stay far inside this bound.
+        timeout-minutes: 15
+        run: npm run check:retrieval-scale
       - name: Grounded retrieval quality gate (RB-5, GEN-AI-RELEASE-GATE-001)
         # Drives the REAL production semantic-retrieval + RRF fusion + model-reranker path (not the
         # lexical toy corpus) over distractor-dense fixtures with non-tautological (<1) floors, and
@@ -1622,6 +1630,24 @@ jobs:
           packages/keiko-memory-vault/src/paths.test.ts
           packages/keiko-server/src/editor/watch/workspaceWatchService.test.ts
           --testNamePattern '^(?!.*link)'
+      - name: Verify recursive search suites on Windows
+        if: runner.os == 'Windows'
+        # The walker, search, index, containment and Files suites under native separators, letter
+        # case and reparse points (#4432). Each argument is a path filter, so a new suite of these
+        # areas joins by its name. Directory aliases are junctions; file links use the runner's
+        # symbolic-link privilege, which a standard local account lacks.
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          packages/keiko-workspace/src/discovery
+          packages/keiko-workspace/src/repoSearch.
+          packages/keiko-workspace/src/workspaceIndex
+          packages/keiko-workspace/src/workspacePathDiscovery
+          packages/keiko-workspace/src/realpath.
+          packages/keiko-workspace/src/fs.
+          packages/keiko-workspace/src/ignore.
+          packages/keiko-local-knowledge/src/discovery/walk.test.ts
+          packages/keiko-server/src/files
+          packages/keiko-server/src/grounded-metadata-intake.test.ts
       - name: Smoke the Windows command spawn wrapper
         if: runner.os == 'Windows'
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so

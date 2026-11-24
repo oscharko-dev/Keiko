@@ -657,6 +657,171 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
   });
 
+  it("records skipped locked entries on evidence-details without failing retrieval (#4434)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const base = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: `export const value = "${target}";
+`,
+      [`${PRIVATE_SCOPE_PATH}/locked.ts`]: `export const locked = "${target}";
+`,
+    });
+    const locked = (path: string): boolean =>
+      path.replaceAll("\\", "/").endsWith(`/${PRIVATE_SCOPE_PATH}/locked.ts`);
+    const busy = (): Error => Object.assign(new Error("PRIVATE_LOCK_DETAIL"), { code: "EBUSY" });
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: {
+        ...base,
+        stat: (path) => {
+          if (locked(path)) throw busy();
+          return base.stat(path);
+        },
+        realPath: (path) => {
+          if (locked(path)) throw busy();
+          return base.realPath(path);
+        },
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: true,
+      unavailableEntriesByDiscovery: 1,
+    });
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.extra).toMatchObject({
+      discoveryUnavailableEntryCount: 1,
+      discoveryVanishedEntryCount: 0,
+      discoveryMembershipRetryCount: 0,
+    });
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    expect(JSON.stringify(activityLog.events)).not.toContain("PRIVATE_LOCK_DETAIL");
+    expect(JSON.stringify(activityLog.events)).not.toContain("locked.ts");
+  });
+
+  it("records skipped links and unreadable directories on evidence-details (#4431)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const base = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: `export const value = "${target}";\n`,
+      [`${PRIVATE_SCOPE_PATH}/vault/notes.ts`]: `export const hidden = "${target}";\n`,
+    });
+    // The memory port reads its own tree through `this`.
+    const iterate = base.iterateDirectory?.bind(base);
+    if (iterate === undefined) throw new TypeError("Expected the streaming directory port");
+    const endsWith = (path: string, suffix: string): boolean =>
+      path.replaceAll("\\", "/").endsWith(`/${suffix}`);
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: {
+        ...base,
+        iterateDirectory: async function* (path) {
+          if (endsWith(path, "vault")) {
+            throw Object.assign(new Error("PRIVATE_DIRECTORY_DETAIL"), { code: "EACCES" });
+          }
+          yield* iterate(path);
+          if (endsWith(path, PRIVATE_SCOPE_PATH)) {
+            yield { name: "linked", isDirectory: true, isFile: false, isSymbolicLink: true };
+          }
+        },
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: true,
+      deniedByDiscovery: 0,
+      skippedSymbolicLinksByDiscovery: 1,
+      unavailableDirectoriesByDiscovery: 1,
+    });
+    expect(JSON.stringify(output.pack.uncertainty)).toContain("unreadable directories 1");
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.correlationId).toBe(CORRELATION_ID);
+    expect(evidenceDetails?.extra).toMatchObject({
+      discoverySkippedLinkCount: 1,
+      discoveryUnavailableDirectoryCount: 1,
+      discoveryOversizedDirectoryCount: 0,
+      discoveryUnavailableEntryCount: 0,
+      discoveryDeniedCount: 0,
+      discoveryUnrepresentablePathCount: 0,
+    });
+    expect(typeof evidenceDetails?.extra?.discoveryIgnoredCount).toBe("number");
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    const logged = JSON.stringify(activityLog.events);
+    for (const secret of ["PRIVATE_DIRECTORY_DETAIL", "vault", "linked"])
+      expect(logged).not.toContain(secret);
+  });
+
+  it("records pruned Windows system entries on evidence-details, body-free (#4437)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: memFs(FIXTURE_ROOT, {
+        [PRIVATE_SCOPE_FILE]: `export const value = "${target}";\n`,
+        "$Recycle.Bin/S-1-5-21/PRIVATE_DELETED.ts": `export const gone = "${target}";\n`,
+        [`${PRIVATE_SCOPE_PATH}/desktop.ini`]: `[${target}]\n`,
+      }),
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: false,
+      systemNoisePrunedByDiscovery: 2,
+    });
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.correlationId).toBe(CORRELATION_ID);
+    expect(evidenceDetails?.extra).toMatchObject({ discoverySystemNoisePrunedCount: 2 });
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    const serialized = JSON.stringify(activityLog.events);
+    for (const secret of ["$Recycle.Bin", "PRIVATE_DELETED", "desktop.ini", target]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({
@@ -762,6 +927,8 @@ describe("retrieveConnectedContextPack activity log", () => {
         queryIdentitySha256: started.queryIdentitySha256,
         activityDetailStatus: "complete",
         sourceDescriptorPathCount: 0,
+        // #4456: a healthy small scope never reaches the parsed source budget.
+        codeIndexSourceBudgetReachedCount: 0,
         completeness: "complete",
         loss: "none",
       });
@@ -989,6 +1156,65 @@ describe("retrieveConnectedContextPack activity log", () => {
         .find((line) => line.includes('"op":"search.connected-context.completion-details"'));
       if (completedLine === undefined) throw new Error("Missing persisted index diagnostics");
       expectActivityLogProof("search.connected-context.completion-details.line", completedLine);
+    } finally {
+      activityLog.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists stored-text reuse for a differently worded question (#4457)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-content-log-"));
+    const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
+    const workspaceIndex = createWorkspaceIndex();
+    const fs = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: "export function PrivateCustomerHandler(): string { return 'ok'; }\n",
+    });
+    const reworded: OrchestratorInput = {
+      ...fixtureInput(),
+      query: {
+        ...fixtureQuery(),
+        text: "Where is PrivateCustomerHandler declared and what returns?",
+      },
+    };
+    try {
+      const cold = await retrieveConnectedContextPack(fixtureInput(), {
+        ...fixtureDeps(activityLog, `${CORRELATION_ID}-cold`),
+        fs,
+        workspaceIndexForRoot: () => workspaceIndex,
+      });
+      const warm = await retrieveConnectedContextPack(reworded, {
+        ...fixtureDeps(activityLog, `${CORRELATION_ID}-reworded`),
+        fs,
+        workspaceIndexForRoot: () => workspaceIndex,
+      });
+      activityLog.close?.();
+
+      const raw = readPersistedActivityLog(stateDir);
+      const [coldLine, warmLine] = parsePersistedLogLines(raw).filter(
+        (entry) => entry.op === "search.connected-context.completion-details",
+      );
+      if (coldLine === undefined || warmLine === undefined) {
+        throw new Error("expected both connected-context completion lines");
+      }
+      expect(warmLine.correlationId).toBe(`${CORRELATION_ID}-reworded`);
+      expect(warm.pack.files.map((file) => file.scopePath)).toEqual(
+        cold.pack.files.map((file) => file.scopePath),
+      );
+      expect(nestedExtra(coldLine, "workspaceIndex")).toMatchObject({
+        searchMode: "persistent-cold",
+        reusedRecords: 0,
+      });
+      // The reworded question reuses the stored lane text: no new record, no stale record.
+      expect(nestedExtra(warmLine, "workspaceIndex")).toMatchObject({
+        searchMode: "persistent-warm",
+        indexedRecords: 0,
+        staleRecords: 0,
+      });
+      expect(nestedExtra(warmLine, "workspaceIndex").reusedRecords).toBeGreaterThan(0);
+      expect(nestedExtra(warmLine, "workspaceIo").contentReadCalls).toBeLessThan(
+        nestedExtra(coldLine, "workspaceIo").contentReadCalls as number,
+      );
+      for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
     } finally {
       activityLog.close?.();
       rmSync(stateDir, { recursive: true, force: true });

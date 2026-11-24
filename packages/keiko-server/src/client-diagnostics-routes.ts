@@ -1368,6 +1368,8 @@ const CLIENT_SCOPE_NOTICE_OPERATION = defineActivityLogOperation({
         "widened",
         "pinned-folder",
         "missing-evidence-added",
+        "app-data-contained",
+        "app-data-selected",
       ],
     },
     scopeKind: {

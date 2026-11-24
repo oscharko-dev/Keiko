@@ -121,6 +121,40 @@ describe("createChat", () => {
 // route, the Chat History route, and the create/send envelope). The limited page therefore
 // decides which conversations a user can see and which one the session resumes: it must be the
 // most RECENTLY updated page, never the oldest one.
+// Issue #4459 — a Windows API or CLI caller may name a registered project with either separator.
+describe("project path separators", () => {
+  it.runIf(process.platform === "win32")(
+    "creates and lists a chat with a forward-slash Windows project path",
+    () => {
+      const forward = proj.replaceAll("\\", "/");
+      expect(forward).not.toBe(proj);
+      const chat = store.createChat(forward, "Forward", "example-chat-model");
+      expect(chat.projectPath).toBe(proj);
+      expect(store.listChats(forward).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(proj).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(forward, 10).map((c) => c.id)).toEqual([chat.id]);
+    },
+  );
+
+  // A POSIX backslash is a character of a file name, never a separator. A canonical workspace root
+  // cannot carry one (workspace-contract-primitives), so no project is registered under such a
+  // name; what the store owes is that the name never resolves to the nested project `a/b`.
+  it.runIf(process.platform !== "win32")(
+    "keeps a literal POSIX backslash apart from the path separator",
+    () => {
+      const nested = join(tmp, "a", "b");
+      mkdirSync(nested, { recursive: true });
+      store.createProject(nested);
+      const chat = store.createChat(nested, "Nested", "example-chat-model");
+      const literal = join(tmp, "a\\b");
+      expect(chat.projectPath).toBe(nested);
+      expect(store.listChats(nested).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(literal)).toEqual([]);
+      expect(store.listChats(literal, 10)).toEqual([]);
+    },
+  );
+});
+
 describe("listChats — limited page window", () => {
   it("returns the most recently updated chats, not the oldest", () => {
     const oldest = store.createChat(proj, "oldest", "m1");

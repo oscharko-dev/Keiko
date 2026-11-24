@@ -197,7 +197,7 @@ describe("workspace path discovery scope and coverage", () => {
 
   it("does not read contained or external symlink targets in native directory listings", async () => {
     const selectedRoot = mkdtempSync(join(tmpdir(), "keiko-path-discovery-"));
-    const root = realpathSync(selectedRoot);
+    const root = realpathSync.native(selectedRoot);
     try {
       mkdirSync(join(root, "real"));
       writeFileSync(join(root, "real/target.ts"), "source");

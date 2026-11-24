@@ -139,7 +139,8 @@ describe("explicitly declared legacy HTML codecs", () => {
       endLine: 302,
       maxBytes: 512,
     });
-    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>\r");
+    // The CRLF terminator is not line content (#4439).
+    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>");
   });
   it.each([
     '<meta/charset="windows-1252">',

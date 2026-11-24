@@ -190,7 +190,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("route content scoring reuses per-file line segmentation", () => {
   it("segments each physical source line once across overlapping declaration windows", () => {
-    const text = "export const unrelated = 937;\n".repeat(64);
+    // The asked path, spelled without a declaration, sends every window through the scan (#4457).
+    const text = "export const unrelated = 937;\n".repeat(64) + 'const label = "/orders/{id}";\n';
     const lineCount = repositorySourceLines(text, "src/routes.ts").length;
     const spy = vi.spyOn(String.prototype, "matchAll");
     scoreContentForSearch(QUERY, text, POLICY, "src/routes.ts");
@@ -198,6 +199,18 @@ describe("route content scoring reuses per-file line segmentation", () => {
       pattern.source.startsWith("\\b(?:router|app|server|r)\\."),
     );
     expect(starts).toHaveLength(lineCount);
+  });
+
+  // #4457: every declaration marker carries a path its file spells, so a file without the asked
+  // path cannot earn the route bonus and is neither classified nor segmented for it.
+  it("does not scan declaration windows of a file that never spells the asked path", () => {
+    const text = 'router.post("/orders", save);\n' + "export const unrelated = 937;\n".repeat(64);
+    const spy = vi.spyOn(String.prototype, "matchAll");
+    expect(scoreContentForSearch(QUERY, text, POLICY, "src/routes.ts")).toBeGreaterThan(0);
+    const starts = spy.mock.calls.filter(([pattern]) =>
+      pattern.source.startsWith("\\b(?:router|app|server|r)\\."),
+    );
+    expect(starts).toHaveLength(0);
   });
 
   it("stops preparation at the first accepted window instead of scanning the remaining file", () => {

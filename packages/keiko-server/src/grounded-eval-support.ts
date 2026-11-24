@@ -153,6 +153,11 @@ export interface ConnectedRetrievalEvalInput {
   readonly answerer?: GroundedAnswerer | undefined;
   readonly budget?: ExplorationBudget | undefined;
   readonly files: Readonly<Record<string, string>>;
+  /**
+   * An already materialized fixture root. Scale gates write a large corpus once and ask several
+   * questions over it; `files` is then ignored and the root is neither written nor removed.
+   */
+  readonly root?: string | undefined;
   readonly query: string;
   readonly history?: readonly { readonly role: "user" | "assistant"; readonly content: string }[];
   readonly correlationId?: string;
@@ -160,6 +165,8 @@ export interface ConnectedRetrievalEvalInput {
   readonly answer?: string;
   readonly detectWorkspace?: OrchestratorDeps["detectWorkspace"];
   readonly contentRedaction?: OrchestratorDeps["contentRedaction"];
+  /** Fault-injecting filesystem port over the materialized fixture, e.g. a locked entry. */
+  readonly fs?: OrchestratorDeps["fs"];
 }
 
 function connectedEvalRuntime(): UiHandlerDeps {
@@ -229,12 +236,9 @@ async function initializeConnectedFixtureRepository(root: string): Promise<void>
       "Connected retrieval fixture baseline",
     ],
   ];
+  const options = { cwd: root, maxBytes: 65_536, timeoutMs: 3_000 };
   for (const args of commands) {
-    const result = await runner(args, {
-      cwd: root,
-      maxBytes: 65_536,
-      timeoutMs: 3_000,
-    });
+    const result = await runner(args, options); // NOSONAR typescript:S9382 -- init, add and commit build on the previous command's repository state
     if (result.exitCode !== 0 || result.truncated)
       throw new Error("Connected retrieval fixture Git initialization failed");
   }
@@ -274,6 +278,7 @@ function connectedEvalRetrievalDeps(fixture: ConnectedRetrievalEvalInput): Orche
     correlationId: fixture.correlationId,
     activityLog: fixture.activityLog,
     ...(fixture.detectWorkspace === undefined ? {} : { detectWorkspace: fixture.detectWorkspace }),
+    ...(fixture.fs === undefined ? {} : { fs: fixture.fs }),
     ...(fixture.contentRedaction === undefined
       ? {}
       : { contentRedaction: fixture.contentRedaction }),
@@ -289,10 +294,11 @@ export async function runConnectedRetrievalEval(fixture: ConnectedRetrievalEvalI
   readonly retrievalContent: string;
   readonly answer?: OrchestratorOutput;
 }> {
-  const root = mkdtempSync(join(tmpdir(), "keiko-connected-retrieval-eval-"));
+  const owned = fixture.root === undefined;
+  const root = fixture.root ?? mkdtempSync(join(tmpdir(), "keiko-connected-retrieval-eval-"));
   const deps = connectedEvalRuntime();
   try {
-    await materializeConnectedFixture(root, fixture.files);
+    if (owned) await materializeConnectedFixture(root, fixture.files);
     deps.store.createProject(root, "Connected retrieval fixture");
     const chat = deps.store.createChat(root, "Connected retrieval fixture", "fixture");
     let timestamp = 1_700_000_000_000;
@@ -313,6 +319,6 @@ export async function runConnectedRetrievalEval(fixture: ConnectedRetrievalEvalI
     };
   } finally {
     deps.store.close();
-    rmSync(root, { recursive: true, force: true });
+    if (owned) rmSync(root, { recursive: true, force: true });
   }
 }

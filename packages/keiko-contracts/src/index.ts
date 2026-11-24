@@ -384,6 +384,7 @@ export type {
   WorkspaceLanguage,
   TestFramework,
   WorkspaceInfo,
+  WorkspacePathCase,
   DiscoveredFile,
   DiscoveryOptions,
   DiscoveryStats,

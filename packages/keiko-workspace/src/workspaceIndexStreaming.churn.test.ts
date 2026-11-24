@@ -67,7 +67,9 @@ async function fullRetiredShard(persistent = false, query = QUERY): Promise<Chur
   const reads = vi.fn(nodeWorkspaceFs.readFileBytes);
   const fs = { ...nodeWorkspaceFs, readFileBytes: reads };
   const { index, reopen } = indexFixture(persistent);
-  const first = await producedSnapshot(scope, fs, index, query);
+  // The producer runs against a scratch index, so the index under test holds only the full match
+  // shard: its content layer (#4457) must not already know manual.html, or no body read happens.
+  const first = await producedSnapshot(scope, fs, createWorkspaceIndex(), query);
   const records = retiredRecords(first.snapshot);
   await index.saveSnapshot(first.key, {
     ...first.snapshot,

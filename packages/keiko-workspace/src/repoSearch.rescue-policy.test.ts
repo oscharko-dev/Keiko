@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { memFs } from "./_memfs.js";
+import { memFs, memoryFixturePath } from "./_memfs.js";
 import type { WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, findFiles, searchText, type SearchScope } from "./repoSearch.js";
 
@@ -31,7 +31,7 @@ function fixture(files: Readonly<Record<string, string>>): {
     fs: {
       ...base,
       readDir: (path, cap): ReturnType<WorkspaceFs["readDir"]> => {
-        if (path === root) rootWalks += 1;
+        if (memoryFixturePath(path) === root) rootWalks += 1;
         return base.readDir(path, cap);
       },
     },

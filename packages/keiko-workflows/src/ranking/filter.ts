@@ -27,6 +27,10 @@ export interface FilterOptions {
   readonly fallbackPeerGroups?: ReadonlyMap<string, string> | undefined;
   readonly minScoreExemptPaths?: ReadonlySet<string>;
   readonly generatedExemptPaths?: ReadonlySet<string>;
+  // #4458: paths admitted only as continuity from the previous answer. They stay kept, but they
+  // are not the current question's own evidence, so the keep-one fallback still retains the
+  // question's strongest below-floor candidate beside them.
+  readonly continuityOnlyPaths?: ReadonlySet<string> | undefined;
   readonly maxKept: number;
   readonly omitGenerated: boolean;
   readonly omitNearDuplicates: boolean;
@@ -189,6 +193,10 @@ function takeFallbackPeers(
   return peers;
 }
 
+function keepsOwnEvidence(kept: readonly CandidateFile[], options: FilterOptions): boolean {
+  return kept.some((candidate) => options.continuityOnlyPaths?.has(candidate.scopePath) !== true);
+}
+
 export function filterCandidates(
   entries: readonly AnnotatedCandidate[],
   options: FilterOptions,
@@ -202,10 +210,11 @@ export function filterCandidates(
       (fallbackRanks.get(a.scopePath) ?? Infinity) - (fallbackRanks.get(b.scopePath) ?? Infinity) ||
       compareKept(a, b),
   );
-  if (kept.length === 0 && maxKept > 0) {
+  const remaining = maxKept - kept.length;
+  if (!keepsOwnEvidence(kept, options) && remaining > 0) {
     const fallback = lowRelevance.shift();
     if (fallback !== undefined) {
-      kept.push(fallback, ...takeFallbackPeers(fallback, lowRelevance, options, maxKept));
+      kept.push(fallback, ...takeFallbackPeers(fallback, lowRelevance, options, remaining));
     }
   }
   appendLowRelevanceOmissions(omittedEntries, lowRelevance, nowMs);

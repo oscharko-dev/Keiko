@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readWorkspaceFileForEditing as readViaPublishedSubpath } from "@oscharko-dev/keiko-workspace/internal/editor-read";
 import {
@@ -24,7 +24,7 @@ import {
   visitWorkspaceFiles,
 } from "./discovery.js";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
-import { memFs } from "./_memfs.js";
+import { DIRECTORY_LINK_TYPE, memFs, portableFixtureFs } from "./_memfs.js";
 import {
   FileTooLargeError,
   PathDeniedError,
@@ -86,7 +86,7 @@ describe("streamed discovery failure propagation", () => {
     let open = 0;
     let peak = 0;
     let closed = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       ...base,
       iterateDirectory: async function* (path) {
         open += 1;
@@ -99,7 +99,7 @@ describe("streamed discovery failure propagation", () => {
           closed += 1;
         }
       },
-    };
+    });
     const visited: string[] = [];
     const result = await visitWorkspaceFiles(
       fakeWorkspace("/ws"),
@@ -125,7 +125,7 @@ describe("streamed discovery failure propagation", () => {
     const base = memFs("/ws", { "child/leaf.txt": "fact" });
     const abort = new AbortController();
     const opened: string[] = [];
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       ...base,
       iterateDirectory: async function* (path) {
         opened.push(path);
@@ -135,7 +135,7 @@ describe("streamed discovery failure propagation", () => {
           abort.abort();
         }
       },
-    };
+    });
     await expect(
       visitWorkspaceFiles(
         fakeWorkspace("/ws"),
@@ -267,7 +267,7 @@ function mutableRootDiscoveryFs(): {
   let selectedRootCalls = 0;
   let statCalls = 0;
   return {
-    fs: {
+    fs: portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => {
         statCalls += 1;
@@ -283,7 +283,7 @@ function mutableRootDiscoveryFs(): {
         return selectedRootCalls === 1 ? "/safe/project" : "/safe/.aws";
       },
       exists: (): boolean => true,
-    },
+    }),
     readDirPaths,
     selectedRootCalls: () => selectedRootCalls,
     statCalls: () => statCalls,
@@ -339,7 +339,7 @@ describe("discoverFiles", () => {
     const root = "/ws";
     let readDirCalls = 0;
     const requestedCaps: (number | undefined)[] = [];
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => ({
         size: 0,
@@ -363,7 +363,7 @@ describe("discoverFiles", () => {
       },
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
     const result = discoverCandidateInventory(
       fakeWorkspace(root),
       { ...DEFAULT_DISCOVERY_OPTIONS, maxFiles: 1 },
@@ -389,7 +389,7 @@ describe("discoverFiles", () => {
       isFile: false,
       isSymbolicLink: false,
     }));
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => ({
         size: 0,
@@ -413,7 +413,7 @@ describe("discoverFiles", () => {
       },
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     const result = discoverCandidateInventory(
       fakeWorkspace(root),
@@ -505,7 +505,7 @@ describe("discoverFiles", () => {
     const hugeDirectoryEntries = 60_000;
     const requestedCaps: (number | undefined)[] = [];
     let materialized = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (absolutePath): WorkspaceStat => ({
         size: 1,
@@ -527,7 +527,7 @@ describe("discoverFiles", () => {
       },
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
     const workspace = fakeWorkspace(root);
 
     const result = discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
@@ -546,7 +546,7 @@ describe("discoverFiles", () => {
     // The memory bound is not the traversal entry budget: one oversized directory is skipped and
     // reported, while the rest of the walk still completes.
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (absolutePath): WorkspaceStat => ({
         size: 1,
@@ -575,7 +575,7 @@ describe("discoverFiles", () => {
       },
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     const result = discoverWithStats(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs);
 
@@ -624,7 +624,7 @@ describe("discoverFiles", () => {
     const aws = join(dir, ".aws");
     mkdirSync(aws);
     writeFileSync(join(aws, "credentials.md"), "aws_secret should never be listed", "utf8");
-    symlinkSync(aws, join(dir, "docs"));
+    symlinkSync(aws, join(dir, "docs"), DIRECTORY_LINK_TYPE);
     const ws = fakeWorkspace(join(dir, "docs"));
     expect(() => discoverFiles(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
     expect(() => discoverWithStats(ws, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
@@ -640,7 +640,7 @@ describe("discoverFiles", () => {
     mkdirSync(deniedTarget, { recursive: true });
     writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
     const linkedRoot = join(lexicalParent, "linked-workspace");
-    symlinkSync(deniedTarget, linkedRoot);
+    symlinkSync(deniedTarget, linkedRoot, DIRECTORY_LINK_TYPE);
     const workspace = fakeWorkspace(linkedRoot);
 
     expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
@@ -721,7 +721,7 @@ describe("discoverFiles", () => {
     mkdirSync(deniedTarget, { recursive: true });
     writeFileSync(join(deniedTarget, "notes.md"), "must not be listed", "utf8");
     const linkedRoot = join(lexicalParent, "docs");
-    symlinkSync(deniedTarget, linkedRoot);
+    symlinkSync(deniedTarget, linkedRoot, DIRECTORY_LINK_TYPE);
     const workspace = fakeWorkspace(linkedRoot);
 
     expect(() => discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS)).toThrow(PathDeniedError);
@@ -742,7 +742,7 @@ describe("discoverFiles", () => {
   it("drops an enumeration when its directory is replaced after entries are returned", () => {
     file("docs/safe.ts", "SAFE");
     const outside = mkdtempSync(join(tmpdir(), "keiko-directory-race-outside-"));
-    const documentDirectory = realpathSync(join(dir, "docs"));
+    const documentDirectory = realpathSync.native(join(dir, "docs"));
     let swapped = false;
     try {
       writeFileSync(join(outside, "private.ts"), "OUTSIDE_PRIVATE_BYTES", "utf8");
@@ -752,7 +752,7 @@ describe("discoverFiles", () => {
           if (!swapped && absolutePath === documentDirectory) {
             const entries = nodeWorkspaceFs.readDir(outside, maxEntries);
             renameSync(join(dir, "docs"), join(dir, "docs-original"));
-            symlinkSync(outside, join(dir, "docs"));
+            symlinkSync(outside, join(dir, "docs"), DIRECTORY_LINK_TYPE);
             swapped = true;
             return entries;
           }
@@ -783,7 +783,7 @@ describe("discoverFiles", () => {
       ctimeNs: "1",
       fileIdentity,
     });
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (absolutePath): WorkspaceStat =>
         absolutePath === safeRoot ? directoryStat("1:1") : directoryStat("2:2"),
@@ -806,7 +806,7 @@ describe("discoverFiles", () => {
         return absolutePath;
       },
       exists: (): boolean => true,
-    };
+    });
 
     const found = discoverFiles(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs);
 
@@ -816,7 +816,7 @@ describe("discoverFiles", () => {
 
   it("tolerates an unreadable subdirectory without throwing", () => {
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => ({
         size: 0,
@@ -832,7 +832,7 @@ describe("discoverFiles", () => {
       },
       realPath: (p: string): string => p,
       exists: (): boolean => true,
-    };
+    });
     expect(discoverFiles(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
   });
 
@@ -840,7 +840,7 @@ describe("discoverFiles", () => {
     let readDirCalls = 0;
     let statCalls = 0;
     let contentReadCalls = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => {
         contentReadCalls += 1;
         return "";
@@ -857,7 +857,7 @@ describe("discoverFiles", () => {
         throw new Error("EACCES");
       },
       exists: (): boolean => false,
-    };
+    });
     const workspace = fakeWorkspace("/unavailable");
 
     expect(discoverFiles(workspace, DEFAULT_DISCOVERY_OPTIONS, fs)).toEqual([]);
@@ -916,7 +916,7 @@ describe("discoverFiles", () => {
 
   it("bounds the internal skipped-symlink inventory and reports pruning", () => {
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => ({
         size: 0,
@@ -933,7 +933,7 @@ describe("discoverFiles", () => {
         })),
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     const result = discoverCandidateInventory(
       fakeWorkspace(root),
@@ -949,7 +949,7 @@ describe("discoverFiles", () => {
 
   it("fails internal candidate discovery when a directory cannot be read", () => {
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): WorkspaceStat => ({
         size: 0,
@@ -962,7 +962,7 @@ describe("discoverFiles", () => {
       },
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     expect(() =>
       discoverCandidateInventory(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs),
@@ -973,7 +973,7 @@ describe("discoverFiles", () => {
   it("revalidates a stale directory entry before descending through a swapped symlink", async () => {
     const root = "/ws";
     let outsideReadDirCalls = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): never => {
         throw new Error("content must not be read");
       },
@@ -993,7 +993,7 @@ describe("discoverFiles", () => {
       realPath: (absolutePath): string =>
         absolutePath === `${root}/swapped` ? "/outside/swapped" : absolutePath,
       exists: (): boolean => true,
-    };
+    });
     const workspace = fakeWorkspace(root);
 
     const sync = discoverWithStats(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
@@ -1011,7 +1011,7 @@ describe("discoverFiles", () => {
 
   it("fails internal candidate discovery when a discovered file cannot be stated", () => {
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: (): never => {
         throw new Error("EIO");
@@ -1022,7 +1022,7 @@ describe("discoverFiles", () => {
           : [],
       realPath: (absolutePath): string => absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     expect(() =>
       discoverCandidateInventory(fakeWorkspace(root), DEFAULT_DISCOVERY_OPTIONS, fs),
@@ -1053,7 +1053,7 @@ describe("discoverFiles", () => {
     async (failedDirectory) => {
       const root = "/ws";
       const base = memFs(root, { "good.ts": "fact", "nested/component.tsx": "fact" });
-      const fs: WorkspaceFs = {
+      const fs: WorkspaceFs = portableFixtureFs({
         ...base,
         readDir: (path, limit) => {
           if (path === (failedDirectory === "root" ? root : `${root}/nested`)) {
@@ -1061,7 +1061,7 @@ describe("discoverFiles", () => {
           }
           return base.readDir(path, limit);
         },
-      };
+      });
       const workspace = fakeWorkspace(root);
       const tolerant = await discoverWithStatsAsync(workspace, DEFAULT_DISCOVERY_OPTIONS, fs);
       expect(tolerant.files.map((entry) => entry.relativePath)).toEqual(
@@ -1082,7 +1082,7 @@ describe("discoverFiles", () => {
       "ignored/noise.ts": "fact",
       ".aws/credentials": "fact",
     });
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       ...base,
       readDir: (path, limit) => {
         if (path === `${root}/ignored` || path === `${root}/.aws`) {
@@ -1090,7 +1090,7 @@ describe("discoverFiles", () => {
         }
         return base.readDir(path, limit);
       },
-    };
+    });
     const result = await discoverWithStatsAsync(
       { ...fakeWorkspace(root), ignoreLines: ["ignored/"] },
       DEFAULT_DISCOVERY_OPTIONS,
@@ -1148,7 +1148,7 @@ describe("readWorkspaceFile", () => {
     let rootResolutionCalls = 0;
     let statCalls = 0;
     let readCalls = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => {
         readCalls += 1;
         return "must not be read";
@@ -1167,7 +1167,7 @@ describe("readWorkspaceFile", () => {
         return path;
       },
       exists: (): boolean => true,
-    };
+    });
 
     expect(() =>
       readWorkspaceFile(fakeWorkspace("/selected"), "alias.txt", { maxBytes: 100 }, fs),
@@ -1181,7 +1181,7 @@ describe("readWorkspaceFile", () => {
     let statCalls = 0;
     let readCalls = 0;
     let existsCalls = 0;
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => {
         readCalls += 1;
         return "must not be read";
@@ -1199,7 +1199,7 @@ describe("readWorkspaceFile", () => {
         existsCalls += 1;
         return true;
       },
-    };
+    });
 
     let failure: unknown;
     try {
@@ -1224,14 +1224,14 @@ describe("readWorkspaceFile", () => {
     const aws = join(dir, ".aws");
     mkdirSync(aws);
     writeFileSync(join(aws, "config.md"), "aws_session_token opaque-bare-token-not-shaped", "utf8");
-    symlinkSync(aws, join(dir, "docs")); // benign-named link -> denied real dir
+    symlinkSync(aws, join(dir, "docs"), DIRECTORY_LINK_TYPE); // benign-named link -> denied real dir
     expect(() => readWorkspaceFile(fakeWorkspace(join(dir, "docs")), "config.md")).toThrow(
       PathDeniedError,
     );
   });
 
   it("still reads an admitted Codex worktree below its denied internal-state ancestor", () => {
-    const nested = join(dir, ".codex", "worktrees", "task", "project");
+    const nested = join(realpathSync.native(dir), ".codex", "worktrees", "task", "project");
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, "notes.md"), "ordinary project notes", "utf8");
     const content = readWorkspaceFile(detectWorkspaceAt(nested), "notes.md");
@@ -1244,7 +1244,7 @@ describe("readWorkspaceFile", () => {
     const real = join(dir, "realdocs");
     mkdirSync(real);
     writeFileSync(join(real, "spec.md"), "the system shall validate input", "utf8");
-    symlinkSync(real, join(dir, "linked"));
+    symlinkSync(real, join(dir, "linked"), DIRECTORY_LINK_TYPE);
     const content = readWorkspaceFile(detectWorkspaceAt(join(dir, "linked")), "spec.md");
     expect(content.text).toBe("the system shall validate input");
   });
@@ -1283,7 +1283,7 @@ describe("readWorkspaceFile", () => {
 
   it("wraps a non-Error filesystem throw into a WorkspaceReadError", () => {
     const root = "/ws";
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => {
         // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw "raw string failure";
@@ -1297,7 +1297,7 @@ describe("readWorkspaceFile", () => {
       readDir: (): readonly WorkspaceDirEntry[] => [],
       realPath: (p: string): string => p,
       exists: (): boolean => true,
-    };
+    });
     expect(() => readWorkspaceFile(fakeWorkspace(root), "a.txt", { maxBytes: 100 }, fs)).toThrow(
       WorkspaceReadError,
     );
@@ -1439,7 +1439,7 @@ describe("readWorkspaceFileForEditing", () => {
         },
         stat: (absolutePath): WorkspaceStat => {
           const before = nodeWorkspaceFs.stat(absolutePath);
-          if (!swapped && absolutePath.endsWith("/safe.ts")) {
+          if (!swapped && absolutePath.endsWith(join(sep, "safe.ts"))) {
             swapped = true;
             unlinkSync(absolutePath);
             symlinkSync(outsidePath, absolutePath);
@@ -1473,10 +1473,10 @@ describe("readWorkspaceFileForEditing", () => {
         },
         stat: (absolutePath): WorkspaceStat => {
           const before = nodeWorkspaceFs.stat(absolutePath);
-          if (!swapped && absolutePath.endsWith("/docs/safe.ts")) {
+          if (!swapped && absolutePath.endsWith(join(sep, "docs", "safe.ts"))) {
             swapped = true;
             renameSync(join(dir, "docs"), join(dir, "docs-original"));
-            symlinkSync(outside, join(dir, "docs"));
+            symlinkSync(outside, join(dir, "docs"), DIRECTORY_LINK_TYPE);
           }
           return before;
         },
@@ -1509,7 +1509,7 @@ describe("readWorkspaceFileForEditing", () => {
       mtimeNs: "1000000",
       ctimeNs: "1000000",
     };
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): never => {
         throw new Error("legacy read must not run");
       },
@@ -1524,7 +1524,7 @@ describe("readWorkspaceFileForEditing", () => {
       realPath: (absolutePath): string =>
         retargeted && absolutePath === selected ? other : absolutePath,
       exists: (): boolean => true,
-    };
+    });
 
     expect(() =>
       readWorkspaceFileForEditing(fakeWorkspace(root), "selected.ts", { maxBytes: 16 }, fs),
@@ -1578,7 +1578,7 @@ describe("nodeWorkspaceFs.exists", () => {
         code: "EACCES",
       });
     };
-    const fs: WorkspaceFs = {
+    const fs: WorkspaceFs = portableFixtureFs({
       readFileUtf8: (): string => "",
       stat: eaccesStat,
       readDir: (): readonly WorkspaceDirEntry[] => [],
@@ -1591,7 +1591,7 @@ describe("nodeWorkspaceFs.exists", () => {
           return false;
         }
       },
-    };
+    });
     expect(() => fs.exists("/locked")).not.toThrow();
     expect(fs.exists("/locked")).toBe(false);
     expect(statCallCount).toBe(2); // called once per exists() invocation

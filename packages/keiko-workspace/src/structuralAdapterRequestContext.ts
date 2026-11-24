@@ -113,6 +113,8 @@ export interface StructuralRequestContextDiagnostics {
   readonly candidateFileCount: number;
   readonly candidateDirectoryCount: number;
   readonly codeIndexBuildCount: number;
+  /** Code index builds whose source list the parsed source budget ended (#4456). */
+  readonly codeIndexSourceBudgetReachedCount: number;
   readonly symbolGraphBuildCount: number;
   readonly importGraphBuildCount: number;
   readonly endpointGraphBuildCount: number;
@@ -265,6 +267,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private candidateFileCount = 0;
   private candidateDirectoryCount = 0;
   private codeIndexBuildCount = 0;
+  private codeIndexSourceBudgetReachedCount = 0;
   private symbolGraphBuildCount = 0;
   private importGraphBuildCount = 0;
   private endpointGraphBuildCount = 0;
@@ -677,29 +680,34 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     // Fix source priority when the shared build is first requested; later registrations cannot
     // relabel or rebuild the already memoized graph.
     const preferredSourcePaths = [...this.preferredCodeIntelligenceSourcePaths];
-    this.codeIndexPromise ??= Promise.resolve().then(() => {
-      this.codeIndexBuildCount += 1;
-      const candidates = this.candidateSet();
-      this.codeIndexSourceCapacity = Math.max(
-        0,
-        this.limits.maxFilesScanned ?? candidates.files.length,
-      );
-      return buildCodeIntelligenceIndexFromCandidatesAsync(
-        this.scope,
-        this.limits,
-        this.executionFs,
-        candidates,
-        {
-          preferredSourcePaths,
-          executionControl: this.executionControl,
-          disableCache: true,
-          readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
-          assertSourceAllowed: (path) => {
-            this.assertSourceAllowed(path);
+    this.codeIndexPromise ??= Promise.resolve()
+      .then(() => {
+        this.codeIndexBuildCount += 1;
+        const candidates = this.candidateSet();
+        this.codeIndexSourceCapacity = Math.max(
+          0,
+          this.limits.maxFilesScanned ?? candidates.files.length,
+        );
+        return buildCodeIntelligenceIndexFromCandidatesAsync(
+          this.scope,
+          this.limits,
+          this.executionFs,
+          candidates,
+          {
+            preferredSourcePaths,
+            executionControl: this.executionControl,
+            disableCache: true,
+            readSource: (path, maxBytes) => this.codeIntelligenceSource(path, maxBytes),
+            assertSourceAllowed: (path) => {
+              this.assertSourceAllowed(path);
+            },
           },
-        },
-      );
-    });
+        );
+      })
+      .then((index) => {
+        if (index.parsedSourceBudgetReached === true) this.codeIndexSourceBudgetReachedCount += 1;
+        return index;
+      });
     return this.codeIndexPromise;
   }
 
@@ -918,6 +926,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
       candidateFileCount: this.candidateFileCount,
       candidateDirectoryCount: this.candidateDirectoryCount,
       codeIndexBuildCount: this.codeIndexBuildCount,
+      codeIndexSourceBudgetReachedCount: this.codeIndexSourceBudgetReachedCount,
       symbolGraphBuildCount: this.symbolGraphBuildCount,
       importGraphBuildCount: this.importGraphBuildCount,
       endpointGraphBuildCount: this.endpointGraphBuildCount,
