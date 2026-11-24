@@ -14,6 +14,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useCallback, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
@@ -49,6 +50,7 @@ import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { notifyWorkspaceFileMutated } from "../workspace-file-events";
 import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
+import type { WindowCfgValue } from "../../../windows/types";
 
 // Issue #3400 — the "Connect to Chat" dialog calls fetchChats/connectGitChangeToChat directly
 // (it owns no GitClientSeam methods). Only these two are replaced; every other @/lib/api export
@@ -584,6 +586,38 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     })),
     ...overrides,
   };
+}
+
+/**
+ * The desktop's Git window mount (`governedGit` in widgets/index.tsx): the window is keyed by its
+ * resolved root, an empty `projectPath` falls back to the global selected repository, and
+ * `updateCfg` is the window frame's stable merge patch (WindowFrame.tsx).
+ */
+function DesktopKeyedGitWindow({
+  client,
+  selectedRoot,
+  initialCfg,
+}: {
+  readonly client: GitClientSeam;
+  readonly selectedRoot: string;
+  readonly initialCfg: Record<string, WindowCfgValue>;
+}): ReactNode {
+  const [cfg, setCfg] = useState(initialCfg);
+  const updateCfg = useCallback((patch: Record<string, WindowCfgValue>): void => {
+    setCfg((current) => ({ ...current, ...patch }));
+  }, []);
+  const configuredRoot = cfg["projectPath"];
+  const projectId =
+    typeof configuredRoot === "string" && configuredRoot !== "" ? configuredRoot : selectedRoot;
+  return (
+    <GitClientWindow
+      key={projectId}
+      projectId={projectId}
+      connectHandedOffRepository={cfg["connectRepository"] === true}
+      client={client}
+      updateCfg={updateCfg}
+    />
+  );
 }
 
 function makeStructuredDiffResponse(
@@ -1152,11 +1186,10 @@ describe("GitClientWindow — repository list", () => {
     );
     expect(client.registerRepository).not.toHaveBeenCalled();
     // The refusal ends the hand-off, so a restored window never retries it on its own. Strict
-    // equality: the cleared flag must be written, not merely absent.
-    expect(updateCfg.mock.calls.at(-1)?.[0]).toStrictEqual({
-      projectPath: "",
-      connectRepository: undefined,
-    });
+    // equality: the cleared flag must be written, not merely absent. The handed-off folder stays
+    // configured, since the desktop keys the window by it and clearing it would drop the refusal.
+    expect(updateCfg.mock.calls.at(-1)?.[0]).toStrictEqual({ connectRepository: undefined });
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
   });
 
   it("ends the hand-off of a folder that is already a connected repository", async () => {
@@ -1263,7 +1296,7 @@ describe("GitClientWindow — repository list", () => {
       "Repository reconnection failed: not a git repository",
     );
     expect(client.registerRepository).toHaveBeenCalledOnce();
-    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
     expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
   });
 
@@ -1605,6 +1638,91 @@ describe("GitClientWindow — repository list", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(listCalls).toBe(2));
     expect(client.reconnectRepository).toHaveBeenCalledOnce();
+  });
+
+  // CodeRabbit on #4553: the desktop keys the Git window by its root. Clearing the handed-off folder
+  // after a failed or refused hand-off replaced the window, which dropped the failure and showed the
+  // global selected repository instead.
+  it("keeps a failed hand-off visible in the desktop's keyed window", async () => {
+    const client = makeClient({
+      registerRepository: vi.fn(async () => {
+        throw new Error("not a git repository");
+      }),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: "/repos/not-git", connectRepository: true }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Repository reconnection failed: not a git repository",
+      ),
+    );
+    expect(client.registerRepository).toHaveBeenCalledOnce();
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refused hand-off visible in the desktop's keyed window", async () => {
+    const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, legacy] })),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: legacy.path, connectRepository: true }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("This local repository is unavailable."),
+    );
+    expect(client.registerRepository).not.toHaveBeenCalled();
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed hand-off by running the hand-off again", async () => {
+    const user = userEvent.setup();
+    const handedOff = makeRepo("/repos/handed-off", "handed-off");
+    let registrations = 0;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({
+        projects: registrations > 1 ? [REPO_A, handedOff] : [REPO_A],
+      })),
+      registerRepository: vi.fn(async () => {
+        registrations += 1;
+        if (registrations === 1) throw new Error("folder is busy");
+        return makeProjectResponse(handedOff);
+      }),
+      reconnectRepository: vi.fn(async () => makeProjectResponse(handedOff)),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: handedOff.path, connectRepository: true }}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Repository reconnection failed: folder is busy",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(handedOff.path),
+    );
+    expect(client.registerRepository).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(client.getStatus).mock.calls.map((call) => call[0])).not.toContain(
+      REPO_A.path,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.

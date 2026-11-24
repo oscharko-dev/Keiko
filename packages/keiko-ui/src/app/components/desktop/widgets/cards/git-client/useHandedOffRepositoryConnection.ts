@@ -32,7 +32,7 @@ export interface HandedOffRepositoryConnectionInput {
   readonly actionSequence: { current: number };
   readonly onStarted: () => void;
   readonly onAdded: (project: ProjectWithAvailability) => void;
-  readonly onFailed: (error: unknown) => void;
+  readonly onFailed: (error: unknown, path: string) => void;
   /** Ends the hand-off once it settled, so a later mount never repeats it. */
   readonly onSettled: () => void;
   /** A newer hand-off replaced the one a registration served; the window lets the newer proceed. */
@@ -151,7 +151,7 @@ export function useHandedOffRepositoryConnection(
         onSettled();
         if (!isCurrent) return;
         if (outcome.kind === "added") onAdded(outcome.project);
-        else onFailed(outcome.error);
+        else onFailed(outcome.error, path);
       };
       onStarted();
       registerHandedOffPath(client, path, settle);

@@ -197,7 +197,7 @@ describe("useHandedOffRepositoryConnection (#4103 F2)", () => {
       await registration.promise.catch((): undefined => undefined);
     });
     expect(input.onSettled).toHaveBeenCalledOnce();
-    expect(input.onFailed).toHaveBeenCalledExactlyOnceWith(error);
+    expect(input.onFailed).toHaveBeenCalledExactlyOnceWith(error, HANDED_OFF.path);
     expect(input.onAdded).not.toHaveBeenCalled();
     expect(vi.mocked(reportGitClientOperationDiagnostic).mock.calls.at(-1)?.[1]).toEqual({
       operation: "repository-register",

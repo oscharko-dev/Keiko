@@ -1290,16 +1290,30 @@ function ConnectedRepositoryError({
  * The window's repository error. A failed switch to a repository keeps that repository with its
  * error, so Retry connects it again; the target can never outlive the error it caused.
  */
+/** What Retry does about a repository failure. */
+type RepositoryRetry =
+  | { readonly kind: "reload-list" }
+  | { readonly kind: "switch"; readonly path: string }
+  | { readonly kind: "hand-off"; readonly path: string };
+
 interface RepositoryFailure {
   readonly message: string;
-  readonly failedSwitchPath: string | null;
+  readonly retry: RepositoryRetry;
 }
+
+const RELOAD_LIST: RepositoryRetry = { kind: "reload-list" };
 
 function repositoryFailure(
   message: string,
-  failedSwitchPath: string | null = null,
+  retry: RepositoryRetry = RELOAD_LIST,
 ): RepositoryFailure {
-  return { message, failedSwitchPath };
+  return { message, retry };
+}
+
+interface RepositoryRetryActions {
+  readonly reconnect: (path: string) => void;
+  readonly handOffAgain: (path: string) => void;
+  readonly reloadList: () => void;
 }
 
 function repositoryFailureMessage(failure: RepositoryFailure | null): string | null {
@@ -1307,19 +1321,23 @@ function repositoryFailureMessage(failure: RepositoryFailure | null): string | n
 }
 
 /**
- * Retry after a repository failure: a failed switch connects its repository again, any other
- * failure reloads the repository list. While the list itself has failed nothing can be decided, so
- * Retry reloads it first, even after a later failed switch.
+ * Retry after a repository failure: a failed switch connects its repository again, and a failed or
+ * refused hand-off runs that hand-off again on a freshly loaded repository list. Any other failure
+ * reloads the list. While the list itself has failed nothing can be decided, so Retry reloads it
+ * first, even after a later failed switch.
  */
 function retryRepositoryFailure(
   failure: RepositoryFailure | null,
   listFailed: boolean,
-  reconnect: (path: string) => void,
-  reloadList: () => void,
+  actions: RepositoryRetryActions,
 ): void {
-  const failedSwitchPath = failure === null ? null : failure.failedSwitchPath;
-  if (listFailed || failedSwitchPath === null) reloadList();
-  else reconnect(failedSwitchPath);
+  const retry = failure === null ? RELOAD_LIST : failure.retry;
+  if (retry.kind === "switch" && !listFailed) {
+    actions.reconnect(retry.path);
+    return;
+  }
+  if (retry.kind === "hand-off") actions.handOffAgain(retry.path);
+  actions.reloadList();
 }
 
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
@@ -1715,17 +1733,20 @@ export function GitClientWindow({
       if (project.available !== true) {
         setReposLoading(false);
         setReposFailure(
-          repositoryFailure(optionalT("gitClientWindow.repository.unavailable"), switchPath),
+          repositoryFailure(optionalT("gitClientWindow.repository.unavailable"), {
+            kind: "switch",
+            path: switchPath,
+          }),
         );
         return false;
       }
       if (project.workspaceAvailable !== true) {
         setReposLoading(false);
         setReposFailure(
-          repositoryFailure(
-            optionalT("gitClientWindow.repository.workspaceUnavailable"),
-            switchPath,
-          ),
+          repositoryFailure(optionalT("gitClientWindow.repository.workspaceUnavailable"), {
+            kind: "switch",
+            path: switchPath,
+          }),
         );
         return false;
       }
@@ -1765,7 +1786,7 @@ export function GitClientWindow({
               optionalT("gitClientWindow.repository.reconnectFailed", {
                 detail: formatGitError(error),
               }),
-              path,
+              { kind: "switch", path },
             ),
           );
         },
@@ -1774,9 +1795,20 @@ export function GitClientWindow({
     [applyConnectedRepository, client, loadRepositories, mountedRef, optionalT, pendingHandOffRef],
   );
 
+  // Arms the hand-off of `path` again; the decision then connects, selects or refuses it as before.
+  const handOffAgain = useCallback(
+    (path: string): void => {
+      updateCfg?.({ projectPath: path, connectRepository: true });
+    },
+    [updateCfg],
+  );
   const retryRepositoryError = useCallback((): void => {
-    retryRepositoryFailure(reposFailure, reposListFailed, reconnectRepository, loadRepositories);
-  }, [loadRepositories, reconnectRepository, reposFailure, reposListFailed]);
+    retryRepositoryFailure(reposFailure, reposListFailed, {
+      reconnect: reconnectRepository,
+      handOffAgain,
+      reloadList: loadRepositories,
+    });
+  }, [handOffAgain, loadRepositories, reconnectRepository, reposFailure, reposListFailed]);
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
@@ -1794,25 +1826,27 @@ export function GitClientWindow({
   );
 
   // The window follows the hand-off at once: while the handed-off folder connects it no longer shows
-  // the previous repository, so the connection's outcome is what the person sees (#4103 F2).
+  // the previous repository, so the connection's outcome is what the person sees (#4103 F2). A
+  // failed or refused hand-off keeps the handed-off folder configured: the desktop keys this window
+  // by its root, so clearing it would replace the window and drop the failure it shows.
   const startHandedOffConnection = useCallback((): void => {
     setSelectedPath(null);
     setReposLoading(true);
     setReposFailure(null);
   }, []);
   const failHandedOffConnection = useCallback(
-    (error: unknown): void => {
-      updateCfg?.({ projectPath: "" });
+    (error: unknown, path: string): void => {
       setReposLoading(false);
       setReposFailure(
         repositoryFailure(
           optionalT("gitClientWindow.repository.reconnectFailed", {
             detail: formatGitError(error),
           }),
+          { kind: "hand-off", path },
         ),
       );
     },
-    [optionalT, updateCfg],
+    [optionalT],
   );
   const settleHandedOffConnection = useCallback((): void => {
     updateCfg?.({ connectRepository: undefined });
@@ -1829,11 +1863,9 @@ export function GitClientWindow({
   });
 
   const refuseRepository = useCallback(
-    (reason: RepositoryRefusalReason, endsHandOff: boolean): void => {
+    (path: string, reason: RepositoryRefusalReason, endsHandOff: boolean): void => {
       setSelectedPath(null);
-      updateCfg?.(
-        endsHandOff ? { projectPath: "", connectRepository: undefined } : { projectPath: "" },
-      );
+      updateCfg?.(endsHandOff ? { connectRepository: undefined } : { projectPath: "" });
       setReposFailure(
         repositoryFailure(
           optionalT(
@@ -1841,6 +1873,7 @@ export function GitClientWindow({
               ? "gitClientWindow.repository.unavailable"
               : "gitClientWindow.repository.workspaceUnavailable",
           ),
+          endsHandOff ? { kind: "hand-off", path } : RELOAD_LIST,
         ),
       );
     },
@@ -1877,7 +1910,7 @@ export function GitClientWindow({
         connectHandedOffFolder(decision.path);
         return;
       case "refuse":
-        refuseRepository(decision.reason, decision.endsHandOff);
+        refuseRepository(decision.path, decision.reason, decision.endsHandOff);
     }
   }, [
     configuredPath,

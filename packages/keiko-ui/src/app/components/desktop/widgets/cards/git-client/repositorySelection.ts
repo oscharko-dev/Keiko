@@ -18,6 +18,7 @@ export type RepositorySelectionDecision =
   | { readonly kind: "connect-hand-off"; readonly path: string }
   | {
       readonly kind: "refuse";
+      readonly path: string;
       readonly reason: RepositoryRefusalReason;
       readonly endsHandOff: boolean;
     };
@@ -89,12 +90,14 @@ function decideListedRepository(
   if (repository === undefined) {
     // A handed-off folder that was never connected is connected, not discarded.
     return handOffPath === null
-      ? { kind: "refuse", reason: "unavailable", endsHandOff }
+      ? { kind: "refuse", path, reason: "unavailable", endsHandOff }
       : { kind: "connect-hand-off", path };
   }
-  if (repository.available !== true) return { kind: "refuse", reason: "unavailable", endsHandOff };
+  if (repository.available !== true) {
+    return { kind: "refuse", path, reason: "unavailable", endsHandOff };
+  }
   if (repository.workspaceAvailable !== true) {
-    return { kind: "refuse", reason: "workspaceUnavailable", endsHandOff };
+    return { kind: "refuse", path, reason: "workspaceUnavailable", endsHandOff };
   }
   return { kind: "select", path, endsHandOff };
 }
