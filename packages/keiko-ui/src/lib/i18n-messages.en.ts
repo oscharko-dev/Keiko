@@ -297,6 +297,9 @@ export const EN_MESSAGES = {
     "The saved shortcuts could not be reset. Reload to try again, or edit the saved settings outside Keiko.",
   "window.error.title": "This window hit an error",
   "window.error.body": "Please try again.",
+  "window.error.chunkTitle": "Part of Keiko could not be loaded",
+  "window.error.chunkBody":
+    "Keiko was probably updated while this page stayed open. Reload Keiko to load the current version; your windows are restored afterwards.",
   "window.tooSmall.title": "Too small to show {label}",
   "window.tooSmall.body": "Enlarge the window or zoom its content out",
   "window.connectPort.title": "Click to connect to another window",

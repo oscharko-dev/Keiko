@@ -2099,7 +2099,8 @@ export function FilesWindowSessionHost({
     ctx.openEditorFile({ root: fileRoot, path });
   };
   const onOpenGitDelivery = (projectRoot: string): void => {
-    ctx.openWindow("governedGit", { projectPath: projectRoot });
+    // An explicit hand-off: the Git window connects this folder if it was never connected (#4103).
+    ctx.openWindow("governedGit", { projectPath: projectRoot, connectRepository: true });
   };
   if (workspace.manifest !== null && workspace.manifest.roots.length > 1) {
     return (

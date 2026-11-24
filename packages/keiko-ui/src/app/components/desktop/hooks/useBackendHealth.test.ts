@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchHealth, type HealthSnapshot } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { notePageServerVersion } from "@/lib/server-version-reload";
 import { HEALTH_POLL_INTERVAL_MS, useBackendHealth } from "./useBackendHealth";
 
 vi.mock("@/lib/api", async (original) => ({
@@ -9,6 +10,7 @@ vi.mock("@/lib/api", async (original) => ({
   fetchHealth: vi.fn(),
 }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("@/lib/server-version-reload", () => ({ notePageServerVersion: vi.fn() }));
 const fetch = vi.mocked(fetchHealth);
 const ready: HealthSnapshot = { status: "ok", version: "1.2.3" };
 
@@ -23,6 +25,14 @@ afterEach(() => {
 });
 
 describe("useBackendHealth", () => {
+  // #4103 F1: the page remembers the server version it loaded with, so a re-pair after an upgrade
+  // can tell that this tab still runs the previous build.
+  it("hands every loaded server version to the page's version memory", async () => {
+    renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    expect(notePageServerVersion).toHaveBeenCalledWith("1.2.3");
+  });
+
   it("keeps a previously loaded snapshot through one failed poll followed by recovery", async () => {
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());

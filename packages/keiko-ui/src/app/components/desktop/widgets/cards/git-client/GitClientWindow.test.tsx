@@ -829,6 +829,39 @@ describe("GitClientWindow — repository list", () => {
     await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 3));
   });
 
+  // #4103 F3: an agent's edit (announced with `agent` provenance by the Coding Workbench) and a
+  // change made outside Keiko (seen when the page regains focus) both re-read the status.
+  it("re-reads the status for an agent mutation and when the page regains focus", async (): Promise<void> => {
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => makeStatus());
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("button", { name: "Branch: main" });
+    const initialReads = getStatus.mock.calls.length;
+
+    act((): void => notifyWorkspaceFileMutated(REPO_A.path, { provenance: "agent" }));
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 1));
+
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledTimes(initialReads + 2));
+  });
+
+  it("does not read a status on focus while no repository is connected", (): void => {
+    const client = makeClient({
+      listRepositories: vi.fn(
+        (): Promise<{ readonly projects: readonly ProjectWithAvailability[] }> =>
+          new Promise(() => undefined),
+      ),
+    });
+    render(<GitClientWindow client={client} />);
+
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
   it("ignores the previous canonical root while a newly selected repository is loading", async (): Promise<void> => {
     let resolveBetaStatus!: (value: GitRepositoryStatusResponse) => void;
     const betaStatus = new Promise<GitRepositoryStatusResponse>((resolve): void => {
@@ -1032,6 +1065,93 @@ describe("GitClientWindow — repository list", () => {
     );
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
     expect(client.getStatus).not.toHaveBeenCalled();
+    // A configured path that was not handed off never registers itself (#4103 F2).
+    expect(client.registerRepository).not.toHaveBeenCalled();
+  });
+
+  // #4103 F2: the Files window's Git button hands off a folder that was never connected here. It is
+  // connected the way "Open local repository" connects it, instead of "No repository connected".
+  it("connects a handed-off folder that is not yet a connected repository", async () => {
+    const handedOff = makeRepo("/repos/handed-off", "handed-off");
+    let registered = false;
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({
+        projects: registered ? [REPO_A, handedOff] : [REPO_A],
+      })),
+      registerRepository: vi.fn(async () => {
+        registered = true;
+        return makeProjectResponse(handedOff);
+      }),
+      reconnectRepository: vi.fn(async () => makeProjectResponse(handedOff)),
+    });
+    render(
+      <GitClientWindow
+        projectId={handedOff.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    expect(client.registerRepository).toHaveBeenCalledExactlyOnceWith(
+      { path: handedOff.path },
+      expect.any(String),
+    );
+    expect(client.reconnectRepository).toHaveBeenCalledWith(handedOff.path);
+    expect(vi.mocked(client.getStatus).mock.calls[0]?.[0]).toBe(handedOff.path);
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: "" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a failed hand-off connection and ends the hand-off", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A] })),
+      registerRepository: vi.fn(async () => {
+        throw new Error("not a git repository");
+      }),
+    });
+    render(
+      <GitClientWindow
+        projectId="/repos/not-git"
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: not a git repository",
+    );
+    expect(client.registerRepository).toHaveBeenCalledOnce();
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+    expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not register a handed-off folder the repository list already reports as unavailable", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({
+        projects: [makeRepo("/repos/legacy", "legacy", { available: false })],
+      })),
+    });
+    render(
+      <GitClientWindow
+        projectId="/repos/legacy"
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This local repository is unavailable.",
+    );
+    expect(client.registerRepository).not.toHaveBeenCalled();
+    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
   });
 
   it("offers Connect repository and Clone from URL actions in the connect panel", async () => {

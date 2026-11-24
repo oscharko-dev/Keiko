@@ -52,6 +52,8 @@ import type {
 import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
+import { useHandedOffRepositoryConnection } from "./useHandedOffRepositoryConnection";
+import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
@@ -80,12 +82,7 @@ import {
   syncOutcomePresentation,
   type SyncOutcomeView,
 } from "./sync-outcome";
-import {
-  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
-  gitRepositoryStateInvalidationRoots,
-  notifyGitRepositoryStateInvalidated,
-} from "../git-repository-state-events";
-import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
+import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
 import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
 import {
@@ -174,6 +171,9 @@ export interface GitClientWindowProps {
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
   readonly initialRepositoryDialog?: "clone" | "open" | undefined;
+  /** `projectId` was handed off explicitly (the Files window's Git button): a folder that is not yet
+   * a connected repository is connected instead of discarded (#4103 F2). */
+  readonly connectHandedOffRepository?: boolean | undefined;
   readonly onRepositoryConnected?: (root: string) => void;
   readonly onOpenFiles?: (root: string) => void;
   readonly onOpenEditor?: (root: string) => void;
@@ -1250,6 +1250,11 @@ function BranchOutcomeBanner({
   );
 }
 
+/** The repository path the window was configured with, or null when it names none. */
+function configuredRepositoryPath(projectId: string | undefined): string | null {
+  return projectId !== undefined && projectId !== "" ? projectId : null;
+}
+
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
   return response?.available === true ? response.branches : EMPTY_BRANCHES;
 }
@@ -1260,6 +1265,7 @@ export function GitClientWindow({
   initialPath,
   initialCommit,
   initialRepositoryDialog,
+  connectHandedOffRepository = false,
   onRepositoryConnected,
   onOpenFiles,
   onOpenEditor,
@@ -1591,46 +1597,10 @@ export function GitClientWindow({
     selectedPath,
   ]);
 
-  useEffect((): (() => void) => {
-    const onRepositoryStateInvalidated = (event: Event): void => {
-      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
-      const repositoryRoot = mutationRepositoryRoot ?? null;
-      if (
-        !invalidatedRoots.some(
-          (root): boolean =>
-            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
-        )
-      ) {
-        return;
-      }
-      setStatusRevision((revision): number => revision + 1);
-    };
-    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
-    return (): void =>
-      window.removeEventListener(
-        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
-        onRepositoryStateInvalidated,
-      );
-  }, [mutationRepositoryRoot, selectedPath]);
-
-  useEffect((): (() => void) => {
-    const onWorkspaceFileMutated = (event: Event): void => {
-      const mutationRoots = workspaceFileMutationRoots(event);
-      const repositoryRoot = mutationRepositoryRoot ?? null;
-      if (
-        !mutationRoots.some(
-          (root): boolean =>
-            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
-        )
-      ) {
-        return;
-      }
-      setStatusRevision((revision): number => revision + 1);
-    };
-    window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-    return (): void =>
-      window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-  }, [mutationRepositoryRoot, selectedPath]);
+  const refreshStatus = useCallback((): void => {
+    setStatusRevision((revision): number => revision + 1);
+  }, []);
+  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;
@@ -1721,8 +1691,35 @@ export function GitClientWindow({
     [loadRepositories, lockedToActiveRoot, reconnectRepository],
   );
 
+  const startHandedOffConnection = useCallback((): void => {
+    setReposLoading(true);
+    setReposError(null);
+  }, []);
+  const failHandedOffConnection = useCallback(
+    (error: unknown): void => {
+      setReposLoading(false);
+      setReposError(
+        optionalT("gitClientWindow.repository.reconnectFailed", { detail: formatGitError(error) }),
+      );
+    },
+    [optionalT],
+  );
+  const settleHandedOffConnection = useCallback((): void => {
+    updateCfg?.({ connectRepository: undefined });
+  }, [updateCfg]);
+  const claimHandedOffRepository = useHandedOffRepositoryConnection({
+    enabled: connectHandedOffRepository,
+    lockedToActiveRoot,
+    configuredPath: configuredRepositoryPath(projectId),
+    client,
+    onStarted: startHandedOffConnection,
+    onAdded: onRepositoryAdded,
+    onFailed: failHandedOffConnection,
+    onSettled: settleHandedOffConnection,
+  });
+
   useEffect(() => {
-    const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
+    const configuredPath = configuredRepositoryPath(projectId);
     // A root the desktop locked to the active task workspace is a managed worktree: the server
     // registers it for trust, manifests and verification and keeps it out of the user-facing
     // repository list on purpose, so the recents-membership check below could only ever declare it
@@ -1740,6 +1737,8 @@ export function GitClientWindow({
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
       return;
     }
+    // A handed-off folder that was never connected is connected, not discarded (#4103 F2).
+    if (selected === undefined && claimHandedOffRepository(requestedPath)) return;
     setSelectedPath(null);
     updateCfg?.({ projectPath: "" });
     setReposError(
@@ -1750,6 +1749,7 @@ export function GitClientWindow({
       ),
     );
   }, [
+    claimHandedOffRepository,
     lockedToActiveRoot,
     optionalT,
     projectId,

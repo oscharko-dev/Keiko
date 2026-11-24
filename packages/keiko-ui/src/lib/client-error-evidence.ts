@@ -85,3 +85,24 @@ export function clientErrorEvidence(error: unknown): ClientErrorEvidence {
   }
   return { errorClass: safeClass(error), frames, causeChain };
 }
+
+// A lazily loaded chunk the browser could not load, typically one a newer server build no longer
+// ships to a tab that outlived the upgrade (#4103 F1). Webpack names the failure `ChunkLoadError`
+// and marks a CSS chunk with `CSS_CHUNK_LOAD_FAILED`; a native dynamic import fails with an
+// engine-specific message. The message is only matched here and never leaves this function.
+const DYNAMIC_IMPORT_FAILURE_MESSAGES: readonly RegExp[] = [
+  /^Loading (?:CSS )?chunk \S+ failed/u,
+  /^Failed to load chunk /u,
+  /^Failed to fetch dynamically imported module/u,
+  /^error loading dynamically imported module/u,
+  /^Importing a module script failed/u,
+];
+
+export function isChunkLoadFailure(error: unknown): boolean {
+  if (safeClass(error) === "ChunkLoadError") return true;
+  if (safeProperty(error, "code") === "CSS_CHUNK_LOAD_FAILED") return true;
+  const message = safeProperty(error, "message");
+  if (typeof message !== "string") return false;
+  const head = message.slice(0, 256);
+  return DYNAMIC_IMPORT_FAILURE_MESSAGES.some((pattern) => pattern.test(head));
+}

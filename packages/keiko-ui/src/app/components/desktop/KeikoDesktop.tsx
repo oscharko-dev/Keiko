@@ -7,6 +7,7 @@ import {
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
 } from "@/lib/coding-app-session-client";
+import { reloadIfServerVersionChanged } from "@/lib/server-version-reload";
 import { AppShell } from "./AppShell";
 import { WorkspacePersistenceBoundary } from "./WorkspacePersistenceBoundary";
 
@@ -41,8 +42,11 @@ export function KeikoDesktop(): ReactNode {
     const onHashChange = (): void => {
       if (!pairingFragmentPresent()) return;
       // A re-pair after a lane restart arrives this way; its redemption re-runs every read that
-      // depends on the session, the app-session channel included (F65).
-      void redeemCodingAppSessionPairingNavigation();
+      // depends on the session, the app-session channel included (F65). A restart can also be an
+      // upgrade, and this tab still runs the previous build, so a changed version reloads (#4103).
+      void redeemCodingAppSessionPairingNavigation().then((redeemed) =>
+        redeemed ? reloadIfServerVersionChanged() : false,
+      );
     };
     window.addEventListener("hashchange", onHashChange);
     return (): void => {

@@ -297,6 +297,11 @@ async function dispatchApi(
   writeJson(req, res, outcome.status, outcome.body, outcome.headers);
 }
 
+// The Next.js build namespace holds content-hashed assets only, never a client route. A miss there
+// is a retired build's chunk asked for by a tab that outlived a server upgrade (#4103 F1): answer it
+// with a real 404 so the loader fails as a load failure instead of parsing the HTML shell.
+const BUILD_ASSET_PREFIX = "/_next/";
+
 function resolveStaticTargets(pathname: string): readonly string[] {
   if (pathname === "/") {
     return ["/index.html"];
@@ -325,9 +330,11 @@ async function serveStatic(
       return;
     }
   }
-  const indexPath = join(staticRoot, "index.html");
-  if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
-    return;
+  if (!pathname.startsWith(BUILD_ASSET_PREFIX)) {
+    const indexPath = join(staticRoot, "index.html");
+    if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
+      return;
+    }
   }
   writeJson(req, res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
 }

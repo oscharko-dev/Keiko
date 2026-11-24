@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clientErrorEvidence } from "./client-error-evidence";
+import { clientErrorEvidence, isChunkLoadFailure } from "./client-error-evidence";
 import { takeClientDiagnosticLoss } from "./client-diagnostics";
 afterEach(() => {
   takeClientDiagnosticLoss();
@@ -107,4 +107,51 @@ it("keeps the native cause location when the wrapper fills the frame budget", ()
   const evidence = clientErrorEvidence(wrapper);
   expect(evidence.frames).toHaveLength(8);
   expect(evidence.frames).toContain(`${frame}:999:42`);
+});
+
+describe("chunk load failure classification (#4103 F1)", () => {
+  function named(name: string, message: string): Error {
+    const error = new Error(message);
+    error.name = name;
+    return error;
+  }
+
+  it.each([
+    ["webpack JS chunk", named("ChunkLoadError", "Loading chunk 812 failed.\n(error: /x.js)")],
+    ["webpack CSS chunk", Object.assign(new Error("x"), { code: "CSS_CHUNK_LOAD_FAILED" })],
+    ["webpack CSS message", new Error("Loading CSS chunk 37 failed.\n(/_next/static/css/a.css)")],
+    ["Turbopack chunk", new Error("Failed to load chunk /_next/static/chunks/a.js from module 1")],
+    [
+      "Chromium import",
+      new TypeError("Failed to fetch dynamically imported module: http://x/a.js"),
+    ],
+    ["Firefox import", new TypeError("error loading dynamically imported module: http://x/a.js")],
+    ["WebKit import", new TypeError("Importing a module script failed.")],
+  ])("recognizes a %s failure", (_label, error) => {
+    expect(isChunkLoadFailure(error)).toBe(true);
+  });
+
+  it.each([
+    ["an ordinary render defect", new Error("forced widget defect")],
+    [
+      "a message that only mentions a chunk",
+      new Error("Rendering failed after Loading chunk 1 failed"),
+    ],
+    ["a non-error value", "Loading chunk 1 failed"],
+    ["null", null],
+    ["an error without a string message", Object.assign(new Error(), { message: 42 })],
+  ])("does not treat %s as a chunk load failure", (_label, error) => {
+    expect(isChunkLoadFailure(error)).toBe(false);
+  });
+
+  it("counts a hostile message accessor instead of throwing", () => {
+    const error = new Error("private");
+    Object.defineProperty(error, "message", {
+      get(): never {
+        throw new Error("private accessor");
+      },
+    });
+    expect(isChunkLoadFailure(error)).toBe(false);
+    expect(takeClientDiagnosticLoss()?.errorsSuppressed).toBeGreaterThan(0);
+  });
 });

@@ -32,6 +32,9 @@ Portable launch/setup issues are covered in the dedicated
 Windows SmartScreen, macOS Gatekeeper, managed install root, proxy, firewall, local port, and
 organization-managed rollout blockers.
 
+A window that shows “Part of Keiko could not be loaded” in a tab that stayed open across an update
+is covered in [Reload a tab that still runs the previous Keiko version](window-not-loaded-after-update.md).
+
 A standalone folder package that does not start, starts without the team's configuration or asks
 for portable setup is covered in
 [Resolve a standalone folder package that does not start or asks for setup](standalone-folder-package.md).

@@ -24,6 +24,7 @@ import {
   parseUnifiedDiff,
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
+import { notifyWorkspaceFileMutated } from "@/app/components/desktop/widgets/cards/workspace-file-events";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { correlationIdOf } from "./client-error-summary";
 import { bffRequestErrorKind } from "./http";
@@ -366,6 +367,24 @@ function useChangeSignalRefresh(input: {
   }, [changeSignal, refresh, runId]);
 }
 
+// #4103 F3: a Coding run edits the working tree without an event the other windows hear, so a Git
+// window bound to the same repository kept showing the state from before the run. Every fresh read of
+// the run's changes (each lands a new `files` array; selecting a file or loading its diff keeps it)
+// tells the open windows the way an Editor save does, with `agent` provenance. It cannot compare
+// contents: a second edit to a file that was already changed leaves the set alike, so a later read is
+// announced even when the set did not move. A first read of a root without changes has nothing to tell.
+function useAgentChangeBroadcast(root: string | null, state: CodingWorkbenchChangesState): void {
+  const announcedRootRef = useRef<string | null>(null);
+  const files = state.status === "ready" ? state.files : null;
+  useEffect(() => {
+    if (root === null || files === null) return;
+    const firstReadOfRoot = announcedRootRef.current !== root;
+    announcedRootRef.current = root;
+    if (firstReadOfRoot && files.length === 0) return;
+    notifyWorkspaceFileMutated(root, { provenance: "agent" });
+  }, [files, root]);
+}
+
 export function useCodingWorkbenchChanges(
   input: UseCodingWorkbenchChangesInput,
 ): UseCodingWorkbenchChangesResult {
@@ -386,5 +405,6 @@ export function useCodingWorkbenchChanges(
   useChangesSnapshot({ ...input, client, root, epoch, setState });
   useSelectedDiff({ client, root, epoch, diffEpoch, state, setState });
   useChangeSignalRefresh({ ...input, refresh: retry });
+  useAgentChangeBroadcast(root, state);
   return { ...state, retry, retryDiff, selectPath };
 }

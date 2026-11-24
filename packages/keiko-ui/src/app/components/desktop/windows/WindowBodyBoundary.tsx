@@ -12,9 +12,15 @@
 // getDerivedStateFromError, minimal fallback with zero heavy dependencies. The fallback
 // reuses the existing global lk-empty/lk-btn classes — globals.css is SHA-gated (#1300)
 // and must not grow for this.
+//
+// #4103 F1: a window whose lazily loaded chunk cannot load (most often a tab that outlived a server
+// upgrade, so the new build no longer ships the old chunk) cannot recover by re-rendering — the
+// bundler keeps the failed request. That failure is told apart, reported as `unavailable` rather
+// than `internal`, and offers the page reload that requests the current build; the workspace
+// restores every window after it.
 
 import { SupportReportButton } from "../SupportReportButton";
-import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { clientErrorEvidence, isChunkLoadFailure } from "@/lib/client-error-evidence";
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -25,6 +31,8 @@ interface WindowBodyBoundaryProps {
   // this boundary logs, and titles can carry user content (e.g. chat names).
   readonly windowType: string;
   readonly children: ReactNode;
+  // Seam for the tests: the real recovery reloads the page.
+  readonly reload?: (() => void) | undefined;
 }
 
 interface InnerWindowBodyBoundaryProps extends WindowBodyBoundaryProps {
@@ -33,6 +41,7 @@ interface InnerWindowBodyBoundaryProps extends WindowBodyBoundaryProps {
 
 interface WindowBodyBoundaryState {
   readonly failed: boolean;
+  readonly chunkLoadFailed?: boolean | undefined;
   readonly correlationId?: string | undefined;
 }
 
@@ -42,8 +51,8 @@ class InnerWindowBodyBoundary extends Component<
 > {
   public override state: WindowBodyBoundaryState = { failed: false };
 
-  public static getDerivedStateFromError(): WindowBodyBoundaryState {
-    return { failed: true };
+  public static getDerivedStateFromError(error: unknown): WindowBodyBoundaryState {
+    return { failed: true, chunkLoadFailed: isChunkLoadFailure(error) };
   }
 
   public override componentDidCatch(error: Error): void {
@@ -57,24 +66,42 @@ class InnerWindowBodyBoundary extends Component<
         correlationId,
         kind: "boundary",
         renderFailure: "window-body",
-        errorKind: "internal",
+        errorKind: isChunkLoadFailure(error) ? "unavailable" : "internal",
         errorEvidence: clientErrorEvidence(error),
       },
     );
   }
 
   private readonly retry = (): void => {
-    this.setState({ failed: false });
+    this.setState({ failed: false, chunkLoadFailed: false });
+  };
+
+  private readonly reload = (): void => {
+    (this.props.reload ?? ((): void => window.location.reload()))();
   };
 
   public override render(): ReactNode {
     if (!this.state.failed) return this.props.children;
+    if (this.state.chunkLoadFailed === true) return this.renderChunkLoadFailure();
     return (
       <div className="lk-empty" role="alert" data-window-body-crashed="true">
         <p className="lk-empty-title">{this.props.t("window.error.title")}</p>
         <p className="lk-empty-body">{this.props.t("window.error.body")}</p>
         <button type="button" className="lk-btn lk-btn-ghost" onClick={this.retry}>
           {this.props.t("common.retry")}
+        </button>
+        <SupportReportButton correlationId={this.state.correlationId} />
+      </div>
+    );
+  }
+
+  private renderChunkLoadFailure(): ReactNode {
+    return (
+      <div className="lk-empty" role="alert" data-window-body-crashed="chunk-load">
+        <p className="lk-empty-title">{this.props.t("window.error.chunkTitle")}</p>
+        <p className="lk-empty-body">{this.props.t("window.error.chunkBody")}</p>
+        <button type="button" className="lk-btn" onClick={this.reload}>
+          {this.props.t("shell.error.reload")}
         </button>
         <SupportReportButton correlationId={this.state.correlationId} />
       </div>
