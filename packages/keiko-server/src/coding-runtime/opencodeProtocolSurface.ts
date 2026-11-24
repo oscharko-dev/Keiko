@@ -174,15 +174,26 @@ function collectReferences(value: unknown): Set<string> {
   return references;
 }
 
+/** Schema keywords whose object value maps payload field names, not schema keywords, to schemas. */
+const FIELD_MAP_KEYS = new Set(["patternProperties", "properties"]);
+
 function structural(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(structural);
+  if (Array.isArray(value)) return value.map((item) => structural(item));
   const source = record(value);
   if (source === undefined) return value;
   return Object.fromEntries(
     Object.entries(source)
       .filter(([key]) => !DOCUMENTATION_KEYS.has(key) && !key.startsWith("x-"))
-      .map(([key, item]) => [key, structural(item)]),
+      .map(([key, item]) => [key, FIELD_MAP_KEYS.has(key) ? fieldMap(item) : structural(item)]),
   );
+}
+
+// A payload field may be named like an annotation (`summary`, `description`, `x-…`): every field of
+// the map is structure and stays, while the schema of each field is projected as usual (#4546).
+function fieldMap(value: unknown): unknown {
+  const fields = record(value);
+  if (fields === undefined) return structural(value);
+  return Object.fromEntries(Object.entries(fields).map(([name, item]) => [name, structural(item)]));
 }
 
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {

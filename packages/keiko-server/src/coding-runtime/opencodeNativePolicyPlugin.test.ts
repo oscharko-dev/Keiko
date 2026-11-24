@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   createGeneratedOpenCodeNativePolicyPlugin,
+  OPENCODE_CODE_MODE_GOVERNED_TOOLS,
+  OPENCODE_CODE_MODE_PROGRAM,
   OPENCODE_NATIVE_NPM_RELAY_ENV,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -75,13 +77,13 @@ async function pluginHarness(
   mode = "supervised-coding",
   answer: { readonly effect: "allow" | "deny"; readonly message?: string } = { effect: "allow" },
   extraEnv: Readonly<Record<string, string>> = {},
+  source: string = createGeneratedOpenCodeNativePolicyPlugin(),
 ): Promise<Harness> {
   const requests: PolicyRequest[] = [];
   const fetch = (_url: string, init: { body: string }): Promise<Response> => {
     requests.push(JSON.parse(init.body) as PolicyRequest);
     return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
   };
-  const source = createGeneratedOpenCodeNativePolicyPlugin();
   const value: unknown = new Script(
     source.replace("export default", "const plugin =") + "\nplugin;",
   ).runInNewContext({
@@ -553,4 +555,93 @@ it("forwards MCP input only for the server-owned configured namespace", async ()
   expect(harness.requests[0]).toMatchObject({ mcpInput: input });
   await harness.evaluate({ ...event([]), metadata: { input } });
   expect(harness.requests[1]).not.toHaveProperty("mcpInput");
+});
+
+// 2.4.1 runs the tool a hook renames a nested Code Mode call to, and fires no before hook for it
+// (#4546). The boundary therefore holds only while the policy plugin never writes the hook event's
+// tool, by any spelling: every write to the event is recorded through a proxy, whatever its path.
+describe("the generated native policy plugin never renames a tool call (#4546)", () => {
+  interface EventWrites {
+    readonly event: ToolEvent;
+    readonly writes: string[];
+  }
+
+  function recorded(tool: string): EventWrites {
+    const writes: string[] = [];
+    const target: ToolEvent = {
+      tool,
+      sessionID: "ses_plugin",
+      agent: "build",
+      messageID: "msg_code_mode",
+      id: "call_nested",
+      input: { name: "feature", title: "t", directory: "/w/src", code: "return 1;" },
+    };
+    const event = new Proxy(target, {
+      set: (object, key, value: unknown): boolean => {
+        writes.push(`set ${String(key)}`);
+        return Reflect.set(object, key, value);
+      },
+      defineProperty: (object, key, descriptor): boolean => {
+        writes.push(`define ${String(key)}`);
+        return Reflect.defineProperty(object, key, descriptor);
+      },
+      deleteProperty: (object, key): boolean => {
+        writes.push(`delete ${String(key)}`);
+        return Reflect.deleteProperty(object, key);
+      },
+      setPrototypeOf: (object, prototype: object | null): boolean => {
+        writes.push("prototype");
+        return Reflect.setPrototypeOf(object, prototype);
+      },
+    });
+    return { event, writes };
+  }
+
+  it("records an indirect rename and leaves a plugin's own objects alone (controls)", () => {
+    const renamed = recorded("read");
+    const key = ["to", "ol"].join("");
+    Reflect.set(renamed.event, key, "bash");
+    Object.assign(renamed.event, { [key]: "bash" });
+    expect(renamed.writes).toEqual(["set tool", "set tool"]);
+    const owned = recorded("read");
+    const copy = { ...owned.event };
+    copy.tool = "bash";
+    expect(owned.writes).toEqual([]);
+    expect(owned.event.tool).toBe("read");
+  });
+
+  it("writes nothing to the event of any tool, in every mode, allowed or refused", async () => {
+    const tools = [
+      OPENCODE_CODE_MODE_PROGRAM,
+      ...OPENCODE_CODE_MODE_GOVERNED_TOOLS,
+      "automation_create",
+      "automation_pause",
+      "automation_list",
+      "automation_unknown",
+      "opencode_worktree_list",
+      "read",
+      "bash",
+    ];
+    for (const programReviewed of [true, false])
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+        for (const effect of ["allow", "deny"] as const) {
+          const harness = await pluginHarness(
+            mode,
+            { effect },
+            {},
+            createGeneratedOpenCodeNativePolicyPlugin({ programReviewed }),
+          );
+          for (const tool of tools) {
+            const { event, writes } = recorded(tool);
+            // A refused call throws by design; either outcome must leave the event unwritten.
+            const outcome = await harness.toolBefore(event).then(
+              () => "passed",
+              () => "refused",
+            );
+            expect(["passed", "refused"]).toContain(outcome);
+            expect(writes, `${tool} ${mode} ${effect}`).toEqual([]);
+            expect(event.tool).toBe(tool);
+          }
+        }
+  });
 });

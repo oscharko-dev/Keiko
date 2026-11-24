@@ -200,14 +200,22 @@ async function startStub(
       .catch(() => response.writeHead(500).end());
   });
   stub.server = server;
+  stub.port = await listenOnLoopback(server);
+  return stub as Stub;
+}
+
+/** Binds a fixture listener to an ephemeral loopback port; a failed bind rejects, never hangs. */
+async function listenOnLoopback(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("fixture-listener-invalid");
-  stub.port = address.port;
-  return stub as Stub;
+  return address.port;
 }
 
 async function closeStub(stub: Stub): Promise<void> {
@@ -218,6 +226,20 @@ async function closeStub(stub: Stub): Promise<void> {
       else reject(error);
     });
   });
+}
+
+/** The text of a request's newest message when it is the user's, so a prompt is counted once. */
+function lastUserText(body: unknown): string | undefined {
+  const messages = object(body)?.messages;
+  const last = Array.isArray(messages) ? object(messages.at(-1)) : undefined;
+  if (last?.role !== "user") return undefined;
+  const content = last.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+  return content
+    .map((part) => object(part)?.text)
+    .filter((text): text is string => typeof text === "string")
+    .join("");
 }
 
 function lastRole(body: unknown): unknown {
@@ -3492,9 +3514,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
           },
         );
       });
-      await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
-      const address = listener.address();
-      if (address === null || typeof address === "string") throw new Error("fixture-listener");
+      const port = await listenOnLoopback(listener);
       const generation = new AbortController();
       try {
         const measured: Record<string, string> = {};
@@ -3505,7 +3525,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
             runId: RUN_ID,
             relay: {
               relay,
-              origin: `http://127.0.0.1:${String(address.port)}`,
+              origin: `http://127.0.0.1:${String(port)}`,
               secrets: {},
               managed: { generation: () => generation.signal, serve },
             },
@@ -4023,12 +4043,17 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
     };
     /** The output of a program that decides nothing, so a failed program never passes as a read. */
     readonly output?: RegExp;
+    /** What the decided effect left behind, so a decision without its effect never passes. */
+    readonly effect?: (run: Run) => Promise<void> | void;
   }
   const both = (effect: string): Readonly<Record<Mode, string>> => ({
     "governed-assist": effect,
     "autonomous-delivery": effect,
   });
   const askThenAllow = { "governed-assist": "ask", "autonomous-delivery": "allow" } as const;
+
+  /** A file in the directory the removal program names: a denied removal leaves it in place. */
+  const WORKTREE_KEEP = "KEEP.txt";
 
   function programs(workspace: string, page: string): readonly NestedProgram[] {
     const move = JSON.stringify({ directory: join(workspace, "src") });
@@ -4038,6 +4063,9 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
         name: "rename",
         code: 'return await tools.opencode.session.rename({ title: "renamed" });',
         decides: { permission: "opencode_session_rename", effect: both("allow") },
+        effect: async (run): Promise<void> => {
+          expect(JSON.stringify(await run.raw("/api/session"))).toMatch(/"title":"renamed"/u);
+        },
       },
       {
         name: "move",
@@ -4053,6 +4081,9 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
         name: "worktree remove",
         code: `return await tools.opencode.worktree_remove(${remove});`,
         decides: { permission: "edit", effect: both("deny") },
+        effect: (run): void => {
+          expect(existsSync(join(run.fixture.workspace, "wt", WORKTREE_KEEP))).toBe(true);
+        },
       },
       {
         name: "MCP resources",
@@ -4136,6 +4167,7 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
             files: {
               [FIXTURE_FILE]: "fixture\n",
               "src/a.ts": "export const a = 1;\n",
+              [`wt/${WORKTREE_KEEP}`]: "kept\n",
               "mcp-server.cjs": MCP_FIXTURE_SERVER,
             },
             mcpServers: server,
@@ -4173,6 +4205,7 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
               ]);
               if (program.output !== undefined)
                 expect(output, program.name).toMatch(program.output);
+              await program.effect?.(run);
             }
           },
         );
@@ -4220,7 +4253,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     try {
       return db
         .prepare(
-          "SELECT id, status, run_count, action, trigger FROM automation ORDER BY time_created",
+          "SELECT id, session_id, status, run_count, action, trigger FROM automation ORDER BY time_created",
         )
         .all();
     } finally {
@@ -4387,6 +4420,14 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
         await expect
           .poll(() => automations(run)[0]?.run_count, { timeout: 60_000, interval: 500 })
           .toBe(1);
+        // The fired automation delivers its prompt to the model once, as the newest user message
+        // of a request, in the session the run created it in.
+        const delivered = (): number =>
+          run.gateway.requests.filter((request) =>
+            lastUserText(request.body)?.includes(PROMPT.prompt),
+          ).length;
+        await expect.poll(delivered, { timeout: 30_000, interval: 250 }).toBe(1);
+        expect(automations(run)[0]?.session_id).toBe(run.sessionId);
       });
     },
     180_000,
@@ -4402,7 +4443,11 @@ describe("pinned native OpenCode fetches no plugin during a run (#4546)", () => 
   // `util/npm.ts` in 2.4.1). The registry is a loopback recorder that answers nothing found.
   const CANARY_NAME = `keiko-canary-plugin-${randomUUID().slice(0, 8)}`;
   const CANARY_CONFIG = JSON.stringify({ plugins: [`${CANARY_NAME}@latest`] });
-  const REGISTRY_QUIET_CHECKS = 30;
+  // One bound for both sides: the control must reach the registry within it, and the confined run
+  // is watched for all of it after its turn settled, so at least as long since its runtime started.
+  const REGISTRY_LOOKUP_BOUND_MS = 30_000;
+  const REGISTRY_CHECK_INTERVAL_MS = 500;
+  const REGISTRY_QUIET_CHECKS = REGISTRY_LOOKUP_BOUND_MS / REGISTRY_CHECK_INTERVAL_MS;
 
   async function withRegistryRecorder(body: (registry: Stub) => Promise<void>): Promise<void> {
     const registry = await startStub((_stub, _recorded, response) => {
@@ -4453,7 +4498,7 @@ describe("pinned native OpenCode fetches no plugin during a run (#4546)", () => 
             // Re-checked for longer than the control needs to reach the registry: a lookup the
             // producer starts in the background after the turn would still be seen.
             for (let check = 0; check < REGISTRY_QUIET_CHECKS; check += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 500));
+              await new Promise((resolve) => setTimeout(resolve, REGISTRY_CHECK_INTERVAL_MS));
               if (registry.requests.length > 0)
                 throw new Error(`the runtime asked the registry (check ${String(check)})`);
             }
@@ -4473,47 +4518,59 @@ describe("pinned native OpenCode fetches no plugin during a run (#4546)", () => 
     async () => {
       if (BINARY === undefined) throw new Error("fixture-binary-missing");
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plugin-canary-")));
-      const config = join(root, "config", "opencode");
-      const workspace = join(root, "workspace");
-      mkdirSync(config, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
-      writeFileSync(join(config, "opencode.json"), CANARY_CONFIG);
-      const password = randomUUID();
-      await withRegistryRecorder(async (registry) => {
-        const child = spawn(realpathSync(BINARY), ["serve", "--port", "0"], {
-          cwd: workspace,
-          env: {
-            PATH: "/usr/bin:/bin",
-            HOME: join(root, "home"),
-            XDG_CONFIG_HOME: join(root, "config"),
-            TMPDIR: tmpdir(),
-            OPENCODE_SERVER_PASSWORD: password,
-            ...registryEnv(registry),
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        try {
-          const endpoint = await childEndpoint(child);
-          const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
-          const raw = async (path: string): Promise<unknown> => {
-            const location = `location%5Bdirectory%5D=${encodeURIComponent(workspace)}`;
-            const response = await fetch(`${endpoint}${path}?${location}`, {
-              headers: { Authorization: authorization },
-            });
-            return (await response.json()) as unknown;
-          };
-          await expect
-            .poll(async () => (await packageSources(raw)).length, { timeout: 30_000 })
-            .toBe(1);
-          await expect
-            .poll(() => registry.requests.map((request) => request.url), { timeout: 30_000 })
-            .toContain(`/${CANARY_NAME}`);
-        } finally {
-          await stopChild(child);
-          rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-        }
-      });
+      try {
+        await controlRegistryLookup(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
     },
     120_000,
   );
+
+  async function controlRegistryLookup(root: string): Promise<void> {
+    if (BINARY === undefined) throw new Error("fixture-binary-missing");
+    const config = join(root, "config", "opencode");
+    const workspace = join(root, "workspace");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(config, "opencode.json"), CANARY_CONFIG);
+    const password = randomUUID();
+    await withRegistryRecorder(async (registry) => {
+      const child = spawn(realpathSync(BINARY), ["serve", "--port", "0"], {
+        cwd: workspace,
+        env: {
+          PATH: "/usr/bin:/bin",
+          HOME: join(root, "home"),
+          XDG_CONFIG_HOME: join(root, "config"),
+          TMPDIR: tmpdir(),
+          OPENCODE_SERVER_PASSWORD: password,
+          ...registryEnv(registry),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        const endpoint = await childEndpoint(child);
+        const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+        const raw = async (path: string): Promise<unknown> => {
+          const location = `location%5Bdirectory%5D=${encodeURIComponent(workspace)}`;
+          const response = await fetch(`${endpoint}${path}?${location}`, {
+            headers: { Authorization: authorization },
+          });
+          return (await response.json()) as unknown;
+        };
+        await expect
+          .poll(async () => (await packageSources(raw)).length, {
+            timeout: REGISTRY_LOOKUP_BOUND_MS,
+          })
+          .toBe(1);
+        await expect
+          .poll(() => registry.requests.map((request) => request.url), {
+            timeout: REGISTRY_LOOKUP_BOUND_MS,
+          })
+          .toContain(`/${CANARY_NAME}`);
+      } finally {
+        await stopChild(child);
+      }
+    });
+  }
 });

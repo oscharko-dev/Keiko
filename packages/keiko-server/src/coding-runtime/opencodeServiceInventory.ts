@@ -1337,7 +1337,9 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
   configurationPlugin("experimental.sqlite_fts", ["S01"], ["opencode.config.session-search"]),
   // #4546: withheld at the source (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`) until each has an owner
   // and a proof. Home memory writes a persistent memory outside the workspace; MCP events are
-  // automation triggers; a fork notice only follows a fork, which Keiko does not offer.
+  // automation triggers. A fork notice tells the model it runs in a fork; Keiko offers governed
+  // forks through the Workbench (S03), and the notice stays withheld until it has an owner and a
+  // proof of what it adds to such a fork.
   refused("experimental-unadmitted", 4546, ["S03"], ["opencode.fork-notice"]),
   refused("experimental-unadmitted", 4546, ["C03"], ["opencode.home-memory"]),
   refused(

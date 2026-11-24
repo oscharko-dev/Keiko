@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
@@ -864,6 +865,13 @@ const REQUIRE_PROBE = [
   "return JSON.stringify({ provided: provided.sort(), refused });",
 ].join("\n");
 
+const LOCAL_MODULE_CANARY = "local-module-canary.js";
+const LOCAL_MODULE_TEXT = "LOCAL-MODULE-CANARY";
+/** A program that loads one module and returns its value, or the interpreter's refusal message. */
+function requireMessage(specifier: string): string {
+  return `try { return String(require(${JSON.stringify(specifier)})); } catch (e) { return String(e && e.message); }`;
+}
+
 async function withRun(
   overrides: Partial<LaunchOptions>,
   body: (run: Run) => Promise<void>,
@@ -1609,6 +1617,17 @@ describe("pinned native OpenCode Code Mode semantics", () => {
             (name) => !["buffer", "crypto", "url", "util"].includes(name),
           ),
         });
+        // A local file is refused because it is local, not because it is missing: the canary
+        // exists and loads outside the interpreter, and the interpreter refuses it by its rule.
+        const canary = join(run.fixture.workspace, LOCAL_MODULE_CANARY);
+        writeFileSync(canary, `module.exports = ${JSON.stringify(LOCAL_MODULE_TEXT)};\n`);
+        expect(createRequire(canary)(canary)).toBe(LOCAL_MODULE_TEXT);
+        for (const specifier of [`./${LOCAL_MODULE_CANARY}`, canary]) {
+          const local = await probedTurn(run, executeCall(requireMessage(specifier)));
+          expect(local.result, specifier).toBe(
+            `Cannot import "${specifier}": local files can't be imported.`,
+          );
+        }
       });
     },
     120_000,

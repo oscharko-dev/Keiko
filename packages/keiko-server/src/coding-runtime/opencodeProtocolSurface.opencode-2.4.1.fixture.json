@@ -3739,6 +3739,9 @@
           "name": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "mention": {
             "$ref": "#/components/schemas/Prompt.Mention"
           }
@@ -4056,6 +4059,9 @@
         "properties": {
           "name": {
             "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         },
         "required": ["name"],
@@ -4113,6 +4119,9 @@
           "system": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "mode": {
             "type": "string",
             "enum": ["subagent", "primary", "all"]
@@ -4143,6 +4152,9 @@
           },
           "name": {
             "$ref": "#/components/schemas/Skill.Name"
+          },
+          "description": {
+            "type": "string"
           },
           "autoinvoke": {
             "type": "boolean"
@@ -5671,6 +5683,9 @@
           "text": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "type": {
             "type": "string",
             "enum": ["synthetic"]
@@ -5703,6 +5718,9 @@
             "enum": ["system"]
           },
           "text": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           }
         },
@@ -5977,6 +5995,9 @@
             "$ref": "#/components/schemas/Prompt.FileSource"
           },
           "name": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "mention": {
@@ -7510,6 +7531,9 @@
                 "$ref": "#/components/schemas/Session.ID"
               },
               "text": {
+                "type": "string"
+              },
+              "description": {
                 "type": "string"
               },
               "metadata": {
@@ -10824,6 +10848,9 @@
           "text": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "metadata": {
             "type": "object"
           }
@@ -11100,6 +11127,9 @@
           "reason": {
             "type": "string",
             "enum": ["auto", "manual"]
+          },
+          "summary": {
+            "type": "string"
           }
         },
         "required": ["type", "id", "time", "status", "reason", "summary"],
@@ -11141,6 +11171,9 @@
           },
           "native": {
             "$ref": "#/components/schemas/Session.Message.Native"
+          },
+          "summary": {
+            "type": "string"
           },
           "cost": {
             "$ref": "#/components/schemas/Money.USD"
@@ -11209,6 +11242,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -11268,6 +11304,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "required": {
@@ -11332,6 +11371,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -11394,6 +11436,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -11424,6 +11469,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "required": {
@@ -11485,6 +11533,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           }
         },
@@ -12202,6 +12253,9 @@
           },
           "label": {
             "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         },
         "required": ["value", "label"],
@@ -12250,6 +12304,9 @@
         "type": "object",
         "properties": {
           "text": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "metadata": {
@@ -12374,6 +12431,9 @@
             "$ref": "#/components/schemas/Session.ID"
           },
           "agent": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           }
         },
@@ -12630,6 +12690,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -12689,6 +12752,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "required": {
@@ -12753,6 +12819,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -12815,6 +12884,9 @@
           "title": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "required": {
             "type": "boolean"
           },
@@ -12845,6 +12917,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "required": {
