@@ -1292,6 +1292,43 @@ describe("GitClientWindow — repository list", () => {
     );
   });
 
+  // CodeRabbit on #4553: Retry under a failed switch retries that switch, not only the list.
+  it.each([
+    ["the toolbar while another repository is shown", REPO_A.path],
+    ["the connect panel", undefined],
+  ])("retries a failed repository switch from %s", async (_case, projectId) => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const client = makeClient({
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path !== REPO_B.path) return makeProjectResponse(REPO_A);
+        attempts += 1;
+        if (attempts === 1) throw new Error("folder moved");
+        return makeProjectResponse(REPO_B);
+      }),
+    });
+    render(<GitClientWindow projectId={projectId} client={client} />);
+    if (projectId === undefined) {
+      await user.click(await screen.findByRole("button", { name: /beta/ }));
+    } else {
+      await waitFor(() =>
+        expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+      );
+      await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+      await user.click(await screen.findByRole("option", { name: new RegExp(REPO_B.path) }));
+    }
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: folder moved",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    expect(attempts).toBe(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
   it("connects a handed-off repository after an earlier repository was refused", async () => {
     const legacy = makeRepo("/repos/legacy", "legacy", { available: false });

@@ -1281,6 +1281,19 @@ function ConnectedRepositoryError({
   );
 }
 
+/**
+ * Retry after a repository failure: a failed switch connects its repository again, any other
+ * failure reloads the repository list.
+ */
+function retryRepositoryFailure(
+  failedSwitchPath: string | null,
+  reconnect: (path: string) => void,
+  reloadList: () => void,
+): void {
+  if (failedSwitchPath === null) reloadList();
+  else reconnect(failedSwitchPath);
+}
+
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
   return response?.available === true ? response.branches : EMPTY_BRANCHES;
 }
@@ -1307,6 +1320,9 @@ export function GitClientWindow({
   const [reposLoading, setReposLoading] = useState(true);
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposListFailed, setReposListFailed] = useState(false);
+  // The repository whose switch caused the shown error, so Retry connects it again. Set only with
+  // that error and cleared whenever a switch or a list load starts.
+  const [failedSwitchPath, setFailedSwitchPath] = useState<string | null>(null);
   // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
   // the current project projection proves that it still has live workspace-manifest membership.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -1428,6 +1444,7 @@ export function GitClientWindow({
     setReposLoading(true);
     setReposError(null);
     setReposListFailed(false);
+    setFailedSwitchPath(null);
     void client.listRepositories().then(
       (res) => {
         if (reposRequestSequenceRef.current !== requestSequence) return;
@@ -1686,14 +1703,17 @@ export function GitClientWindow({
       repositoryConnectSeqRef.current = requestSequence;
       setReposLoading(true);
       setReposError(null);
+      setFailedSwitchPath(null);
       void client.reconnectRepository(path).then(
         (response): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
           if (applyConnectedRepository(response.project)) loadRepositories();
+          else setFailedSwitchPath(path);
         },
         (error: unknown): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
           setReposLoading(false);
+          setFailedSwitchPath(path);
           setReposError(
             optionalT("gitClientWindow.repository.reconnectFailed", {
               detail: formatGitError(error),
@@ -1704,6 +1724,10 @@ export function GitClientWindow({
     },
     [applyConnectedRepository, client, loadRepositories, optionalT],
   );
+
+  const retryRepositoryError = useCallback((): void => {
+    retryRepositoryFailure(failedSwitchPath, reconnectRepository, loadRepositories);
+  }, [failedSwitchPath, loadRepositories, reconnectRepository]);
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
@@ -2251,7 +2275,7 @@ export function GitClientWindow({
         lockedToActiveRoot={lockedToActiveRoot}
         selectedPath={selectedPath}
         error={reposError}
-        onRetry={loadRepositories}
+        onRetry={retryRepositoryError}
       />
       {showBranchOutcome ? (
         <BranchOutcomeBanner
@@ -2269,7 +2293,7 @@ export function GitClientWindow({
             onSelect={reconnectRepository}
             onConnect={() => openRepositoryDialog("open")}
             onClone={() => openRepositoryDialog("clone")}
-            onRetry={loadRepositories}
+            onRetry={retryRepositoryError}
           />
         ) : (
           <>

@@ -64,8 +64,9 @@ interface RepositoryErrorNoticeProps {
 }
 
 /**
- * A repository failure with its retry, which reloads the repository list. The connected view shows
- * it too (#4103 F2), so a failure never hides behind the repository the window still shows.
+ * A repository failure with its retry: the window connects a repository whose switch failed again
+ * and reloads the list after any other failure. The connected view shows it too (#4103 F2), so a
+ * failure never hides behind the repository the window still shows.
  */
 export function RepositoryErrorNotice({ error, onRetry }: RepositoryErrorNoticeProps): ReactNode {
   const t = useOptionalWidgetTranslate();
