@@ -59,12 +59,13 @@ const RESTORED_TURN_POLL_BASE_MS = 1000;
 const RESTORED_TURN_POLL_MAX_DELAY_MS = 10_000;
 const RESTORED_TURN_POLLS_PER_STEP = 15;
 /**
- * Hard guard. The schedule above spans about 13.75 minutes, longer than the 10 minute approval
- * lifetime that bounds a held worker, so a live review is always observed to its end. The server
- * settles a turn whose worker died (database recovery fails every pending turn), which ends the
- * observation as a terminal state; this cap only covers an unreachable or silent server.
+ * Hard guard. The schedule above spans about 494 minutes, longer than the 480-minute Chat tool turn
+ * (owner decision 2026-11-24) and its 60-minute approval lifetime, so a live turn, a long review
+ * included, is always observed to its end. The server settles a turn whose worker died (database
+ * recovery fails every pending turn), which ends the observation as a terminal state; this cap only
+ * covers an unreachable or silent server.
  */
-export const RESTORED_TURN_POLL_MAX_ATTEMPTS = 120;
+export const RESTORED_TURN_POLL_MAX_ATTEMPTS = 3_000;
 
 export function restoredTurnPollDelayMs(attempt: number): number {
   return Math.min(

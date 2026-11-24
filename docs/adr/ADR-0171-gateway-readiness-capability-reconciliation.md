@@ -138,9 +138,9 @@ models only, as before. The press is recorded as `client.coding-workbench.intera
 `tool-check-requested` (no fields). A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
-interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.
-Interactive inference admission may join a running startup check for the selected model for up to
-five minutes. Its deadline only stops that
+interactive gateway's silence floor (#4038; fifteen minutes since the 2026-11-24 owner decision,
+five before), preserving larger configured timeouts. Interactive inference admission may join a
+running startup check for the selected model for up to that floor. Its deadline only stops that
 caller's wait and never authorizes an unverified model or cancels the configuration-owned probe.
 
 Chat creation uses the stored result as a default-model preference. Send, regeneration, grounded

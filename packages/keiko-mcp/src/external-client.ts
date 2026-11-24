@@ -76,7 +76,8 @@ const LIST_TIMEOUT_MS = 15_000;
 /** A call fails after this long without an answer or a progress notification... */
 const CALL_IDLE_TIMEOUT_MS = 30_000;
 /** ...and never runs longer than this, whatever progress it reports. */
-const CALL_MAX_MS = 300_000;
+export const MCP_EXTERNAL_CALL_MAX_MS = 300_000;
+const CALL_MAX_MS = MCP_EXTERNAL_CALL_MAX_MS;
 /** The largest result delivered to a model. Larger ones are refused whole, never truncated. */
 const RESULT_MAX_BYTES = 1024 * 1024;
 /**

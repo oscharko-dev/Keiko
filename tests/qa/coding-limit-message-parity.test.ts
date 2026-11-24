@@ -12,7 +12,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../../packages/keiko-server/src/coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+} from "../../packages/keiko-server/src/coding-runtime/productionRuntimeWorkspaceAuthority.js";
 
 const CATALOG_DIRECTORY =
   "../../packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench";
@@ -40,6 +43,18 @@ describe("Coding Workbench limit messages", () => {
     expect(catalogMessage(DE_CATALOG, key)).toContain(
       `bis höchstens ${MAX_RUNTIME_MAX_DURATION_MINUTES.toLocaleString("de-DE")} Minuten`,
     );
+  });
+
+  // Owner decision 2026-11-24: the cap is also the default, and the message says so instead of
+  // offering a longer limit that does not exist. A default lowered below the cap must change the
+  // message with it.
+  it("say the cap is the default exactly while the server's default is the cap", () => {
+    const key = "codingWorkbench.event.failure.envelope-duration-exhausted";
+    expect(DEFAULT_RUNTIME_MAX_DURATION_MINUTES).toBe(MAX_RUNTIME_MAX_DURATION_MINUTES);
+    expect(catalogMessage(EN_CATALOG, key)).toContain("which is also the default");
+    expect(catalogMessage(DE_CATALOG, key)).toContain("das ist auch der Standard");
+    expect(catalogMessage(EN_CATALOG, key)).not.toMatch(/lengthen/iu);
+    expect(catalogMessage(DE_CATALOG, key)).not.toMatch(/verlängern/iu);
   });
 
   it("reads the catalog entry it is asked for and fails loudly for a missing one", () => {

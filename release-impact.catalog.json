@@ -4785,6 +4785,83 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7106820462",
         "rationale": "On 2026-11-23 the repository owner approved G0 for Milestone 0 of epic #4491 as recommended: the corrected macOS boundary statement, the 1.5.7 release text with its named limits, the protection of .git/hooks before the release, and the release of Keiko 1.5.7 once #4543 is merged, followed by the npm folder packages whose publication run records the npm folder form (#4520 AC1). 1.5.7 also carries #4523, #4537, #4529, #4532, #4527, #4534, #4533 and #4538. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-24-keiko-1.5.8-long-work-finishes",
+      "packageVersion": "1.5.8",
+      "releaseTag": "v1.5.8",
+      "supportedFrom": [
+        "0.2.0",
+        "1.5.0",
+        "1.5.1",
+        "1.5.2",
+        "1.5.3",
+        "1.5.4",
+        "1.5.5",
+        "1.5.6",
+        "1.5.7"
+      ],
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Long work finishes on your own models: a Coding run or Chat turn may work 480 minutes and make 10,000 tool calls, one terminal, task, container or governed Coding command may run 30 minutes, and model calls, verification, installs, approvals, Jira and MCP reads wait long enough for slow self-hosted models. A Chat answer says when older tool results reached the model only as a summary, a failed Coding run offers an error report, and verification asks for the project's check up front instead of a blind reminder at the end.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": ["ui-store-schema", "chat-history"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "UI schema 82 rebuilds the coding run snapshot table so that it can record the closed cause output-limit-reached, and schema 83 adds a nullable verification_gap column that reads empty for older runs. Rows, references and indexes carry forward. A downgrade uses its matching pre-update backup.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "chat-history",
+          "description": "A Chat tool transcript may carry an optional contextElision marker that counts the older tool results the model received only as a summary. Transcripts without it read unchanged, and no schema migration is added.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Long work finishes: a Coding run or a Chat turn may work up to 480 minutes and make up to 10,000 tool calls (before 120 or 60 minutes and 256 or 250 calls). A model's first answer may take 15 minutes and a whole answer 30; a model provider that is down no longer ends a run after about 20 minutes, the run waits as long as its own duration allows and Stop ends it earlier. Verification steps, dependency installs, approvals, Jira and MCP reads also wait long enough for slow self-hosted models. #4491",
+        "Commands run up to 30 minutes: one command in the terminal, a task run, a container run or a Coding run's governed command may run as long as one verification step, before 30 seconds. #4491",
+        "A shortened conversation is shown: when older tool results reached the model only as a summary to fit its context window, the Chat answer carries a short Keiko note with their count. #4491",
+        "A failed Coding run offers the Create error report action on its failure card, and a model call Keiko cut at its output limit is named as such instead of as an internal error. #4548",
+        "Verification without a blind reminder: each mode asks the model for the project's check up front; Keiko continues a run by itself only once, after a check that ran and failed after the last code change, naming that check. A run that changed code without a passing check says so, and Keiko's own continuation turns appear as notes. #4548",
+        "Coding Workbench tasks: a completed or left task stays out of view after a reload, a rename or completion in Coding History shows at once, a project that still holds Coding tasks cannot be removed, and a cancelled Start keeps the composer draft. On macOS a run's lockfile fetches its pinned packages through Keiko's repository relay too. #4548"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-24",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7126818488",
+        "rationale": "On 2026-11-24 the repository owner ordered every proposal of the work-ending limits review implemented in one pull request, raised the command ceiling of the terminal, task runs, container runs and the Authority Envelope to 30 minutes, and approved releasing Keiko 1.5.8 once that pull request is merged, followed by a customer-style test of the published release and the npm folder packages. 1.5.8 also carries #4548. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
+      }
     }
   ]
 }

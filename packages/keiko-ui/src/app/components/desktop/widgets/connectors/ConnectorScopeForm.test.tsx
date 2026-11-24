@@ -6,6 +6,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ConnectorScopeForm, type ConnectorScopeValue } from "./ConnectorScopeForm";
 
 async function addKey(
@@ -71,7 +72,12 @@ describe("ConnectorScopeForm — Jira", () => {
       const { container, unmount } = render(
         <ConnectorScopeForm provider="jira" onChange={vi.fn()} />,
       );
-      expect(screen.getByText(/at most 2000 items/i)).toBeInTheDocument();
+      // The hint names the production bound, read from the contract rather than restated.
+      const bound = new RegExp(
+        `at most ${String(DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems)} items`,
+        "i",
+      );
+      expect(screen.getByText(bound)).toBeInTheDocument();
       expect(await axe(container)).toHaveNoViolations();
       unmount();
     }

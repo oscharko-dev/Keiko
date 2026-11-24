@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "./tools.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
   VERIFICATION_SETTLEMENT_GRACE_MS,
@@ -105,8 +106,10 @@ describe("verification failure-location caps", () => {
     expect(VERIFICATION_FAILURE_MESSAGE_MAX_CHARS).toBeGreaterThan(0);
   });
 
-  it("leaves the existing default limits unchanged", () => {
-    expect(DEFAULT_VERIFICATION_LIMITS.wallTimeMs).toBe(120_000);
+  it("gives one verification step thirty minutes and keeps the no-network default", () => {
+    // Owner decision 2026-11-24: a Maven build or a full test suite on a self-hosted model setup
+    // must not end at two minutes.
+    expect(DEFAULT_VERIFICATION_LIMITS.wallTimeMs).toBe(1_800_000);
     expect(DEFAULT_VERIFICATION_LIMITS.network).toBe("none");
   });
 });
@@ -266,9 +269,11 @@ describe("countMatchesStatus (KEIKO-0159, shared with editor-agent-verification.
 describe("the governed verification tool's settlement budget", () => {
   it("adds the whole package-script trust wait and a grace to its install and step ceilings", () => {
     expect(VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS).toBe(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS);
-    // Literal pins (PR #3452 review): the five-minute wait, the four-minute install, one two-minute
-    // step and the grace. A budget that lost its grace, or kept only slack, changes the total.
+    // Literal pins (PR #3452 review): the 60-minute wait, the 20-minute install, one 30-minute
+    // step and the grace (owner decision 2026-11-24). A budget that lost its grace, or kept only
+    // slack, changes the total.
     expect(VERIFICATION_SETTLEMENT_GRACE_MS).toBe(15_000);
-    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBe(675_000);
+    expect(DEPENDENCY_INSTALL_LIMITS.wallTimeMs).toBe(1_200_000);
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBe(6_615_000);
   });
 });

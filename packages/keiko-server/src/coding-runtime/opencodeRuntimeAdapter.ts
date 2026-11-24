@@ -103,8 +103,10 @@ const MAX_STREAM_FLAPS = 32;
 const EVENTS_ENDED_MESSAGE = "opencode-events-ended";
 const EVENTS_INVALID_MESSAGE = "opencode-events-invalid";
 const HISTORY_INCOMPLETE_MESSAGE = "opencode-history-incomplete";
-// The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
-const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+// The server-owned governed tool-bridge round-trip deadline (owner decision 2026-11-24: two minutes
+// on a self-hosted setup); the generated client must outlive it by a margin.
+export const OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS = 120_000;
+const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS + 5_000;
 
 const OPEN_CODE_READINESS_PHASES = [
   "target-attestation",

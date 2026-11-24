@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   ChatClaimNotice,
   ChatToolBatchProgress,
+  ChatToolContextElision,
   ChatToolExchange,
   ChatToolTranscript,
   ChatToolTurnEnd,
@@ -17,6 +18,7 @@ import {
   CHAT_TOOL_BATCH_TOOL_NAME,
   isChatClaimNotice,
   isChatToolBatchProgress,
+  isChatToolContextElision,
   isChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -103,6 +105,11 @@ export type ChatToolTranscriptUpdate =
       readonly end: ChatToolTurnEnd | undefined;
     }
   | {
+      /** How many older tool results reached the model only as a summary; undefined clears it. */
+      readonly kind: "context-elision";
+      readonly elision: ChatToolContextElision | undefined;
+    }
+  | {
       readonly kind: "write-approval";
       readonly callId: string;
       readonly approval: ChatToolWriteApprovalView;
@@ -143,30 +150,73 @@ export function chatToolExchangeReservation(
   );
 }
 
+/**
+ * Whether one more exchange fits the stored transcript's bound. The stored bytes carry every
+ * written exchange at its actual size, the calls still in flight hold their worst case, and the base
+ * share stays free on top for the writes that are no exchange: schema, read grants and markers.
+ */
+export function chatToolTranscriptAdmits(
+  storedBytes: number,
+  heldBytes: number,
+  exchangeBytes: number,
+): boolean {
+  return (
+    storedBytes + CHAT_TOOL_TRANSCRIPT_BASE_BYTES + heldBytes + exchangeBytes <=
+    CHAT_TOOL_TRANSCRIPT_MAX_BYTES
+  );
+}
+
+function pendingTurnRow(row: Readonly<Record<string, unknown>> | undefined): {
+  readonly chatId: string;
+  readonly row: Readonly<Record<string, unknown>>;
+} {
+  if (row === undefined || typeof row.chat_id !== "string") throw notFound("Message");
+  if (row.client_turn_state !== null && row.client_turn_state !== "pending")
+    throw invalidRequest("Tool turn is no longer pending.");
+  return { chatId: row.chat_id, row };
+}
+
 /** Body-free occupancy for the existing transcript reservation owner, before native dispatch. */
 export function chatToolTranscriptOccupancy(
   db: DatabaseSync,
   messageId: string,
 ): { readonly bytes: number; readonly exchangeCount: number } {
-  const row = db
-    .prepare(
-      "SELECT chat_id, tool_transcript_json, client_turn_state FROM chat_messages WHERE id=? AND role='user'",
-    )
-    .get(messageId);
-  if (row === undefined || typeof row.chat_id !== "string") throw notFound("Message");
-  if (row.client_turn_state !== null && row.client_turn_state !== "pending")
-    throw invalidRequest("Tool turn is no longer pending.");
-  if (row.tool_transcript_json === null) return { bytes: 0, exchangeCount: 0 };
-  if (typeof row.tool_transcript_json !== "string") throw invalidTranscript();
-  const transcript = decodeStoredTranscript(row.tool_transcript_json, {
-    chatId: row.chat_id,
-    messageId,
-  });
+  const { chatId, row } = pendingTurnRow(
+    db
+      .prepare(
+        "SELECT chat_id, tool_transcript_json, client_turn_state FROM chat_messages WHERE id=? AND role='user'",
+      )
+      .get(messageId),
+  );
+  const body = row.tool_transcript_json;
+  if (body === null) return { bytes: 0, exchangeCount: 0 };
+  if (typeof body !== "string") throw invalidTranscript();
+  const transcript = decodeStoredTranscript(body, { chatId, messageId });
   if (transcript === undefined) throw invalidTranscript();
   return {
-    bytes: Buffer.byteLength(row.tool_transcript_json),
+    bytes: Buffer.byteLength(body),
     exchangeCount: transcript.exchanges.length,
   };
+}
+
+/**
+ * The stored size of a pending turn's tool transcript and its Chat, read in SQL without decoding the
+ * transcript, so a Chat tool call's admission stays cheap however long the turn grows.
+ */
+export function chatToolTranscriptSize(
+  db: DatabaseSync,
+  messageId: string,
+): { readonly chatId: string; readonly bytes: number } {
+  const { chatId, row } = pendingTurnRow(
+    db
+      .prepare(
+        "SELECT chat_id, length(CAST(tool_transcript_json AS BLOB)) AS bytes, client_turn_state FROM chat_messages WHERE id=? AND role='user'",
+      )
+      .get(messageId),
+  );
+  if (row.bytes === null) return { chatId, bytes: 0 };
+  if (typeof row.bytes !== "number") throw invalidTranscript();
+  return { chatId, bytes: row.bytes };
 }
 const UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -192,6 +242,7 @@ const UPDATE = defineActivityLogOperation({
         "human-input",
         "claim-notice",
         "turn-end",
+        "context-elision",
       ],
     },
     batchPhase: {
@@ -231,6 +282,7 @@ const UPDATE = defineActivityLogOperation({
       ],
     },
     exchangeCount: { type: "integer", dataClass: "count", required: true },
+    elidedResultCount: { type: "integer", dataClass: "count", required: false },
     draftReceiptCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -498,14 +550,15 @@ function validReadGrants(
 }
 
 /**
- * The two closed facts a turn's final answer states: the claim marker and the early ending. Both are
- * presentation records on top of the exchanges: one that is not valid is dropped when the transcript
- * is read, never allowed to cost the conversation its tool history (the stored English answer is
- * what the Chat then shows).
+ * The closed facts a turn's final answer states: the claim marker, the early ending and the count of
+ * tool results the model received only as a summary. All are presentation records on top of the
+ * exchanges: one that is not valid is dropped when the transcript is read, never allowed to cost the
+ * conversation its tool history (the stored English answer is what the Chat then shows).
  */
 const OPTIONAL_MARKERS = [
   { key: "claimNotice", name: "claim-notice", valid: isChatClaimNotice },
   { key: "turnEnd", name: "turn-end", valid: isChatToolTurnEnd },
+  { key: "contextElision", name: "context-elision", valid: isChatToolContextElision },
 ] as const;
 type DroppedMarker = (typeof OPTIONAL_MARKERS)[number]["name"];
 function dropInvalidMarkers(value: unknown): readonly DroppedMarker[] {
@@ -531,7 +584,7 @@ const MARKER_OMITTED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["claim-notice", "turn-end"],
+      values: ["claim-notice", "turn-end", "context-elision"],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -567,6 +620,7 @@ function validTranscript(
       "readGrants",
       "claimNotice",
       "turnEnd",
+      "contextElision",
     ])
   )
     return false;
@@ -834,6 +888,7 @@ function applyUpdate(
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind === "claim-notice") return { ...current, claimNotice: update.notice };
   if (update.kind === "turn-end") return { ...current, turnEnd: update.end };
+  if (update.kind === "context-elision") return { ...current, contextElision: update.elision };
   if (update.kind !== "read-consent") return applyExchange(current, update);
   return applyReadConsent(current, update, chatId);
 }
@@ -1100,6 +1155,20 @@ function redactTurnEnd(
   // The record is closed facts (a reason, tool names, issue keys, counts): validated, never free text.
   return { kind: "turn-end", end: update.end };
 }
+function redactContextElision(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "context-elision" }>,
+): ChatToolTranscriptUpdate {
+  if (update.elision !== undefined && !isChatToolContextElision(update.elision))
+    throw invalidRequest("Invalid context elision.");
+  // Copy only the count; nothing else of the update survives.
+  return {
+    kind: "context-elision",
+    elision:
+      update.elision === undefined
+        ? undefined
+        : { elidedResultCount: update.elision.elidedResultCount },
+  };
+}
 function redactClaimNotice(
   update: Extract<ChatToolTranscriptUpdate, { kind: "claim-notice" }>,
 ): ChatToolTranscriptUpdate {
@@ -1126,7 +1195,16 @@ function redactHumanInput(
 function redactStateUpdate(
   update: Exclude<
     ChatToolTranscriptUpdate,
-    { kind: "started" | "captured" | "settled" | "human-input" | "claim-notice" | "turn-end" }
+    {
+      kind:
+        | "started"
+        | "captured"
+        | "settled"
+        | "human-input"
+        | "claim-notice"
+        | "turn-end"
+        | "context-elision";
+    }
   >,
 ): ChatToolTranscriptUpdate {
   if (update.kind === "write-prepared") {
@@ -1161,6 +1239,7 @@ function redactUpdate(
   if (update.kind === "human-input") return redactHumanInput(update);
   if (update.kind === "claim-notice") return redactClaimNotice(update);
   if (update.kind === "turn-end") return redactTurnEnd(update);
+  if (update.kind === "context-elision") return redactContextElision(update);
   return redactStateUpdate(update);
 }
 
@@ -1237,11 +1316,14 @@ function draftReceiptLogFields(update: ChatToolTranscriptUpdate): { draftReceipt
 function markerLogFields(update: ChatToolTranscriptUpdate): {
   readonly claimNotice?: ChatClaimNotice;
   readonly turnEndReason?: ChatToolTurnEndReason;
+  readonly elidedResultCount?: number;
 } {
   if (update.kind === "claim-notice" && update.notice !== undefined)
     return { claimNotice: update.notice };
   if (update.kind === "turn-end" && update.end !== undefined)
     return { turnEndReason: update.end.reason };
+  if (update.kind === "context-elision" && update.elision !== undefined)
+    return { elidedResultCount: update.elision.elidedResultCount };
   return {};
 }
 export function updateChatToolTranscript(

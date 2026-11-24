@@ -91,8 +91,8 @@ it, on its buffered and its streamed model calls alike. The `coding-workbench` l
 not select it: that profile only raises the timeout floors, and the interactive commit-message
 draft borrows it (#3591) while a person waits on the answer. A call with the signal keeps retrying a
 transiently unavailable provider (429, a retryable 5xx, a refused connection, a silent attempt) for
-the gateway configuration's `codingOutageWindowMs` (default `GATEWAY_CODING_OUTAGE_WINDOW_MS`, 10
-minutes; at most one hour) rather than stopping after the provider's `maxRetries`, and it waits
+the gateway configuration's `codingOutageWindowMs` (default `GATEWAY_CODING_OUTAGE_WINDOW_MS`, 30
+minutes since the 2026-11-24 owner decision, 10 before; at most one hour) rather than stopping after the provider's `maxRetries`, and it waits
 through an open circuit breaker's cooldown and probe slot instead of receiving `CircuitOpenError`
 at once. The window extends only the retries after a failure the breaker counts against the
 provider (`isNonProviderFault` is false); a retry that reacts to the model's own output, a rejected
@@ -111,13 +111,15 @@ never add load to a recovering provider.
 The window is the operator's explicit bound, not the provider's attempt budget. Under the outage
 policy the call's end-to-end budget is the window plus one attempt bound, and never less than the
 provider's own budget (`bufferedCallBudgetMs` / `streamedCallBudgetMs`): the configured window holds
-even at `maxRetries: 0`, where the provider budget alone is ten minutes, and the attempt the window
+even at `maxRetries: 0`, where the provider budget alone is thirty minutes, and the attempt the window
 admits last keeps its full bound, so a healthy answer is not cut at the window's edge. The sidecar
 route's deadline sits behind that budget, from the same derivation. Each attempt keeps its own
-bound: a silent attempt ends at the silence floor (at least five minutes without data) when the
-answer is read over a stream, otherwise at the buffered floor (at least ten minutes), and it is
+bound: a silent attempt ends at the silence floor (at least fifteen minutes without data) when the
+answer is read over a stream, otherwise at the buffered floor (at least thirty minutes), and it is
 retried only while the window still has room. With the default window and floors a silent streamed
-attempt is therefore retried once and a silent whole-body attempt not at all; a longer
+attempt is therefore retried once and a silent whole-body attempt not at all (the 2026-11-24 owner
+decision tripled the silence floor, the buffered floor and the default window together, from five,
+ten and ten minutes, so this holds); a longer
 `codingOutageWindowMs` buys more attempts. A call that outlasts the window ends with
 `gateway.retry.exhausted reason=budget`.
 
@@ -661,9 +663,10 @@ composed signal is passed to `fetch(url, { signal })`. A signal abort triggered 
 slowly at peak load — 30s, 45s, 120s and longer before the first byte, with stalls between stream
 chunks — and Keiko must stay in the request rather than abort on its own for such delays. Every
 interactive gateway surface therefore floors its effective bound to at least the constants exported
-from `resilience.ts`: `GATEWAY_SILENCE_FLOOR_MS` (5 min — the longest wait for the first byte and
-between two stream data events), `GATEWAY_STREAM_BUDGET_FLOOR_MS` (30 min — the longest total read
-of a streamed answer, `Gateway.chatStream()`), and `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` (10 min — the
+from `resilience.ts`: `GATEWAY_SILENCE_FLOOR_MS` (15 min, 5 min until the 2026-11-24 owner
+decision — the longest wait for the first byte and between two stream data events),
+`GATEWAY_STREAM_BUDGET_FLOOR_MS` (30 min — the longest total read of a streamed answer,
+`Gateway.chatStream()`), and `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` (30 min, 10 min until that decision — the
 longest total read of a buffered answer, `Gateway.chat()`, including coding-workbench and every
 buffered call that answers a user action: commit draft, prompt enhancer, memory salience, quality
 judge). A caller's own configuration may only raise these bounds, never lower them; an already

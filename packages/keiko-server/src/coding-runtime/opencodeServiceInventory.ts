@@ -876,6 +876,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "providers.*.settings",
       "providers.*.settings.*",
       "providers.*.settings.chunkTimeout",
+      "providers.*.settings.headerTimeout",
     ],
   ),
   keikoOperation(
@@ -1156,7 +1157,6 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "providers.*.settings.compaction",
       "providers.*.settings.compaction.type",
       "providers.*.settings.encoding",
-      "providers.*.settings.headerTimeout",
       "providers.*.settings.timeout",
       "providers.*.settings.transport",
     ],

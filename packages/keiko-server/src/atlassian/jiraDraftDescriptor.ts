@@ -19,6 +19,9 @@ import {
   REQUIREMENT_REFUSAL,
 } from "./jiraManagedMutationDescriptors.js";
 
+/** How long one draft-stage call may take; it saves a draft in Keiko and makes no Jira write. */
+export const JIRA_DRAFT_STAGE_DURATION_MS = 30 * 60_000;
+
 const DESCRIPTION =
   "Save a reviewable backlog draft in Keiko without creating Jira issues. Supports small and large drafts in pages of 1 to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
@@ -80,7 +83,9 @@ export function jiraDraftStageDeclaration(): ManagedMcpToolDeclaration {
         maxArgumentBytes: 262144,
         maxResultBytes: 16384,
         maxResultCount: 1,
-        maxDurationMs: 300000,
+        // Owner decision 2026-11-24: 30 minutes (was 5), room for the metadata reads a large draft's
+        // field check makes against a slow Jira.
+        maxDurationMs: JIRA_DRAFT_STAGE_DURATION_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

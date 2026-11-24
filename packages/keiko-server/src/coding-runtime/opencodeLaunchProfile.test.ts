@@ -129,6 +129,8 @@ describe("OpenCode launch profile", () => {
     });
     const settings = record(provider.settings);
     expect(settings.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
+    // Owner decision 2026-11-24: the runtime defaults (300 s headers, 900 s chunks) are raised.
+    expect(settings.headerTimeout).toBe(30 * 60_000);
     expect(settings.chunkTimeout).toBe(30 * 60_000);
     expect(provider.headers).toEqual({
       Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",

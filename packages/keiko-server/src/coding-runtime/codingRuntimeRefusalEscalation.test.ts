@@ -51,9 +51,11 @@ function observeTimes(
 // F5 (#3873, live Gemma qualification): the classification and the bounds the run's orchestration
 // settles a run with once its edits keep being refused.
 describe("classifyEditRefusal", () => {
-  it("pins the documented bounds: three for an unrepairable refusal, six for a repairable one", () => {
+  it("pins the documented bounds: three for an unrepairable refusal, fifteen for a repairable one", () => {
+    // Owner decision 2026-11-24: a long edit task on a self-hosted model may be refused more often
+    // before it lands; the unrepairable bound stays.
     expect(UNREPAIRABLE_EDIT_REFUSAL_BOUND).toBe(3);
-    expect(REPAIRABLE_EDIT_REFUSAL_BOUND).toBe(6);
+    expect(REPAIRABLE_EDIT_REFUSAL_BOUND).toBe(15);
   });
 
   // The facade forwards the model a closed code from its own vocabulary; one it can forward but
@@ -130,14 +132,14 @@ describe("CodingRuntimeEditRefusalStreaks", () => {
     expect(streaks.escalation(RUN_ID)).toEqual(results[2]);
   });
 
-  it("escalates the sixth consecutive INVALID_EDITS refusal, not the fifth", () => {
+  it("escalates the fifteenth consecutive INVALID_EDITS refusal, not the fourteenth", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
-    expect(observeTimes(streaks, refused("INVALID_EDITS"), 5)).toEqual(Array(5).fill(undefined));
+    expect(observeTimes(streaks, refused("INVALID_EDITS"), 14)).toEqual(Array(14).fill(undefined));
     expect(streaks.observe(RUN_ID, refused("INVALID_EDITS"))).toMatchObject({
       reasonCode: "INVALID_EDITS",
       refusalClass: "repairable",
-      consecutiveCount: 6,
-      bound: 6,
+      consecutiveCount: 15,
+      bound: 15,
       failureCode: "edit-retries-exhausted",
     });
   });
@@ -180,22 +182,22 @@ describe("a streak counts refusals whatever their code", () => {
       streaks.observe(RUN_ID, refused(codes[index % codes.length] ?? "UNCLASSIFIED")),
     );
 
-  it("settles a run that alternates two repairable refusals at the sixth, not never", () => {
+  it("settles a run that alternates two repairable refusals at the fifteenth, not never", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
-    const results = alternating(streaks, ["INVALID_EDITS", "CONTENT_HASH_MISMATCH"], 6);
+    const results = alternating(streaks, ["INVALID_EDITS", "CONTENT_HASH_MISMATCH"], 15);
 
-    expect(results.slice(0, 5)).toEqual(Array(5).fill(undefined));
-    expect(results[5]).toMatchObject({
-      reasonCode: "CONTENT_HASH_MISMATCH",
+    expect(results.slice(0, 14)).toEqual(Array(14).fill(undefined));
+    expect(results[14]).toMatchObject({
+      reasonCode: "INVALID_EDITS",
       refusalClass: "repairable",
-      errorKind: "conflict",
+      errorKind: "validation-failed",
       consecutiveCount: REPAIRABLE_EDIT_REFUSAL_BOUND,
       bound: REPAIRABLE_EDIT_REFUSAL_BOUND,
       failureCode: "edit-retries-exhausted",
-      refusalCount: 6,
+      refusalCount: 15,
       unrepairableCount: 0,
     });
-    expect(streaks.escalation(RUN_ID)).toEqual(results[5]);
+    expect(streaks.escalation(RUN_ID)).toEqual(results[14]);
   });
 
   it("settles a run that alternates two unrepairable refusals at the third", () => {
@@ -234,7 +236,7 @@ describe("a streak counts refusals whatever their code", () => {
     });
   });
 
-  it("meets the six-refusal bound on a mixed run whose unrepairable refusals stay below three", () => {
+  it("meets the fifteen-refusal bound on a mixed run whose unrepairable refusals stay below three", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
     const results = alternating(
       streaks,
@@ -242,19 +244,20 @@ describe("a streak counts refusals whatever their code", () => {
       5,
     );
     expect(results).toEqual(Array(5).fill(undefined));
+    expect(observeTimes(streaks, refused("INVALID_EDITS"), 9)).toEqual(Array(9).fill(undefined));
 
-    // The sixth refusal is an unrepairable one, but only two of the six were.
-    const sixth = streaks.observe(RUN_ID, refused("QUEUE_FULL"));
-    expect(sixth).toMatchObject({
+    // The fifteenth refusal is an unrepairable one, but only two of the fifteen were.
+    const last = streaks.observe(RUN_ID, refused("QUEUE_FULL"));
+    expect(last).toMatchObject({
       // The latest refusal's own code and error class...
       reasonCode: "QUEUE_FULL",
       errorKind: "unavailable",
-      // ...and the bound that was met: six refusals in a row, not three unrepairable ones.
+      // ...and the bound that was met: fifteen refusals in a row, not three unrepairable ones.
       refusalClass: "repairable",
-      consecutiveCount: 6,
+      consecutiveCount: 15,
       bound: REPAIRABLE_EDIT_REFUSAL_BOUND,
       failureCode: "edit-retries-exhausted",
-      refusalCount: 6,
+      refusalCount: 15,
       unrepairableCount: 2,
     });
   });
@@ -262,20 +265,20 @@ describe("a streak counts refusals whatever their code", () => {
   it("ends the whole streak on an applied edit, whatever refusals came before it", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
     const codes = ["INVALID_EDITS", "CONTENT_HASH_MISMATCH"];
-    expect(alternating(streaks, codes, 5)).toEqual(Array(5).fill(undefined));
+    expect(alternating(streaks, codes, 14)).toEqual(Array(14).fill(undefined));
     expect(streaks.observe(RUN_ID, APPLIED)).toBeUndefined();
 
-    expect(alternating(streaks, codes, 5)).toEqual(Array(5).fill(undefined));
+    expect(alternating(streaks, codes, 14)).toEqual(Array(14).fill(undefined));
     expect(streaks.escalation(RUN_ID)).toBeUndefined();
     expect(streaks.observe(RUN_ID, refused("INVALID_EDITS"))).toMatchObject({
       failureCode: "edit-retries-exhausted",
-      refusalCount: 6,
+      refusalCount: 15,
     });
   });
 
   it("settles an alternating run once: later refusals add no second escalation", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
-    const results = alternating(streaks, ["INVALID_EDITS", "CONTENT_HASH_MISMATCH"], 12);
+    const results = alternating(streaks, ["INVALID_EDITS", "CONTENT_HASH_MISMATCH"], 30);
 
     expect(results.filter((result) => result !== undefined)).toHaveLength(1);
   });
@@ -283,8 +286,8 @@ describe("a streak counts refusals whatever their code", () => {
 
 // #3873 review (PR #3876): `EDIT_PREPARE_FAILED` was classed repairable by its code alone, although
 // the facade also raises it for causes the model cannot repair: an edit whose governed read is
-// refused, a workspace whose access was lost, a guard that no longer holds. Such a run took six
-// refusals instead of three, and the Workbench then told the operator the edits "no longer matched
+// refused, a workspace whose access was lost, a guard that no longer holds. Such a run took the repairable
+// bound of refusals instead of three, and the Workbench then told the operator the edits "no longer matched
 // the file".
 describe("EDIT_PREPARE_FAILED is classified by its cause", () => {
   it.each([
@@ -380,11 +383,11 @@ describe("EDIT_PREPARE_FAILED is classified by its cause", () => {
     },
   );
 
-  it("still gives an invalid changeset the higher bound of six", () => {
+  it("still gives an invalid changeset the higher bound of fifteen", () => {
     const streaks = new CodingRuntimeEditRefusalStreaks();
     const outcome = prepareFailed("changeset-invalid");
 
-    expect(observeTimes(streaks, outcome, 5)).toEqual(Array(5).fill(undefined));
+    expect(observeTimes(streaks, outcome, 14)).toEqual(Array(14).fill(undefined));
     expect(streaks.observe(RUN_ID, outcome)).toMatchObject({
       refusalClass: "repairable",
       failureCode: "edit-retries-exhausted",
@@ -478,6 +481,7 @@ describe("recordRefusalEscalated", () => {
     streaks.observe(RUN_ID, prepareFailed("replacement-read-failed", "not-text"));
     streaks.observe(RUN_ID, refused("INVALID_EDITS"));
     streaks.observe(RUN_ID, refused("CONTENT_HASH_MISMATCH"));
+    observeTimes(streaks, refused("INVALID_EDITS"), 9);
     const escalation = streaks.observe(RUN_ID, prepareFailed("changeset-invalid"));
     if (escalation === undefined) throw new Error("expected an escalation");
 
@@ -495,10 +499,10 @@ describe("recordRefusalEscalated", () => {
       expect.objectContaining({
         reasonCode: "EDIT_PREPARE_FAILED",
         refusalClass: "repairable",
-        consecutiveCount: 6,
-        bound: 6,
+        consecutiveCount: 15,
+        bound: 15,
         failureCode: "edit-retries-exhausted",
-        refusalCount: 6,
+        refusalCount: 15,
         unrepairableCount: 1,
         prepareCause: "changeset-invalid",
       }),

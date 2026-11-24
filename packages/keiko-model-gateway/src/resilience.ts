@@ -65,13 +65,18 @@ const MAX_BACKOFF_MS = 30_000;
 // WHOLE-BODY case, and `chatStream()`'s own buffered fallback for a non-streaming adapter (same
 // reasoning: no incremental progress to observe), use the buffered floor as their per-attempt bound.
 // Longest wait for the first byte, and between two stream data events.
-export const GATEWAY_SILENCE_FLOOR_MS = 300_000;
+// Owner decision 2026-11-24: fifteen minutes, because Keiko runs on the customer's own models and a
+// long prefill is healthy work, not a failure.
+export const GATEWAY_SILENCE_FLOOR_MS = 900_000;
 // Longest total read of a streamed answer (`Gateway.chatStream()` — Conversation Center and any
 // other true streaming consumer).
 export const GATEWAY_STREAM_BUDGET_FLOOR_MS = 1_800_000;
 // Longest total read of a buffered answer (`Gateway.chat()` — coding-workbench and every buffered
 // call that answers a user action: commit draft, prompt enhancer, memory salience, quality judge).
-export const GATEWAY_BUFFERED_BUDGET_FLOOR_MS = 600_000;
+// Owner decision 2026-11-24: thirty minutes, like a streamed answer. A whole-body answer shows no
+// progress, so this one number must cover the longest healthy generation of a slow self-hosted
+// model, and it never sits below the silence floor a streamed read of the same call is held to.
+export const GATEWAY_BUFFERED_BUDGET_FLOOR_MS = 1_800_000;
 // Per-call floor for retrieval/indexing transports (embeddings, rerank): the actual outbound HTTP
 // deadline for ONE call, never the ladder/batch bookkeeping deadline those transports derive from
 // the caller's configured value (that bookkeeping must stay driven by what the caller asked for,
@@ -1253,7 +1258,9 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
 // add load while it recovers.
 // Only a call that carries the explicit `outagePolicy: "outage-window"` request signal (the coding
 // sidecar route's buffered and streamed calls) runs under it; see `gateway.ts`.
-export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 600_000;
+// Owner decision 2026-11-24: thirty minutes, scaled with the silence and whole-body floors, so a
+// silent streamed attempt is still retried once inside the default window.
+export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 1_800_000;
 
 /**
  * The outage window a call runs under (#3873): the configuration's `codingOutageWindowMs`

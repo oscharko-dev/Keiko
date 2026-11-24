@@ -42,6 +42,8 @@ import type {
 } from "../store/chatToolMutationTypes.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { JIRA_CREATE_ALL_DURATION_MS_MAX } from "./jiraManagedMutationDescriptors.js";
 import { draftProblemData } from "./jiraChatDraftArguments.js";
 import { JIRA_DRAFT_UNLISTED_GUIDANCE, listIssueKeys } from "./jiraDraftKeyRanges.js";
 import {
@@ -123,9 +125,13 @@ export interface JiraDraftRunBudget {
   readonly writeMs: number;
   readonly totalMs: number;
 }
+// Owner decision 2026-11-24: a run may create for as long as the jira.draft tool's own ceiling
+// leaves after the person's approval wait (it was 10 minutes of creating and 40 in all), so a
+// backlog of a few hundred requirements is created in one approved run, not in continuations.
+const JIRA_DRAFT_RUN_MS = JIRA_CREATE_ALL_DURATION_MS_MAX - ATLASSIAN_ACTION_APPROVAL_TTL_MS;
 export const JIRA_DRAFT_RUN_BUDGET: JiraDraftRunBudget = Object.freeze({
-  writeMs: 10 * 60_000,
-  totalMs: 40 * 60_000,
+  writeMs: JIRA_DRAFT_RUN_MS,
+  totalMs: JIRA_DRAFT_RUN_MS,
 });
 /** A progress line is written to the Activity Log after this many items were attempted. */
 const PROGRESS_EVERY = 100;

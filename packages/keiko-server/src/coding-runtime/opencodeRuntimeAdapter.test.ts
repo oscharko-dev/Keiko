@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   createGeneratedOpenCodeBundle,
+  OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS,
   openCodeToolClientTimeoutMs,
   type OpenCodeTurnOutcome,
 } from "./opencodeRuntimeAdapter.js";
@@ -941,8 +942,10 @@ describe("OpenCode runtime adapter readiness", () => {
     });
     expect(bundle.config.compaction).toMatchObject({ auto: true, prune: true, tail_turns: 2 });
     expect(options.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
+    // Owner decision 2026-11-24: the runtime defaults (300 s headers, 900 s chunks) are raised.
+    expect(options.headerTimeout).toBe(30 * 60_000);
     expect(options.chunkTimeout).toBe(30 * 60_000);
-    expect(Object.keys(options)).toEqual(["baseURL", "chunkTimeout", "headers"]);
+    expect(Object.keys(options)).toEqual(["baseURL", "headerTimeout", "chunkTimeout", "headers"]);
     expect(headers.Authorization).toBe("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
     expect(bundle.config.tools).toMatchObject({
       question: true,
@@ -2647,7 +2650,17 @@ describe("the generated client timeout of a tool that waits for an approval", ()
         budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
       );
     }
-    expect(openCodeToolClientTimeoutMs(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs)).toBe(35_000);
+    expect(openCodeToolClientTimeoutMs(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs)).toBe(125_000);
+  });
+
+  // Owner decision 2026-11-24: the bridge round trip of an ordinary governed tool (a git command, a
+  // search, a patch on a large tree) may take two minutes on a self-hosted setup; the generated
+  // client keeps the same five-second margin above it, derived, so the two never drift apart.
+  it("keeps the ordinary tool client five seconds above the 120 s bridge deadline", () => {
+    expect(OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS).toBe(120_000);
+    expect(openCodeToolClientTimeoutMs(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs)).toBe(
+      OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS + 5_000,
+    );
   });
 });
 

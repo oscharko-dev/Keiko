@@ -629,10 +629,14 @@ export interface AtlassianSyncBounds {
   readonly maxConcurrency: number;
 }
 
+// Owner decision 2026-11-24: items 20,000 (was 2,000), duration 120 minutes (was 15). The byte
+// budget is 256 MB (was 50 MB), not more: the sync lane gathers every fetched item of one run in
+// memory until the run is applied as a whole (a truncated run is never applied), so the bytes bound
+// is also the run's memory ceiling.
 export const DEFAULT_ATLASSIAN_SYNC_BOUNDS: AtlassianSyncBounds = Object.freeze({
-  maxItems: 2_000,
-  maxBytes: 50_000_000,
-  maxDurationMs: 900_000,
+  maxItems: 20_000,
+  maxBytes: 256_000_000,
+  maxDurationMs: 7_200_000,
   maxConcurrency: 4,
 } as const satisfies AtlassianSyncBounds);
 

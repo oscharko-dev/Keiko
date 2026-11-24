@@ -178,6 +178,7 @@ import {
   type JiraOperationBinding,
   type JiraOperationContract,
 } from "./jiraOperationRegistry.js";
+import { JIRA_READ_DURATION_MS } from "./actionApprovalLimits.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -569,7 +570,7 @@ function coreDeclaration(name: CoreReadToolName): ManagedMcpToolDeclaration {
       maxArgumentBytes: 8192,
       maxResultBytes: 262144,
       maxResultCount: 100,
-      maxDurationMs: 15000,
+      maxDurationMs: JIRA_READ_DURATION_MS,
     },
     idempotency: "server-key-required",
     cancellation: "before-effect",

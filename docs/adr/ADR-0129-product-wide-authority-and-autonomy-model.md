@@ -272,7 +272,7 @@ mode, a granted grant restarts its time on every passing check once 30 s have el
 window), forward only, capped by the envelope expiry of the invocation's current authority, to which the
 grant is re-bound (a grant issued under the previous turn's authority follows the running turn;
 the subject never changes) (`renewRunningReadGrant`). A long tool such as a requirements batch therefore
-outlives the ten-minute approval lifetime. A pending, rejected, revoked or expired grant is never
+outlives the approval lifetime (sixty minutes since the 2026-11-24 owner decision, ten before). A pending, rejected, revoked or expired grant is never
 renewed, and every hard denial still ends the invocation.
 A successful response arriving after access loss is discarded without exposing its data; its
 already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
@@ -290,14 +290,22 @@ same turn deadline bounds `expiresAt` and runtime. The envelope budget is the tu
 (#4175, owner decision 2026-10-31): the shared Chat tool loop derives its iteration and model-call
 ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds
 one exchange per admitted tool call. The default (`CHAT_TOOL_TURN_BUDGET`) is sized for backlog
-work — 60 minutes and 250 tool calls, with no prompt-token bound (owner decision 2026-11-11,
-ADR-0137 D2; the earlier 5,000,000-token allowance is removed) — and a composition may
+work — 480 minutes and 10,000 tool calls since the 2026-11-24 owner decision (60 minutes and 250
+calls before), with no prompt-token bound (owner decision 2026-11-11, ADR-0137 D2; the earlier
+5,000,000-token allowance is removed) — and a composition may
 narrow it; a request cannot. A composed value above the default is clamped to it field by field,
 because the default is also the stored transcript's exchange bound. Jira and MCP sources of one turn
 share it. A round past the tool-call budget is refused before any model call. Before a call starts,
 the turn reserves its worst-case transcript bytes (arguments, the descriptor's result bound, the
-result binding and a fixed envelope share); a call that would exceed the transcript's 16 MiB bound
-ends the turn as `budget-exhausted` instead of starting work whose result could not be persisted. When a turn that already settled tool calls ends early
+result binding and a fixed envelope share) beside the transcript's actual stored bytes, the worst
+case of the calls still in flight and a 64 KiB base share kept free for the schema, read grants and
+markers; a settled call stops holding its worst case, because the stored transcript then carries
+its actual result (2026-11-24: summing every earlier call's worst case ended a turn of small reads
+after about sixty calls). A call that would exceed the transcript's 16 MiB
+bound ends the turn as `budget-exhausted` instead of starting work whose result could not be
+persisted. When older tool results reach the model only as a summary to fit its context window, the
+transcript records their count (`contextElision`) and the Chat shows a Keiko note under the answer:
+the trimming is shown, never silent. When a turn that already settled tool calls ends early
 (budget, deadline, authority change, unsettled tool call, output exhaustion, context overflow or
 another model failure), its answer is built from the stored transcript, not from the model: it lists
 the acknowledged writes with their issue keys, unconfirmed writes separately, calls that started

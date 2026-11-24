@@ -621,6 +621,21 @@ export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
 }
 
 /**
+ * How many older tool results a turn's model continuation carried only as a compact summary, so the
+ * conversation stays within the model's context window. Owner decision 2026-11-24: the person sees
+ * it instead of the model silently losing detail; the full results stay in the transcript.
+ */
+export interface ChatToolContextElision {
+  readonly elidedResultCount: number;
+}
+export function isChatToolContextElision(value: unknown): value is ChatToolContextElision {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (Object.keys(value).length !== 1 || !("elidedResultCount" in value)) return false;
+  const count = value.elidedResultCount;
+  return typeof count === "number" && Number.isSafeInteger(count) && count > 0;
+}
+
+/**
  * Why a Chat tool turn ended before the model gave its own answer (#4175, #4355). One closed
  * vocabulary: the server's ending function writes it to the `chat.tool-turn.ended` log line and to
  * the transcript from the same value, and the Chat words each member from its message catalog.
@@ -779,6 +794,8 @@ export interface ChatToolTranscript {
   readonly claimNotice?: ChatClaimNotice | undefined;
   /** Absent unless the turn ended early; the stored answer is then its English rendering. */
   readonly turnEnd?: ChatToolTurnEnd | undefined;
+  /** Absent unless older tool results reached the model only as a summary. */
+  readonly contextElision?: ChatToolContextElision | undefined;
   /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
   /** At most one current disclosure per source kind; older transcripts contain only readGrant. */

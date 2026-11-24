@@ -512,3 +512,10 @@ which no stylesheet or capture reads. Only those three input digests were update
 proofs, as for release 1.5.6; the other 26 digests are unchanged. The proofs retain their Linux
 captures, rendered CSS digest, measurements, tolerances and accessibility records; no producer was
 rerun for this metadata change.
+
+## Release 1.5.8 input metadata — 2026-11-24
+
+As for 1.5.7, the release changes only the version fields of `package.json`, `package-lock.json`
+and `packages/keiko-ui/package.json` (#4491). Only those three input digests were updated in the
+four proofs; the other 26 digests, the Linux captures, the rendered CSS digest, the measurements,
+the tolerances and the accessibility records are unchanged, and no producer was rerun.

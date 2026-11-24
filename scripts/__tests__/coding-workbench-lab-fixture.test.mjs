@@ -328,12 +328,12 @@ describe("the head+md baseline exercises the AGENTS.md loader's cap", () => {
   });
 
   it(
-    "is about 30 KiB: above the cap, under the read ceiling and under the line limit, so the byte cap is what truncates",
+    "is about 78 KiB: above the cap, under the read ceiling and under the line limit, so the byte cap is what truncates",
     () => {
       const large = largeCopy();
       expect(bytes(large)).toBeGreaterThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES);
-      expect(bytes(large)).toBeGreaterThan(28 * 1024);
-      expect(bytes(large)).toBeLessThan(32 * 1024);
+      expect(bytes(large)).toBeGreaterThan(76 * 1024);
+      expect(bytes(large)).toBeLessThan(80 * 1024);
       expect(bytes(large)).toBeLessThanOrEqual(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
       expect(large.split("\n").length).toBeLessThan(REPOSITORY_INSTRUCTIONS_MAX_LINES);
     },

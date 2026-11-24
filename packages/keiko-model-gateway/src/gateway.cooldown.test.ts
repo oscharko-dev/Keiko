@@ -6,7 +6,7 @@ import {
   RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway } from "./gateway.js";
-import { CircuitBreaker, systemClock } from "./resilience.js";
+import { CircuitBreaker, providerRequestBudgetMs, systemClock } from "./resilience.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import type {
   GatewayConfig,
@@ -39,6 +39,14 @@ function gatewayConfig(): GatewayConfig {
     ],
     circuitBreaker: { failureThreshold: 2, cooldownMs: 1_000, halfOpenProbes: 1 },
   };
+}
+
+// A provider cooldown one minute longer than the whole budget of a request with three retries, so
+// the breaker wait can never fit it: derived from the production budget, never restated.
+function cooldownPastRequestBudgetMs(): number {
+  const entry = gatewayConfig().providers[0];
+  if (entry === undefined) throw new TypeError("fixture must configure a provider");
+  return providerRequestBudgetMs({ ...entry, maxRetries: 3 }) + 60_000;
 }
 
 function answer(): NormalizedResponse {
@@ -415,7 +423,7 @@ describe("concurrent provider cooldown admission", () => {
         circuitBreaker: {
           ...config.circuitBreaker,
           failureThreshold: 2,
-          cooldownMs: 3_000_000,
+          cooldownMs: cooldownPastRequestBudgetMs(),
           halfOpenProbes: 1,
         },
       },
@@ -439,7 +447,7 @@ describe("concurrent provider cooldown admission", () => {
     const events: ModelGatewayLogEvent[] = [];
     const config = gatewayConfig();
     const call = vi.fn(() =>
-      Promise.reject(new ProviderError("Synthetic outage", 503, [], 3_000_000)),
+      Promise.reject(new ProviderError("Synthetic outage", 503, [], cooldownPastRequestBudgetMs())),
     );
     const provider = gateway(
       call,

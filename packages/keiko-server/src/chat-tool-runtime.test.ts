@@ -111,6 +111,8 @@ interface Options {
   readonly budget?: NonNullable<UiHandlerDeps["chatToolTurnBudget"]>;
   /** Leave the Chat without an explicit mode, so it resolves the default (Full access). */
   readonly defaultMode?: boolean;
+  /** The model's declared output limit; one close to the window leaves no room for tool results. */
+  readonly maxOutputTokens?: number;
 }
 // A narrow composed envelope budget keeps the shared-bound pins exact and fast (#4175).
 const NARROW_BUDGET = {
@@ -127,7 +129,11 @@ function context(body: Record<string, unknown>, params: Record<string, string> =
     correlationId: CORRELATION,
   };
 }
-function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"): void {
+function configure(
+  deps: UiHandlerDeps,
+  reasoningHistory?: "required-with-tools",
+  maxOutputTokens?: number,
+): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
@@ -147,6 +153,7 @@ function configure(deps: UiHandlerDeps, reasoningHistory?: "required-with-tools"
           ...(reasoningHistory === undefined
             ? {}
             : { contextWindow: 128_000, maxOutputTokens: 4_096 }),
+          ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
           toolCalling: true,
           toolCallingVerification: {
             status: "verified",
@@ -391,7 +398,7 @@ function fixture(options: Options = {}): Fixture {
     await deps.dispose?.();
     rmSync(root, { recursive: true, force: true });
   });
-  configure(deps, options.reasoningHistory);
+  configure(deps, options.reasoningHistory, options.maxOutputTokens);
   preselectKnownFixtureTools(deps, options);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic combined", MODEL);
@@ -1237,6 +1244,48 @@ it("shares the envelope's physical tool limit across alternating Jira and MCP ca
   // No further model round is requested once the shared tool-call budget is spent.
   expect(f.calls).toHaveLength(1);
 });
+// Owner decision 2026-11-24: the stored-transcript admission counts the transcript's actual bytes
+// plus the worst case of calls still in flight. Each read descriptor admits a result of up to
+// 256 KiB, so summing every started call's worst case ended a turn after about sixty reads even
+// when every result was a few bytes.
+it("completes a turn of one hundred reads whose results are tiny despite the large result bound", async () => {
+  const budget = { maxRuntimeMs: 300_000, maxToolCalls: 150, maxPatchBytes: 0 } as const;
+  const f = fixture({ batchSize: 100, budget });
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  await pending;
+  expect(f.effects).toHaveLength(100);
+  const transcript = f.deps.store
+    .listMessages(f.chatId)
+    .find((message) => message.toolTranscript !== undefined)?.toolTranscript;
+  expect(transcript?.exchanges).toHaveLength(100);
+  expect(transcript?.turnEnd).toBeUndefined();
+  expect(f.calls).toHaveLength(2);
+  // One hundred governed dispatches through the real store take several seconds on a loaded host.
+}, 30_000);
+
+// Owner decision 2026-11-24: trimming the conversation to the model's context window is shown,
+// never silent. A turn whose older tool results reached the model only as a summary stores their
+// count with its transcript, and the Chat shows it under the answer; a turn that fits stores none.
+it("records how many tool results reached the model only as a summary, and nothing when all fit", async () => {
+  const fitting = fixture();
+  await send(fitting);
+  const fitted = fitting.deps.store
+    .listMessages(fitting.chatId)
+    .find((message) => message.toolTranscript !== undefined)?.toolTranscript;
+  expect(fitted?.exchanges).toHaveLength(2);
+  expect(fitted?.contextElision).toBeUndefined();
+
+  const trimmed = fixture({ maxOutputTokens: 32_000 });
+  await send(trimmed);
+  const transcript = trimmed.deps.store
+    .listMessages(trimmed.chatId)
+    .find((message) => message.toolTranscript !== undefined)?.toolTranscript;
+  expect(transcript?.exchanges).toHaveLength(2);
+  expect(transcript?.contextElision?.elidedResultCount).toBeGreaterThan(0);
+  expect(transcript?.contextElision?.elidedResultCount).toBeLessThanOrEqual(2);
+});
+
 // Keiko does not limit tokens (#4346). The turn envelope used to carry a cumulative prompt allowance
 // (5,000,000 tokens) shared by every source the turn reads, and it refused the model round crossing
 // it. Each round here reports 700,000 prompt tokens, so the turn passes 5,000,000 after seven rounds

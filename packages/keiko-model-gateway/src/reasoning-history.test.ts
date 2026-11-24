@@ -144,6 +144,12 @@ describe("transient completed reasoning state", () => {
     expect(() => f.history.prepare(followup(), PROVIDER)).toThrow("reasoning history");
   });
 
+  // Owner decision 2026-11-24: a long run retains up to 16,384 entries and 128 MiB; the TTL is kept.
+  it("retains up to 16,384 entries within 128 MiB", () => {
+    expect(REASONING_HISTORY_MAX_ENTRIES).toBe(16_384);
+    expect(REASONING_HISTORY_MAX_BYTES).toBe(128 * 1024 * 1024);
+  });
+
   it("bounds retained entries and removes their tool-call lookup indexes", () => {
     const f = fixture();
     for (let index = 0; index <= REASONING_HISTORY_MAX_ENTRIES; index++) {
