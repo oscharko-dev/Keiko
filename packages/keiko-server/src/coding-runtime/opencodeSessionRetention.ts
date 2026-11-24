@@ -953,8 +953,6 @@ function stagedRowsRefused(path: string, manifest: RetainedSessionManifest): boo
   }
 }
 
-export { RETAINED_SCHEDULE_MAX };
-
 /**
  * The lease row is process-lifetime state: Keiko's own hold (`opencodeScheduleLease.ts`) or a
  * runtime's lease left behind when its process was ended. The staged copy drops exactly that row;
@@ -1162,11 +1160,6 @@ function refusalForClassifiedRows(
     check: UNKNOWN_STATE_CHECKS[unknown[0]] ?? "schema-drift",
   };
 }
-
-export {
-  RETAINED_SCHEDULE_ACTION_MAX_CHARS,
-  RETAINED_SCHEDULE_NAME_MAX_CHARS,
-} from "./opencodeAutomationRows.js";
 
 /**
  * Automation rows a retained copy may not carry (`opencodeAutomationRows.ts`): anything but a

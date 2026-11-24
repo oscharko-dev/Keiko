@@ -2972,6 +2972,31 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
     180_000,
   );
 
+  // OpenCode falls back to CLAUDE.md wherever no AGENTS.md exists, at the root and in the read
+  // tool's nested walk. Repository instructions reach a run only through Keiko's copy (#4546).
+  it.skipIf(skip)(
+    "never hands the model a CLAUDE.md, at the root or in a folder the read reaches",
+    async () => {
+      await withRun(
+        {
+          files: {
+            "CLAUDE.md": "ROOT-CLAUDE-RULE\n",
+            "src/CLAUDE.md": "NESTED-CLAUDE-RULE\n",
+            "src/a.ts": "export const a = 1;\n",
+          },
+        },
+        async (run) => {
+          await scriptedTurn(run, read("src/a.ts"));
+          // Positive control: the read reached the file next to the nested CLAUDE.md.
+          expect(requestText(run, 1)).toContain("export const a = 1;");
+          expect(requestText(run, 0)).not.toContain("ROOT-CLAUDE-RULE");
+          expect(requestText(run, 0)).not.toContain("NESTED-CLAUDE-RULE");
+        },
+      );
+    },
+    180_000,
+  );
+
   // `/init` (C02) writes the workspace's first AGENTS.md during a run: the copy Keiko writes before
   // the next turn lands in the slot the producer has watched since launch.
   it.skipIf(skip)(

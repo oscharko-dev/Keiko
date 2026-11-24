@@ -401,6 +401,11 @@ function launchEnvironment(
     // models.dev: the one model is the gateway's, and a firewalled customer has no route there.
     OPENCODE_DISABLE_FREE_MODELS: "1",
     OPENCODE_DISABLE_MODELS_FETCH: "1",
+    // OpenCode falls back to CLAUDE.md (and ~/.claude) wherever no AGENTS.md exists, at the root and
+    // in the read tool's nested walk. Repository instructions reach a run only through Keiko's
+    // bounded AGENTS.md copy, so the Claude Code compatibility layer stays off in every profile.
+    OPENCODE_DISABLE_CLAUDE_CODE: "1",
+    OPENCODE_DISABLE_CLAUDE_CODE_PROMPT: "1",
     OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
     OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
     ...(process.platform === "linux" ? { [LINUX_GATEWAY_SERVICE_ENV]: "1" } : {}),

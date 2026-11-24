@@ -164,7 +164,7 @@ omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
 the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
-source. The pinned runtime reads no `CLAUDE.md`.
+source. Keiko switches off the producer's `CLAUDE.md` fallback (`OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`), at the root and in the `read` walk (real binary, #4546).
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain

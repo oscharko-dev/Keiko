@@ -15,10 +15,12 @@ import {
 } from "./opencodeRetainedSchedules.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
-  createRetainedSessionStore,
   RETAINED_SCHEDULE_ACTION_MAX_CHARS,
   RETAINED_SCHEDULE_MAX,
   RETAINED_SCHEDULE_NAME_MAX_CHARS,
+} from "./opencodeAutomationRows.js";
+import {
+  createRetainedSessionStore,
   retainedSessionKey,
   type RetainedSessionStore,
 } from "./opencodeSessionRetention.js";

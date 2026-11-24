@@ -332,6 +332,8 @@ describe("OpenCode launch profile", () => {
         expect(record(JSON.parse(launched.config)).policies, toolProfile).toEqual(expected);
         expect(launched.env.OPENCODE_DISABLE_FREE_MODELS, toolProfile).toBe("1");
         expect(launched.env.OPENCODE_DISABLE_MODELS_FETCH, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT, toolProfile).toBe("1");
       }
     });
 
