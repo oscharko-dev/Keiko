@@ -66,6 +66,13 @@ import {
 } from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
+  createMcpCredentialRelay,
+  MCP_RELAY_PATH_PREFIX,
+  serveMcpRelayRequest,
+  type McpRelayMethod,
+} from "../mcp/mcpCredentialRelay.js";
+import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
+import {
   holdSchedulerLease,
   releaseSchedulerLease,
   SCHEDULER_HOLD_OWNER,
@@ -360,6 +367,8 @@ interface LaunchOptions {
   readonly plugins: Readonly<Record<string, string>>;
   /** The operator's MCP registry servers for this run, admitted as production admits them. */
   readonly mcpServers?: ((fixture: Fixture) => readonly McpServerDefinition[]) | undefined;
+  /** A complete MCP admission in place of `mcpServers`: a managed server behind Keiko's relay. */
+  readonly mcpAdmission?: (() => OpenCodeNativeMcpAdmission) | undefined;
   /**
    * A toolchain directory on the launcher's `PATH`, opened as production opens the launcher's
    * `PATH` (`nativeToolchainReadRoots`), so the agent runs the host's real executables (#3901 AC1).
@@ -649,13 +658,14 @@ async function withRun(
   await options.prepare?.(fixture);
   const gateway = await startGateway();
   const mcp =
-    options.mcpServers === undefined
+    options.mcpAdmission?.() ??
+    (options.mcpServers === undefined
       ? undefined
       : openCodeNativeMcpAdmission({
           servers: options.mcpServers(fixture),
           mode: options.mode,
           home: join(fixture.state, "home"),
-        });
+        }));
   const facade = await startFacade({
     mode: options.mode,
     workspaceRoot: fixture.workspace,
@@ -3323,7 +3333,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
   const viaCodeMode = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
   // The runtime starts a location's MCP servers lazily, on its first use, and registers their tools
   // shortly after it reports them connected: wait until Code Mode itself lists the server.
-  async function connected(run: Run): Promise<void> {
+  async function connected(run: Run, name = "fixture"): Promise<void> {
     await expect
       .poll(
         async () => {
@@ -3338,7 +3348,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
         async () => await scriptedTurn(run, viaCodeMode("return Object.keys(tools).join(',');")),
         { timeout: 20_000, interval: 250 },
       )
-      .toContain("fixture");
+      .toContain(name);
     run.facade.decisions.length = 0;
   }
 
@@ -3429,6 +3439,108 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
       });
     },
     120_000,
+  );
+
+  // #4546 AC8: a managed server (the shape of a Jira Pod the person picked) reaches the run only
+  // through Keiko's relay, and the pinned runtime's MCP client negotiates with it in every mode.
+  // The relay serves it from Keiko's own handler, as the managed connections do in production.
+  it.skipIf(skip)(
+    "connects a managed server through Keiko's relay and reads its tool in every mode, pool off",
+    async () => {
+      const negotiated: unknown[] = [];
+      const serve = (_name: string, request: Request): Promise<Response> =>
+        request.text().then((text) => {
+          const message = object(parseJson(text));
+          if (message?.id === undefined) return new Response(null, { status: 202 });
+          const params = object(message.params);
+          if (message.method === "initialize") negotiated.push(params?.protocolVersion);
+          const result =
+            message.method === "initialize"
+              ? {
+                  protocolVersion: params?.protocolVersion,
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "pod", version: "1" },
+                }
+              : message.method === "tools/list"
+                ? { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] }
+                : { content: [{ type: "text", text: "POD-ECHO" }] };
+          return Response.json({ jsonrpc: "2.0", id: message.id, result });
+        });
+      const servers: readonly McpServerDefinition[] = [
+        {
+          name: "pod",
+          description: undefined,
+          enabled: true,
+          transport: { kind: "remote", url: "https://pod.example.invalid/mcp" },
+          tools: { echo: "read" },
+        },
+      ];
+      const relay = createMcpCredentialRelay();
+      const listener = createServer((request, response) => {
+        void serveMcpRelayRequest(
+          request,
+          response,
+          {
+            relayId: (request.url ?? "").slice(MCP_RELAY_PATH_PREFIX.length),
+            method: request.method as McpRelayMethod,
+          },
+          {
+            relay,
+            upstream: () => Promise.reject(new Error("fixture-unmanaged-upstream")),
+            activityLog: undefined,
+            correlationId: "relay-fixture",
+          },
+        );
+      });
+      await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+      const address = listener.address();
+      if (address === null || typeof address === "string") throw new Error("fixture-listener");
+      const generation = new AbortController();
+      try {
+        const measured: Record<string, string> = {};
+        for (const mode of ALL_MODES) {
+          const relays = bindNativeMcpRelays({
+            servers,
+            mode,
+            runId: RUN_ID,
+            relay: {
+              relay,
+              origin: `http://127.0.0.1:${String(address.port)}`,
+              secrets: {},
+              managed: { generation: () => generation.signal, serve },
+            },
+            activityLog: undefined,
+          });
+          const admission = openCodeNativeMcpAdmission({
+            servers,
+            mode,
+            home: "/unused",
+            relays,
+            managed: true,
+            grantedServers: new Set(["pod"]),
+          });
+          expect(JSON.stringify(admission.config)).toContain('"pool":false');
+          await withRun(
+            { ...mcpLaunch(mode, true), mcpServers: undefined, mcpAdmission: () => admission },
+            async (run) => {
+              await connected(run, "pod");
+              measured[mode] = await scriptedTurn(
+                run,
+                viaCodeMode("return await tools.pod.echo({});"),
+              );
+            },
+          );
+          relay.releaseRun(RUN_ID);
+        }
+        expect(Object.values(measured).every((result) => result.includes("POD-ECHO"))).toBe(true);
+        expect(negotiated.length).toBeGreaterThanOrEqual(ALL_MODES.length);
+        expect(negotiated.every((version) => typeof version === "string")).toBe(true);
+      } finally {
+        generation.abort();
+        await closeStub({ server: listener, port: 0, requests: [] });
+      }
+    },
+    360_000,
   );
 
   it.skipIf(skip)(
