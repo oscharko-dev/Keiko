@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 275,
+      "files": 276,
       "uncoveredFiles": 13,
       "uncoveredLines": 1726,
       "totalLines": 20942,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1241,
+      "files": 1251,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,
@@ -294,7 +294,7 @@
       }
     },
     "keiko-ui": {
-      "files": 751,
+      "files": 752,
       "uncoveredFiles": 4,
       "uncoveredLines": 2939,
       "totalLines": 58777,
@@ -330,7 +330,7 @@
       }
     },
     "keiko-workspace": {
-      "files": 89,
+      "files": 90,
       "uncoveredFiles": 1,
       "uncoveredLines": 669,
       "totalLines": 12136,

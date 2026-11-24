@@ -103,6 +103,11 @@ import {
   jiraAccountResourceNoopSupported,
 } from "./jira-account-resource-presentation";
 import { REQUIREMENTS_TOOL_ALIAS, requirementsReadGroups } from "./jira-tool-progress";
+import {
+  connectedFolderPartialNotice,
+  connectedFolderToolLabels,
+  isConnectedFolderToolCall,
+} from "./connected-folder-tool-presentation";
 const LOCALLY_PAGED_TOOLS = new Set([
   ...JIRA_REMOTE_VERSION_LINK_TOOLS,
   ...JIRA_ACCOUNT_DIAGNOSTIC_TOOLS,
@@ -185,6 +190,16 @@ const KNOWLEDGE_TOOLS: Readonly<
     details: "chat.review.details",
   },
 };
+interface LabelledExchange {
+  readonly call: Pick<ChatToolExchange["call"], "name" | "arguments">;
+  readonly result?: ChatToolExchange["result"];
+}
+/** The labels of a source tool: a Knowledge alias, or the Chat's connected-folder tool. */
+function sourceToolLabels(
+  exchange: LabelledExchange,
+): (typeof KNOWLEDGE_TOOLS)[string] | undefined {
+  return KNOWLEDGE_TOOLS[exchange.call.name] ?? connectedFolderToolLabels(exchange);
+}
 /** A saved alias alone cannot turn an external payload into a Knowledge receipt. */
 export function isCanonicalKnowledgeExchange(exchange: ChatToolExchange): boolean {
   const ref = exchange.result?.toolRef;
@@ -219,15 +234,13 @@ export function jiraCallLabel(
     ? "chat.jira.link.operation"
     : jiraOperationLabel(operation);
 }
-export function jiraToolLabel(exchange: {
-  readonly call: Pick<ChatToolExchange["call"], "name" | "arguments">;
-}): WidgetMessageKey {
+export function jiraToolLabel(exchange: LabelledExchange): WidgetMessageKey {
   if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME)
     return actionTypeLabelKey("jira.draft-batch");
   const catalog = CATALOG_TOOL_LABELS[exchange.call.name];
   if (catalog !== undefined) return catalog;
-  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
-  if (knowledge !== undefined) return knowledge.label;
+  const source = sourceToolLabels(exchange);
+  if (source !== undefined) return source.label;
   const operation = MANAGED_TOOLS.find(
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
@@ -266,13 +279,13 @@ export function jiraLocalReadFailureNotice(
   return LOCAL_READ_FAILURE_NOTICES.get(`${result.status}:${result.reason}`);
 }
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
-  if (knowledge !== undefined) return knowledge.label;
+  const source = sourceToolLabels(exchange);
+  if (source !== undefined) return source.label;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : "chat.jira.tool";
 }
 export function jiraToolDetailsLabel(exchange: ChatToolExchange): WidgetMessageKey {
-  const knowledge = KNOWLEDGE_TOOLS[exchange.call.name];
-  if (knowledge !== undefined) return knowledge.details;
+  const source = sourceToolLabels(exchange);
+  if (source !== undefined) return source.details;
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.details" : "chat.jira.details";
 }
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -334,7 +347,8 @@ export function jiraToolPartialNotice(exchange: ChatToolExchange): WidgetMessage
     return undefined;
   // Paged unit reads are counted by the consolidated card, which names what a cut left out.
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return requirementsPartialNotice(exchange);
-
+  // A folder look-up names what it left out itself; it is never a partial Jira result.
+  if (isConnectedFolderToolCall(exchange)) return connectedFolderPartialNotice(exchange);
   if (KNOWLEDGE_TOOLS[exchange.call.name] !== undefined)
     return knowledgeCut(exchange.result) ? "chat.knowledge.partial" : undefined;
   return jiraReadPartialNotice(exchange, exchange.result);

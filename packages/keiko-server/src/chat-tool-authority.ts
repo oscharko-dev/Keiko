@@ -14,6 +14,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { ChatToolAuthorityResolution } from "./editor/agentAuthorityRegistry.js";
 import { chatToolTurnBudget } from "./chat-tool-turn-budget.js";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import { chatToolAuthorityActionClasses } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 
 type AuthorityFailure = Extract<ChatToolAuthorityResolution, { readonly ok: false }>;
 type CurrentChatToolAuthority =
@@ -71,10 +72,7 @@ export function acceptedChatToolAuthorityEnvelope<
     requestedMode,
     deploymentCeiling,
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
-    actionClasses:
-      "kind" in subject && subject.kind === "knowledge-pods"
-        ? ["connector-access"]
-        : ["connector-access", "network-egress"],
+    actionClasses: chatToolAuthorityActionClasses(subject),
     connectorScopes,
     budget,
     expiresAt: new Date(turn.startedAtMs + budget.maxRuntimeMs).toISOString(),
@@ -112,7 +110,12 @@ export function isRequestedChatToolModeCurrent(
   return envelope.requestedMode === (chat?.toolMode ?? CHAT_TOOL_DEFAULT_MODE);
 }
 
-/** Reserve only after the source adapter resolved its current subject, scope, mode and ceiling. */
+/**
+ * Reserve only after the source adapter resolved its current subject, scope, mode and ceiling.
+ *
+ * @returns the current authority once reserved, the failure that refused it, or undefined when no
+ *   registry answered.
+ */
 export function reserveResolvedChatToolAuthority<Current extends CurrentChatToolAuthority>(
   deps: Pick<UiHandlerDeps, "agentAuthorityRegistry">,
   current: Current,

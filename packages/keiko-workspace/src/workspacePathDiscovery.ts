@@ -252,6 +252,8 @@ export function matchesDocumentBasenameStem(path: string, stem: string): boolean
 interface BasenameDiscoveryControl extends StructuralExecutionControl {
   readonly exactBasename?: string | undefined;
   readonly documentStem?: string | undefined;
+  /** Continues a bounded listing: only paths that sort after this one are counted and retained. */
+  readonly afterPath?: string | undefined;
 }
 
 function discoveryPathMatcher(
@@ -277,7 +279,10 @@ export async function discoverWorkspacePaths(
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): Promise<WorkspacePathDiscoveryResult> {
   const selected = validateRequest(request);
-  const matches = discoveryPathMatcher(selected, control, workspacePathCase(workspace));
+  const matchesPath = discoveryPathMatcher(selected, control, workspacePathCase(workspace));
+  const after = control.afterPath;
+  const matches = (path: string): boolean =>
+    matchesPath(path) && (after === undefined || compareStrings(path, after) > 0);
   const retained = new RetainedAtomHeap<WorkspacePathDiscoveryEntry>(
     selected.maxResults,
     (left, right) => compareStrings(left.relativePath, right.relativePath),

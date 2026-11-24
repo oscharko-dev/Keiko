@@ -204,6 +204,21 @@ and Node 26.13.1, `npm run check:update-ui-evidence` passes and the Linux Editor
 unchanged. Only the three records were kept; the 14 committed screenshots, updater assertions and
 harness inputs retain their existing values.
 
+The connected-folder Chat tool (`folder.files`, owner proposal 2026-11-21, ADR-0181) added its step
+labels, card labels, result summary and one sentence per closed refusal reason to both optional
+catalogs, so the freshness gate rejected their digests. On 2026-11-21 (UTC) the original nine
+Chromium cases passed in 1.7 minutes in the Linux gates image with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. The run used the image's own filesystem: on
+a bind mount from a Windows host the same nine cases took 6.2 minutes and the real BFF start of the
+`@real-bff-outage` case exceeded its 90 s lifecycle timeout. Only the three records were kept; the
+14 committed screenshots, updater assertions and harness inputs retain their existing values.
+`npm run check:editor-release-evidence` passes in the same image.
+
+The tool then moved to its own branch on top of current `dev`, where both optional catalogs differ
+from either earlier record. On 2026-11-22 (UTC) the producer was rerun the same way on those final
+sources: the nine cases passed in 1.7 minutes, both evidence checks pass, and only the three
+records were kept.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -883,6 +898,17 @@ A Chat answer now carries a short Keiko note when older tool results reached the
 summary, with a singular and a plural form in both optional catalogs, which changed their two digests. On
 2026-11-24 (UTC) all nine updater cases passed in 1.5 minutes in the Linux arm64 gates container
 with Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` and
+`npm run check:editor-release-evidence` passed there. Only the three producer records were kept;
+the fourteen committed captures, updater assertions and harness inputs retain their existing
+values.
+
+## Connected-folder tool merged with the context elision note — 2026-11-24 (#4429)
+
+The connected-folder Chat tool branch (#4535) merged `dev` with the context elision note (#4491).
+Both sides add messages to the two optional catalogs, so the merged catalogs match neither earlier
+record. On 2026-11-24 (UTC) the producer was rerun on the merged sources: all nine updater cases
+passed in 1.7 minutes in the Linux x86-64 gates image on its own filesystem with Node 26.13.1 and
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` and
 `npm run check:editor-release-evidence` passed there. Only the three producer records were kept;
 the fourteen committed captures, updater assertions and harness inputs retain their existing
 values.
