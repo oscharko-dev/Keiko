@@ -37,6 +37,7 @@ import { jiraOperationContracts } from "./atlassian/jiraManagedProvider.js";
 import { OPENCODE_MODEL_VISIBLE_TOOLS } from "./coding-runtime/opencodeToolSchemas.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import { createKnowledgeRequirementsProvider } from "./requirementsTool.js";
+import { createConnectedFolderProvider } from "./connectedFolderTool.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +89,7 @@ function chatBaseTools(): readonly Advertised[] {
     return [
       ...declared("jira-discovery", createJiraCatalogDiscoveryProvider().tools()),
       ...declared("knowledge", createKnowledgeRequirementsProvider(deps).tools()),
+      ...declared("connected-folder", createConnectedFolderProvider(deps).tools()),
     ];
   } finally {
     void deps.dispose?.();
@@ -172,9 +174,11 @@ describe("every advertised tool definition is provider-neutral on the wire", () 
     expect(violations(operations)).toEqual([]);
   }, 60_000);
 
-  it("covers the Chat base tools: Jira discovery and Knowledge", () => {
+  it("covers the Chat base tools: Jira discovery, Knowledge and the connected folder", () => {
     const tools = chatBaseTools();
     expect(tools.length).toBeGreaterThan(0);
+    for (const source of ["jira-discovery", "knowledge", "connected-folder"])
+      expect(tools.some((entry) => entry.source === source)).toBe(true);
     expect(violations(tools)).toEqual([]);
   }, 60_000);
 

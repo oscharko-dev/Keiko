@@ -8220,6 +8220,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "connected-folder-tool",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["folder.files.turn-selected"],
+      end: ["folder.files.operation"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["folder.files.operation", "folder.files.turn-selected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["folder.files.operation", "folder.files.turn-selected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["folder.files.operation", "folder.files.turn-selected"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "duration",
+      "loss-state",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "knowledge-store-corruption",
     requiredProductSurfaces: ["keiko-local-knowledge"],
     requiredLifecycleOperations: {

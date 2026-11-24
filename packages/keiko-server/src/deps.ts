@@ -2,6 +2,10 @@ import {
   installKnowledgeChatCatalogRuntime,
   type KnowledgeChatCatalogRuntime,
 } from "./knowledge-chat-catalog.js";
+import {
+  installConnectedFolderChatCatalogRuntime,
+  type ConnectedFolderChatCatalogRuntime,
+} from "./connected-folder-chat-catalog.js";
 import { presentCodingReasoning } from "./coding-reasoning-continuation.js";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
@@ -1070,6 +1074,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
   readonly knowledgeChatCatalog?: KnowledgeChatCatalogRuntime;
+  /** Hosts the one read tool of a Chat that is connected to exactly one folder. */
+  readonly connectedFolderChatCatalog?: ConnectedFolderChatCatalogRuntime;
   /** In-memory Jira reports (#4181): the tool resumes them and the export route reads them. */
   readonly jiraReportStore?: JiraReportStore;
   /** In-memory staged backlog drafts (#4178): the staging tool appends, approval and runs read. */
@@ -5315,7 +5321,10 @@ function installChatToolCatalogs(
   installed.jiraDraftStore?.bindConnection((chatId) =>
     currentJiraChatConnectionFingerprint(installed, chatId),
   );
-  return installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log);
+  return installConnectedFolderChatCatalogRuntime(
+    installKnowledgeChatCatalogRuntime(installMcpChatCatalogRuntime(installed, log), log),
+    log,
+  );
 }
 
 /**

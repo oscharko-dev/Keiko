@@ -1,17 +1,14 @@
-import { admitChatToolModelCall } from "./chat-tool-approvals.js";
-import { ChatToolTurn, bindChatToolCatalog, mintAndBoundChatTurn } from "./chat-tool-turn.js";
+import { mintAndBoundChatTurn } from "./chat-tool-turn.js";
+import { mintAcceptedKnowledgeChatAuthority } from "./knowledge-chat-authority.js";
 import {
-  mintAcceptedKnowledgeChatAuthority,
-  reserveCurrentKnowledgeChatAuthority,
-} from "./knowledge-chat-authority.js";
-import {
-  createKnowledgeChatAdmission,
+  KNOWLEDGE_CHAT_SOURCE_OWNER,
   knowledgeChatConsumerPort,
 } from "./knowledge-chat-consumer.js";
 import type {
   JiraChatCatalogConsumer,
   JiraChatCatalogContext,
 } from "./atlassian/jiraChatCatalogConsumer.js";
+import { LocalChatSourceToolTurn, localChatSourceTurnContext } from "./local-chat-source-turn.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
@@ -29,45 +26,11 @@ export interface KnowledgeChatTurnOptions {
 export function knowledgeChatTurnContext(
   options: KnowledgeChatTurnOptions,
 ): JiraChatCatalogContext {
-  const { authority, message, signal, correlationId } = options;
-  return {
-    runId: authority.envelope.runId,
-    correlationId,
-    chatId: message.chatId,
-    userMessageId: message.id,
-    authority: authority.reference.envelopeDigest,
-    authorityReference: authority.reference,
-    authorityExpiresAt: authority.envelope.expiresAt,
-    deadlineAt: authority.envelope.expiresAt,
-    signal,
-  };
+  return localChatSourceTurnContext(options);
 }
-export class KnowledgeChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
-  constructor(private readonly knowledgeOptions: KnowledgeChatTurnOptions) {
-    const { deps, message, managed, correlationId, authority } = knowledgeOptions;
-    super({
-      deps,
-      message,
-      managed,
-      correlationId,
-      context: knowledgeChatTurnContext(knowledgeOptions),
-      budget: authority.envelope.budget,
-      bind: (context, budgetPort) =>
-        bindChatToolCatalog<JiraChatCatalogConsumer>({
-          deps,
-          managed,
-          context,
-          budgetPort,
-          consumerPort: knowledgeChatConsumerPort,
-          admission: createKnowledgeChatAdmission({ deps, context: () => context, now: Date.now }),
-        }),
-    });
-  }
-  protected override observedMutation(): undefined {
-    return undefined;
-  }
-  protected override admitAuthorityModelCall(): boolean {
-    return admitChatToolModelCall(this.knowledgeOptions, reserveCurrentKnowledgeChatAuthority);
+export class KnowledgeChatToolTurn extends LocalChatSourceToolTurn {
+  constructor(options: KnowledgeChatTurnOptions) {
+    super(options, { consumerPort: knowledgeChatConsumerPort, owner: KNOWLEDGE_CHAT_SOURCE_OWNER });
   }
 }
 export async function createKnowledgeChatToolTurn(
