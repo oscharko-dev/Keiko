@@ -883,7 +883,8 @@ describe("pinned native OpenCode repository items", () => {
         await listedWhen(run, "/api/command", "ship");
         const names = (await run.client.commands()).map(({ name }) => name).sort();
 
-        expect(names).toEqual(["background", "delegated", "init", "review", "ship"]);
+        // init, review and automation are the runtime's built-ins.
+        expect(names).toEqual(["automation", "background", "delegated", "init", "review", "ship"]);
         // The shell-substituting template and the command that names an unadmitted agent are refused.
         expect(names).not.toContain("shell");
         expect(names).not.toContain("stranger");

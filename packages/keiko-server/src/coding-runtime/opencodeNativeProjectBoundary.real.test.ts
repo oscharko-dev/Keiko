@@ -810,10 +810,59 @@ function hookTrail(events: readonly ProbeEntry[]): readonly string[] {
   return events.map((event) => `${event.hook}:${event.tool ?? event.action ?? ""}`);
 }
 
-const NESTED_CODE_MODE_TOOLS = CODE_MODE_TOOL_NAMES.filter((name) => name !== "execute").map(
-  (name) => name.replace(/^opencode_/u, ""),
+// The call path of each nested tool in 2.4.1: the session tools moved into a `session` namespace,
+// while the hook keeps reporting the tool id (`opencode_session_rename`).
+const NESTED_CODE_MODE_PATHS = CODE_MODE_TOOL_NAMES.filter((name) => name !== "execute").map(
+  (name) =>
+    `tools.${name.replace(/^opencode_session_/u, "opencode.session.").replace(/^opencode_/u, "opencode.")}`,
 );
+// A program that lists every tool path the producer's `search` finds for the nested tools' topics.
+const SEARCH_CODE_MODE_PATHS = [
+  "const paths = new Set();",
+  'for (const query of ["session", "worktree", "mcp", "model", "read", "edit", "shell", "write"])',
+  "  for (const item of (await search(query)).items) paths.add(item.path);",
+  "return JSON.stringify([...paths].sort());",
+].join("\n");
 const ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE = ["read", "edit", "shell", "write"] as const;
+
+const REQUIRE_PROBE_MODULES = [
+  "buffer",
+  "crypto",
+  "url",
+  "util",
+  "fs",
+  "node:fs",
+  "fs/promises",
+  "path",
+  "os",
+  "child_process",
+  "node:child_process",
+  "net",
+  "http",
+  "https",
+  "dns",
+  "tls",
+  "process",
+  "module",
+  "vm",
+  "worker_threads",
+  "events",
+  "stream",
+  "bun",
+  "bun:ffi",
+  "bun:sqlite",
+  "zod",
+  "./local.js",
+  "/etc/passwd",
+] as const;
+// Sorts each probed module into the ones the program's `require` provides and the ones it refuses.
+const REQUIRE_PROBE = [
+  "const provided = []; const refused = [];",
+  `for (const name of ${JSON.stringify(REQUIRE_PROBE_MODULES)}) {`,
+  "  try { require(name); provided.push(name); } catch { refused.push(name); }",
+  "}",
+  "return JSON.stringify({ provided: provided.sort(), refused });",
+].join("\n");
 
 async function withRun(
   overrides: Partial<LaunchOptions>,
@@ -1206,10 +1255,12 @@ describe("pinned native OpenCode built-in agent restrictions", () => {
         const result = await scriptedTurn(run, executeCall("return 6 * 7;"), "Run the program.");
         expect(result).toBe("42");
         const asked = run.facade.requests.map((recorded) => object(recorded.body));
-        // The human reviews the program itself: its text is the ask's resource.
+        // Keiko's plugin names no resource for the program when the pin's `decidesNestedEffects`
+        // holds (`PROGRAM_REVIEWED` off): the program passes, and each nested effect is decided on
+        // its own (opencodeNativeQualification.real.test.ts, #4359).
         expect(asked).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ permission: "execute", resources: ["return 6 * 7;"] }),
+            expect.objectContaining({ permission: "execute", resources: [] }),
           ]),
         );
       });
@@ -1284,11 +1335,17 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         expect(names.filter((name) => name.startsWith("opencode_"))).toEqual([]);
         const catalog = firstSystemPrompt(run.gateway);
         expect(catalog).toContain("cannot be called directly");
-        expect(NESTED_CODE_MODE_TOOLS).toHaveLength(8);
-        for (const nested of NESTED_CODE_MODE_TOOLS)
-          expect(catalog).toContain(`tools.opencode.${nested}(`);
-        for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE)
+        // 2.4.1 lists a partial catalog and finds the rest with the program's global `search`.
+        expect(catalog).toContain("search(");
+        expect(NESTED_CODE_MODE_PATHS).toHaveLength(8);
+        const found = JSON.parse(
+          await scriptedTurn(run, executeCall(SEARCH_CODE_MODE_PATHS), "Search the tools."),
+        ) as readonly string[];
+        expect(found).toEqual(expect.arrayContaining([...NESTED_CODE_MODE_PATHS]));
+        for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE) {
           expect(catalog).not.toContain(`tools.${ordinary}(`);
+          expect(found).not.toContain(`tools.${ordinary}`);
+        }
       });
     },
     120_000,
@@ -1308,9 +1365,20 @@ describe("pinned native OpenCode Code Mode semantics", () => {
           "tool.execute.after:execute",
         ]);
         const [outer, nested] = allowed.events;
-        // The event carries no verdict field; the nested call reuses the outer call's id.
-        expect(nested?.keys).toEqual(["agent", "id", "input", "messageID", "sessionID", "tool"]);
-        expect(nested?.id).toBe(outer?.id);
+        // The event carries no verdict field. 2.4.1 adds `codemode` and `info` to the hook input.
+        expect(nested?.keys).toEqual([
+          "agent",
+          "codemode",
+          "id",
+          "info",
+          "input",
+          "messageID",
+          "sessionID",
+          "tool",
+        ]);
+        // 2.4.1 gives each nested call its own id, so a nested decision names that call alone.
+        expect(nested?.id).toMatch(/^call_/u);
+        expect(nested?.id).not.toBe(outer?.id);
         expect(JSON.stringify(outer?.input)).toContain("worktree_create");
         expect(nested?.input).toEqual({ name: "wt" });
         expect(worktreeCount(run.fixture)).toBe(2);
@@ -1366,23 +1434,31 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         expect(replaced.result).toBe("replaced");
         const renamed = await probedTurn(
           run,
-          executeCall('return await tools.opencode.session_rename({ title: "kept" });'),
+          executeCall('return await tools.opencode.session.rename({ title: "kept" });'),
           {
             mutateOn: "opencode_session_rename",
             mutateInput: { title: "mutated" },
           },
         );
-        expect(renamed.result).toContain('"title": "mutated"');
-        // Renaming the call is not a verdict either: the original tool still ran.
+        expect(renamed.result).toMatch(/"title":\s*"mutated"/u);
+        // 2.4.1 runs the tool a hook renames a nested call to, and fires no before hook for it. Only
+        // plugin code can rename a call (a program cannot), it already runs inside the runtime, and
+        // Keiko's policy plugin never renames; so this widens no boundary (#4546 findings).
         const ignored = await probedTurn(
           run,
-          executeCall('return await tools.opencode.session_rename({ title: "stays" });'),
+          executeCall('return await tools.opencode.session.rename({ title: "stays" });'),
           {
             renameOn: "opencode_session_rename",
             renameTo: "opencode_worktree_list",
           },
         );
-        expect(ignored.result).toContain('"title": "stays"');
+        expect(hookTrail(ignored.events)).toEqual([
+          "tool.execute.before:execute",
+          "tool.execute.before:opencode_session_rename",
+          "tool.execute.after:opencode_worktree_list",
+          "tool.execute.after:execute",
+        ]);
+        expect(ignored.result).toContain('"worktrees"');
       });
     },
     120_000,
@@ -1397,7 +1473,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         const directory = async (): Promise<unknown> =>
           object(object((await run.service.client.sessions())[0])?.location)?.directory;
         const move = executeCall(
-          `return await tools.opencode.session_move({ directory: ${JSON.stringify(join(run.fixture.workspace, "sub"))} });`,
+          `return await tools.opencode.session.move({ directory: ${JSON.stringify(join(run.fixture.workspace, "sub"))} });`,
         );
         await probedTurn(run, move, { throwOn: "opencode_session_move" });
         expect(await directory()).toBe(run.fixture.workspace);
@@ -1430,7 +1506,7 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         ]);
         for (const silent of [
           "tools.opencode.models({})",
-          'tools.opencode.session_rename({ title: "t" })',
+          'tools.opencode.session.rename({ title: "t" })',
           "tools.opencode.worktree_list({})",
         ])
           expect(await evaluated(`return await ${silent};`)).toEqual([]);
@@ -1518,12 +1594,21 @@ describe("pinned native OpenCode Code Mode semantics", () => {
           ),
         );
         expect(external.result).toMatch(/EPERM/u);
-        // The confined interpreter exposes no process, environment or module access.
+        // The confined interpreter exposes no process or environment access.
         const identifiers = await probedTurn(
           run,
           executeCall("return [typeof process, typeof Bun, typeof require].join(',');"),
         );
-        expect(identifiers.result).toBe("undefined,undefined,undefined");
+        expect(identifiers.result).toBe("undefined,undefined,function");
+        // 2.4.1 adds a `require` that serves only computational modules: every system, network,
+        // process or code-loading module, every package and every local file is refused.
+        const modules = await probedTurn(run, executeCall(REQUIRE_PROBE));
+        expect(JSON.parse(modules.result)).toEqual({
+          provided: ["buffer", "crypto", "url", "util"],
+          refused: REQUIRE_PROBE_MODULES.filter(
+            (name) => !["buffer", "crypto", "url", "util"].includes(name),
+          ),
+        });
       });
     },
     120_000,

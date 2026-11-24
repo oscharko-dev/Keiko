@@ -443,7 +443,7 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["init", "other", "review"],
+      values: ["automation", "init", "other", "review"],
     },
     commandDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     // The UTF-8 size of the text after the command, the only trace of what the operator typed.
@@ -616,13 +616,13 @@ function shiftedMentions(
 
 /** The log's words for a command turn: a built-in by name, any other by the digest of its name. */
 function commandFields(command: PromptCommandRequest | undefined): {
-  readonly command?: "init" | "other" | "review";
+  readonly command?: "automation" | "init" | "other" | "review";
   readonly commandDigest?: string;
   readonly commandArgumentBytes?: number;
 } {
   if (command === undefined) return {};
   const argumentBytes = { commandArgumentBytes: command.argumentBytes };
-  if (command.name === "init" || command.name === "review") {
+  if (command.name === "init" || command.name === "review" || command.name === "automation") {
     return { command: command.name, ...argumentBytes };
   }
   return {

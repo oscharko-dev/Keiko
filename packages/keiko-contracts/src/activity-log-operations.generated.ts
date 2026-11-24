@@ -14053,7 +14053,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["init", "other", "review"],
+        values: ["automation", "init", "other", "review"],
       },
       commandDigest: {
         type: "string",

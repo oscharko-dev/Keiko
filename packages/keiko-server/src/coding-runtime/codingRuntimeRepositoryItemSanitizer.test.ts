@@ -99,6 +99,7 @@ describe("repository item names", () => {
     "summary",
     "init",
     "review",
+    "automation",
     "opencode",
     "report",
     "default",

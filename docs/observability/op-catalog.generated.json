@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3cda88638101944e794b93453aa75f0fe4d84889bd4979e921f4702b7ef784e6",
+    "catalogDigest": "8f65adfc884c4259717ef3579feccb8090e4810aad4c04bc5af2024843bc70be",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14620,7 +14620,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["init", "other", "review"]
+            "values": ["automation", "init", "other", "review"]
           },
           "commandDigest": {
             "type": "string",
