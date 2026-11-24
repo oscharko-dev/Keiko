@@ -28,7 +28,10 @@ import {
 } from "@oscharko-dev/keiko-security/errors/gateway";
 
 import { mockRequest, mockResponse } from "../_support.js";
-import { handleCodingSidecarGatewayChatCompletions } from "../coding-sidecar-gateway.js";
+import {
+  handleCodingSidecarGatewayChatCompletions,
+  outputByteBackstop,
+} from "../coding-sidecar-gateway.js";
 import {
   buildRedactor,
   codingSidecarGatewayEvidenceRecorder,
@@ -738,9 +741,9 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     // The buffered delivery's two output-bound refusals: a finished answer past the budget, and the
     // reasoning a provider with a required continuation returned past its bound. Each is one failed
     // call the gateway cut, published once and settled as the output bound.
-    // Owner decision 2026-11-24: a reasoning is bounded at eight bytes per allowed output token, so
-    // the fixture sits one byte past the profile's own allowance rather than at a restated size.
-    const BUFFERED_REASONING_BOUND = "r".repeat(profileMaxOutputTokens() * 8 + 1);
+    // Owner decision 2026-11-24: the fixture sits one byte past the gateway's own reasoning bound at
+    // the profile's output allowance rather than at a restated size or ratio.
+    const BUFFERED_REASONING_BOUND = "r".repeat(outputByteBackstop(profileMaxOutputTokens()) + 1);
     const bufferedCuts: readonly (readonly [string, NormalizedResponse, boolean])[] = [
       [
         "a finished answer past the budget",

@@ -57,6 +57,7 @@ import {
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
+import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import {
   defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
@@ -5813,6 +5814,13 @@ describe("private OpenCode tool bridge", () => {
         },
       }),
       GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    // Owner decision 2026-11-24: a governed command runs up to 30 minutes, so the bridge must not
+    // cut it off at its 120-second default.
+    [
+      "governed command",
+      longBudgetBody({ action: "command", commandId: "npm-test" }),
+      COMMAND_RUN_MAX_DURATION_MS,
     ],
   ] as const;
   const activityRecorder = (): {

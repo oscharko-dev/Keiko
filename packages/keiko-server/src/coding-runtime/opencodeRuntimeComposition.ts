@@ -3881,9 +3881,9 @@ const MAX_TOOL_BRIDGE_DEADLINE_MS = OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS;
 /**
  * The deadline the tool bridge admits a request under. A tool the catalog settles beyond the
  * sandbox default (the verification tool at its derived work budget, the four proposal tools at the
- * wait for the operator's approval on top of their own work) is admitted one settlement grace past
- * that budget, read from the catalog descriptor of the tool the request dispatches to, so the
- * facade's answer (the result, or the catalog's own timeout) always reaches the sidecar instead of a
+ * wait for the operator's approval on top of their own work, the governed command at its 30-minute
+ * ceiling) is admitted one settlement grace past that budget, read from the catalog descriptor of
+ * the tool the request dispatches to (the command's from its runner ceiling), so the facade's answer (the result, or the catalog's own timeout) always reaches the sidecar instead of a
  * bridge-side abort racing it. Every other request, and a body the facade's parser refuses, gets the
  * configured default; the facade refuses the latter afterwards as before. A deadline read from the
  * verification action alone cut every waiting approval off at 30 s (PR #3452, F44).

@@ -46,12 +46,14 @@ import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
+  openCodeToolMayAwaitOperator,
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
   type CanonicalCatalogFacadeBridgeInput,
 } from "./catalogToolFacadeBridge.js";
 import type { CatalogToolBudgetPort } from "./catalogToolPorts.js";
+import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -920,6 +922,19 @@ it("gives an unstage proposal and its redemption the catalog budget of staging",
       proposalId: "unstage-1",
     }),
   ).toBeDefined();
+});
+
+// Owner decision 2026-11-24: a governed command runs up to the command ceiling, so its settlement
+// budget outlives that ceiling and it holds its slot in the lane of the long-running tools.
+it("settles a governed command past the command ceiling in the long-running lane", () => {
+  const command: CodingToolActionRequest = {
+    ...identity,
+    action: "command",
+    commandId: "npm-test",
+  };
+  expect(openCodeCatalogSettlementBudgetMs(command)).toBeGreaterThan(COMMAND_RUN_MAX_DURATION_MS);
+  expect(openCodeToolMayAwaitOperator(command)).toBe(true);
+  expect(openCodeToolMayAwaitOperator(discoverRequest)).toBe(false);
 });
 
 it("derives mapped aliases from the existing canonical request producer", () => {

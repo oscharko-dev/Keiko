@@ -2206,7 +2206,8 @@ function reportGatewayOutputCut(
   });
 }
 
-function outputByteBackstop(maxOutputTokens: number): number {
+/** The byte bound of one output (an answer's text or a reasoning) at `maxOutputTokens`. */
+export function outputByteBackstop(maxOutputTokens: number): number {
   return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_BACKSTOP;
 }
 
