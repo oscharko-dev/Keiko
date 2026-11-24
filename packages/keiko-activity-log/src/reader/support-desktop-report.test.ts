@@ -549,7 +549,7 @@ describe("desktop canonical support report", () => {
     writeFixtureSegment(stateDir, segmentIdentity(process, now - span, 1), lines);
     const analyzed = transientReport("long-run-root");
     const selected = analyzed.analysis.timelines.flatMap((timeline) => timeline.lines);
-    expect(selected.length).toBe(lines.length);
+    expect(selected).toHaveLength(lines.length);
     expect(SUPPORT_INCIDENT_WINDOW_BEFORE_MS).toBeLessThan(span / 2);
   });
 

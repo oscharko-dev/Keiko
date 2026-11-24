@@ -500,7 +500,7 @@ function liveRunOf(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeSn
 // for readiness when the snapshot arrives first, because an agent is adopted only while offered.
 function withLiveRunIdentity(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   const run = liveRunOf(state);
-  if (run === null || run.agent === undefined || state.identityAdoptedRunId === run.runId) {
+  if (run?.agent === undefined || state.identityAdoptedRunId === run.runId) {
     return state;
   }
   if (!isOfferedCodingWorkbenchAgent(state, run.agent)) return state;

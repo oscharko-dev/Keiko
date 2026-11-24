@@ -101,7 +101,9 @@
   display: flex;
   gap: 2px;
   height: var(--control-height);
+  min-width: 0;
   box-sizing: border-box;
+  margin: 0;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);

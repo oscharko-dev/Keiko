@@ -1793,16 +1793,22 @@ function recordRuntimeVerificationSummary(
   return true;
 }
 
+/** What a settlement line names beside the run's state: each fact only when it applies. */
+interface RunSettledLogFacts {
+  readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  readonly cause?: RunSettlementCause | undefined;
+  readonly verificationBlockedReason?: CodingVerificationBlockedReason | undefined;
+  readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+}
+
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   state: CodingWorkbenchRuntimeStateName,
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
-  failureCode?: CodingWorkbenchRuntimeFailureCode,
-  cause?: RunSettlementCause,
-  verificationBlockedReason?: CodingVerificationBlockedReason,
-  verificationGap?: CodingWorkbenchVerificationGap,
+  facts: RunSettledLogFacts,
 ): void {
+  const { failureCode, cause, verificationBlockedReason, verificationGap } = facts;
   const errorKind = settlementErrorKind(state, cause, verificationBlockedReason, verificationGap);
   activityLog?.write(
     activityLogEvent(
@@ -5310,12 +5316,15 @@ export class CodingRuntimeOrchestrator {
       next,
       state,
       this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
-      failureCode,
-      cause,
-      failureCode === "verification-not-evidenced"
-        ? this.effort.verificationBlockedReason(next.runId)
-        : undefined,
-      next.verificationGap,
+      {
+        failureCode,
+        cause,
+        verificationBlockedReason:
+          failureCode === "verification-not-evidenced"
+            ? this.effort.verificationBlockedReason(next.runId)
+            : undefined,
+        verificationGap: next.verificationGap,
+      },
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);

@@ -256,7 +256,7 @@ function HistoryFilters({
   const t = useCodingWorkbenchTranslate();
   return (
     <>
-      <div className={styles.cmpTabs} role="group" aria-label={t("codingWorkbench.history.filter")}>
+      <fieldset className={styles.cmpTabs} aria-label={t("codingWorkbench.history.filter")}>
         {(["active", "completed"] as const).map((value) => (
           <button
             key={value}
@@ -268,7 +268,7 @@ function HistoryFilters({
             {history.tasks.filter((task) => task.status === value).length}
           </button>
         ))}
-      </div>
+      </fieldset>
       {history.error ? <p role="alert">{t("codingWorkbench.history.listError")}</p> : null}
       {history.loading ? <output>{t("codingWorkbench.history.listLoading")}</output> : null}
       <button
