@@ -18562,6 +18562,12 @@
               "required": false
             },
             {
+              "name": "subagentSessionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "taskDigest",
               "type": "string",
               "dataClass": "digest",

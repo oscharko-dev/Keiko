@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "004425e2f2052aba3c8e2c3ff6d62b1b00b289d05fc196a55fff2706a1267c0d",
+    "catalogDigest": "8b4dc7dbf3041d167bedd9712ba428c05962a35aeef7bce786fa8e1c32ece29d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -18392,6 +18392,11 @@
             "dataClass": "count",
             "required": false
           },
+          "subagentSessionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "entryCount": {
             "type": "integer",
             "dataClass": "count",
@@ -18434,7 +18439,7 @@
         "proofIds": ["coding-runtime.session-continuity.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:218",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:372"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:375"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -83913,6 +83918,12 @@
                   "name": "sourceTaskDigest",
                   "type": "string",
                   "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "subagentSessionCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {

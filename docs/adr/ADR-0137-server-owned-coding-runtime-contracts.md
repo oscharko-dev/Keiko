@@ -2879,9 +2879,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     root. One entry per task; a new entry replaces the previous one and a run that retains nothing
     removes it. The manifest binds the database's sha256 and size, the task, a digest of the workspace
     identity, the session id, the runtime version and the input window the history was built under.
-    The copy must hold exactly one top-level session and no row in any grant, credential or pending
-    table, no suspended or archived session, no staged revert and an empty permission ruleset;
-    an unknown schema is refused rather than guessed. Because the whole database crosses this
+    The copy must hold exactly one top-level session, the run's own, and no row in any grant,
+    credential or pending table, no suspended or archived session, no staged revert and an empty
+    permission ruleset; an unknown schema is refused rather than guessed. Every other session is a
+    subagent session the run's turns spawned: its parent chain reaches the run's session within the
+    live session tree's depth bound (`NATIVE_SESSION_ANCESTRY_MAX_DEPTH`) and it passes the same
+    checks, so a task that delegated to a subagent keeps its native session (#4546). A subagent
+    whose own session carries a permission ruleset leaves the task unretained (`grant-present`),
+    the same refusal its parent would get; the built-in `general` and `explore` subagents carry
+    none (`opencodeNativeSessionResume.real.test.ts`). A resumed run accepts the same tree from the
+    runtime's session list: one root, the retained session, unique ids, and descendants of it only.
+    A fork removes its source together with the subagent sessions under it, so a forked run starts
+    with one session. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
     runtime's own migrations create for the session's runtime version, derived from genuine
@@ -2914,7 +2923,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the
     retained entry is never written by a run. After the handshake the composition binds the run to
-    the one session the database holds, resets its agent to Build (the launch profile's default,
+    the one top-level session the database holds, resets its agent to Build (the launch profile's default,
     which a fresh run also starts under; a read-only Plan run must not silently turn the next task
     into one), and the orchestrator skips the history replay for a resumed run. The gateway readiness challenge of a
     continued run runs in a scratch session that is removed afterwards, so the probe's prompt is not

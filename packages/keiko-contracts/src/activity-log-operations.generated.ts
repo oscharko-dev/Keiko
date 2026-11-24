@@ -17681,6 +17681,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      subagentSessionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       entryCount: {
         type: "integer",
         dataClass: "count",

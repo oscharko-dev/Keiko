@@ -12036,6 +12036,7 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
             ok: true,
             databaseBytes: 4096,
             messageCount: 6,
+            subagentSessionCount: 0,
             entryCount: 1,
             prunedCount: 0,
             blockedCount: 0,

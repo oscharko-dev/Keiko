@@ -35,6 +35,7 @@ import {
   windowsOwnerPrivateVerdict,
 } from "@oscharko-dev/keiko-security/windows-owner-private";
 
+import { NATIVE_SESSION_ANCESTRY_MAX_DEPTH } from "./opencodeNativeSessionTree.js";
 import {
   AUTOMATION_ID_PATTERN,
   RETIRED_SCHEDULE_ID_PATTERN,
@@ -181,6 +182,8 @@ export type RetainResult =
       readonly ok: true;
       readonly databaseBytes: number;
       readonly messageCount: number;
+      /** The subagent sessions retained under the run's own session (#4546). */
+      readonly subagentSessionCount: number;
       readonly entryCount: number;
       readonly prunedCount: number;
       /** Entries a pruning wanted gone but a process holds open; the next pruning retries them. */
@@ -321,7 +324,7 @@ interface AuditExpectation {
 }
 
 type AuditResult =
-  | { readonly ok: true; readonly messageCount: number }
+  | { readonly ok: true; readonly messageCount: number; readonly subagentSessionCount: number }
   | {
       readonly ok: false;
       readonly reason: RetentionRefusal;
@@ -359,6 +362,7 @@ class Store {
         ok: true,
         databaseBytes: staged.databaseBytes,
         messageCount: staged.messageCount,
+        subagentSessionCount: staged.subagentSessionCount,
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
         blockedCount: pruned.blocked,
@@ -557,7 +561,12 @@ class Store {
     };
     writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(manifest), { mode: 0o600 });
     this.protectPrivatePath(join(staging, MANIFEST_FILE));
-    return { ok: true, databaseBytes: hashed.bytes, messageCount: audit.messageCount };
+    return {
+      ok: true,
+      databaseBytes: hashed.bytes,
+      messageCount: audit.messageCount,
+      subagentSessionCount: audit.subagentSessionCount,
+    };
   }
 
   // The previous entry moves aside before the new one is renamed in, so a reader sees one whole
@@ -728,7 +737,12 @@ class Store {
 }
 
 type StageResult =
-  | { readonly ok: true; readonly databaseBytes: number; readonly messageCount: number }
+  | {
+      readonly ok: true;
+      readonly databaseBytes: number;
+      readonly messageCount: number;
+      readonly subagentSessionCount: number;
+    }
   | {
       readonly ok: false;
       readonly reason: RetentionRefusal;
@@ -1078,7 +1092,8 @@ class AuditRefused extends Error {
 const SQLITE_ERROR = "ERR_SQLITE_ERROR";
 
 /**
- * Proves that a database holds exactly one session, the expected one, and no state that could act
+ * Proves that a database holds exactly one top-level session, the expected one, with only the
+ * subagent sessions its turns spawned under it, and no state that could act
  * with authority a later run does not have: saved grants, credentials, queued inputs, a staged undo.
  * An unknown schema is refused rather than guessed at.
  */
@@ -1118,18 +1133,14 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
       "SELECT id, directory, version, parent_id, workspace_id, permission, revert, time_archived, time_suspended FROM session_v2",
     )
     .all() as SessionRow[];
-  const session = sessions[0];
-  if (sessions.length !== 1 || session === undefined) {
-    return { ok: false, reason: "session-mismatch" };
-  }
-  const sessionProblem = sessionRefusal(session, expected);
+  const sessionProblem = sessionTreeRefusal(sessions, expected);
   if (sessionProblem !== undefined) return { ok: false, reason: sessionProblem };
   const messageCount = rowCount(
     database,
     "SELECT COUNT(*) AS n FROM session_message WHERE session_id = ?",
     expected.sessionId,
   );
-  return { ok: true, messageCount };
+  return { ok: true, messageCount, subagentSessionCount: sessions.length - 1 };
 }
 
 function refusalForClassifiedRows(
@@ -1234,15 +1245,53 @@ function persistedDirectory(directory: string): string {
   return /^[A-Za-z]:[\\/]/u.test(directory) ? directory.replaceAll("\\", "/") : directory;
 }
 
+/**
+ * The run's session and the subagent sessions its turns spawned: exactly one root, the run's own
+ * session, and every other session a descendant of it whose parent chain ends at the root. Each one
+ * passes the same checks, so a child carries no grant, queued input or staged undo either (#4546).
+ */
+function sessionTreeRefusal(
+  sessions: readonly SessionRow[],
+  expected: AuditExpectation,
+): RetentionRefusal | undefined {
+  const roots = sessions.filter((session) => session.parent_id === null);
+  const root = roots[0];
+  if (roots.length !== 1 || root?.id !== expected.sessionId || !descendsFromRoot(sessions, root)) {
+    return "session-mismatch";
+  }
+  for (const session of [root, ...sessions.filter((entry) => entry !== root)]) {
+    const problem = sessionRefusal(session, expected);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/** Every session's parent chain ends at the root within the live session tree's depth bound. */
+function descendsFromRoot(sessions: readonly SessionRow[], root: SessionRow): boolean {
+  const parents = new Map<unknown, unknown>(
+    sessions.map((session) => [session.id, session.parent_id]),
+  );
+  if (parents.size !== sessions.length) return false;
+  return sessions.every((session) => {
+    let current: unknown = session.id;
+    for (let step = 0; step <= NATIVE_SESSION_ANCESTRY_MAX_DEPTH; step += 1) {
+      if (current === root.id) return true;
+      if (!parents.has(current)) return false;
+      current = parents.get(current);
+    }
+    return false;
+  });
+}
+
 function sessionRefusal(
   session: SessionRow,
   expected: AuditExpectation,
 ): RetentionRefusal | undefined {
   if (
-    session.id !== expected.sessionId ||
+    typeof session.id !== "string" ||
+    !SESSION_ID.test(session.id) ||
     session.directory !== persistedDirectory(expected.directory) ||
     session.version !== expected.version ||
-    session.parent_id !== null ||
     session.workspace_id !== null ||
     session.time_archived !== null
   ) {

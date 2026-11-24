@@ -1,3 +1,4 @@
+import { NATIVE_SESSION_ANCESTRY_MAX_DEPTH } from "./opencodeNativeSessionTree.js";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +85,7 @@ function fakeStore(
         ok: true,
         databaseBytes: 2048,
         messageCount: 9,
+        subagentSessionCount: 2,
         entryCount: 2,
         prunedCount: 1,
         blockedCount: 0,
@@ -355,7 +357,9 @@ describe("seeding a run's database from a task's retained entry", () => {
       { runId: RUN, runRoot: settled, workspaceRoot: WORKSPACE, sessionId: SESSION },
       "succeeded",
     );
-    expect(lines(retaining)).toMatchObject([{ outcome: "retained", messageCount: 1 }]);
+    expect(lines(retaining)).toMatchObject([
+      { outcome: "retained", messageCount: 1, subagentSessionCount: 0 },
+    ]);
 
     const resuming = harness({ store: real });
     const resumed = join(root, "resumed-run");
@@ -559,6 +563,48 @@ describe("binding a run to the retained session it resumes", () => {
       (): readonly SessionRecord[] => [session(SESSION, { location: { directory: "/else" } })],
     ],
     ["no location", (): readonly SessionRecord[] => [{ id: SESSION }]],
+    // #4546: a session that is not the run's own root and not under it.
+    [
+      "a session whose parent is not listed",
+      (): readonly SessionRecord[] => [
+        session(SESSION),
+        session("ses_orphan", { parentID: "ses_gone" }),
+      ],
+    ],
+    [
+      "the run's session listed twice",
+      (): readonly SessionRecord[] => [
+        session(SESSION),
+        session(SESSION, { parentID: "ses_child" }),
+        session("ses_child", { parentID: SESSION }),
+      ],
+    ],
+    [
+      "two sessions that are each other's parent",
+      (): readonly SessionRecord[] => [
+        session(SESSION),
+        session("ses_a", { parentID: "ses_b" }),
+        session("ses_b", { parentID: "ses_a" }),
+      ],
+    ],
+    [
+      "the run's session listed as another session's child",
+      (): readonly SessionRecord[] => [
+        session("ses_root"),
+        session(SESSION, { parentID: "ses_root" }),
+      ],
+    ],
+    [
+      "a descendant deeper than the session tree's bound",
+      (): readonly SessionRecord[] => [
+        session(SESSION),
+        ...Array.from({ length: NATIVE_SESSION_ANCESTRY_MAX_DEPTH + 1 }, (_unused, index) =>
+          session(`ses_depth_${String(index)}`, {
+            parentID: index === 0 ? SESSION : `ses_depth_${String(index - 1)}`,
+          }),
+        ),
+      ],
+    ],
   ])("refuses %s as a session mismatch", async (_name, sessions) => {
     const fake = fakeClient({ sessions });
 
@@ -571,6 +617,21 @@ describe("binding a run to the retained session it resumes", () => {
 
     expect(bound).toMatchObject({ ok: false, reason: "session-mismatch" });
     expect(fake.calls).toEqual(["sessions"]);
+  });
+
+  // #4546: the subagent sessions a turn spawned stay under the run's session in the database.
+  it("binds the run's session when the runtime also lists the subagent sessions under it", async () => {
+    const fake = fakeClient({
+      sessions: () => [
+        session(SESSION),
+        session("ses_child", { parentID: SESSION }),
+        session("ses_grandchild", { parentID: "ses_child" }),
+      ],
+    });
+
+    expect(
+      await bindContinuedSession(fake.client, continuation(RESUME), WORKSPACE, undefined),
+    ).toMatchObject({ ok: true, sessionId: SESSION });
   });
 
   it("refuses a history the client will not read", async () => {
@@ -1005,6 +1066,7 @@ describe("retaining a settled run", () => {
           taskDigest: retainedSessionKey(TASK),
           databaseBytes: 2048,
           messageCount: 9,
+          subagentSessionCount: 2,
           entryCount: 2,
           prunedCount: 1,
         },
