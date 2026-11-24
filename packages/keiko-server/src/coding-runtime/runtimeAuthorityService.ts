@@ -72,6 +72,7 @@ import {
   type RuntimeCapabilityBinding,
   type RuntimeCapabilityStore,
 } from "./runtimeCapabilityStore.js";
+import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 import type { CiRepairBudgetBlockReason } from "./codingRuntimeCiRepairBudgetTypes.js";
@@ -538,7 +539,7 @@ export function codingRuntimeCommandPolicyForMode(
     mode: commandExecutionGranted(mode) ? "governed" : "deny",
     allow: [],
     deny: [],
-    maxCommandTimeoutMs: 120_000,
+    maxCommandTimeoutMs: COMMAND_RUN_MAX_DURATION_MS,
     requirePerCommandApproval: mode !== "autonomous-delivery",
   };
 }

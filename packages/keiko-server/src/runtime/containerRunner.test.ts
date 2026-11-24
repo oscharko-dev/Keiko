@@ -31,6 +31,7 @@ import {
   type ContainerRunnerManagerOptions,
 } from "./containerRunner.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
+import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
@@ -547,5 +548,25 @@ describe("ContainerRunnerManager — evidence", () => {
     await expect(
       manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID }),
     ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
+  });
+});
+
+// Owner decision 2026-11-24: a container run may work for the command wall time (was 30 seconds).
+describe("ContainerRunnerManager — command wall time", () => {
+  it("arms the run's timer at the command wall time and honours a longer request up to it", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const manager = makeManager(makeSpawn({ stdout: "ok\n", exitCode: 0 }));
+    for (const timeoutMs of [undefined, 600_000, COMMAND_RUN_MAX_DURATION_MS * 2]) {
+      const result = await manager.execute({
+        projectId: workspaceRoot,
+        taskId: PILOT_ID,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      expect(result.failureReason).toBe("none");
+    }
+    const delays = timers.mock.calls.map((call) => call[1]);
+    expect(delays.filter((delay) => delay === COMMAND_RUN_MAX_DURATION_MS)).toHaveLength(2);
+    expect(delays).toContain(600_000);
+    expect(delays).not.toContain(COMMAND_RUN_MAX_DURATION_MS * 2);
   });
 });

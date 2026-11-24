@@ -158,13 +158,22 @@ field added to `UiHandlerDeps`). The production default for the terminal surface
 | `envAllowlist` | `DEFAULT_ENV_ALLOWLIST` | `src/tools/types.ts:35` |
 | `network` | `"inherit"` | `src/tools/types.ts:53` — Wave 1 honest limit, unchanged |
 | `maxOutputBytes` | `262_144` (256 KB) | `src/tools/types.ts:55` |
-| `defaultTimeoutMs` | `30_000` (30 s) | `src/tools/types.ts:56` |
+| `defaultTimeoutMs` | `1_800_000` (30 min) | `COMMAND_SANDBOX_POLICY` (`packages/keiko-server/src/command-wall-time.ts`) |
 | `terminationGraceMs` | `2_000` (2 s) | `src/tools/types.ts:57` |
 
 The BFF route handler accepts an optional `timeoutMs` in the request body for commands where the
 user expects a different duration. If supplied, it is passed as `RunCommandInput.timeoutMs` and
 clamped to `[1_000, defaultTimeoutMs]` — a caller cannot exceed the policy's default ceiling. This
 is the same per-invocation override pattern used by verification steps.
+
+Owner decision 2026-11-24 (`docs/owner-decisions.md`, "Work-ending limits"): the terminal, the
+task runner and the container runner take `COMMAND_SANDBOX_POLICY`, the default sandbox policy with
+`defaultTimeoutMs` set to `COMMAND_RUN_MAX_DURATION_MS`. That value is one governed verification
+step's wall time (30 minutes), so a Maven build or a full test suite finishes. Until then it was the
+30-second default the read-only tool commands keep. The Authority Envelope's `maxCommandTimeoutMs`
+for a Coding run's governed command tool is the same value; it was 2 minutes, and the 30-second
+runner ceiling clamped it. The person's Stop still ends a command earlier; every other field is
+unchanged.
 
 No `SandboxPolicy` field is weakened. The harness `commandExecutions` counter is not applicable
 here (the terminal tool does not run through a harness session). The `TerminalExecutionManager`

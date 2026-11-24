@@ -72,6 +72,9 @@ ordinary work:
 - Verification steps, dependency installs, a person's approval, Jira and MCP reads, governed tool
   round trips, repository instructions, Atlassian sync scopes and Knowledge discovery got bounds
   sized for real work (the owning ADRs and code name each value).
+- One command a person starts in the terminal, a task run, a container run or a Coding run's
+  governed command tool may run 30 minutes, as long as one verification step (was 30 seconds, and
+  2 minutes in the Authority Envelope); `COMMAND_RUN_MAX_DURATION_MS` in the server owns it.
 
 A bound stays where it protects memory, security, the model's context window (read windows, tool
 output, request size) or stops a runaway loop. Trimming a conversation to the model's context window
