@@ -1725,6 +1725,37 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("retries a refused hand-off on a freshly loaded repository list", async () => {
+    const user = userEvent.setup();
+    let listCalls = 0;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => {
+        listCalls += 1;
+        return {
+          projects: [REPO_A, makeRepo("/repos/legacy", "legacy", { available: listCalls > 1 })],
+        };
+      }),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: "/repos/legacy", connectRepository: true }}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("This local repository is unavailable."),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe("/repos/legacy"),
+    );
+    expect(listCalls).toBe(2);
+    expect(client.registerRepository).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
   it("connects a handed-off repository after an earlier repository was refused", async () => {
     const legacy = makeRepo("/repos/legacy", "legacy", { available: false });

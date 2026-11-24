@@ -1286,16 +1286,17 @@ function ConnectedRepositoryError({
   );
 }
 
-/**
- * The window's repository error. A failed switch to a repository keeps that repository with its
- * error, so Retry connects it again; the target can never outlive the error it caused.
- */
 /** What Retry does about a repository failure. */
 type RepositoryRetry =
   | { readonly kind: "reload-list" }
   | { readonly kind: "switch"; readonly path: string }
   | { readonly kind: "hand-off"; readonly path: string };
 
+/**
+ * The window's repository error with its retry target: a failed switch keeps the repository it
+ * tried, a failed or refused hand-off keeps the handed-off folder. Both live in one state, so the
+ * target can never outlive the error it caused.
+ */
 interface RepositoryFailure {
   readonly message: string;
   readonly retry: RepositoryRetry;
@@ -1336,8 +1337,9 @@ function retryRepositoryFailure(
     actions.reconnect(retry.path);
     return;
   }
-  if (retry.kind === "hand-off") actions.handOffAgain(retry.path);
+  // The list starts loading first, so an armed hand-off is never decided on the list that refused it.
   actions.reloadList();
+  if (retry.kind === "hand-off") actions.handOffAgain(retry.path);
 }
 
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
