@@ -1329,6 +1329,95 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  // CodeRabbit on #4553: a list load that fails after a failed switch owns the shown error, so
+  // Retry reloads the list instead of connecting the earlier repository.
+  it("retries the repository list when it fails after a failed switch", async () => {
+    const user = userEvent.setup();
+    const gamma = makeRepo("/repos/gamma", "gamma");
+    let rejectList: (error: unknown) => void = () => undefined;
+    let listCalls = 0;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => {
+        listCalls += 1;
+        if (listCalls !== 2) return { projects: [REPO_A, REPO_B, gamma] };
+        return await new Promise<{ readonly projects: readonly ProjectWithAvailability[] }>(
+          (_resolve, reject) => {
+            rejectList = reject;
+          },
+        );
+      }),
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path === REPO_B.path) throw new Error("folder moved");
+        return makeProjectResponse(path === gamma.path ? gamma : REPO_A);
+      }),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+
+    // Switching to gamma succeeds and starts a list load that is still in flight.
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(gamma.path) }));
+    await waitFor(() => expect(listCalls).toBe(2));
+    // Switching to beta fails while that list load is still in flight.
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(REPO_B.path) }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: folder moved",
+    );
+    await act(async () => {
+      rejectList(new Error("list down"));
+      await Promise.resolve();
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("list down");
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(listCalls).toBe(3));
+    expect(vi.mocked(client.reconnectRepository).mock.calls.map((call) => call[0])).toEqual([
+      gamma.path,
+      REPO_B.path,
+    ]);
+  });
+
+  // The retry target belongs to the error it caused: a later refusal owns the shown error, so its
+  // Retry reloads the list instead of connecting the repository whose switch failed before.
+  it("retries the repository list after a refusal that follows a failed switch", async () => {
+    const user = userEvent.setup();
+    const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B, legacy] })),
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path === REPO_B.path) throw new Error("folder moved");
+        return makeProjectResponse(REPO_A);
+      }),
+    });
+    const view = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(REPO_B.path) }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: folder moved",
+    );
+
+    view.rerender(
+      <GitClientWindow projectId={legacy.path} connectHandedOffRepository client={client} />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This local repository is unavailable.",
+    );
+    const listCallsBeforeRetry = vi.mocked(client.listRepositories).mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(client.listRepositories).toHaveBeenCalledTimes(listCallsBeforeRetry + 1),
+    );
+    expect(vi.mocked(client.reconnectRepository).mock.calls.map((call) => call[0])).toEqual([
+      REPO_B.path,
+    ]);
+  });
+
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
   it("connects a handed-off repository after an earlier repository was refused", async () => {
     const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
