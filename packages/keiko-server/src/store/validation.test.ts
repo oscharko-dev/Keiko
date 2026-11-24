@@ -7,7 +7,12 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyPathShape, validateProjectPath, UiStoreError } from "./index.js";
+import {
+  canonicalProjectPathKey,
+  classifyPathShape,
+  validateProjectPath,
+  UiStoreError,
+} from "./index.js";
 
 let tmpDir: string;
 let realDir: string;
@@ -201,6 +206,47 @@ describe("validateProjectPath — Windows drive paths (cross-platform, mustExist
       () => validateProjectPath("C:\\Users\\evil\0name", { mustExist: false }),
       "INVALID_PATH",
     );
+  });
+});
+
+// Issue #4459 — the lookup key of a registered project is host-independent: a Windows drive path
+// takes exactly the form the store persists (derived from validateProjectPath, not restated), and
+// every other shape is returned untouched.
+describe("canonicalProjectPathKey", () => {
+  it.each([
+    "D:/work/corpus",
+    "D:\\work\\corpus",
+    "D:/work\\corpus",
+    "d:/work/corpus",
+    "C://Users/Example/Project",
+    "D:/work/corpus/",
+    "C:/",
+  ])("gives %s the stored project form", (input) => {
+    expect(canonicalProjectPathKey(input)).toBe(validateProjectPath(input, { mustExist: false }));
+  });
+
+  it("gives both separators of one Windows path the same key", () => {
+    expect(canonicalProjectPathKey("D:/work/corpus")).toBe(
+      canonicalProjectPathKey("D:\\work\\corpus"),
+    );
+  });
+
+  it.each(["/home/example/a\\b", "/home/example/project", "/srv/a\\b/c"])(
+    "leaves the POSIX path %s unchanged, including a literal backslash",
+    (input) => {
+      expect(canonicalProjectPathKey(input)).toBe(input);
+    },
+  );
+
+  it.each([
+    "D:/work/../Windows",
+    "D:/work/evil\0name",
+    "relative/path",
+    "\\\\server\\share",
+    "//?/C:/device",
+    "",
+  ])("does not collapse the rejected or non-drive input %j", (input) => {
+    expect(canonicalProjectPathKey(input)).toBe(input);
   });
 });
 

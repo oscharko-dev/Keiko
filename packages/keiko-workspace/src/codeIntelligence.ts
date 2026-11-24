@@ -206,6 +206,8 @@ export interface CodeIntelligenceIndex {
   readonly filesSkipped: number;
   readonly filesPartiallyIndexed: number;
   readonly candidateLimitReached?: boolean | undefined;
+  /** True when the parsed source budget (#4456), not the file ceiling, ended the source list. */
+  readonly parsedSourceBudgetReached?: boolean | undefined;
   readonly parserCoverage: readonly CodeParserCoverage[];
 }
 
@@ -334,6 +336,13 @@ const INDEX_CACHE_LIMIT = 16;
 // Structural indexing benefits from whole declarations/import sections. Keep this bounded, but do
 // not inherit the lexical scanner's smaller per-file prefix cap that is tuned for fast grep-style IO.
 const CODE_INDEX_MAX_SOURCE_BYTES = 2_097_152;
+// #4456: every parsed TypeScript syntax tree stays alive until the last build stage, and one tree
+// retains about 20 heap bytes per source byte (measured on this repository). Bound the source text
+// one build parses so a very large connected repository yields a truncated index
+// (`candidateLimitReached`) instead of exhausting the server heap: 32 MiB keeps the retained trees
+// near 650 MB. Each source is charged at most the per-file read cap, in the existing preference
+// order, from its discovered size, so the bound is decided before any read.
+export const CODE_INDEX_MAX_PARSED_SOURCE_BYTES = 33_554_432;
 const GRAPH_NEIGHBOR_DEPTH_LIMIT = 4;
 const GRAPH_NEIGHBOR_ATOM_LIMIT = 80;
 const GRAPH_NEIGHBOR_SEED_ATOM_LIMIT = 32;
@@ -3411,12 +3420,17 @@ function transparentReturnedExpression(node: ts.Node): boolean {
   );
 }
 
+/** AST node identity; the operands are positions of unrelated declared node kinds. */
+function sameNode(left: ts.Node | undefined, right: ts.Node): boolean {
+  return left === right;
+}
+
 function callReturnsOwnValue(node: ts.CallExpression): boolean {
   let expression: ts.Node = node;
   while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
   const parent = expression.parent;
   return (
-    (typeScriptCompiler().isReturnStatement(parent) && parent.expression === expression) ||
+    (typeScriptCompiler().isReturnStatement(parent) && sameNode(parent.expression, expression)) ||
     (typeScriptCompiler().isArrowFunction(parent) && parent.body === expression)
   );
 }
@@ -3583,7 +3597,7 @@ function callableDeclaration(node: ts.Node): ts.Node | undefined {
   let expression: ts.Node = node;
   while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
   const parent = expression.parent;
-  return (compiler.isVariableDeclaration(parent) && parent.initializer === expression) ||
+  return (compiler.isVariableDeclaration(parent) && sameNode(parent.initializer, expression)) ||
     (compiler.isExportAssignment(parent) &&
       !parent.isExportEquals &&
       parent.expression === expression)
@@ -5703,6 +5717,23 @@ function advanceCodeIntelligenceBatch(
   return step;
 }
 
+// Keeps the longest prefix of the preference-ordered sources whose charged size fits the parsed
+// source budget (#4456). A prefix, not a best fit, so a preferred file is never displaced by smaller
+// later ones and the selection stays deterministic for the cache fingerprint.
+function withinParsedSourceBudget<T extends { readonly sizeBytes: number }>(
+  sources: readonly T[],
+  perFileCap: number,
+): { readonly files: readonly T[]; readonly truncated: boolean } {
+  let charged = 0;
+  for (const [index, source] of sources.entries()) {
+    charged += Math.min(Math.max(0, source.sizeBytes), perFileCap);
+    if (charged > CODE_INDEX_MAX_PARSED_SOURCE_BYTES) {
+      return { files: sources.slice(0, index), truncated: true };
+    }
+  }
+  return { files: sources, truncated: false };
+}
+
 function* codeIntelligenceBuildSteps(
   scope: SearchScope,
   limits: SearchLimits,
@@ -5745,7 +5776,11 @@ function* codeIntelligenceBuildSteps(
     limits,
     () => true,
   );
-  const candidates = boundedInputs.files.filter((file) => isIndexable(file.relativePath));
+  const parsedSources = withinParsedSourceBudget(
+    boundedInputs.files.filter((file) => isIndexable(file.relativePath)),
+    sourceReadCap(limits),
+  );
+  const candidates = parsedSources.files;
   const resolverMetadata = boundedInputs.files.filter((file) =>
     isImportResolverMetadataPath(file.relativePath),
   );
@@ -5901,7 +5936,9 @@ function* codeIntelligenceBuildSteps(
     filesIndexed: files.length,
     filesSkipped: skipped + importResolver.filesSkipped,
     filesPartiallyIndexed: partiallyIndexed,
-    candidateLimitReached: boundedInputs.truncated || buildState.truncated,
+    candidateLimitReached:
+      boundedInputs.truncated || parsedSources.truncated || buildState.truncated,
+    parsedSourceBudgetReached: parsedSources.truncated,
     parserCoverage: collectParserCoverage(files),
   };
   if (

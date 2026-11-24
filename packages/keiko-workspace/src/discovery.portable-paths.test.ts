@@ -95,6 +95,8 @@ describe("portable directory entry admission", () => {
     },
   );
 
+  // Below the root only a backslash makes a name unrepresentable, and NTFS cannot store one: a
+  // Windows folder cannot hold the unsupported subtree this case needs (#4432).
   it.skipIf(process.platform === "win32")(
     "keeps an explicitly selected subfolder partial",
     async () => {

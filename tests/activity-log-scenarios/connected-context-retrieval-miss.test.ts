@@ -27,6 +27,13 @@ import {
   INCIDENT_RETRIEVAL_FILES,
 } from "../../scripts/check-retrieval-quality.mjs";
 import type { GroundedAnswerer } from "../../packages/keiko-server/src/grounded-orchestrator.js";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import { resetServerLogger } from "../support/activity-log-test-support.js";
 import { readPersistedActivityLog } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
@@ -173,6 +180,96 @@ async function driveCustomerShape(followUpPassesMax: 0 | 1, correlationId: strin
   }
 }
 
+// Windows recursive-search drops (#4431): one locked file, one unreadable directory, one directory
+// too large to re-read after membership churn, and one skipped link. The faults sit on the real
+// Node filesystem port over a materialized fixture, so the walk, writer and reader are production.
+const DROP_CORRELATION_ID = "connected-context-discovery-drops";
+const LOCKED_PATH = "lib/Locked.ts";
+const OVERSIZED_LISTING_ENTRIES = 10_001;
+const DROP_FILES = {
+  ...INCIDENT_RETRIEVAL_FILES,
+  [LOCKED_PATH]: "export const lockedApprovalFlag = true;\n",
+  "lib/Visible.ts": "export const visible = true;\n",
+  "vault/notes.md": "Protected notes.\n",
+  "bulk/keep.txt": "Bulk directory.\n",
+};
+
+function codedFault(code: string): Error {
+  return Object.assign(new Error(`PRIVATE_${code}_DETAIL`), { code });
+}
+
+function endsWithSegment(path: string, suffix: string): boolean {
+  return path.replaceAll("\\", "/").endsWith(`/${suffix}`);
+}
+
+// Denied names keep the synthetic listing away from stat calls; only its size and churn matter.
+async function* oversizedChurningListing(): AsyncIterable<WorkspaceDirEntry> {
+  for (let index = 0; index < OVERSIZED_LISTING_ENTRIES; index += 1) {
+    yield await Promise.resolve({
+      name: `bulk-${String(index)}.pem`,
+      isDirectory: false,
+      isFile: true,
+      isSymbolicLink: false,
+    });
+  }
+  throw new WorkspaceDescriptorReadError("directory-membership-changed");
+}
+
+async function* faultyListing(
+  iterate: NonNullable<WorkspaceFs["iterateDirectory"]>,
+  path: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  if (endsWithSegment(path, "vault")) throw codedFault("EACCES");
+  if (endsWithSegment(path, "bulk")) {
+    yield* oversizedChurningListing();
+    return;
+  }
+  yield* iterate(path);
+  if (endsWithSegment(path, "lib")) {
+    yield { name: "linked-folder", isDirectory: true, isFile: false, isSymbolicLink: true };
+  }
+}
+
+function droppingFs(): WorkspaceFs {
+  const base = nodeWorkspaceFs;
+  const iterate = base.iterateDirectory;
+  if (iterate === undefined) throw new TypeError("Expected the streaming directory port");
+  const locked = (path: string): boolean => endsWithSegment(path, LOCKED_PATH);
+  return {
+    ...base,
+    stat: (path): WorkspaceStat => {
+      if (locked(path)) throw codedFault("EBUSY");
+      return base.stat(path);
+    },
+    realPath: (path): string => {
+      if (locked(path)) throw codedFault("EBUSY");
+      return base.realPath(path);
+    },
+    iterateDirectory: (path) => faultyListing(iterate, path),
+  };
+}
+
+function expectBodyFreeDropEvidence(stateDir: string): void {
+  const text = readPersistedActivityLog(stateDir);
+  const evidence = text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .find(
+      (record) =>
+        record.correlationId === DROP_CORRELATION_ID &&
+        record.op === "search.connected-context.evidence-details",
+    );
+  expect(evidence).toMatchObject({
+    discoveryUnavailableEntryCount: 1,
+    discoveryUnavailableDirectoryCount: 1,
+    discoveryOversizedDirectoryCount: 1,
+    discoverySkippedLinkCount: 1,
+  });
+  for (const secret of ["Locked.ts", "linked-folder", "bulk-1", "vault/", "PRIVATE_"])
+    expect(text).not.toContain(secret);
+}
+
 describe("Activity Log scenario: connected-context retrieval incident (#3882)", () => {
   let stateDir: string;
   beforeEach(() => {
@@ -197,6 +294,40 @@ describe("Activity Log scenario: connected-context retrieval incident (#3882)", 
     expect(report.selection).toMatchObject({
       status: "insufficient",
       reasons: ["no-registered-failure"],
+    });
+  });
+
+  it("names locked, unreadable, oversized and linked discovery drops in the support report (#4431)", async () => {
+    const { pack } = await runConnectedRetrievalEval({
+      files: DROP_FILES,
+      query: `Which fields are required in ${INCIDENT_FEATURE_PATH}?`,
+      correlationId: DROP_CORRELATION_ID,
+      answer: `The feature requires an approval flag. [${INCIDENT_FEATURE_PATH}:6-8]`,
+      fs: droppingFs(),
+    });
+    expect(pack.files.some((file) => file.scopePath === INCIDENT_FEATURE_PATH)).toBe(true);
+    expect(pack.diagnostics?.coverage).toMatchObject({
+      incomplete: true,
+      unavailableEntriesByDiscovery: 1,
+      unavailableDirectoriesByDiscovery: 1,
+      oversizedDirectoriesByDiscovery: 1,
+      skippedSymbolicLinksByDiscovery: 1,
+    });
+    expectBodyFreeDropEvidence(stateDir);
+    const report = await reconstructUserReportedAsk(stateDir, DROP_CORRELATION_ID);
+    expect(report.analysis.evidence.classification).toBe("supported");
+    const drop = (report.analysis.findings ?? []).find(
+      (finding) => finding.reason === "discovery-dropped-entries",
+    );
+    expect(drop).toMatchObject({
+      kind: "retrieval-miss",
+      fields: {
+        discoveryUnavailableEntryCount: 1,
+        discoveryUnavailableDirectoryCount: 1,
+        discoveryOversizedDirectoryCount: 1,
+        discoverySkippedLinkCount: 1,
+        discoveryUnrepresentablePathCount: 0,
+      },
     });
   });
 

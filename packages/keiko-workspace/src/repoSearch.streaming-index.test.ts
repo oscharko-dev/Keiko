@@ -19,6 +19,7 @@ import {
   createFileWorkspaceIndexStore,
   createWorkspaceIndex,
   type WorkspaceIndex,
+  type WorkspaceIndexSnapshot,
 } from "./workspaceIndex.js";
 
 const roots: string[] = [];
@@ -68,6 +69,37 @@ function fixture(): {
   };
 }
 
+function recordingIndex(): {
+  readonly workspaceIndex: WorkspaceIndex;
+  readonly saved: WorkspaceIndexSnapshot[];
+} {
+  const base = createWorkspaceIndex();
+  const saved: WorkspaceIndexSnapshot[] = [];
+  return {
+    saved,
+    workspaceIndex: {
+      loadSnapshot: base.loadSnapshot,
+      saveSnapshot: async (key, snapshot, isActive): Promise<void> => {
+        saved.push(snapshot);
+        await base.saveSnapshot(key, snapshot, isActive);
+      },
+    },
+  };
+}
+
+/** The query identities of every query match the producer stored. */
+function savedMatchRecords(snapshots: readonly WorkspaceIndexSnapshot[]): readonly string[] {
+  return snapshots
+    .flatMap((snapshot) => snapshot.records)
+    .flatMap((record) =>
+      record.queryMatch === undefined ? [] : [record.queryMatch.queryIdentitySha256],
+    );
+}
+
+function matchIdentities(snapshots: readonly WorkspaceIndexSnapshot[]): ReadonlySet<string> {
+  return new Set(savedMatchRecords(snapshots));
+}
+
 describe("unlimited discovery with fresh query-bound workspace index records", () => {
   it("reuses completed matches without repeating unchanged body reads or declaring index coverage", async () => {
     const { scope, fs, reads } = fixture();
@@ -115,25 +147,42 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
     expect(reads).toHaveBeenCalledOnce();
   });
 
-  it.each(["new-query", "result-cap", "interpretation"])("keeps %s scans live", async (change) => {
-    const { scope, fs, reads } = fixture();
-    const workspaceIndex = createWorkspaceIndex();
-    await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
-    reads.mockClear();
-    await searchText(
-      scope,
-      change === "new-query" ? { ...QUERY, text: "Navigation" } : QUERY,
-      change === "result-cap" ? { ...LIMITS, maxMatchesReturned: 2 } : LIMITS,
-      {
+  it.each(["new-query", "result-cap", "interpretation"])(
+    "keeps %s matching live over stored lane text",
+    async (change) => {
+      const { scope, fs, reads } = fixture();
+      const { workspaceIndex, saved } = recordingIndex();
+      await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+      const earlier = matchIdentities(saved);
+      expect(earlier.size).toBe(1);
+      saved.length = 0;
+      reads.mockClear();
+      const query = change === "new-query" ? { ...QUERY, text: "Navigation" } : QUERY;
+      const limits = change === "result-cap" ? { ...LIMITS, maxMatchesReturned: 2 } : LIMITS;
+      const interpretation =
+        change === "interpretation"
+          ? { queryInterpretation: { kind: "literal" as const, terms: ["temperature"] } }
+          : {};
+      const result = await searchText(scope, query, limits, {
         fs,
         workspaceIndex,
-        ...(change === "interpretation"
-          ? { queryInterpretation: { kind: "literal" as const, terms: ["temperature"] } }
-          : {}),
-      },
-    );
-    expect(reads).toHaveBeenCalledTimes(12);
-  });
+        nowMs: () => 0,
+        ...interpretation,
+      });
+      // #4457: the stored lane text of the unchanged files spares the body reads...
+      expect(reads).not.toHaveBeenCalled();
+      // ...but no stored match answers the changed request: all twelve are matched again.
+      const fresh = savedMatchRecords(saved);
+      expect(fresh).toHaveLength(12);
+      expect(fresh.some((identity) => earlier.has(identity))).toBe(false);
+      const live = await searchText(scope, query, limits, {
+        fs: nodeWorkspaceFs,
+        nowMs: () => 0,
+        ...interpretation,
+      });
+      expect(result.atoms).toEqual(live.atoms);
+    },
+  );
 
   it("preserves active known-fit observation over every live file", async () => {
     const { scope, fs, reads } = fixture();
@@ -285,8 +334,10 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
     );
     expect(warm.atoms).toEqual(cold.atoms);
     expect(warm.coverage.reasons).toContain("match-cap");
-    expect(reads).toHaveBeenCalledTimes(partialReadCount);
-    expect(reads.mock.calls.every(([path]) => path.endsWith("manual-11.html"))).toBe(true);
+    // #4457: the complete stored lane text spares the body read, but the capped match itself is
+    // never stored: manual-11 is matched again and again reported incomplete (skipped).
+    expect(reads).not.toHaveBeenCalled();
+    expect(warm.workspaceIndex).toMatchObject({ reusedRecords: 12, skippedEntries: 1 });
   });
 
   it("never treats cached paths as discovery authority for deletions or newly added files", async () => {
@@ -303,16 +354,27 @@ describe("unlimited discovery with fresh query-bound workspace index records", (
 
   it("keeps changed matching policy and byte grants live", async () => {
     const { scope, fs, reads } = fixture();
-    const workspaceIndex = createWorkspaceIndex();
+    const { workspaceIndex, saved } = recordingIndex();
     await searchText(scope, QUERY, LIMITS, { fs, workspaceIndex, nowMs: () => 0 });
+    const earlier = matchIdentities(saved);
+    saved.length = 0;
     reads.mockClear();
-    await searchText(scope, QUERY, LIMITS, {
+    const hints = { searchHints: { retrievalIntent: "project-metadata" as const } };
+    const changedPolicy = await searchText(scope, QUERY, LIMITS, {
       fs,
       workspaceIndex,
       nowMs: () => 0,
-      searchHints: { retrievalIntent: "project-metadata" },
+      ...hints,
     });
-    expect(reads).toHaveBeenCalledTimes(12);
+    // #4457: a changed matching policy reuses the lane text, never an earlier policy's matches.
+    expect(reads).not.toHaveBeenCalled();
+    const fresh = savedMatchRecords(saved);
+    expect(fresh).toHaveLength(12);
+    expect(fresh.some((identity) => earlier.has(identity))).toBe(false);
+    expect(changedPolicy.atoms).toEqual(
+      (await searchText(scope, QUERY, LIMITS, { fs: nodeWorkspaceFs, nowMs: () => 0, ...hints }))
+        .atoms,
+    );
     const limited = { ...LIMITS, maxBytesPerFileScanned: 32 };
     reads.mockClear();
     const live = await searchText(scope, QUERY, limited, { fs, nowMs: () => 0 });

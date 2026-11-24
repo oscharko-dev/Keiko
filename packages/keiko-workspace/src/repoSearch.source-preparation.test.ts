@@ -155,6 +155,32 @@ describe("request-local source preparation from the actual streamed search produ
     expect(spy).toHaveBeenCalledExactlyOnceWith(text, "src/source.ts");
   });
 
+  // #4457: classification ran for every candidate file of every question, although only definition
+  // and route intent read its masks; an explanatory question scores the same raw lines without it.
+  it.each([
+    "How are invoices reconciled?",
+    "Wie werden Rechnungen mit reconcileInvoice abgeglichen?",
+    "Which orders does the /orders/{id} path return?",
+  ])("matches %s without classifying any file", async (text) => {
+    const spy = vi.spyOn(classification, "repositorySourceLines");
+    const source = "export function reconcileInvoice(orders) {\n  return orders.invoice;\n}\n";
+    const result = await search("src/source.ts", source, { ...ROUTE_QUERY, text });
+    expect(result.atoms.length).toBeGreaterThan(0);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // #4457: route intent reads a line's masks only on a line holding the asked path, and the route
+  // bonus needs that path in the text. A file that matches the question's words without the path
+  // is scored from its raw lines, exactly as before, without classifying it.
+  it("matches a route question in a file without its path unclassified", async () => {
+    const spy = vi.spyOn(classification, "repositorySourceLines");
+    const source = "export function listOrders(orders) {\n  return orders;\n}\n";
+    const text = "Which handler serves POST /orders/{id}?";
+    const result = await search("src/source.ts", source, { ...ROUTE_QUERY, text });
+    expect(result.atoms.length).toBeGreaterThan(0);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("retains distinct raw and entity-decoded structural interpretations", async () => {
     const row = CASES.at(-1);
     if (row === undefined) throw new Error("missing encoded HTML fixture");

@@ -87,6 +87,35 @@ describe("discoverAndExtract — happy path", () => {
     expect(events.filter((e) => e.kind === "file-extracted")).toHaveLength(3);
   });
 
+  it("counts an entry that vanished mid-walk on the completed event instead of failing it (#4435)", async () => {
+    const base = memoryFs(ROOT, [
+      { relativePath: "README.md", content: "# Hello" },
+      { relativePath: "~$README.md", content: "lock" },
+    ]);
+    const fs: typeof base = {
+      ...base,
+      realPath: (path: string): string => {
+        if (path === `${ROOT}/~$README.md`) {
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        }
+        return base.realPath(path);
+      },
+    };
+    const events = await collect(
+      discoverAndExtract(
+        { fs, store, parserRegistry: createDefaultParserRegistry() },
+        { capsuleId, source },
+      ),
+    );
+    expect(events.filter((e) => e.kind === "scope-error")).toEqual([]);
+    expect(events.find((e) => e.kind === "completed")).toMatchObject({
+      totalDiscovered: 1,
+      totalFailed: 0,
+      totalVanished: 1,
+      totalDirectoryRetries: 0,
+    });
+  });
+
   it("classifies an unsupported binary as failed=0/extracted=1 (unsupported is a persisted outcome)", async () => {
     const fs = memoryFs(ROOT, [
       {

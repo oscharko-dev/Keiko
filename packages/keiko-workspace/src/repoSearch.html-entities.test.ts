@@ -123,6 +123,7 @@ describe("HTML character-reference search with raw source evidence", () => {
     const result = await searchText(selected, query("Überhitzungsschutz"));
     expect(result.atoms).toHaveLength(1);
     expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    // The CRLF terminator is not line content (#4439); the encoded `&#13;` stays as written.
     expect(
       (
         await readExcerpt(selected, {
@@ -132,7 +133,7 @@ describe("HTML character-reference search with raw source evidence", () => {
           maxBytes: 512,
         })
       ).content,
-    ).toBe("<p>Protection&#10;&#220;berhitzungsschutz&#13;61.2 C</p>\r");
+    ).toBe("<p>Protection&#10;&#220;berhitzungsschutz&#13;61.2 C</p>");
   });
 
   it("does not accept old raw hashed cache negatives as proof of an absent decoded HTML term", async () => {

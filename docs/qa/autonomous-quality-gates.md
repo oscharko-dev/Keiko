@@ -41,7 +41,9 @@ successful:
 - the release build, shipped-dependency audit, SBOM, package-install, and runtime smoke lane;
 - Linux/macOS cross-platform smoke, plus the same full Windows proof unless the trusted
   base-revision classifier positively identifies every changed pull-request path as
-  non-Windows-relevant; pushes, merge groups, and manual runs always use the full matrix;
+  non-Windows-relevant; pushes, merge groups, and manual runs always use the full matrix. The
+  Windows proof also runs the recursive-search suites (walker, search, index, containment and
+  Files) under native separators, letter case and reparse points (#4432), as a required step;
 - the UI lint, typecheck, build, browser smoke, and release-evidence lane;
 - Fallow semantic duplicate analysis over changed files only; and
 - Gitleaks over every addition in the pull-request commit range, including intermediate commits.

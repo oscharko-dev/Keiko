@@ -279,8 +279,15 @@ Imported targets retain exact runtime module-export identities. Explicit compile
 reuse already guarded metadata and can address only admitted sources in the owning package.
 Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
 ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
-reservation and request-local current-source metadata capacity. Finite enrichment grants and
+reservation and request-local current-source metadata capacity. The code intelligence build also
+bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
+`evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
 bounded complete-text reuse retain their separate limits.
+A question naming a subfolder of the admitted inventory (`commands-Ordner`, `the X folder`,
+`components/PromptInput`) reads that subtree once more, entry files first, as whole-file listing
+evidence within the known-fit capacity plus at most eight of its documents; ordinary evidence,
+floors and grants are unchanged. `evidence-details` records `namedDirectoryFocusState` and counts,
+never a folder name (#4429, ADR-0022).
 Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
 cannot certify a unique runtime target when a competing branch is unobserved.
 A guarded current definition reached through an observed inline-callable reference retains its
@@ -526,6 +533,8 @@ Workspace-index failures with no retained, indexed or reused records report live
 actual cold or warm request work remains visible even when saving its snapshot fails.
 Conversation continuity records only its closed referent source and source/admitted/rejected
 counts on selection-details; assistant path text never enters activity evidence.
+A previous-answer path stays a continuity hint: it never replaces the current question's own
+keep-one fallback, which remains low confidence beside it within the same grants (#4458).
 The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
 `targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
 An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for
@@ -613,7 +622,10 @@ and originating request retain the existing causal link. Candidate counts and mo
 marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
 `client.scope.notice` records scope narrowing, widening and adding missing
 evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
-`narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
+`narrowed-to-directory`, `widened`, `pinned-folder`, `missing-evidence-added`, or, for the
+plain-language AppData sensitive-data notice that informs without blocking (#4437),
+`app-data-contained` (the folder holds an `AppData` folder) and `app-data-selected` (the folder
+is part of one). `scopeKind` is
 `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
 `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
 folder or asks for confirmation. The existing timeline carries these dispositions and counts

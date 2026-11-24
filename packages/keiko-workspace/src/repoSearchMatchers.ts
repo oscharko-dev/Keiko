@@ -40,6 +40,11 @@ export interface LineMatcher {
   readonly citationDirectiveClauseCount?: number | undefined;
   /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
   readonly requiresSourceClassification?: boolean | undefined;
+  /**
+   * #4457: false when `match` reads no source line of any line of `text`, so the file need not be
+   * classified. Only an explicit false skips it; a matcher that rewrites lines must drop it.
+   */
+  readonly readsSourceLinesOf?: ((text: string) => boolean) | undefined;
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
@@ -654,11 +659,46 @@ export function structuralLineLooksLikeSymbolDefinition(
   symbolToken: string,
   caseSensitive: boolean,
 ): boolean {
-  return definitionSymbolsInStructuralLine(structuralLine).some((symbol) =>
+  return definitionsInclude(
+    definitionSymbolsInStructuralLine(structuralLine),
+    symbolToken,
+    caseSensitive,
+  );
+}
+
+function definitionsInclude(
+  definitions: readonly string[],
+  symbolToken: string,
+  caseSensitive: boolean,
+): boolean {
+  return definitions.some((symbol) =>
     caseSensitive
       ? symbol === symbolToken
       : symbol.toLocaleLowerCase("en-US") === symbolToken.toLocaleLowerCase("en-US"),
   );
+}
+
+// #4457: the tokens adjustedDefinitionIntentScore looks for in a line's masks: symbol tokens under
+// definition intent, route tokens when an HTTP method accompanies them. Without one of them in the
+// masks it returns its base score. A mask is the raw line with characters replaced by spaces, so a
+// token (which holds no space) found in a mask is found in the raw line too; only the final sigma,
+// whose lowercase depends on its neighbours, can differ between the two.
+function sourceLineNeedles(intent: NaturalLanguageIntent): readonly string[] {
+  return [
+    ...(intent.definitionIntent ? intent.symbolTokens : []),
+    ...(intent.routeTokens.length > 0 && intent.httpMethods.length > 0 ? intent.routeTokens : []),
+  ];
+}
+
+function mayReadSourceLine(
+  raw: string,
+  folded: string,
+  needles: readonly string[],
+  caseSensitive: boolean,
+): boolean {
+  if (needles.length === 0) return false;
+  if (!caseSensitive && raw.includes("Σ")) return true;
+  return needles.some((needle) => folded.includes(needle));
 }
 
 function lineLooksLikeRouteDeclaration(
@@ -691,13 +731,12 @@ function adjustedDefinitionIntentScore(
   if (!intent.definitionIntent) return Math.min(1, baseScore + routeBonus);
   let bonus = routeBonus;
   let penalty = 0;
-  for (const symbolToken of intent.symbolTokens) {
-    if (!structuralHaystack.includes(symbolToken)) {
-      continue;
-    }
-    if (
-      structuralLineLooksLikeSymbolDefinition(sourceLine.structural, symbolToken, caseSensitive)
-    ) {
+  // #4457: the line's definition captures do not depend on the token; capture them once.
+  const present = intent.symbolTokens.filter((token) => structuralHaystack.includes(token));
+  const definitions =
+    present.length === 0 ? [] : definitionSymbolsInStructuralLine(sourceLine.structural);
+  for (const symbolToken of present) {
+    if (definitionsInclude(definitions, symbolToken, caseSensitive)) {
       bonus = Math.max(bonus, 0.75);
     } else if (lineLooksLikeDeclaration(sourceLine.structural)) {
       bonus = Math.max(bonus, 0.55);
@@ -763,18 +802,26 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   );
   const wholeCompoundTerms = tokenGroups.flat().filter(isNumberedCompoundQueryTerm);
   const total = tokenGroups.length;
+  const needles = sourceLineNeedles(intent);
+  const fold = (text: string): string => (query.caseSensitive ? text : text.toLowerCase());
   return {
     citationDirectiveClauseCount,
     queryGroupCount: total,
+    // #4457: only definition and route intent read a line's code/structural masks, and only on a
+    // line holding one of their tokens. Every other question skips source classification.
+    requiresSourceClassification: needles.length > 0,
+    // A line reads its masks only when it holds a needle (or a sigma); the file can hold one only
+    // when its folded text does. Folding is per character apart from the sigma, so the folded text
+    // is the folded lines joined by their unchanged terminators.
+    readsSourceLinesOf: (text: string): boolean =>
+      mayReadSourceLine(text, fold(text), needles, query.caseSensitive),
     matchedQueryGroups: (line: string): readonly number[] =>
       matchedNaturalLanguageGroups(line, tokenGroups, query.caseSensitive),
     match: (line: string, providedSourceLine?: RepositorySourceLine): number => {
       if (total === 0) {
         return 0;
       }
-      const sourceLine = providedSourceLine ?? repositorySourceLines(line)[0];
-      if (sourceLine === undefined) return 0;
-      const haystack = query.caseSensitive ? line : line.toLowerCase();
+      const haystack = fold(line);
       // A whole compound actually present in the source is strong lexical evidence.
       // An absent spelling leaves full-question matching intact (e.g. SHA-256 versus sha256).
       if (
@@ -783,21 +830,19 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
         )
       )
         return 1;
-      let hits = 0;
-      for (const group of tokenGroups) {
-        if (group.some((token) => haystack.includes(token))) {
-          hits += 1;
-        }
-      }
+      const hits = tokenGroups.filter((group) =>
+        group.some((token) => haystack.includes(token)),
+      ).length;
       if (hits === 0) {
         return 0;
       }
-      const definitionAdjusted = adjustedDefinitionIntentScore(
-        sourceLine,
-        hits / total,
-        intent,
-        query.caseSensitive,
-      );
+      const sourceLine = mayReadSourceLine(line, haystack, needles, query.caseSensitive)
+        ? (providedSourceLine ?? repositorySourceLines(line)[0])
+        : undefined;
+      const definitionAdjusted =
+        sourceLine === undefined
+          ? Math.min(1, hits / total)
+          : adjustedDefinitionIntentScore(sourceLine, hits / total, intent, query.caseSensitive);
       return adjustedVersionDeclarationScore(line, definitionAdjusted, versionDeclarationPatterns);
     },
   };

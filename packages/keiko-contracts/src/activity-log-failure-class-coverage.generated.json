@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 413,
-  "completeClassCount": 413,
+  "supportedClassCount": 416,
+  "completeClassCount": 416,
   "completeness": "complete",
   "classes": [
     {
@@ -11524,6 +11524,12 @@
               "required": false
             },
             {
+              "name": "pathCase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "policyMode",
               "type": "string",
               "dataClass": "closed-enum",
@@ -22471,7 +22477,121 @@
               "required": true
             },
             {
+              "name": "codeIndexSourceBudgetReachedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "codeRedactionRevision",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryDeniedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryIgnoredCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryMembershipRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryOversizedDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoverySkippedLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoverySystemNoisePrunedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnavailableDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnavailableEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnrepresentablePathCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryVanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryAmbiguousTermCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryCandidateFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryChargedBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryDocumentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryFocusState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryObservedFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "namedDirectoryRetainedFileCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -24674,6 +24794,68 @@
             "causeChain": false
           },
           "proofIds": ["editor.agent.action-queue.refusal"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "editor-assured-copy-containment",
+      "requirementContract": "editor-assured-copy-containment",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["editor.assured-copy.completed"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.assured-copy.completed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.assured-copy.completed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.assured-copy.completed",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "copiedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "skippedLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.assured-copy.completed.links-skipped"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -28083,6 +28265,160 @@
             "causeChain": false
           },
           "proofIds": ["figma.snapshot.captured.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "files-copy-containment-refusal",
+      "requirementContract": "files-copy-containment-refusal",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["files.copy.refused"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "files.copy.refused",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["files.copy.refused"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "files.copy.refused",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "cleanup",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "code",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "entryKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["files.copy.refused.link"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "files-search-availability",
+      "requirementContract": "files-search-availability",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["files.search.completed"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "files.search.completed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["files.search.completed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "files.search.completed",
+          "owner": "keiko-server",
+          "category": "search",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "resultCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "scannedFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "systemEntryPrunedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "truncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "unavailableEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "vanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["files.search.completed.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -48328,6 +48664,12 @@
               "required": true
             },
             {
+              "name": "directoryRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "discoveredCount",
               "type": "integer",
               "dataClass": "count",
@@ -48350,6 +48692,12 @@
               "type": "string",
               "dataClass": "digest",
               "required": true
+            },
+            {
+              "name": "vanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "walkCompleted",

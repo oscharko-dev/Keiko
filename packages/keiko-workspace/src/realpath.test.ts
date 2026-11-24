@@ -12,7 +12,7 @@ import {
 } from "./ownedRootMint.js";
 import type { WorkspaceInfo } from "./types.js";
 import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
-import { memFs } from "./_memfs.js";
+import { DIRECTORY_LINK_TYPE, memFs } from "./_memfs.js";
 import {
   containedRealPathInfo,
   containedRealPathInfoWithinOwnedRoot,
@@ -354,44 +354,43 @@ function withDiskRoot(run: (root: string, outside: string) => void): void {
 }
 
 describe("containedRealPathInfo — unresolvable symlink leaf (#3347)", () => {
-  it.skipIf(process.platform === "win32")(
-    "refuses a dangling final symlink instead of reporting an allowed missing target",
-    () => {
-      withDiskRoot((root, outside) => {
-        // The owner's reproduction: `root/link -> outside/new` with `outside/new` absent. `realPath`
-        // fails exactly as it does for a missing leaf, so the create-target fallback used to hand
-        // back an empty `realRelative` — an allowed missing target — for a name that is a symlink
-        // pointing out of the root.
-        symlinkSync(join(outside, "new"), join(root, "link"));
-        // Same class through a link cycle: `realPath` fails with ELOOP, `lstat` still sees a link.
-        symlinkSync(join(root, "cycle"), join(root, "cycle"));
-        // And a dangling link whose target would land inside the root: the effect would still write
-        // to a name other than the one containment classified.
-        symlinkSync(join(root, "inner-new"), join(root, "inner"));
+  it("refuses a dangling final symlink instead of reporting an allowed missing target", () => {
+    withDiskRoot((root, outside) => {
+      // The owner's reproduction: `root/link -> outside/new` with `outside/new` absent. `realPath`
+      // fails exactly as it does for a missing leaf, so the create-target fallback used to hand
+      // back an empty `realRelative` — an allowed missing target — for a name that is a symlink
+      // pointing out of the root.
+      symlinkSync(join(outside, "new"), join(root, "link"), DIRECTORY_LINK_TYPE);
+      // Same class through a link cycle: `realPath` fails with ELOOP, `lstat` still sees a link.
+      symlinkSync(join(root, "cycle"), join(root, "cycle"), DIRECTORY_LINK_TYPE);
+      // And a dangling link whose target would land inside the root: the effect would still write
+      // to a name other than the one containment classified.
+      symlinkSync(join(root, "inner-new"), join(root, "inner"), DIRECTORY_LINK_TYPE);
 
-        for (const name of ["link", "cycle", "inner"]) {
-          expect(() => containedRealPathInfo(nodeWorkspaceFs, root, join(root, name))).toThrow(
-            PathEscapeError,
-          );
-          expect(() =>
-            containedRealPathInfoWithinOwnedRoot(nodeWorkspaceFs, root, join(root, name)),
-          ).toThrow(PathEscapeError);
-        }
+      for (const name of ["link", "cycle", "inner"]) {
+        expect(() => containedRealPathInfo(nodeWorkspaceFs, root, join(root, name))).toThrow(
+          PathEscapeError,
+        );
+        expect(() =>
+          containedRealPathInfoWithinOwnedRoot(nodeWorkspaceFs, root, join(root, name)),
+        ).toThrow(PathEscapeError);
+      }
+    });
+  });
+
+  it("still admits a genuinely missing leaf as a contained create target", () => {
+    withDiskRoot((root) => {
+      const missing = containedRealPathInfo(nodeWorkspaceFs, root, join(root, "new.ts"));
+
+      expect(missing).toEqual({
+        path: join(root, "new.ts"),
+        realRelative: "",
+        realBase: root,
+        unresolved: "vanished",
       });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "still admits a genuinely missing leaf as a contained create target",
-    () => {
-      withDiskRoot((root) => {
-        const missing = containedRealPathInfo(nodeWorkspaceFs, root, join(root, "new.ts"));
-
-        expect(missing).toEqual({ path: join(root, "new.ts"), realRelative: "", realBase: root });
-        expect(isAllowedContainedPathParent(missing, root, "new.ts")).toBe(true);
-      });
-    },
-  );
+      expect(isAllowedContainedPathParent(missing, root, "new.ts")).toBe(true);
+    });
+  });
 });
 
 describe("realRootIsDeniedViaSymlink", () => {
@@ -421,28 +420,22 @@ describe("realRootIsDeniedViaSymlink", () => {
     ).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps canonically equivalent Unicode root names distinct on POSIX-shaped volumes",
-    () => {
-      expect(
-        realRootIsDeniedViaSymlink("/work/.codex/\u00e9/project", "/work/.codex/e\u0301/project"),
-      ).toBe(true);
-    },
-  );
+  it("keeps canonically equivalent Unicode root names distinct on POSIX-shaped volumes", () => {
+    expect(
+      realRootIsDeniedViaSymlink("/work/.codex/\u00e9/project", "/work/.codex/e\u0301/project"),
+    ).toBe(true);
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps case-distinct roots separate on case-sensitive POSIX-shaped volumes",
-    () => {
-      expect(realRootIsDeniedViaSymlink("/work/.codex/Foo", "/work/.codex/foo")).toBe(true);
-    },
-  );
+  it("keeps case-distinct roots separate on case-sensitive POSIX-shaped volumes", () => {
+    expect(realRootIsDeniedViaSymlink("/work/.codex/Foo", "/work/.codex/foo")).toBe(true);
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps POSIX backslash names distinct from directory separators",
-    () => {
-      expect(realRootIsDeniedViaSymlink("/work/.codex/a/b", "/work/.codex/a\\b")).toBe(true);
-    },
-  );
+  // A Windows host reads the backslash as a separator, so both spellings name one root there.
+  it("keeps POSIX backslash names distinct from directory separators", () => {
+    expect(realRootIsDeniedViaSymlink("/work/.codex/a/b", "/work/.codex/a\\b")).toBe(
+      process.platform !== "win32",
+    );
+  });
 
   it("accepts equivalent roots with repeated trailing separators", () => {
     expect(realRootIsDeniedViaSymlink("/work/.codex", "/work/.codex///")).toBe(false);
@@ -515,22 +508,20 @@ describe("isCanonicalAllowedContainedPath", () => {
     ).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps a literal POSIX backslash distinct from a directory separator",
-    () => {
-      expect(
-        isCanonicalAllowedContainedPath(
-          {
-            path: "/workspace/src/file.ts",
-            realRelative: "src/file.ts",
-            realBase: "/workspace",
-          },
-          "/workspace",
-          "src\\file.ts",
-        ),
-      ).toBe(false);
-    },
-  );
+  // A Windows host reads the backslash as a separator, which the case above admits there.
+  it("keeps a literal POSIX backslash distinct from a directory separator", () => {
+    expect(
+      isCanonicalAllowedContainedPath(
+        {
+          path: "/workspace/src/file.ts",
+          realRelative: "src/file.ts",
+          realBase: "/workspace",
+        },
+        "/workspace",
+        "src\\file.ts",
+      ),
+    ).toBe(process.platform === "win32");
+  });
 
   it("rejects aliases, denied descendants, and a denied root alias", () => {
     expect(
@@ -598,7 +589,7 @@ describe("boundWorkspaceFs", () => {
   }
 
   it("returns the fallback for a WorkspaceInfo no prover bound", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-plain-")));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-plain-")));
     try {
       expect(boundWorkspaceFs(workspaceInfo(root), nodeWorkspaceFs)).toBe(nodeWorkspaceFs);
     } finally {
@@ -607,7 +598,7 @@ describe("boundWorkspaceFs", () => {
   });
 
   it("returns the exact owned-root port the prover bound, and admits the denied root through it", () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-owned-")));
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-owned-")));
     const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
     mkdirSync(root, { recursive: true });
     try {
@@ -626,7 +617,7 @@ describe("boundWorkspaceFs", () => {
   });
 
   it("refuses to bind a port whose authority names another root, or none", () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-foreign-")));
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-foreign-")));
     const root = join(base, "a");
     const other = join(base, "b");
     mkdirSync(root);

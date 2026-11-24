@@ -30,7 +30,12 @@ import {
   PathDeniedError,
   resolveExistingAllowedWorkspaceRealRoot,
 } from "@oscharko-dev/keiko-workspace";
-import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  isWorkspaceDirectoryIdentityCurrent,
+  isWorkspacePathSnapshotCurrent,
+  WorkspaceDescriptorReadError,
+  workspaceEntryAvailabilityFailure,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -38,6 +43,7 @@ import {
   type DiscoveredFile,
   type DiscoveryError,
   type DiscoveryOptions,
+  type WalkChurnKind,
 } from "./types.js";
 
 // Each yield is either a discovered file or a per-entry rejection diagnostic. We split the
@@ -151,20 +157,39 @@ function abortYield(): WalkYield {
   };
 }
 
-function safeStatFile(fs: WorkspaceFs, realPath: string): WorkspaceStat | DiscoveryError {
+interface Inspection<T> {
+  readonly result: T;
+  // Set when the entry was listed but no longer exists (#4435); its absence is current state.
+  readonly vanished: boolean;
+  // Set when the entry exists but is locked or protected (#4434).
+  readonly unavailable: boolean;
+}
+
+function inspectionFailure<T>(result: T, error: unknown): Inspection<T> {
+  const availability = workspaceEntryAvailabilityFailure(error);
+  return {
+    result,
+    vanished: availability === "vanished",
+    unavailable: availability === "unavailable",
+  };
+}
+
+function safeStatFile(
+  fs: WorkspaceFs,
+  realPath: string,
+): Inspection<WorkspaceStat | DiscoveryError> {
   try {
-    const realStats = fs.stat(realPath);
-    return realStats;
-  } catch {
-    return { code: "STAT_FAILED", message: "entry stat failed" };
+    return { result: fs.stat(realPath), vanished: false, unavailable: false };
+  } catch (error) {
+    return inspectionFailure({ code: "STAT_FAILED", message: "entry stat failed" }, error);
   }
 }
 
-function safeRealPath(fs: WorkspaceFs, absolutePath: string): string | undefined {
+function safeRealPath(fs: WorkspaceFs, absolutePath: string): Inspection<string | undefined> {
   try {
-    return fs.realPath(absolutePath);
-  } catch {
-    return undefined;
+    return { result: fs.realPath(absolutePath), vanished: false, unavailable: false };
+  } catch (error) {
+    return inspectionFailure(undefined, error);
   }
 }
 
@@ -174,6 +199,7 @@ function safeRealPath(fs: WorkspaceFs, absolutePath: string): string | undefined
 // target is itself a denied locus (e.g. a source lexically admitted as safe, then retargeted via
 // symlink to `~/.ssh` before this call runs). Only the root needs this: every descendant is
 // already re-checked against `ctx.realRootPath` and the deny list on every subsequent snapshot.
+/** @returns the admitted canonical root, or the discovery error that refuses the source root. */
 function resolveAdmittedRealRoot(fs: WorkspaceFs, rootPath: string): string | DiscoveryError {
   try {
     return resolveExistingAllowedWorkspaceRealRoot(fs, rootPath);
@@ -196,6 +222,10 @@ interface WalkContext {
   readonly options: DiscoveryOptions;
   readonly gitIgnore: IgnoreMatcher | undefined;
   filesYielded: number;
+}
+
+function observeChurn(ctx: WalkContext, kind: WalkChurnKind): void {
+  ctx.options.onWalkChurn?.(kind);
 }
 
 const HIDDEN_OR_GENERATED_DIRS: ReadonlySet<string> = new Set([
@@ -236,8 +266,10 @@ function isGitIgnored(ctx: WalkContext, relativePath: string, isDirectory: boole
   return ctx.gitIgnore === undefined ? false : isIgnored(ctx.gitIgnore, relativePath, isDirectory);
 }
 
+// The root's identity, not its membership metadata: Office lock files and sync clients change the
+// root's mtime/ctime constantly, while a replaced, moved or re-pointed root still fails (#4435).
 function rootSnapshotIsCurrent(ctx: WalkContext): boolean {
-  return isWorkspacePathSnapshotCurrent(
+  return isWorkspaceDirectoryIdentityCurrent(
     ctx.fs,
     ctx.bounds.rootPath,
     ctx.realRootPath,
@@ -261,13 +293,9 @@ function resolveFileSnapshot(
       error: { code: "READ_FAILED", message: "selected source root changed during discovery" },
     };
   }
-  const realPath = safeRealPath(ctx.fs, absolutePath);
-  if (realPath === undefined) {
-    return {
-      kind: "error",
-      error: { code: "READ_FAILED", message: "entry realpath failed", relativePath },
-    };
-  }
+  const resolvedPath = safeRealPath(ctx.fs, absolutePath);
+  const realPath = resolvedPath.result;
+  if (realPath === undefined) return unresolvedFileSnapshot(ctx, resolvedPath, relativePath);
   if (!isContained(ctx.realRootPath, realPath)) {
     return {
       kind: "error",
@@ -279,9 +307,33 @@ function resolveFileSnapshot(
     };
   }
   if (isDeniedRelativePath(toPosixRelative(ctx.realRootPath, realPath))) return { kind: "skip" };
-  const stat = safeStatFile(ctx.fs, realPath);
-  if ("code" in stat) return { kind: "error", error: { ...stat, relativePath } };
+  const inspected = safeStatFile(ctx.fs, realPath);
+  const stat = inspected.result;
+  if ("code" in stat) {
+    if (inspected.vanished) return vanishedEntry(ctx);
+    return { kind: "error", error: { ...stat, relativePath } };
+  }
   return stat.isFile ? { kind: "ready", realPath, stat } : { kind: "skip" };
+}
+
+// A listed entry that no longer exists is skipped and counted: it is gone, so a later prune of
+// its document is correct. A locked or protected entry stays a per-entry READ_FAILED, which keeps
+// the earlier document and marks the scan incomplete instead of inferring deletion (#4434).
+function vanishedEntry(ctx: WalkContext): FileSnapshotResolution {
+  observeChurn(ctx, "vanished-entry");
+  return { kind: "skip" };
+}
+
+function unresolvedFileSnapshot(
+  ctx: WalkContext,
+  inspected: Inspection<string | undefined>,
+  relativePath: string,
+): FileSnapshotResolution {
+  if (inspected.vanished) return vanishedEntry(ctx);
+  const message = inspected.unavailable
+    ? "entry is locked or not permitted"
+    : "entry realpath failed";
+  return { kind: "error", error: { code: "READ_FAILED", message, relativePath } };
 }
 
 function* yieldFileIfAllowed(
@@ -346,12 +398,12 @@ interface DirectorySnapshot {
 
 function directorySnapshot(ctx: WalkContext, absolutePath: string): DirectorySnapshot | undefined {
   if (!rootSnapshotIsCurrent(ctx)) return undefined;
-  const realPath = safeRealPath(ctx.fs, absolutePath);
+  const realPath = safeRealPath(ctx.fs, absolutePath).result;
   if (realPath === undefined || !isContained(ctx.realRootPath, realPath)) return undefined;
   const requestedRelative = toPosixRelative(ctx.bounds.rootPath, absolutePath);
   const canonicalRelative = toPosixRelative(ctx.realRootPath, realPath);
   if (requestedRelative !== canonicalRelative) return undefined;
-  const stat = safeStatFile(ctx.fs, realPath);
+  const stat = safeStatFile(ctx.fs, realPath).result;
   if ("code" in stat || !stat.isDirectory || stat.isSymbolicLink) return undefined;
   return { realPath, stat };
 }
@@ -363,18 +415,60 @@ function directoryReadFailure(): DirectoryRead {
   };
 }
 
+function directoryIdentityIsCurrent(
+  ctx: WalkContext,
+  absolutePath: string,
+  before: DirectorySnapshot,
+): boolean {
+  return (
+    rootSnapshotIsCurrent(ctx) &&
+    isWorkspaceDirectoryIdentityCurrent(ctx.fs, absolutePath, before.realPath, before.stat)
+  );
+}
+
+// The port enumerates one consistent snapshot and refuses a directory whose metadata moved during
+// the read. When only membership moved (identity is unchanged), the directory is read once more
+// from a fresh snapshot; a second failure, or any identity change, stays READ_FAILED (#4435).
+function readDirOnce(
+  ctx: WalkContext,
+  absolutePath: string,
+  before: DirectorySnapshot,
+): readonly WalkDirEntry[] | undefined {
+  try {
+    const entries = ctx.fs.readDir(before.realPath, directoryEntryCap());
+    return directoryIdentityIsCurrent(ctx, absolutePath, before) ? entries : undefined;
+  } catch (error) {
+    // Only the port's own snapshot refusal can be a membership change worth one retry; every
+    // other read failure keeps the existing READ_FAILED handling of the caller.
+    if (!(error instanceof WorkspaceDescriptorReadError)) throw error;
+    return undefined;
+  }
+}
+
+function readDirWithMembershipRetry(
+  ctx: WalkContext,
+  absolutePath: string,
+): readonly WalkDirEntry[] | undefined {
+  const before = directorySnapshot(ctx, absolutePath);
+  if (before === undefined) return undefined;
+  const entries = readDirOnce(ctx, absolutePath, before);
+  if (entries !== undefined) return entries;
+  // Only a directory whose identity held but whose membership metadata moved is retried.
+  if (!directoryIdentityIsCurrent(ctx, absolutePath, before)) return undefined;
+  if (isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, before.realPath, before.stat)) {
+    return undefined;
+  }
+  const retry = directorySnapshot(ctx, absolutePath);
+  if (retry === undefined) return undefined;
+  observeChurn(ctx, "directory-retried");
+  return readDirOnce(ctx, absolutePath, retry);
+}
+
 function safeReadDir(ctx: WalkContext, absolutePath: string): DirectoryRead {
   try {
-    const before = directorySnapshot(ctx, absolutePath);
-    if (before === undefined) return directoryReadFailure();
+    const entries = readDirWithMembershipRetry(ctx, absolutePath);
+    if (entries === undefined) return directoryReadFailure();
     const cap = directoryEntryCap();
-    const entries = ctx.fs.readDir(before.realPath, cap);
-    if (
-      !rootSnapshotIsCurrent(ctx) ||
-      !isWorkspacePathSnapshotCurrent(ctx.fs, absolutePath, before.realPath, before.stat)
-    ) {
-      return directoryReadFailure();
-    }
     // The sentinel came back: this directory holds more entries than the walk could ever yield,
     // so stop here instead of silently discovering an arbitrary filesystem-order subset.
     if (entries.length >= cap) {
@@ -492,6 +586,7 @@ function* walkFilesScope(ctx: WalkContext, files: readonly string[]): Generator<
 
 const MAX_GITIGNORE_BYTES = 1024 * 1024;
 
+/** @returns whether the path exists, or the read failure when that could not be asked. */
 function pathExists(
   fs: WorkspaceFs,
   absolutePath: string,
@@ -514,13 +609,13 @@ function gitIgnoreSnapshot(
   absolutePath: string,
   realRootPath: string,
 ): GitIgnoreSnapshot | undefined {
-  const realPath = safeRealPath(fs, absolutePath);
+  const realPath = safeRealPath(fs, absolutePath).result;
   if (realPath === undefined || !isContained(realRootPath, realPath)) return undefined;
   const canonicalRelative = toPosixRelative(realRootPath, realPath);
   if (canonicalRelative !== ".gitignore" || isDeniedRelativePath(canonicalRelative)) {
     return undefined;
   }
-  const stat = safeStatFile(fs, realPath);
+  const stat = safeStatFile(fs, realPath).result;
   if ("code" in stat || !stat.isFile || stat.isSymbolicLink || stat.size > MAX_GITIGNORE_BYTES) {
     return undefined;
   }
@@ -584,7 +679,7 @@ export function* walkSource(
     return;
   }
   const realRootPath = admittedRoot;
-  const rootStat = safeStatFile(fs, realRootPath);
+  const rootStat = safeStatFile(fs, realRootPath).result;
   if ("code" in rootStat || !rootStat.isDirectory || rootStat.isSymbolicLink) {
     yield {
       kind: "error",

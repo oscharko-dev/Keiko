@@ -198,6 +198,15 @@ run's git status excludes a deny-listed path (`.idea/**`, `.env`, `.keiko/**`) f
 and reports it as a count, because Keiko never reads, edits or stages such a path and the staged
 tree digest still binds the exact index it may sit in; treating it as an incomplete snapshot made
 every repository that tracks its IDE metadata undeliverable (2026-09-10).
+Recursive walks classify per-entry filesystem failures through one shared rule
+(`workspaceEntryAvailabilityFailure`, #4434/#4435): an entry that vanished between listing and
+inspection, and a locked or protected entry, are skipped, counted and disclosed, and every other
+cause keeps its fail-closed handling. Directory identity (canonical path, device and inode,
+creation time, directory type) is distinguished from membership metadata (mtime/ctime), so a
+replaced, moved or re-pointed root still fails while Office lock files and sync clients do not; a
+directory whose membership moved is re-read once. ADR-0022 "Filesystem consistency and redaction"
+states the coverage and Activity Log consequences. The per-file guarded read and its TOCTOU
+snapshot checks are unchanged.
 Connected-context detection uses marker-only language metadata because its request-local candidate
 inventory already performs the bounded repository walk; structural diagnostics derive additional
 observed languages from that shared inventory instead of scanning the repository twice.
@@ -243,6 +252,20 @@ proportional to the pattern length. This preserves `*`, `**`, `**/`, `?`, litera
 Unicode simple case folding without a new pattern-count or corpus-size cutoff. Brace expansion and
 extglobs remain unsupported. Deny and ignore policy are separate from filename query matching;
 their documented grammar alone does not establish a performance guarantee.
+
+One letter-case rule governs workspace path matching (#4436): `.gitignore` rules, Coding search
+include/exclude globs and literal exclusions, path-discovery globs and exact basenames, and
+Knowledge Pod scope globs. It is case-insensitive on Windows, where NTFS and Git for Windows'
+default `core.ignorecase=true` treat `SCAN.PDF` and `scan.pdf` as one path, and case-sensitive
+elsewhere. A repository's own explicit `core.ignorecase` wins on every platform, as it does in
+Git; detection reads it from the repository's bounded Git config through the guarded Git metadata
+reader, never follows `include` directives, and never retains or logs the config text. An oversized
+or unreadable config leaves the platform default in force. The rule changes letter case only: it
+adds no wildcard, cannot re-include a denied path, and the deny tier stays case-insensitive on
+every platform. Filename queries keep their explicit `caseSensitive` request. The persistent
+workspace-index ignore identity includes a case-insensitive rule, so snapshots built under another
+rule are rebuilt; case-sensitive identities are unchanged. The `coding-repository-handler.settled`
+Activity Log line records the applied rule as the closed `pathCase` value.
 
 ### D4 — Deterministic, explainable context-pack selection with byte-budgeting and redaction
 

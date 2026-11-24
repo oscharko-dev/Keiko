@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "issue": 4429,
+  "fileCount": 20000,
+  "minimumFileCount": 1000,
+  "p95BaseMs": 10000,
+  "p95MsPerThousandFiles": 1500,
+  "heapPeakBudgetMiB": 1024
+}

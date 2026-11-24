@@ -26,6 +26,7 @@ export const SUPPORT_RETRIEVAL_MISS_REASONS = [
   "follow-up-still-insufficient",
   "semantic-unavailable-with-miss",
   "intent-overview-on-follow-up",
+  "discovery-dropped-entries",
 ] as const;
 export type SupportRetrievalMissReason = (typeof SUPPORT_RETRIEVAL_MISS_REASONS)[number];
 
@@ -64,6 +65,14 @@ export interface SupportRetrievalMissFields {
     | "assistant-paths"
     | "assistant-declaration"
     | "assistant-paths-and-declaration";
+  /** Entries the recursive walk did not consider, by closed cause (#4431). */
+  readonly discoveryUnavailableEntryCount?: number;
+  readonly discoveryUnavailableDirectoryCount?: number;
+  readonly discoveryOversizedDirectoryCount?: number;
+  readonly discoverySkippedLinkCount?: number;
+  readonly discoveryUnrepresentablePathCount?: number;
+  readonly discoveryDeniedCount?: number;
+  readonly discoveryIgnoredCount?: number;
 }
 
 export interface SupportRetrievalMissFinding {

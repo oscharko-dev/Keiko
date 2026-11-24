@@ -37,7 +37,12 @@ export interface DiscoveryOptions {
   // Optional cancellation. The walker checks at each directory boundary so an abort lands
   // within one directory of work.
   readonly signal?: AbortSignal;
+  // Optional body-free observer of benign walk churn (#4435): an entry that vanished between
+  // listing and inspection, or a directory re-read once after its membership moved.
+  readonly onWalkChurn?: (kind: WalkChurnKind) => void;
 }
+
+export type WalkChurnKind = "vanished-entry" | "directory-retried";
 
 export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
   maxDepth: 12,
@@ -123,6 +128,9 @@ export type ExtractionEvent =
       readonly totalExtracted: number;
       readonly totalSkipped: number;
       readonly totalFailed: number;
+      // Benign walk churn (#4435): listed entries that vanished, and directories re-read once.
+      readonly totalVanished?: number;
+      readonly totalDirectoryRetries?: number;
     };
 
 // Internal type kept here (not exported from the barrel) so walk.ts and extract.ts share

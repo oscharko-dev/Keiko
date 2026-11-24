@@ -303,6 +303,20 @@ import { directDefinitionSymbol } from "./grounded-query-shape.js";
 
 import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
 import {
+  emptyNamedDirectoryFocus,
+  FocusDescriptorCollector,
+  focusDocumentPaths,
+  isWithinDirectories,
+  NAMED_DIRECTORY_FOCUS_MAX_OBSERVED_FILES,
+  namedDirectoryTerms,
+  namedScopeDirectories,
+  retainFocusFiles,
+  type FocusRetention,
+  type NamedDirectoryFocusObservation,
+  type NamedDirectoryFocusState,
+  type NamedDirectoryMatch,
+} from "./grounded-named-directory-focus.js";
+import {
   attachContextBudgetDiagnostics,
   deriveGroundedContextAssembly,
 } from "./grounded-context-diagnostics.js";
@@ -771,6 +785,29 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Discovery churn and drops of the actual walk (#4434, #4435, #4431) and the Windows system
+// entries it pruned (#4437): by closed cause and as a count only. Absent when no coverage was
+// reported.
+const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
+  discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryIgnoredCount: { type: "integer", dataClass: "count", required: false },
+  discoveryDeniedCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
+  discoverySkippedLinkCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryOversizedDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoverySystemNoisePrunedCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
+// #4429: every count of the named-subfolder read is optional; absent when no folder was named.
+const NAMED_DIRECTORY_COUNT_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: false,
+} as const;
+
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -779,8 +816,11 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
   owner: "keiko-server",
   emitter: "grounded-orchestrator.logSourceEvidenceDetails",
   fields: {
+    ...DISCOVERY_CHURN_ACTIVITY_FIELDS,
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    // #4456: code index builds whose parsed source budget ended the source list.
+    codeIndexSourceBudgetReachedCount: { type: "integer", dataClass: "count", required: false },
     activityDetailStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -789,6 +829,28 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    // #4429: the subfolder a question named, read as its own bounded subtree. Counts only.
+    namedDirectoryFocusState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "no-match",
+        "applied",
+        "partial",
+        "empty",
+        "skipped-budget",
+        "skipped-stopped",
+        "incomplete-traversal",
+      ],
+    },
+    namedDirectoryCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryAmbiguousTermCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryCandidateFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryObservedFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryRetainedFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryDocumentCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryChargedBytes: NAMED_DIRECTORY_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1324,6 +1386,7 @@ interface SourceDecisionObservation {
   semanticRejectedAtomCount: number;
   primaryContentPathCount: number;
   sourceDescriptorPathCount: number;
+  namedDirectoryFocus?: NamedDirectoryFocusObservation | undefined;
 }
 
 function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
@@ -1487,6 +1550,7 @@ function sumContextDiagnostics(
     candidateFileCount: sum("candidateFileCount"),
     candidateDirectoryCount: sum("candidateDirectoryCount"),
     codeIndexBuildCount: sum("codeIndexBuildCount"),
+    codeIndexSourceBudgetReachedCount: sum("codeIndexSourceBudgetReachedCount"),
     symbolGraphBuildCount: sum("symbolGraphBuildCount"),
     importGraphBuildCount: sum("importGraphBuildCount"),
     endpointGraphBuildCount: sum("endpointGraphBuildCount"),
@@ -1739,6 +1803,7 @@ function createStructuralRequestContextPool(
 interface RingResult {
   readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
   readonly endpointContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
@@ -1802,6 +1867,31 @@ function discoveryCoverageMarker(
   };
 }
 
+// A locked or protected entry was skipped, never read; the answer names it as an explicit gap
+// (#4434). The count is added only when present so ordinary coverage markers stay unchanged.
+function discoveryDropCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  return [
+    ...positiveCoverageDetail(
+      "locked or protected entries",
+      coverage.unavailableEntriesByDiscovery,
+    ),
+    // Skipped links, unreadable and oversized directories are named the same way (#4431).
+    ...positiveCoverageDetail("skipped links", coverage.skippedSymbolicLinksByDiscovery),
+    ...positiveCoverageDetail("unreadable directories", coverage.unavailableDirectoriesByDiscovery),
+    ...positiveCoverageDetail("oversized directories", coverage.oversizedDirectoriesByDiscovery),
+  ];
+}
+
+function positiveCoverageDetail(label: string, count: number | undefined): readonly string[] {
+  return count !== undefined && count > 0 ? [`${label} ${String(count)}`] : [];
+}
+
+// Windows system entries ($Recycle.Bin, desktop.ini, ...) are pruned by policy, never read (#4437).
+function systemNoiseCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.systemNoisePrunedByDiscovery ?? 0;
+  return count > 0 ? [`system entries pruned ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1825,6 +1915,8 @@ function coverageUncertainty(
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
+          ...discoveryDropCoverageDetail(coverage),
+          ...systemNoiseCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -2489,6 +2581,7 @@ function lexicalSearchOptions(inputs: SearchInputs): {
 interface ContextSearchResult extends SearchResult {
   readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
 }
 
 function lexicalQuery(
@@ -2657,17 +2750,146 @@ async function lexicalRingSearch(
   const result = await searchLexicalTerms(ring, inputs);
   const decision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
   decision.overviewListingFallback = overviewListingDecision(result, inputs);
-  if (decision.overviewListingFallback !== "used") return { ...result, sourceDecision: decision };
+  if (decision.overviewListingFallback !== "used")
+    return withNamedDirectoryFocus(ring, inputs, { ...result, sourceDecision: decision });
   const listing = await findFiles(
     inputs.searchScope,
     { ...inputs.query, kind: "file-pattern", text: "**/*" },
     ring.searchLimits,
     lexicalSearchOptions(inputs),
   );
-  return {
+  return withNamedDirectoryFocus(ring, inputs, {
     ...mergeOverviewListing(result, listing),
     sourceDecision: decision,
+  });
+}
+
+interface NamedDirectoryFocusRequest {
+  readonly match?: NamedDirectoryMatch | undefined;
+  readonly candidatePaths: readonly string[];
+  readonly observation?: NamedDirectoryFocusObservation | undefined;
+}
+
+function namedDirectoryFocusRequested(inputs: SearchInputs, result: ContextSearchResult): boolean {
+  return (
+    inputs.query.kind === "natural-language" &&
+    inputs.targetDecision.kind !== "literal-search" &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    (result.knownFitFileBytes?.size ?? 0) === 0 &&
+    namedDirectoryTerms(inputs.query.text).length > 0
+  );
+}
+
+function namedDirectoryFocusRequest(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  result: ContextSearchResult,
+): NamedDirectoryFocusRequest {
+  if (!namedDirectoryFocusRequested(inputs, result))
+    return { candidatePaths: [], observation: emptyNamedDirectoryFocus("not-requested") };
+  const candidatePaths = inputs.structuralContexts.forLimits(ring.searchLimits).candidatePaths();
+  const match = namedScopeDirectories(
+    inputs.query.text,
+    candidatePaths,
+    inputs.searchScope.relativePaths,
+  );
+  const refused = (state: NamedDirectoryFocusState): NamedDirectoryFocusRequest => ({
+    candidatePaths,
+    observation: emptyNamedDirectoryFocus(state, match),
+  });
+  if (match.directories.length === 0) return refused("no-match");
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs) return refused("skipped-stopped");
+  if (inputs.tryReserveAdditionalSearchCall?.() !== true) return refused("skipped-budget");
+  return { match, candidatePaths };
+}
+
+// #4429: a question naming a subfolder reads that subtree; ordinary evidence stays unchanged.
+async function withNamedDirectoryFocus(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  result: ContextSearchResult & { readonly sourceDecision: SourceDecisionObservation },
+): Promise<ContextSearchResult> {
+  const request = namedDirectoryFocusRequest(ring, inputs, result);
+  if (request.match === undefined) {
+    if (request.observation?.state !== "not-requested")
+      result.sourceDecision.namedDirectoryFocus = request.observation;
+    return result;
+  }
+  const focus = await scanNamedDirectories(ring, inputs, request.match, request.candidatePaths);
+  result.sourceDecision.namedDirectoryFocus = focus.observation;
+  if (focus.atoms.length === 0 && focus.documents.length === 0) return result;
+  return {
+    ...result,
+    atoms: [...result.atoms, ...focus.atoms],
+    knownFitFileBytes: new Map([...(result.knownFitFileBytes ?? []), ...focus.fileBytes]),
+    focusDocumentPaths: focus.documents,
   };
+}
+
+interface NamedDirectoryFocusScan {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly fileBytes: ReadonlyMap<string, number>;
+  readonly documents: readonly string[];
+  readonly observation: NamedDirectoryFocusObservation;
+}
+
+async function scanNamedDirectories(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  match: NamedDirectoryMatch,
+  candidatePaths: readonly string[],
+): Promise<NamedDirectoryFocusScan> {
+  const collector = new FocusDescriptorCollector(match.directories);
+  const scan = await searchText(
+    { ...inputs.searchScope, relativePaths: match.directories },
+    inputs.query,
+    ring.searchLimits,
+    { ...lexicalSearchOptions(inputs), onEligibleTextFile: collector.observe },
+  );
+  const readable = allowsReadableScopeContext(scan.coverage);
+  const documents = readable
+    ? focusDocumentPaths(candidatePaths, match.directories, isExtractableConnectedDocumentPath)
+    : [];
+  const retention = retainFocusFiles(
+    readable ? collector.descriptors() : [],
+    inputs.scopeContextBytesMax,
+    {
+      scopeId: inputs.searchScope.scopeId,
+      queryFingerprint: projectMetadataQueryFingerprint(inputs.query),
+      emittedAtMs: inputs.nowMs(),
+    },
+  );
+  const state = namedDirectoryFocusState(readable, retention, documents, collector);
+  return {
+    atoms: retention.atoms,
+    fileBytes: retention.fileBytes,
+    documents,
+    observation: {
+      ...emptyNamedDirectoryFocus(state, match),
+      candidateFileCount: candidatePaths.filter((path) =>
+        isWithinDirectories(path, match.directories),
+      ).length,
+      observedFileCount: collector.observedCount(),
+      retainedFileCount: retention.atoms.length,
+      documentCount: documents.length,
+      chargedBytes: retention.chargedBytes,
+    },
+  };
+}
+
+function namedDirectoryFocusState(
+  readable: boolean,
+  retention: FocusRetention,
+  documents: readonly string[],
+  collector: FocusDescriptorCollector,
+): NamedDirectoryFocusState {
+  if (!readable) return "incomplete-traversal";
+  if (retention.atoms.length === 0 && documents.length === 0) return "empty";
+  return retention.droppedFileCount > 0 ||
+    collector.observedCount() >= NAMED_DIRECTORY_FOCUS_MAX_OBSERVED_FILES
+    ? "partial"
+    : "applied";
 }
 
 function overviewListingDecision(
@@ -2742,6 +2964,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     knownFitFileBytes: result.knownFitFileBytes,
+    focusDocumentPaths: result.focusDocumentPaths,
     contextualFallbackCandidates:
       inputs.query.kind === "natural-language" && inputs.targetDecision.kind === "contextual"
         ? captureContextualFallbackCandidates(result.atoms, diagnostics)
@@ -3021,6 +3244,7 @@ interface RingDecisionAudit {
 
 interface RingRunSummary {
   readonly contextualDefinitionSeedCount?: number | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
   readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly explicitAdmission?: ExplicitPathAdmission;
@@ -3366,6 +3590,7 @@ interface RingEvidenceAccumulator {
   symbolDiscovery?: SymbolDiscoveryResult;
   verifiedDefinitionContext?: boolean;
   knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  focusDocumentPaths?: readonly string[] | undefined;
   atoms: EvidenceAtom[];
   omitted: OmittedContextEntry[];
   uncertainty: UncertaintyMarker[];
@@ -3385,6 +3610,7 @@ function newRingEvidence(): RingEvidenceAccumulator {
 }
 function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
   evidence.knownFitFileBytes ??= result.knownFitFileBytes;
+  evidence.focusDocumentPaths ??= result.focusDocumentPaths;
   evidence.endpointContentIdentities =
     result.endpointContentIdentities ?? evidence.endpointContentIdentities;
   if (evidence.diagnostics === undefined) {
@@ -5628,12 +5854,10 @@ async function projectMetadataAtoms(
     PROJECT_METADATA_FILENAMES,
   );
   inputs.existsCache.metadataRetention = retained;
-  for await (const _atoms of iterateSequentialResults(roots, (root) =>
-    metadataTraversalCanContinue(control)
-      ? projectMetadataRootAtoms(root, context)
-      : Promise.resolve([]),
-  )) {
+  // One root at a time: the traversal records what it retains, its atoms are not used here.
+  for (const root of roots) {
     if (!metadataTraversalCanContinue(control)) break;
+    await projectMetadataRootAtoms(root, context); // NOSONAR typescript:S9382 -- one root at a time: retention and the stop check follow the previous root
   }
   await workspacePackageMetadataAtoms(context);
   return retained
@@ -9266,6 +9490,23 @@ function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OP
   };
 }
 
+// #4458: previous-answer paths the current question does not itself name or evidence. They stay
+// admitted and prioritized, but they never replace the question's own keep-one evidence.
+function continuityOnlyPaths(rings: RingRunSummary): ReadonlySet<string> {
+  const selections = rings.explicitAdmission?.selections ?? [];
+  const owned = new Set([
+    ...selections
+      .filter((selection) => selection.origin !== "assistant")
+      .map((selection) => selection.path),
+    ...primaryContentPaths(rings),
+  ]);
+  return new Set(
+    selections
+      .filter((selection) => selection.origin === "assistant" && !owned.has(selection.path))
+      .map((selection) => selection.path),
+  );
+}
+
 function explicitSelectionPaths(rings: RingRunSummary): ReadonlySet<string> {
   return new Set(
     rings.atoms
@@ -9358,6 +9599,7 @@ function finalCandidateFilter(
       args.input.scope.kind === "files"
         ? 0
         : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(args.plan))),
+    continuityOnlyPaths: continuityOnlyPaths(rings),
     nowMs: args.nowMs,
     fallbackOrder: reranker.reranked
       ? []
@@ -9408,6 +9650,7 @@ function selectRankedEvidencePool(
       selected: ordered.kept,
       absoluteFloor: options.minScore,
       fallbackOrder: options.fallbackOrder,
+      continuityOnlyPaths: options.continuityOnlyPaths,
       minScoreExemptPaths: options.minScoreExemptPaths ?? new Set(),
       scopeKind: input.scope.kind,
       relative: ordinaryRelativeFloor(selectionInput),
@@ -9844,7 +10087,11 @@ async function prepareGroundedAssembly(
   // Bounded small-document extraction for explicit `files` scopes (Issue #1285). Returns empty
   // evidence for every other scope kind, leaving the code-first path byte-identical.
   const documentEvidence = await collectConnectedDocumentEvidence({
-    scope: documentSelectionScope(input.scope, augmentedRings.explicitAdmission),
+    scope: documentSelectionScope(
+      input.scope,
+      augmentedRings.explicitAdmission,
+      augmentedRings.focusDocumentPaths,
+    ),
     query: input.query,
     searchScope,
     fs,
@@ -9889,11 +10136,14 @@ async function prepareGroundedAssembly(
 function documentSelectionScope(
   scope: SelectedScope,
   admission: ExplicitPathAdmission | undefined,
+  focusDocumentPaths: readonly string[] = [],
 ): SelectedScope {
-  const paths =
-    admission?.selections
+  const paths = [
+    ...(admission?.selections
       .map((selection) => selection.path)
-      .filter(isExtractableConnectedDocumentPath) ?? [];
+      .filter(isExtractableConnectedDocumentPath) ?? []),
+    ...focusDocumentPaths,
+  ];
   if (paths.length === 0) return scope;
   return {
     ...scope,
@@ -10166,6 +10416,7 @@ const EMPTY_STRUCTURAL_DIAGNOSTICS: StructuralRequestContextPoolDiagnostics = {
   candidateFileCount: 0,
   candidateDirectoryCount: 0,
   codeIndexBuildCount: 0,
+  codeIndexSourceBudgetReachedCount: 0,
   symbolGraphBuildCount: 0,
   importGraphBuildCount: 0,
   endpointGraphBuildCount: 0,
@@ -10734,7 +10985,7 @@ function completionActivityExtra(
 function completedRingDecisions(
   decisions: RingDecisionAudit | undefined,
 ): Partial<Omit<RingDecisionAudit, "augmentationSkipReason">> {
-  const { augmentationSkipReason: _reason, ...completed } = decisions ?? {};
+  const { augmentationSkipReason, ...completed } = decisions ?? {};
   return completed;
 }
 
@@ -10799,12 +11050,12 @@ function sourceReferenceActivityExtra(
 > {
   if (observation === undefined) return {};
   const {
-    stackTraceFrameCount: _all,
-    stackTraceExternalFrameCount: _external,
-    continuityReferentSource: _source,
-    continuityReferentCount: _referents,
-    continuityAdmittedCount: _admitted,
-    continuityRejectedCount: _rejected,
+    stackTraceFrameCount,
+    stackTraceExternalFrameCount,
+    continuityReferentSource,
+    continuityReferentCount,
+    continuityAdmittedCount,
+    continuityRejectedCount,
     ...fields
   } = observation;
   return fields;
@@ -10812,8 +11063,8 @@ function sourceReferenceActivityExtra(
 
 function sourceDecisionActivityExtra(
   observation: SourceDecisionObservation,
-): Omit<SourceDecisionObservation, "sourceDescriptorPathCount"> {
-  const { sourceDescriptorPathCount: _sourceDescriptorPathCount, ...source } = observation;
+): Omit<SourceDecisionObservation, "sourceDescriptorPathCount" | "namedDirectoryFocus"> {
+  const { sourceDescriptorPathCount, namedDirectoryFocus, ...source } = observation;
   return source;
 }
 
@@ -11110,19 +11361,55 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function discoveryChurnActivityExtra(
+  coverage: ContextCoverageDiagnostics | undefined,
+): Partial<Record<keyof typeof DISCOVERY_CHURN_ACTIVITY_FIELDS, number>> {
+  if (coverage === undefined) return {};
+  return {
+    discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
+    discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
+    discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+    discoveryIgnoredCount: coverage.ignoredByDiscovery,
+    discoveryDeniedCount: coverage.deniedByDiscovery,
+    discoveryUnrepresentablePathCount: coverage.unrepresentablePathsByDiscovery ?? 0,
+    discoverySkippedLinkCount: coverage.skippedSymbolicLinksByDiscovery ?? 0,
+    discoveryUnavailableDirectoryCount: coverage.unavailableDirectoriesByDiscovery ?? 0,
+    discoveryOversizedDirectoryCount: coverage.oversizedDirectoriesByDiscovery ?? 0,
+    discoverySystemNoisePrunedCount: coverage.systemNoisePrunedByDiscovery ?? 0,
+  };
+}
+
+function namedDirectoryFocusActivityExtra(
+  focus: NamedDirectoryFocusObservation | undefined,
+): Readonly<Record<string, unknown>> {
+  return focus === undefined
+    ? {}
+    : {
+        namedDirectoryFocusState: focus.state,
+        namedDirectoryCount: focus.directoryCount,
+        namedDirectoryAmbiguousTermCount: focus.ambiguousTermCount,
+        namedDirectoryCandidateFileCount: focus.candidateFileCount,
+        namedDirectoryObservedFileCount: focus.observedFileCount,
+        namedDirectoryRetainedFileCount: focus.retainedFileCount,
+        namedDirectoryDocumentCount: focus.documentCount,
+        namedDirectoryChargedBytes: focus.chargedBytes,
+      };
+}
+
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
-  status: ConnectedContextCompletionStatus,
+  execution: ConnectedContextExecution,
   correlationId: string,
 ): void {
-  const observed = status.sourceDecision;
+  const observed = execution.status.sourceDecision;
   const observation =
     observed === undefined
       ? { activityDetailStatus: "unavailable" as const }
       : {
           activityDetailStatus: "complete" as const,
           sourceDescriptorPathCount: observed.sourceDescriptorPathCount,
+          ...namedDirectoryFocusActivityExtra(observed.namedDirectoryFocus),
         };
   logger.info(() =>
     activityLogEvent(
@@ -11133,6 +11420,8 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
+        codeIndexSourceBudgetReachedCount: execution.structural.codeIndexSourceBudgetReachedCount,
+        ...discoveryChurnActivityExtra(execution.output.pack.diagnostics?.coverage),
         completeness: "complete",
         loss: "none",
       },
@@ -11172,7 +11461,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
-  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
+  logSourceEvidenceDetails(logger, identity, execution, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,

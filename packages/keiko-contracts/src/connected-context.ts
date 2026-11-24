@@ -472,6 +472,21 @@ export interface ContextCoverageLimits {
 export interface ContextCoverageDiagnostics {
   // Rejected directory entries, not the unknown number of files in their subtrees.
   readonly unrepresentablePathsByDiscovery?: number | undefined;
+  // Locked or protected entries the walk skipped; disclosed and reported as io-error (#4434).
+  readonly unavailableEntriesByDiscovery?: number | undefined;
+  // Listed entries that no longer existed when inspected; coverage stays complete (#4435).
+  readonly vanishedEntriesByDiscovery?: number | undefined;
+  // Directories re-read once after benign membership churn (#4435).
+  readonly membershipRetriesByDiscovery?: number | undefined;
+  // Symbolic links and reparse points the walk skipped without following them (#4431).
+  readonly skippedSymbolicLinksByDiscovery?: number | undefined;
+  // Directories whose listing could not be completed; their subtree stays unseen (#4431).
+  readonly unavailableDirectoriesByDiscovery?: number | undefined;
+  // Directories too large to re-read after membership churn; also an io-error (#4431).
+  readonly oversizedDirectoriesByDiscovery?: number | undefined;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) pruned while descending; never evidence,
+  // so coverage stays complete, but the count is disclosed (#4437).
+  readonly systemNoisePrunedByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -1667,6 +1682,13 @@ const REQUIRED_COVERAGE_FIELDS = [
 
 const OPTIONAL_COVERAGE_FIELDS = [
   "unrepresentablePathsByDiscovery",
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",

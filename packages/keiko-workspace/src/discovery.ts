@@ -17,8 +17,13 @@ import {
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
-import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import { compileWorkspaceIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import {
+  type WorkspaceEntryAvailability,
+  workspaceEntryAvailabilityFailure,
+} from "./entryAvailability.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import { isSystemNoiseEntry, isWindowsDriveRoot } from "./systemNoise.js";
 import {
   admittedSearchScopeEntry,
   canonicalSearchScopeRelativePaths,
@@ -76,6 +81,8 @@ interface Walk {
   readonly retainMembership?: boolean;
   readonly entryLimit?: number | undefined;
   readonly executionControl?: StructuralExecutionControl | undefined;
+  /** The walk root is a Windows drive root, so its top level holds the operating system (#4437). */
+  readonly atDriveRoot: boolean;
   entriesVisited: number;
   denied: number;
   unrepresentablePaths: number;
@@ -83,6 +90,18 @@ interface Walk {
   depthPruned: number;
   maxFilesPruned: number;
   ioErrors?: number;
+  // Streaming-walk entries skipped because they were locked or protected (#4434).
+  unavailableEntries?: number;
+  // Streaming-walk entries that disappeared between listing and inspection (#4435).
+  vanishedEntries?: number;
+  // Streaming-walk directories re-read once after benign membership churn (#4435).
+  membershipRetries?: number;
+  // Streaming-walk symbolic links and reparse points skipped without being followed (#4431).
+  skippedLinks?: number;
+  // Streaming-walk directories too large to re-read after churn; also counted in ioErrors (#4431).
+  oversizedDirectories?: number;
+  // Windows system entries pruned while descending (#4437); never read, always disclosed.
+  systemNoisePruned: number;
 }
 
 function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
@@ -140,6 +159,18 @@ function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
   return true;
 }
 
+// Operating-system entries such as `$Recycle.Bin` or `desktop.ini` are pruned only while descending,
+// after the deny and ignore tiers ran, so an explicitly selected path is never pruned (#4437). The
+// count stays separate from `ignored`: an ignored entry triggers the low-value rescue pass, which
+// would walk the connected root a second time for entries that are never evidence.
+function prunedAsSystemNoise(walk: Walk, relativeDir: string, name: string): boolean {
+  if (!isSystemNoiseEntry(name, { atDriveRoot: walk.atDriveRoot && relativeDir === "" })) {
+    return false;
+  }
+  walk.systemNoisePruned += 1;
+  return true;
+}
+
 function childRelative(relativeDir: string, name: string): string {
   return relativeDir === "" ? name : `${relativeDir}/${name}`;
 }
@@ -160,31 +191,56 @@ function assertRecoveryRootUnchanged(
 }
 
 // Process-wide descriptor exhaustion and identity changes remain fatal; only local availability
-// failures can preserve previously verified files and continue into unrelated sibling directories.
-const UNAVAILABLE_DIRECTORY_CODES: ReadonlySet<string> = new Set([
-  "ENOENT",
-  "ENOTDIR",
-  "EACCES",
-  "EPERM",
-  "EIO",
-  "ESTALE",
-]);
-
+// failures (the shared entry classification, which includes Windows sharing violations as EBUSY)
+// can preserve previously verified files and continue into unrelated sibling directories. A child
+// directory whose listing could not be read leaves its subtree unseen, so it stays an io-error.
 function skipUnavailableStreamingDirectory(
   walk: Walk,
   relativeDir: string,
   error: unknown,
 ): boolean {
   if (relativeDir === "" || walk.retainMembership !== false) return false;
-  if (
-    !(error instanceof Error) ||
-    !("code" in error) ||
-    typeof error.code !== "string" ||
-    !UNAVAILABLE_DIRECTORY_CODES.has(error.code)
-  )
-    return false;
+  if (workspaceEntryAvailabilityFailure(error) === undefined) return false;
   assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
   walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+  return true;
+}
+
+// A listed entry that vanished, or one that is locked or protected, is skipped, counted and
+// disclosed instead of failing the walk. The root must still be the admitted root, so a replaced
+// or unavailable root keeps failing closed (#4434, #4435).
+function skipUnavailableStreamingEntry(walk: Walk, relativePath: string, error: unknown): boolean {
+  if (relativePath === "" || walk.retainMembership !== false) return false;
+  const availability = workspaceEntryAvailabilityFailure(error);
+  if (availability === undefined) return false;
+  assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
+  countUnavailableStreamingEntry(walk, availability);
+  return true;
+}
+
+function countUnavailableStreamingEntry(
+  walk: Walk,
+  availability: WorkspaceEntryAvailability,
+): void {
+  if (availability === "vanished") walk.vanishedEntries = (walk.vanishedEntries ?? 0) + 1;
+  else walk.unavailableEntries = (walk.unavailableEntries ?? 0) + 1;
+}
+
+// The realpath parent fallback names the nearest existing parent of an entry that did not
+// resolve. In a streaming walk that cause is counted rather than recorded as a skipped symlink:
+// a vanished entry as vanished, and a locked, protected or otherwise unresolvable entry (a
+// disconnected mount point inside the folder) as unavailable. Both are disclosed (#4434).
+function skipUnresolvedStreamingEntry(
+  walk: Walk,
+  relativePath: string,
+  contained: ReturnType<typeof containedRealPathInfo>,
+): boolean {
+  const unresolved = contained.unresolved;
+  if (unresolved === undefined || relativePath === "" || walk.retainMembership !== false) {
+    return false;
+  }
+  assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
+  countUnavailableStreamingEntry(walk, unresolved === "unclassified" ? "unavailable" : unresolved);
   return true;
 }
 
@@ -207,6 +263,7 @@ function currentContainedDirectory(
     rejectContainedEntry(walk, relativeDir, new Error("workspace root changed during discovery"));
     return undefined;
   }
+  if (skipUnresolvedStreamingEntry(walk, relativeDir, contained)) return undefined;
   if (isDenied(realRelative)) {
     walk.denied += 1;
     return undefined;
@@ -324,7 +381,7 @@ function currentEntryStat(
     if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
       throw error;
     }
-    if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
+    if (skipUnavailableStreamingEntry(walk, relativePath, error)) return undefined;
     if (walk.failOnReadError) {
       throw new WorkspaceReadError(
         `cannot stat discovered path: ${relativePath} (${describe(error)})`,
@@ -335,22 +392,11 @@ function currentEntryStat(
   }
 }
 
-function skipDisappearedStreamingEntry(walk: Walk, relativePath: string, error: unknown): boolean {
-  if (
-    relativePath === "" ||
-    walk.retainMembership !== false ||
-    !(error instanceof Error) ||
-    !("code" in error) ||
-    error.code !== "ENOENT"
-  )
-    return false;
-  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
-  return true;
-}
-
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
   if (walk.retainMembership === false) {
-    walk.denied += 1;
+    // The streaming walk retains no path inventory, so a skipped link is counted on its own
+    // instead of being folded into the policy denial count (#4431).
+    walk.skippedLinks = (walk.skippedLinks ?? 0) + 1;
     return;
   }
   if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
@@ -370,7 +416,7 @@ function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown):
   if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
     throw error;
   }
-  if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
+  if (skipUnavailableStreamingEntry(walk, relativePath, error)) return undefined;
   if (walk.failOnReadError) {
     if (error instanceof PathEscapeError) throw error;
     throw new WorkspaceReadError(
@@ -395,6 +441,7 @@ function currentContainedEntry(walk: Walk, relativePath: string): CurrentEntry |
     rejectContainedEntry(walk, relativePath, new Error("workspace root changed during discovery"));
     return undefined;
   }
+  if (skipUnresolvedStreamingEntry(walk, relativePath, contained)) return undefined;
   const realRelative = contained.realRelative.replaceAll("\\", "/");
   if (isDenied(realRelative)) {
     walk.denied += 1;
@@ -423,6 +470,7 @@ function handleEntry(
   if (!isAllowed(walk, relPath, entry.isDirectory)) {
     return;
   }
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   // Symlinks are skipped unconditionally (for safety/simplicity). A non-symlink entry that
   // reports neither isFile nor isDirectory is likewise treated as non-traversable noise.
   // Only genuine files and directories are walked.
@@ -496,6 +544,7 @@ async function handleEntryAsync(
   await yieldToEventLoop(state);
   const relPath = childRelative(relativeDir, entry.name);
   if (!isAllowed(walk, relPath, entry.isDirectory)) return;
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   if (entry.isSymbolicLink) {
     recordSkippedSymbolicLink(walk, relPath);
     return;
@@ -549,7 +598,7 @@ async function descendAsync(
       break;
     }
     walk.entriesVisited += 1;
-    await handleEntryAsync(walk, state, relativeDir, entry, depth);
+    await handleEntryAsync(walk, state, relativeDir, entry, depth); // NOSONAR typescript:S9382 -- a depth-first walk: which entries the maxFiles and entry-budget caps above keep depends on this order
   }
 }
 
@@ -562,11 +611,13 @@ function createWalk(
   entryLimit?: number,
 ): Walk {
   const realRoot = resolveWalkRoot(fs, workspace.root, failOnReadError);
+  const root = realRoot ?? workspace.root;
   return {
     fs: realRoot === undefined ? fs : workspaceFsBoundToCanonicalRoot(fs, realRoot),
-    root: realRoot ?? workspace.root,
+    root,
     realRoot,
-    matcher: compileIgnore(workspace.ignoreLines),
+    atDriveRoot: isWindowsDriveRoot(root),
+    matcher: compileWorkspaceIgnore(workspace),
     opts,
     applyGitignore: opts.applyGitignore,
     out: [],
@@ -582,6 +633,7 @@ function createWalk(
     ignored: 0,
     depthPruned: 0,
     maxFilesPruned: 0,
+    systemNoisePruned: 0,
   };
 }
 
@@ -622,6 +674,7 @@ function discoveryResult(walk: Walk): DiscoveryResult {
       denied: walk.denied,
       ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ignored: walk.ignored,
+      ...(walk.systemNoisePruned > 0 ? { systemNoisePruned: walk.systemNoisePruned } : {}),
       depthPruned: walk.depthPruned,
       maxFilesPruned: walk.maxFilesPruned,
     },
@@ -683,6 +736,20 @@ export interface StreamingDiscoveryStats {
   readonly ignored: number;
   readonly denied: number;
   readonly ioErrors: number;
+  /** Locked or protected entries skipped and disclosed (#4434). */
+  readonly unavailableEntries?: number;
+  /** Listed entries that no longer existed when inspected (#4435). */
+  readonly vanishedEntries?: number;
+  /** Directories re-read once after benign membership churn (#4435). */
+  readonly membershipRetries?: number;
+  /** Symbolic links and reparse points skipped without being followed; not part of `denied`. */
+  readonly skippedSymbolicLinks?: number;
+  /** Directories whose listing could not be completed; `ioErrors` minus oversized ones (#4431). */
+  readonly unavailableDirectories?: number;
+  /** Directories too large to re-read after membership churn; part of `ioErrors` (#4431). */
+  readonly oversizedDirectories?: number;
+  /** Windows system entries pruned while descending (#4437). */
+  readonly systemNoisePruned?: number;
   readonly directoriesDiscovered?: number;
   readonly directoriesPruned?: number;
 }
@@ -737,6 +804,55 @@ async function retainStreamingDirectory(
   directories.push({ absolute: current.absolutePath, relativeDir: current.relativePath });
 }
 
+// A streaming walk hands each file to its collector while the walk's containment proof is still
+// current: the collector runs before the walk visits the next entry. That proof (canonical real
+// path, allowed real-relative path, no-follow stat) is exactly what repository search re-derived for
+// every file before its read, costing one realpath and one lstat handle per file on Windows (#4438).
+// The proof is handed over once, keyed by the emitted object and the walk root, and is consumed by
+// the first lookup, so no later operation can reuse it. The read lane re-proves the file
+// independently before and after every read.
+/** A file the streaming walk proved contained, canonical and regular in the current operation. */
+export interface WalkAdmittedFile {
+  readonly path: string;
+  readonly realBase: string;
+  readonly realRelative: string;
+  readonly stat: WorkspaceStat;
+}
+
+interface WalkObservedFile extends WalkAdmittedFile {
+  readonly root: string;
+}
+
+const walkObservedFiles = new WeakMap<DiscoveredFile, WalkObservedFile>();
+
+function emitStreamedFile(state: StreamingWalk, current: CurrentEntry): Promise<void> {
+  const file: DiscoveredFile = { relativePath: current.relativePath, sizeBytes: current.stat.size };
+  const realBase = state.walk.realRoot;
+  if (realBase !== undefined) {
+    walkObservedFiles.set(file, {
+      root: state.walk.root,
+      path: current.absolutePath,
+      realBase,
+      realRelative: current.relativePath,
+      stat: current.stat,
+    });
+  }
+  return state.onFile(file);
+}
+
+/** Internal: consume the containment proof the streaming walk established for `file`. */
+export function takeWalkObservedFile(
+  file: DiscoveredFile,
+  root: string,
+): WalkAdmittedFile | undefined {
+  const observed = walkObservedFiles.get(file);
+  if (observed === undefined) return undefined;
+  walkObservedFiles.delete(file);
+  if (observed.root !== root) return undefined;
+  const { path, realBase, realRelative, stat } = observed;
+  return { path, realBase, realRelative, stat };
+}
+
 async function visitStreamingEntry(
   state: StreamingWalk,
   relativeDir: string,
@@ -747,6 +863,7 @@ async function visitStreamingEntry(
   const walk = state.walk;
   const path = childRelative(relativeDir, entry.name);
   if (!isAllowed(walk, path, entry.isDirectory)) return;
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   if (entry.isSymbolicLink) {
     recordSkippedSymbolicLink(walk, path);
     return;
@@ -756,36 +873,84 @@ async function visitStreamingEntry(
   if (current.stat.isDirectory) await retainStreamingDirectory(state, current, directories);
   else if (current.stat.isFile) {
     state.filesDiscovered += 1;
-    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+    await emitStreamedFile(state, current);
   }
 }
 
-async function* admittedStreamingDirectoryEntries(
+// Names already handed to the walk from one directory, so a membership retry visits only the
+// entries the first pass could not have seen. Bounded by the per-directory memory ceiling; a larger
+// directory keeps the single-pass disclosure instead of retaining an unbounded name set.
+interface StreamedDirectoryNames {
+  readonly names: Set<string>;
+  overflowed: boolean;
+}
+
+type StreamedDirectoryPass = "settled" | "membership-changed";
+
+function rememberStreamedName(seen: StreamedDirectoryNames, name: string): void {
+  if (seen.overflowed) return;
+  if (seen.names.size >= MAX_DIRECTORY_ENTRIES) {
+    seen.overflowed = true;
+    seen.names.clear();
+    return;
+  }
+  seen.names.add(name);
+}
+
+async function* streamedDirectoryPass(
   walk: Walk,
   absolute: string,
   relativeDir: string,
-): AsyncIterable<WorkspaceDirEntry> {
+  seen: StreamedDirectoryNames,
+): AsyncGenerator<WorkspaceDirEntry, StreamedDirectoryPass> {
   try {
     if (walk.executionControl !== undefined) assertStructuralExecutionActive(walk.executionControl);
     const current = currentContainedDirectory(walk, absolute, relativeDir);
-    if (current === undefined) return;
+    if (current === undefined) return "settled";
     if (walk.fs.iterateDirectory === undefined) {
       throw new WorkspaceReadError("Directory streaming is unavailable.", relativeDir);
     }
-    yield* walk.fs.iterateDirectory(current);
+    for await (const entry of walk.fs.iterateDirectory(current)) {
+      if (seen.names.has(entry.name)) continue;
+      rememberStreamedName(seen, entry.name);
+      yield entry;
+    }
     revalidateStreamedDirectory(walk, current, relativeDir);
+    return "settled";
   } catch (error) {
     if (
       error instanceof WorkspaceDescriptorReadError &&
       error.reason === "directory-membership-changed"
     ) {
+      // Identity changes throw "changed" in the port and stay fatal below; only membership churn
+      // (entries added or removed while the descriptor was open) reaches this branch.
       assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
-      walk.ioErrors = (walk.ioErrors ?? 0) + 1;
-      return;
+      return "membership-changed";
     }
-    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return;
+    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return "settled";
     throw directoryReadFailure(relativeDir, error);
   }
+}
+
+// Office lock files and sync clients add and remove entries constantly (#4435). A directory whose
+// membership moved during enumeration is re-read once and only unseen names are visited; churn
+// that persists through the retry, or a directory too large to retry, stays an io-error.
+async function* admittedStreamingDirectoryEntries(
+  walk: Walk,
+  absolute: string,
+  relativeDir: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  const seen: StreamedDirectoryNames = { names: new Set(), overflowed: false };
+  const first = yield* streamedDirectoryPass(walk, absolute, relativeDir, seen);
+  if (first === "settled") return;
+  if (seen.overflowed) {
+    walk.oversizedDirectories = (walk.oversizedDirectories ?? 0) + 1;
+  } else {
+    walk.membershipRetries = (walk.membershipRetries ?? 0) + 1;
+    const retry = yield* streamedDirectoryPass(walk, absolute, relativeDir, seen);
+    if (retry === "settled") return;
+  }
+  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
 }
 
 function revalidateStreamedDirectory(walk: Walk, absolute: string, relativeDir: string): void {
@@ -885,6 +1050,38 @@ async function visitSelectedStreamingPath(state: StreamingWalk, path: string): P
   }
 }
 
+type StreamingChurnStats = Pick<
+  StreamingDiscoveryStats,
+  | "unavailableEntries"
+  | "vanishedEntries"
+  | "membershipRetries"
+  | "skippedSymbolicLinks"
+  | "unavailableDirectories"
+  | "oversizedDirectories"
+>;
+
+type StreamingChurnCount = keyof StreamingChurnStats;
+
+// Only positive counts are reported, so a walk without drops keeps its existing stats shape.
+function positiveCount<Key extends StreamingChurnCount>(
+  key: Key,
+  value: number | undefined,
+): Partial<Record<Key, number>> {
+  return value !== undefined && value > 0 ? ({ [key]: value } as Record<Key, number>) : {};
+}
+
+function streamingChurnStats(walk: Walk): StreamingChurnStats {
+  const oversized = walk.oversizedDirectories ?? 0;
+  return {
+    ...positiveCount("unavailableEntries", walk.unavailableEntries),
+    ...positiveCount("vanishedEntries", walk.vanishedEntries),
+    ...positiveCount("membershipRetries", walk.membershipRetries),
+    ...positiveCount("skippedSymbolicLinks", walk.skippedLinks),
+    ...positiveCount("unavailableDirectories", (walk.ioErrors ?? 0) - oversized),
+    ...positiveCount("oversizedDirectories", oversized),
+  };
+}
+
 function streamingDiscoveryStats(state: StreamingWalk): StreamingDiscoveryStats {
   const walk = state.walk;
   return {
@@ -893,6 +1090,8 @@ function streamingDiscoveryStats(state: StreamingWalk): StreamingDiscoveryStats 
     denied: walk.denied,
     ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
     ioErrors: walk.ioErrors ?? 0,
+    ...streamingChurnStats(walk),
+    ...(walk.systemNoisePruned > 0 ? { systemNoisePruned: walk.systemNoisePruned } : {}),
     ...(state.options === undefined
       ? {}
       : {
@@ -937,9 +1136,10 @@ export async function visitWorkspaceFiles(
   const selected =
     relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
   try {
-    for await (const _visit of selectedStreamingVisits(state, selected)) {
-      // Drain one selected root at a time; traversal records its counts in state.
-    }
+    // Drain one selected root at a time; traversal records its counts in state.
+    const visits = selectedStreamingVisits(state, selected)[Symbol.asyncIterator]();
+    let visit = await visits.next();
+    while (visit.done !== true) visit = await visits.next(); // NOSONAR typescript:S9382 -- one selected root at a time: the traversal keeps its counts in shared state
     return streamingDiscoveryStats(state);
   } finally {
     callbacks.onStats?.(streamingDiscoveryStats(state));
@@ -1219,6 +1419,47 @@ function resolvePrefixReadableWorkspaceFile(
   return resolveReadableWorkspaceFile(workspace, relPath, { maxBytes }, fs, false);
 }
 
+// Confirms a walk proof with one fresh no-follow stat immediately before the read. A file whose
+// identity, size or timestamps moved since the walk is not confirmed and is proven afresh.
+/** Internal: confirm a containment proof with one fresh no-follow stat; undefined on any change. */
+export function confirmWalkAdmittedFile(
+  fs: WorkspaceFs,
+  admitted: WalkAdmittedFile,
+): WalkAdmittedFile | undefined {
+  let stat: WorkspaceStat;
+  try {
+    stat = fs.stat(admitted.path);
+  } catch (error) {
+    if (error instanceof StructuralExecutionStoppedError) throw error;
+    return undefined;
+  }
+  if (!stat.isFile || stat.isSymbolicLink || !sameFileSnapshot(admitted.stat, stat))
+    return undefined;
+  return { ...admitted, stat };
+}
+
+// The walk's proof replaces only the pre-read resolution. The descriptor read still compares the
+// opened file against that proof, and postReadStat re-resolves the canonical path afterwards.
+function walkAdmittedReadableFile(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  admitted: WalkAdmittedFile | undefined,
+  fs: WorkspaceFs,
+): ReadableWorkspaceFile | undefined {
+  if (admitted === undefined) return undefined;
+  const normalizedRel = toRelative(workspace.root, resolveWithinWorkspace(workspace.root, relPath));
+  if (normalizedRel !== admitted.realRelative) return undefined;
+  const confirmed = confirmWalkAdmittedFile(fs, admitted);
+  if (confirmed === undefined) return undefined;
+  return {
+    resolvedPath: confirmed.path,
+    normalizedRel,
+    realBase: confirmed.realBase,
+    realRelative: confirmed.realRelative,
+    stat: confirmed.stat,
+  };
+}
+
 function assertStablePrefixRead(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
@@ -1256,8 +1497,27 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceByteRead> {
-  const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  return (await readPrefixWithProof(workspace, relPath, maxBytes, fs, admitted)).read;
+}
+
+interface ProvenPrefixRead {
+  readonly read: InternalWorkspaceByteRead;
+  // The canonical path and stat that postReadStat re-proved immediately after this read.
+  readonly proof: WalkAdmittedFile;
+}
+
+async function readPrefixWithProof(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+  admitted: WalkAdmittedFile | undefined,
+): Promise<ProvenPrefixRead> {
+  const target =
+    walkAdmittedReadableFile(workspace, relPath, admitted, fs) ??
+    resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
   const readBytes = fs.readFileBytes;
   if (readBytes === undefined) {
     throw new WorkspaceReadError(
@@ -1278,7 +1538,15 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
       target.normalizedRel,
     );
   }
-  return { bytes, stat, complete: bytes.byteLength === stat.size };
+  return {
+    read: { bytes, stat, complete: bytes.byteLength === stat.size },
+    proof: {
+      path: target.resolvedPath,
+      realBase: target.realBase,
+      realRelative: target.realRelative,
+      stat,
+    },
+  };
 }
 
 export interface InternalWorkspaceTextByteRead extends InternalWorkspaceByteRead {
@@ -1291,17 +1559,29 @@ export async function readWorkspaceFileBytesForTextInspection(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceTextByteRead> {
-  const head = await readWorkspaceFileBytesPrefixForInternalUse(
+  const probe = await readPrefixWithProof(
     workspace,
     relPath,
     Math.min(maxBytes, DEFAULT_BINARY_PROBE.maxProbeBytes),
     fs,
+    admitted,
   );
+  const head = probe.read;
   // Keep size exclusions authoritative even if an oversized file also has a binary header.
   const binary = head.stat.size <= maxBytes && looksBinary(head.bytes);
   if (head.complete || head.stat.size > maxBytes || binary) return { ...head, binary };
-  const full = await readWorkspaceFileBytesPrefixForInternalUse(workspace, relPath, maxBytes, fs);
+  // The head read's post-read check re-proved the canonical path; that proof replaces the full
+  // read's pre-read resolution and is confirmed with one fresh no-follow stat (#4438). Any change
+  // falls back to full resolution, and the full read keeps its own descriptor and post-read checks.
+  const full = await readWorkspaceFileBytesPrefixForInternalUse(
+    workspace,
+    relPath,
+    maxBytes,
+    fs,
+    probe.proof,
+  );
   if (!sameFileSnapshot(head.stat, full.stat)) {
     throw new WorkspaceReadError(`file changed during text inspection: ${relPath}`, relPath);
   }

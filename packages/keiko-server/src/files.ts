@@ -6,6 +6,7 @@ import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/run
 import type { IncomingMessage } from "node:http";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
 import { recordManagedRootRequestDenial } from "./workspace-root-denial-log.js";
+import { recordFilesSearchCompleted } from "./files-search-activity.js";
 
 // One registry per server process: same-process turn order for the verify→write region below
 // (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
@@ -57,6 +58,8 @@ import {
   reKeyEditorLocalHistorySafely,
 } from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
@@ -65,8 +68,15 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  decodeTextFileBytes,
+  isSystemNoiseEntry,
+  isWindowsDriveRoot,
+} from "@oscharko-dev/keiko-workspace";
+import {
+  WorkspaceDescriptorReadError,
+  workspaceEntryAvailabilityFailure,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
@@ -119,6 +129,12 @@ export interface FilesSearchResponse {
   readonly results: readonly FilesSearchResult[];
   readonly truncated: boolean;
   readonly scannedFileCount: number;
+  // Locked or protected entries the filename search skipped (#4434); absent when none.
+  readonly unavailableEntryCount?: number;
+  // Listed entries that no longer existed when inspected (#4435); absent when none.
+  readonly vanishedEntryCount?: number;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) never searched (#4437); absent when none.
+  readonly systemEntryPrunedCount?: number;
 }
 
 export type FilesSearchFileRole =
@@ -784,7 +800,8 @@ async function mapInBatches<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   for (let offset = 0; offset < values.length; offset += batchSize) {
-    results.push(...(await Promise.all(values.slice(offset, offset + batchSize).map(mapper))));
+    const batch = values.slice(offset, offset + batchSize);
+    results.push(...(await Promise.all(batch.map(mapper)))); // NOSONAR typescript:S9382 -- batches run one after another to cap concurrent filesystem work
   }
   return results;
 }
@@ -1150,6 +1167,18 @@ interface FileSearchState {
   gitRootCache: Map<string, string | null>;
   scannedFileCount: number;
   scanTruncated: boolean;
+  unavailableEntryCount: number;
+  vanishedEntryCount: number;
+  systemEntryPrunedCount: number;
+}
+
+// A locked, protected or vanished entry is skipped and counted (#4434, #4435). Every other failure
+// (descriptor exhaustion, link loops, an unreadable selected root) still fails the search.
+function skipUnavailableFileSearchEntry(state: FileSearchState, error: unknown): void {
+  const availability = workspaceEntryAvailabilityFailure(error);
+  if (availability === undefined) throw error;
+  if (availability === "vanished") state.vanishedEntryCount += 1;
+  else state.unavailableEntryCount += 1;
 }
 
 interface FileSearchResolvedPath {
@@ -1266,7 +1295,8 @@ async function addFileSearchCandidate(args: {
   let info: Stats;
   try {
     info = await lstat(args.nativePath);
-  } catch {
+  } catch (error) {
+    skipUnavailableFileSearchEntry(args.state, error);
     return;
   }
   const resolvedPath = await resolveFileSearchResultPath({
@@ -1317,6 +1347,12 @@ function collectFileSearchEntry(args: {
 }): PendingFileSearchCandidate | undefined {
   const relativePath = childRelative(args.current.relativePath, args.entry.name);
   if (!entryVisibleToFileSearch(relativePath, args.entry, args.redactor)) return undefined;
+  // Operating-system entries spend the scan budget on files that are never a person's (#4437).
+  const atDriveRoot = args.current.relativePath === "" && isWindowsDriveRoot(args.root.realRoot);
+  if (isSystemNoiseEntry(args.entry.name, { atDriveRoot })) {
+    args.state.systemEntryPrunedCount += 1;
+    return undefined;
+  }
   const nativePath = join(args.current.path, args.entry.name);
   if (args.entry.isDirectory()) {
     args.state.stack.push({ path: nativePath, relativePath });
@@ -1352,20 +1388,49 @@ async function collectFileSearchDirectory(args: {
   let dir;
   try {
     dir = await opendir(args.current.path);
-  } catch {
+  } catch (error) {
+    // The selected root itself must be readable; only a descendant directory may be skipped.
+    if (args.current.relativePath === "") throw error;
+    skipUnavailableFileSearchEntry(args.state, error);
     return;
   }
   const candidates: PendingFileSearchCandidate[] = [];
+  try {
+    await collectOpenedFileSearchDirectory(args, dir, candidates);
+  } finally {
+    await closeFileSearchDirectory(dir);
+  }
+  await mapInBatches(candidates, FILE_SEARCH_CANDIDATE_CONCURRENCY, addFileSearchCandidate);
+}
+
+// An entry that turns unreadable or vanishes while its directory is enumerated ends that
+// directory's listing only; entries collected before it remain candidates.
+async function collectOpenedFileSearchDirectory(
+  args: Parameters<typeof collectFileSearchDirectory>[0],
+  dir: Awaited<ReturnType<typeof opendir>>,
+  candidates: PendingFileSearchCandidate[],
+): Promise<void> {
   try {
     for await (const entry of dir) {
       const candidate = collectFileSearchEntry({ ...args, entry });
       if (candidate !== undefined) candidates.push(candidate);
       if (args.state.scanTruncated) break;
     }
-  } finally {
-    await dir.close().catch(() => undefined);
+  } catch (error) {
+    if (args.current.relativePath === "") throw error;
+    skipUnavailableFileSearchEntry(args.state, error);
   }
-  await mapInBatches(candidates, FILE_SEARCH_CANDIDATE_CONCURRENCY, addFileSearchCandidate);
+}
+
+async function closeFileSearchDirectory(dir: Awaited<ReturnType<typeof opendir>>): Promise<void> {
+  try {
+    await dir.close();
+  } catch (error) {
+    // `for await` already closes a directory it finished; a second close reports
+    // ERR_DIR_CLOSED. Any other close failure surfaces.
+    if (!(error instanceof Error && "code" in error && error.code === "ERR_DIR_CLOSED"))
+      throw error;
+  }
 }
 
 async function collectFileSearchResults(args: {
@@ -1385,6 +1450,9 @@ async function collectFileSearchResults(args: {
     gitRootCache: new Map(),
     scannedFileCount: 0,
     scanTruncated: false,
+    unavailableEntryCount: 0,
+    vanishedEntryCount: 0,
+    systemEntryPrunedCount: 0,
   };
 
   while (state.stack.length > 0) {
@@ -1399,6 +1467,13 @@ async function collectFileSearchResults(args: {
     results: state.candidates.slice(0, args.limit).map((candidate) => candidate.result),
     truncated: state.scanTruncated || state.candidates.length > args.limit,
     scannedFileCount: Math.min(state.scannedFileCount, MAX_FILE_SEARCH_SCAN),
+    ...(state.unavailableEntryCount > 0
+      ? { unavailableEntryCount: state.unavailableEntryCount }
+      : {}),
+    ...(state.vanishedEntryCount > 0 ? { vanishedEntryCount: state.vanishedEntryCount } : {}),
+    ...(state.systemEntryPrunedCount > 0
+      ? { systemEntryPrunedCount: state.systemEntryPrunedCount }
+      : {}),
   };
 }
 
@@ -1811,7 +1886,7 @@ async function readStableEditableContent(
     if (statsMatch(before, after)) return { content, stats: after };
     before = after;
     if (attempt < STABLE_CONTENT_READ_ATTEMPTS - 1) {
-      await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
+      await sleep(STABLE_CONTENT_RETRY_DELAY_MS); // NOSONAR typescript:S9382 -- a retry re-reads only after the previous read saw the file change
     }
   }
   throw staleSessionOpenError();
@@ -2431,6 +2506,73 @@ async function assertCopiedTreeContainsNoSymlinks(
   }
 }
 
+// #4429: on Windows `fs.cp` with `dereference: false` copies a nested directory JUNCTION as a real
+// directory holding the junction target's files, so copying a contained folder pulled content from
+// outside the root into it, and the post-copy audit then only ever saw ordinary contained entries.
+// Node's lstat classifies a junction like a symbolic link, so this filter refuses every link of the
+// source tree before `cp` acts on it: the copy never dereferences a link, on any platform. The
+// post-copy audit stays as the second guard for an entry replaced while the copy ran.
+async function refuseLinkedCopySource(sourcePath: string): Promise<boolean> {
+  let current: Stats;
+  try {
+    current = await lstat(sourcePath);
+  } catch {
+    throw stalePathError();
+  }
+  if (current.isSymbolicLink()) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
+  }
+  return true;
+}
+
+async function removeRefusedCopy(
+  targetPath: string,
+  correlationId: string | undefined,
+): Promise<"removed" | "remove-failed"> {
+  try {
+    await rm(targetPath, { recursive: true, force: true });
+    return "removed";
+  } catch (error) {
+    const diagnostic = serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "files.copy.cleanup-failed",
+      source: "files.copy",
+      error,
+      redact: () => "A refused copy could not be removed from the destination.",
+    });
+    emitServerDiagnostic(undefined, diagnostic);
+    return "remove-failed";
+  }
+}
+
+async function copyContainedEntry(
+  source: ResolvedTarget,
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+  correlationId: string | undefined,
+): Promise<void> {
+  let stage: FilesCopyRefusalStage = "copy-filter";
+  try {
+    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` plus the link filter
+    // never follow a link (symbolic link or junction) out of the root.
+    await cp(source.path, target.path, {
+      recursive: kind === "directory",
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+      filter: refuseLinkedCopySource,
+    });
+    stage = "post-copy-audit";
+    assertMutationEffectContained(target, kind);
+    await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
+  } catch (error) {
+    if (!(error instanceof FilesError)) throw mapNodeFsError(error);
+    const cleanup = await removeRefusedCopy(target.path, correlationId);
+    recordFilesCopyRefusal({ stage, code: error.code, entryKind: kind, cleanup }, correlationId);
+    throw error;
+  }
+}
+
 const NOFOLLOW_WRITE_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
 
 async function writeExistingResolvedFile(target: ResolvedTarget, content: string): Promise<Stats> {
@@ -2671,7 +2813,6 @@ export async function deleteFilesEntry(args: {
   return { root: target.root, path: target.relativePath, kind };
 }
 
-// eslint-disable-next-line max-lines-per-function -- copy containment checks are kept adjacent to the filesystem mutation.
 export async function copyFilesEntry(args: {
   readonly store: UiStore;
   readonly rootInput: string | null;
@@ -2679,6 +2820,7 @@ export async function copyFilesEntry(args: {
   readonly destPathInput: string | null;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
   // Source must exist, be contained, and not be denied or a symlink (we never dereference one).
@@ -2712,26 +2854,7 @@ export async function copyFilesEntry(args: {
   }
   await assertResolvedTargetStillCurrent(source);
   assertCreationParentStillContained(target);
-  try {
-    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
-    // links (never follows one out of the root). Contents stay inside the root throughout.
-    await cp(source.path, target.path, {
-      recursive: kind === "directory",
-      force: false,
-      errorOnExist: true,
-      dereference: false,
-    });
-    try {
-      assertMutationEffectContained(target, kind);
-      await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
-    } catch (error) {
-      await rm(target.path, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof FilesError) throw error;
-    throw mapNodeFsError(error);
-  }
+  await copyContainedEntry(source, target, kind, args.correlationId);
   // The copy created a new watched file at the destination; the source is untouched and needs no
   // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -2827,17 +2950,16 @@ export async function handleFilesSearch(
   return runFilesHandler(async () => {
     const rootInput = ctx.url.searchParams.get("root");
     const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
-    return {
-      status: 200,
-      body: await searchFiles(
-        deps.store,
-        rootInput,
-        ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
-        parseSearchLimit(ctx.url.searchParams.get("limit")),
-        deps.redactor,
-        resolvedRoot,
-      ),
-    };
+    const body = await searchFiles(
+      deps.store,
+      rootInput,
+      ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
+      parseSearchLimit(ctx.url.searchParams.get("limit")),
+      deps.redactor,
+      resolvedRoot,
+    );
+    recordFilesSearchCompleted(deps, ctx.correlationId, body);
+    return { status: 200, body };
   });
 }
 
@@ -3359,6 +3481,7 @@ export async function handleFilesCopy(
         destPathInput,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });

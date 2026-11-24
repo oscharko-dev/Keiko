@@ -14,7 +14,7 @@ import {
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
 import { PathEscapeError, WorkspaceError } from "@oscharko-dev/keiko-security/errors/workspace";
-import { memFs } from "./_memfs.js";
+import { DIRECTORY_LINK_TYPE, memFs, memoryFixturePath } from "./_memfs.js";
 import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
@@ -32,7 +32,6 @@ import type { WorkspaceInfo } from "./types.js";
 import { createWorkspaceIndex, type WorkspaceIndex } from "./workspaceIndex.js";
 
 const MEM_ROOT = "/ws";
-
 function memScope(
   files: Readonly<Record<string, string>>,
   overrides: Partial<SearchScope> = {},
@@ -57,7 +56,10 @@ function memScope(
   const fs = memFs(MEM_ROOT, files);
   return {
     scope,
-    fs: { ...fs, exists: (path): boolean => path === `${MEM_ROOT}/.git` || fs.exists(path) },
+    fs: {
+      ...fs,
+      exists: (path): boolean => memoryFixturePath(path) === `${MEM_ROOT}/.git` || fs.exists(path),
+    },
   };
 }
 
@@ -2651,7 +2653,7 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     try {
       mkdirSync(join(outside, "nested"), { recursive: true });
       writeFileSync(join(outside, "nested/secret.ts"), "outside-secret\n");
-      symlinkSync(outside, join(tmp, "linked-outside"), "dir");
+      symlinkSync(outside, join(tmp, "linked-outside"), DIRECTORY_LINK_TYPE);
       const symlinkSubtree = join(tmp, "linked-outside");
       const unsafeTouches: string[] = [];
       const recordUnsafeTouch = (absolutePath: string): void => {
@@ -2689,27 +2691,24 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "does not traverse an explicit scope through a benign root alias into a denied directory",
-    async () => {
-      const deniedRoot = join(tmp, ".aws", "workspace");
-      mkdirSync(join(deniedRoot, "src"), { recursive: true });
-      writeFileSync(join(deniedRoot, "src", "secret.ts"), "export const secret = true;\n");
-      const linkedRoot = join(tmp, "docs");
-      symlinkSync(deniedRoot, linkedRoot, "dir");
-      const deniedScope: SearchScope = {
-        ...scope,
-        workspace: { ...scope.workspace, root: linkedRoot },
-        relativePaths: ["src"],
-      };
+  it("does not traverse an explicit scope through a benign root alias into a denied directory", async () => {
+    const deniedRoot = join(tmp, ".aws", "workspace");
+    mkdirSync(join(deniedRoot, "src"), { recursive: true });
+    writeFileSync(join(deniedRoot, "src", "secret.ts"), "export const secret = true;\n");
+    const linkedRoot = join(tmp, "docs");
+    symlinkSync(deniedRoot, linkedRoot, DIRECTORY_LINK_TYPE);
+    const deniedScope: SearchScope = {
+      ...scope,
+      workspace: { ...scope.workspace, root: linkedRoot },
+      relativePaths: ["src"],
+    };
 
-      await expect(
-        findFiles(deniedScope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, {
-          nowMs: FIXED_NOW,
-        }),
-      ).rejects.toBeInstanceOf(PathDeniedError);
-    },
-  );
+    await expect(
+      findFiles(deniedScope, fpq("**/*.ts"), DEFAULT_SEARCH_LIMITS, {
+        nowMs: FIXED_NOW,
+      }),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+  });
 
   it("drops a binary file (PNG-magic + NUL) from text search", async () => {
     const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00]);
@@ -2802,7 +2801,7 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     mkdirSync(deniedTarget, { recursive: true });
     mkdirSync(dirname(linkedRoot), { recursive: true });
     writeFileSync(join(deniedTarget, "secret.ts"), "export const secret = 'do not read';\n");
-    symlinkSync(deniedTarget, linkedRoot);
+    symlinkSync(deniedTarget, linkedRoot, DIRECTORY_LINK_TYPE);
     scope = {
       ...scope,
       workspace: { ...scope.workspace, root: linkedRoot },

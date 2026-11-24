@@ -1,3 +1,24 @@
+# Every text file is checked out with LF on every platform, so one checkout is byte-identical to
+# the next and `core.autocrlf` cannot change what a tool reads. Keiko needs this repository-wide,
+# not per path: prettier is configured `endOfLine: "lf"`, and several gates hash the RAW BYTES of
+# tracked files — `check:tool-catalog-performance` over `packages/keiko-tool-catalog/src` and its
+# `scripts/*.mjs` ruler paths, `check:tool-catalog-conformance` over the records pinned below. On a
+# CRLF checkout each of them reads a different file than the one its committed digest was taken
+# over, so `format:check`, both catalog checks, `arch:check` and `check:activity-log` fail closed on
+# Windows for a reason that has nothing to do with the change under test.
+#
+# No stored blob changes: every tracked text file is already LF in the index (10935 LF, 569 binary,
+# 59 empty — nothing CRLF or mixed), so this only stops the working tree from diverging. `text=auto`
+# leaves git's binary detection in charge, and the per-path `eol=lf` rules below stay as the record
+# of WHICH digests depend on this, so narrowing this rule later cannot silently break them.
+#
+# The five `scripts/standalone/*.cmd` start/stop files use `goto` labels, where cmd.exe is sensitive
+# to line endings, and the standalone builder copies them verbatim. They are LF in the index today,
+# so the packages built on Linux CI — the ones qualified by actually starting them on a Windows
+# runner — already ship LF. Keeping them under this rule makes a Windows-built package identical to
+# that qualified artifact instead of giving it CRLF; pinning them to `eol=crlf` would instead change
+# the bytes CI ships today.
+* text=auto eol=lf
 *.ts text diff
 native/portable-launcher/fixtures/*.hex text eol=lf
 packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs text eol=lf
@@ -6,3 +27,10 @@ packages/keiko-server/src/coding-runtime/windowsPortableAuthenticodeVerifier.gen
 native/secure-workspace-read/** text eol=lf
 # The Windows npm runtime approval pins the supervisor's source tree the same way (#4068).
 native/runtime-supervisor/** text eol=lf
+# `check:tool-catalog-conformance` hashes the RAW BYTES of these records (sourceContractDigest and
+# the H1/producer receipt digests), so a `core.autocrlf=true` checkout makes the gate read a
+# different file than the one the digest was taken over: on Windows it reports drift that is not
+# there, and `generate:tool-catalog --write` then rewrites the digest from CRLF bytes. Same reason
+# as the native trees above (#4068).
+docs/architecture/*.v1.json text eol=lf
+docs/qa/evidence/**/*.v1.json text eol=lf

@@ -7,6 +7,10 @@
 // write/cwd paths (tools/patch.ts, tools/exec.ts) share this single primitive — no duplicated logic.
 
 import { dirname, isAbsolute, resolve, win32 } from "node:path";
+import {
+  type WorkspaceEntryAvailability,
+  workspaceEntryAvailabilityFailure,
+} from "./entryAvailability.js";
 import { forwardWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { ownedRootWorkspaceFs, ownedWorkspaceRootAuthority } from "./ownedRootLookup.js";
 import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
@@ -262,6 +266,10 @@ export interface ContainedRealPathInfo {
   // symlink that resolves into a protected location — a denied segment that lives in the realpath'd
   // ROOT is invisible to the root-relative deny checks.
   readonly realBase: string;
+  // Set only when the path itself did not resolve and `realRelative` names its nearest existing
+  // parent: the closed class of that failure. Walkers count a vanished or locked entry instead of
+  // mistaking the parent fallback for a symbolic link, and fail closed on "unclassified" (#4434).
+  readonly unresolved?: WorkspaceEntryAvailability | "unclassified";
 }
 
 function normalizeRelativePath(path: string): string {
@@ -364,7 +372,12 @@ function containedRealPathInfoFromBase(
         absolutePath,
       );
     }
-    return { path: absolutePath, realRelative: toRelative(realBase, parentReal), realBase };
+    return {
+      path: absolutePath,
+      realRelative: toRelative(realBase, parentReal),
+      realBase,
+      unresolved: workspaceEntryAvailabilityFailure(error) ?? "unclassified",
+    };
   }
 }
 

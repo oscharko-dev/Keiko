@@ -51,6 +51,7 @@ import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-mo
 import {
   UiStoreError,
   assertUiDbOutsideProject,
+  canonicalProjectPathKey,
   validateProjectPath,
   type Chat,
   type ChatMessage,
@@ -359,6 +360,16 @@ function requireQuery(ctx: RouteContext, name: string): string {
   return v;
 }
 
+// Issue #4459 — a project path that identifies an already registered project takes the stored
+// separator form, so a Windows caller may send either separator.
+function requireProjectPathQuery(ctx: RouteContext): string {
+  return canonicalProjectPathKey(requireQuery(ctx, "projectPath"));
+}
+
+function requireProjectPathField(body: Record<string, unknown>): string {
+  return canonicalProjectPathKey(requireString(body, "projectPath"));
+}
+
 function optionalBoundedQueryInteger(
   ctx: RouteContext,
   name: string,
@@ -660,7 +671,7 @@ function runHandlerSync(worker: () => RouteResult): RouteResult {
 
 export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
-    const projectPath = requireQuery(ctx, "projectPath");
+    const projectPath = requireProjectPathQuery(ctx);
     const limit = optionalBoundedQueryInteger(
       ctx,
       "limit",
@@ -702,7 +713,7 @@ export async function handleCreateChat(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const body = await readJsonObject(ctx.req);
-    const projectPath = requireString(body, "projectPath");
+    const projectPath = requireProjectPathField(body);
     const title = requireString(body, "title");
     const selectedModel = requireChatModelId(deps, body, "selectedModel");
     const branchLabel = optionalString(body, "branchLabel");
@@ -1447,7 +1458,7 @@ function recordAppliedChatUpdate(
 // ──────────────────────────────────────────────────────────────────────────
 
 function requireChatPurgeConfirmation(body: Record<string, unknown>, chatId: string): string {
-  const projectPath = requireString(body, "projectPath");
+  const projectPath = requireProjectPathField(body);
   const confirmation = body.confirmation;
   if (typeof confirmation !== "object" || confirmation === null || Array.isArray(confirmation)) {
     throw new InvalidRequest("Irreversible chat deletion confirmation is required.");
@@ -1573,7 +1584,7 @@ function projectMessagesWithCurrentLocalKnowledgeLifecycle(
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const chatId = requireQuery(ctx, "chatId");
-    const projectPath = requireQuery(ctx, "projectPath");
+    const projectPath = requireProjectPathQuery(ctx);
     const limit = optionalBoundedQueryInteger(
       ctx,
       "limit",
@@ -1609,7 +1620,7 @@ export async function handleCreateMessage(
   return runHandler(async () => {
     const body = await readJsonObject(ctx.req);
     const chatId = requireString(body, "chatId");
-    const projectPath = requireString(body, "projectPath");
+    const projectPath = requireProjectPathField(body);
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
@@ -1659,7 +1670,7 @@ export async function handleUpdateMessage(
   return runHandler(async () => {
     const id = requireQuery(ctx, "id");
     const chatId = requireQuery(ctx, "chatId");
-    const projectPath = requireQuery(ctx, "projectPath");
+    const projectPath = requireProjectPathQuery(ctx);
     if (
       !chatBelongsToProject(deps, projectPath, chatId) ||
       !messageBelongsToChat(deps, chatId, id)
@@ -1682,7 +1693,7 @@ export function handleChatContextStatus(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const chatId = requireQuery(ctx, "chatId");
-    const projectPath = requireQuery(ctx, "projectPath");
+    const projectPath = requireProjectPathQuery(ctx);
     if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
     const modelId = requireQuery(ctx, "modelId");
     assertChatModelId(deps, modelId);
@@ -1754,7 +1765,7 @@ export async function handleCompactChatContext(
     return await runHandler(async () => {
       const body = await readJsonObject(ctx.req);
       const chatId = requireString(body, "chatId");
-      const projectPath = requireString(body, "projectPath");
+      const projectPath = requireProjectPathField(body);
       const modelId = requireString(body, "modelId");
       const result = await runSerializedChatTurn(
         deps,

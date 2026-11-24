@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { executeCodingRepositoryRequest } from "./codingRepositorySearch.js";
@@ -41,7 +41,7 @@ function unavailableFileFs(code: string): WorkspaceFs {
   return {
     ...nodeWorkspaceFs,
     readFileBytes: async (...args): Promise<Uint8Array> => {
-      if (args[0].endsWith("/unreadable.html"))
+      if (args[0].endsWith(join(sep, "unreadable.html")))
         throw Object.assign(new Error("fixture file unavailable"), { code });
       return read(...args);
     },
@@ -98,7 +98,7 @@ describe("recursive text search in ordinary folders", () => {
       ...nodeWorkspaceFs,
       stat: (path) => {
         const stat = nodeWorkspaceFs.stat(path);
-        if (!removed && path.endsWith("/unreadable.html")) {
+        if (!removed && path.endsWith(join(sep, "unreadable.html"))) {
           removed = true;
           rmSync(path);
         }
@@ -196,7 +196,7 @@ describe("recursive text search in ordinary folders", () => {
     const fs = {
       ...nodeWorkspaceFs,
       iterateDirectory: async function* (path: string): AsyncIterable<WorkspaceDirEntry> {
-        if (path.endsWith("/d/d/d")) {
+        if (path.endsWith(join(sep, "d", "d", "d"))) {
           throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
         }
         activeDirectories += 1;

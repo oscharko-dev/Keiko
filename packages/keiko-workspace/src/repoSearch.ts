@@ -100,7 +100,8 @@ import {
   type SearchHints,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
-import type { WorkspaceInfo } from "./types.js";
+import type { WorkspaceInfo, WorkspacePathCase } from "./types.js";
+import { pathCaseKey, pathGlobCaseSensitive, workspacePathCase } from "./pathCase.js";
 import {
   requestedSourceInspectionExtensions,
   sourceInspectionPathMatches,
@@ -125,6 +126,7 @@ import {
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
+import { normalizeSourceLineEndings } from "./sourceLines.js";
 import {
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexSnapshot,
@@ -357,6 +359,13 @@ interface CoverageInputs {
 
 interface CoverageStats {
   readonly unrepresentablePathsByDiscovery: number;
+  readonly unavailableEntriesByDiscovery: number;
+  readonly vanishedEntriesByDiscovery: number;
+  readonly membershipRetriesByDiscovery: number;
+  readonly skippedSymbolicLinksByDiscovery: number;
+  readonly unavailableDirectoriesByDiscovery: number;
+  readonly oversizedDirectoriesByDiscovery: number;
+  readonly systemNoisePrunedByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -369,6 +378,13 @@ interface CoverageStats {
 
 const EMPTY_COVERAGE_STATS: CoverageStats = {
   unrepresentablePathsByDiscovery: 0,
+  unavailableEntriesByDiscovery: 0,
+  vanishedEntriesByDiscovery: 0,
+  membershipRetriesByDiscovery: 0,
+  skippedSymbolicLinksByDiscovery: 0,
+  unavailableDirectoriesByDiscovery: 0,
+  oversizedDirectoriesByDiscovery: 0,
+  systemNoisePrunedByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -378,6 +394,31 @@ const EMPTY_COVERAGE_STATS: CoverageStats = {
   lowValueRescueFilesDiscovered: 0,
   lowValueRescueFilesScanned: 0,
 };
+
+const DISCOVERY_DROP_COVERAGE_KEYS = [
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
+] as const satisfies readonly (keyof CoverageStats)[];
+
+type DiscoveryDropKey = (typeof DISCOVERY_DROP_COVERAGE_KEYS)[number];
+
+// Absent historical or unobserved drop counts read as zero for the coverage arithmetic.
+function discoveryDropStats(diagnostics: SearchDiagnostics): Record<DiscoveryDropKey, number> {
+  return {
+    unavailableEntriesByDiscovery: diagnostics.unavailableEntriesByDiscovery ?? 0,
+    vanishedEntriesByDiscovery: diagnostics.vanishedEntriesByDiscovery ?? 0,
+    membershipRetriesByDiscovery: diagnostics.membershipRetriesByDiscovery ?? 0,
+    skippedSymbolicLinksByDiscovery: diagnostics.skippedSymbolicLinksByDiscovery ?? 0,
+    unavailableDirectoriesByDiscovery: diagnostics.unavailableDirectoriesByDiscovery ?? 0,
+    oversizedDirectoriesByDiscovery: diagnostics.oversizedDirectoriesByDiscovery ?? 0,
+    systemNoisePrunedByDiscovery: diagnostics.systemNoisePrunedByDiscovery ?? 0,
+  };
+}
 
 function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStats {
   if (diagnostics === undefined) {
@@ -389,6 +430,7 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
     unrepresentablePathsByDiscovery: diagnostics.unrepresentablePathsByDiscovery ?? 0,
+    ...discoveryDropStats(diagnostics),
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
     lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
@@ -437,8 +479,21 @@ function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number 
     unvisitedCandidateCount(inputs, stats, omittedCount) +
     stats.ignoredByDiscovery +
     stats.deniedByDiscovery +
-    stats.depthPrunedByDiscovery
+    stats.depthPrunedByDiscovery +
+    stats.unavailableEntriesByDiscovery +
+    stats.systemNoisePrunedByDiscovery
   );
+}
+
+type DiscoveryDropCoverage = Pick<ContextCoverageDiagnostics, DiscoveryDropKey>;
+
+// Only positive counts are reported, so a walk without drops keeps its existing coverage shape.
+function discoveryChurnCoverage(stats: CoverageStats): DiscoveryDropCoverage {
+  const coverage: { -readonly [Key in keyof DiscoveryDropCoverage]?: number } = {};
+  for (const key of DISCOVERY_DROP_COVERAGE_KEYS) {
+    if (stats[key] > 0) coverage[key] = stats[key];
+  }
+  return coverage;
 }
 
 function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
@@ -460,6 +515,7 @@ function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagno
     ...(stats.unrepresentablePathsByDiscovery > 0
       ? { unrepresentablePathsByDiscovery: stats.unrepresentablePathsByDiscovery }
       : {}),
+    ...discoveryChurnCoverage(stats),
     depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
     matchesReturned: inputs.matchesReturned,
@@ -605,6 +661,7 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
   >;
 
 function sourceInspectionCandidateSelection(
+  scope: SearchScope,
   query: RetrievalQuery,
   deps: SearchTextRunnerDeps,
 ): Pick<SearchTextRunner, "candidatePathPredicate" | "sourceInspection"> {
@@ -614,7 +671,11 @@ function sourceInspectionCandidateSelection(
     deps.queryInterpretation === undefined
       ? requestedSourceInspectionExtensions(query.text)
       : [];
-  const predicate = buildCandidatePathPredicate(deps.candidatePathGlobs, extensions);
+  const predicate = buildCandidatePathPredicate(
+    deps.candidatePathGlobs,
+    workspacePathCase(scope.workspace),
+    extensions,
+  );
   return {
     ...(extensions.length === 0 ? {} : { sourceInspection: true }),
     ...(predicate === undefined ? {} : { candidatePathPredicate: predicate }),
@@ -654,7 +715,7 @@ function buildSearchTextRunner(
     }),
     policy,
     query,
-    ...sourceInspectionCandidateSelection(query, deps),
+    ...sourceInspectionCandidateSelection(scope, query, deps),
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.onEligibleTextFile === undefined
       ? {}
@@ -684,21 +745,27 @@ function hasCandidatePathFilters(globs: FacadeDeps["candidatePathGlobs"]): boole
   );
 }
 
+// Include/exclude globs and literal exclusions follow the workspace's letter-case rule
+// (pathCase.ts, #4436): on Windows `**/*.pdf` includes `SCAN.PDF`.
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
+  pathCase: WorkspacePathCase,
   sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
   if (sourceExtensions.length === 0 && !hasCandidatePathFilters(globs)) {
     return undefined;
   }
-  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
-  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
-  const literalExcludes = new Set(globs?.excludeLiteralPaths ?? []);
+  const caseSensitive = pathGlobCaseSensitive(pathCase);
+  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const literalExcludes = new Set(
+    (globs?.excludeLiteralPaths ?? []).map((path) => pathCaseKey(path, pathCase)),
+  );
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
     return (
       included &&
-      !literalExcludes.has(scopePath) &&
+      !literalExcludes.has(pathCaseKey(scopePath, pathCase)) &&
       !excludes.some((pattern) => pattern.test(scopePath)) &&
       (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
     );
@@ -1861,7 +1928,7 @@ async function runScanLoop(
         break;
       }
     }
-    const fileMatches = await collectFileMatches(runner, file, state, candidates, loopIndex);
+    const fileMatches = await collectFileMatches(runner, file, state, candidates, loopIndex); // NOSONAR typescript:S9382 -- each file spends from the scan budget the next hitScanLimit check reads
     if (fileMatches !== undefined) {
       matches.push(fileMatches);
     }
@@ -2343,6 +2410,8 @@ function preserveCandidateMembership(ranked: CandidateSet, membership: Candidate
       ignoredByDiscovery: membership.diagnostics.ignoredByDiscovery,
       deniedByDiscovery: membership.diagnostics.deniedByDiscovery,
       unrepresentablePathsByDiscovery: membership.diagnostics.unrepresentablePathsByDiscovery,
+      skippedSymbolicLinksByDiscovery: membership.diagnostics.skippedSymbolicLinksByDiscovery,
+      systemNoisePrunedByDiscovery: membership.diagnostics.systemNoisePrunedByDiscovery,
       depthPrunedByDiscovery: membership.diagnostics.depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery: membership.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -2642,7 +2711,13 @@ function streamedCoverage(
     filesDiscovered: collected.filesDiscovered,
     filesAfterPolicy: collected.filesAfterPolicy,
     filesScanned: collected.state.filesScanned,
-    filesSkipped: collected.filesSkipped + collected.ignored + collected.denied,
+    filesSkipped:
+      collected.filesSkipped +
+      collected.ignored +
+      collected.denied +
+      (collected.diagnostics.skippedSymbolicLinksByDiscovery ?? 0) +
+      (collected.diagnostics.unavailableEntriesByDiscovery ?? 0) +
+      (collected.diagnostics.systemNoisePrunedByDiscovery ?? 0),
     oversizedFilesScanned: 0,
     lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,
     lowValueRescueFilesScanned: collected.diagnostics.lowValueRescueFilesScanned ?? 0,
@@ -2652,6 +2727,7 @@ function streamedCoverage(
     ...(collected.diagnostics.unrepresentablePathsByDiscovery === undefined
       ? {}
       : { unrepresentablePathsByDiscovery: collected.diagnostics.unrepresentablePathsByDiscovery }),
+    ...discoveryChurnCoverage(coverageStats(collected.diagnostics)),
     depthPrunedByDiscovery: 0,
     maxFilesPrunedByDiscovery: 0,
     matchesReturned: matchesReturned,
@@ -3660,7 +3736,10 @@ export async function findFiles(
       nowMs,
       hints: deps.searchHints,
       candidateSetFor: deps.candidateSetFor,
-      candidatePathPredicate: buildCandidatePathPredicate(deps.candidatePathGlobs),
+      candidatePathPredicate: buildCandidatePathPredicate(
+        deps.candidatePathGlobs,
+        workspacePathCase(scope.workspace),
+      ),
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
     }),
@@ -4004,9 +4083,12 @@ function excerptTextLines(
       "binary",
     );
   }
-  if (lane === "editor") return raw.split("\n");
+  // CRLF folds into LF before redaction, so a Windows-style copy redacts and windows exactly like
+  // its LF copy (#4439); the file-size cap above still counted the original bytes.
+  const source = normalizeSourceLineEndings(raw);
+  if (lane === "editor") return source.split("\n");
   return redactWorkspaceSource(
-    raw,
+    source,
     scopePath,
     true,
     workspaceContentPolicy(workspace),
@@ -4352,7 +4434,7 @@ async function appendQueuedExcerptRange(
   const initial = state.batch.remainingBytes;
   for (const segment of uncoveredQueuedRanges(state, range)) {
     if (state.batch.remainingBytes <= 0 || state.batch.remainingWindows <= 0) break;
-    const results = await readBatchedExcerptRange(state.batch, segment);
+    const results = await readBatchedExcerptRange(state.batch, segment); // NOSONAR typescript:S9382 -- each segment draws down the remaining byte and window grant the loop head re-checks
     state.results.push(...results);
     for (const result of results)
       if (!result.truncated && result.atom.lineRange !== undefined)
@@ -4373,7 +4455,7 @@ async function initialExcerptQueue(
   while (queue.ranges.length > 0 && remaining > 0 && state.batch.remainingWindows > 0) {
     const range = queue.ranges[0];
     if (range === undefined || !queuedRangeFits(state, range, remaining)) break;
-    remaining -= await appendQueuedExcerptRange(state, range, remaining);
+    remaining -= await appendQueuedExcerptRange(state, range, remaining); // NOSONAR typescript:S9382 -- `remaining` is exactly what the previous range left, and it gates the next queuedRangeFits
     queue.ranges.shift();
     queue.served = true;
   }
@@ -4387,7 +4469,7 @@ async function retryUnservedExcerptQueues(
     const range = queue.ranges[0];
     if (queue.served || range === undefined || state.batch.remainingWindows <= 0) continue;
     if (!queuedRangeFits(state, range, state.batch.remainingBytes)) continue;
-    await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+    await appendQueuedExcerptRange(state, range, state.batch.remainingBytes); // NOSONAR typescript:S9382 -- every retry is admitted against the bytes the earlier retries left
     queue.ranges.shift();
     queue.served = true;
   }
@@ -4410,7 +4492,7 @@ async function expandExcerptQueues(
         state.batch.remainingWindows <= 0
       )
         continue;
-      await appendQueuedExcerptRange(state, range, state.batch.remainingBytes);
+      await appendQueuedExcerptRange(state, range, state.batch.remainingBytes); // NOSONAR typescript:S9382 -- the queues take turns spending one shared remaining grant, which is also the while condition
     }
   }
 }
@@ -4481,7 +4563,8 @@ async function queryFacetRangeGroups(
   const groups = new Set<number>();
   for (let line = range.startLine; line <= Math.min(range.endLine, lines.length); line += 1) {
     if (cached.scannedLines > 0 && cached.scannedLines % SCAN_YIELD_INTERVAL === 0)
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // The yield that lets the event loop breathe between scanned-line batches.
+      await new Promise<void>((resolve) => setImmediate(resolve)); // NOSONAR typescript:S9382 -- a yield, not work: there is nothing here to overlap
     cached.scannedLines += 1;
     assertStructuralExecutionActive(control);
     let matched = cached.groups.get(line);
@@ -4510,7 +4593,7 @@ async function ordinaryQueryFacetQueues(
   const planned = new Set<number>();
   const cached: QueryFacetLineCache = { groups: new Map(), scannedLines: 0 };
   for (const range of queues[0]?.ranges ?? []) {
-    const groups = await queryFacetRangeGroups(range, lines, matcher, control, cached);
+    const groups = await queryFacetRangeGroups(range, lines, matcher, control, cached); // NOSONAR typescript:S9382 -- the ranges fill one shared line cache, and its scanned-line count sets the yield cadence
     if (groups.size === 0) unmatched.ranges.push(range);
     for (const group of groups) {
       facets[group]?.ranges.push(range);
@@ -4557,7 +4640,7 @@ async function queuedExcerptResults(
   for (const range of request.ranges ?? []) {
     if (previous.has(excerptRangeKey(range))) continue;
     if (batch.remainingBytes <= 0 || batch.remainingWindows <= 0) break;
-    await appendQueuedExcerptRange(state, range, batch.remainingBytes);
+    await appendQueuedExcerptRange(state, range, batch.remainingBytes); // NOSONAR typescript:S9382 -- the explicit ranges stop as soon as an earlier one has spent the shared grant
   }
   const plan = await ordinaryQueryFacetQueues(
     request,
@@ -4569,7 +4652,7 @@ async function queuedExcerptResults(
   const share = Math.floor(batch.remainingBytes / Math.max(1, queues.length));
   const remainder = batch.remainingBytes % Math.max(1, queues.length);
   for (const [index, queue] of queues.entries())
-    await initialExcerptQueue(state, queue, share + Number(index < remainder));
+    await initialExcerptQueue(state, queue, share + Number(index < remainder)); // NOSONAR typescript:S9382 -- each queue's share is drawn from the one remaining grant the retry and expansion rounds below read
   await retryUnservedExcerptQueues(state, queues);
   if (request.firstRoundOnly !== true) await expandExcerptQueues(state, queues);
   return {

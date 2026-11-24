@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "30f7f1029ea8cfeda23f6dcc456967944fcb8cc9c53baede9664915bc4ebea64"
+    "catalogDigest": "dffaa8a9b6b7bdead5b6fa49abfd4434e0a3b5f95585d27b96c57ced3c67fff5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 720,
-    "proofCount": 744,
-    "resolvedProofCount": 744,
-    "failureClassCount": 413,
+    "operationCount": 723,
+    "proofCount": 747,
+    "resolvedProofCount": 747,
+    "failureClassCount": 416,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -151,6 +151,8 @@
         "chat.turn.started",
         "figma.snapshot.capture-failed",
         "figma.snapshot.captured",
+        "files.copy.refused",
+        "files.search.completed",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
         "http.request.body.cancelled",
@@ -688,6 +690,7 @@
         "editor.agent.bridge-registration",
         "editor.agent.changeset-byte-order-mark",
         "editor.agent.changeset-provenance",
+        "editor.assured-copy.completed",
         "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
@@ -1078,6 +1081,7 @@
     "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-bridge-registration": ["editor-delivery.dependency-failure"],
     "editor-action-queue-refusal": ["editor-delivery.dependency-failure"],
+    "editor-assured-copy-containment": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -1148,6 +1152,8 @@
     "git-delivery-readiness-provider": ["editor-delivery.dependency-failure"],
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
+    "files-copy-containment-refusal": ["bff.rejection"],
+    "files-search-availability": ["bff.dependency-failure"],
     "git-diff-search-bounded": ["editor-delivery.loss"],
     "git-diff-view-bounded": ["editor-delivery.dependency-failure"],
     "git-status-bounded": ["editor-delivery.dependency-failure"],
@@ -2181,6 +2187,9 @@
     "editor.agent.changeset-provenance.emitted-line": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
+    "editor.assured-copy.completed.links-skipped": [
+      "packages/keiko-server/src/editor/assuredPreFilterRunner.test.ts"
+    ],
     "editor.buffer-safety.state.lifecycle": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
@@ -2339,6 +2348,8 @@
     "figma.snapshot.captured.line": [
       "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
     ],
+    "files.copy.refused.link": ["packages/keiko-server/src/files.test.ts"],
+    "files.search.completed.line": ["packages/keiko-server/src/files.search-availability.test.ts"],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],

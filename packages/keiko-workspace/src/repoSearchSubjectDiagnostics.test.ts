@@ -68,6 +68,26 @@ function priorSubjectRevision(
   };
 }
 
+/** Records the query identity of every match the producer stores through this index. */
+function recordingMatches(index: WorkspaceIndex): {
+  readonly index: WorkspaceIndex;
+  readonly identities: string[];
+} {
+  const identities: string[] = [];
+  return {
+    identities,
+    index: {
+      loadSnapshot: index.loadSnapshot,
+      saveSnapshot: async (key, snapshot, isActive): Promise<void> => {
+        for (const record of snapshot.records)
+          if (record.queryMatch !== undefined)
+            identities.push(record.queryMatch.queryIdentitySha256);
+        await index.saveSnapshot(key, snapshot, isActive);
+      },
+    },
+  };
+}
+
 describe("repository query subject diagnostics", () => {
   it("rejects a revision-six cached hit supplied only by output formatting", async () => {
     const formattingQuery: RetrievalQuery = {
@@ -86,24 +106,26 @@ describe("repository query subject diagnostics", () => {
     expect(cold.atoms).toEqual([]);
     reads.mockClear();
     // Actual compiled e1ccb2c7 revision-six producer, with this same query and source.
-    const prior = priorSubjectRevision(
-      index,
-      "98181445a7ec26b12946d097f6581228fb18f96dfb4dfa594979a04ad9cab37a",
-      {
-        best: [{ line: 1, startLine: 1, endLine: 1, score: 0.125 }],
-        maxScore: 0.125,
-        contentScore: 20,
-        definitionMatch: false,
-      },
-    );
+    const priorIdentity = "98181445a7ec26b12946d097f6581228fb18f96dfb4dfa594979a04ad9cab37a";
+    const recording = recordingMatches(index);
+    const prior = priorSubjectRevision(recording.index, priorIdentity, {
+      best: [{ line: 1, startLine: 1, endLine: 1, score: 0.125 }],
+      maxScore: 0.125,
+      contentScore: 20,
+      definitionMatch: false,
+    });
     const migrated = await searchText(scope(), formattingQuery, limits, {
       fs,
       workspaceIndex: prior,
       nowMs: () => 0,
     });
+    // The frozen hit would surface src/years.txt; the corrected matching does not.
     expect(migrated.atoms).toEqual(cold.atoms);
-    expect(migrated.workspaceIndex).toMatchObject({ indexedRecords: 1, reusedRecords: 0 });
-    expect(reads).toHaveBeenCalledOnce();
+    // #4457: stored lane text spares the body read, but the file is matched again under the
+    // corrected identity; the prior revision's match is never reused.
+    expect(reads).not.toHaveBeenCalled();
+    expect(recording.identities).toHaveLength(1);
+    expect(recording.identities).not.toContain(priorIdentity);
     reads.mockClear();
     const warm = await searchText(scope(), formattingQuery, limits, {
       fs,
@@ -144,7 +166,7 @@ describe("repository query subject diagnostics", () => {
   it.each([
     "f13a70e9a38505674a22501f377a141fac774f6c5cad5f654ff48ae60e898991",
     "6c408728cf6c55b4505d5e2543fef89859b66ab410a3655b8257302e80dcaff2",
-  ])("rereads prior-revision %s before reusing the corrected match", async (identity) => {
+  ])("re-matches prior-revision %s before reusing the corrected match", async (identity) => {
     const fs = memFs("/ws", {
       "src/authorization.ts":
         "export function authorizeRequest(policy) { return policy.allowed; }\n",
@@ -160,14 +182,18 @@ describe("repository query subject diagnostics", () => {
     expect(cold.atoms.length).toBeGreaterThan(0);
     expect(cold.workspaceIndex?.indexedRecords).toBe(1);
     reads.mockClear();
+    const recording = recordingMatches(index);
     const migrated = await searchText(scope(), query, limits, {
       fs,
-      workspaceIndex: priorSubjectRevision(index, identity),
+      workspaceIndex: priorSubjectRevision(recording.index, identity),
       nowMs: () => 0,
     });
     expect(migrated.atoms).toEqual(cold.atoms);
-    expect(migrated.workspaceIndex).toMatchObject({ indexedRecords: 1, reusedRecords: 0 });
-    expect(reads).toHaveBeenCalledOnce();
+    // #4457: the stored lane text spares the body read; the prior-revision match is not reused,
+    // the file is matched again and stored under the corrected identity.
+    expect(reads).not.toHaveBeenCalled();
+    expect(recording.identities).toHaveLength(1);
+    expect(recording.identities).not.toContain(identity);
     reads.mockClear();
     const warm = await searchText(scope(), query, limits, {
       fs,
