@@ -474,6 +474,19 @@ describe("how the run's npm reaches its registries' tarballs (#4491)", () => {
     expect(targets.map((target) => target.rewritePackumentTarballs)).toEqual([false, false]);
   });
 
+  // An `.npmrc` often names a scope's registry without its trailing slash, with another host case
+  // or with the default port; the resolved URLs are normalised, so one Nexus group stays one.
+  it("treats a scope spelled differently as the default registry's own URL", () => {
+    const npm = NPMRC_ONE_REGISTRY.replace(
+      "@corp:registry=https://npm.corp.example/registry/",
+      "@corp:registry=https://NPM.corp.example:443/registry",
+    );
+    expect(bindTargets(npm).map((target) => target.rewritePackumentTarballs)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
   // npm moves a tarball only onto the default registry, which would be the wrong binding for a
   // scope bound elsewhere: the relay keeps rewriting, as before #4491, and npm keeps its default.
   it("keeps the relay's rewrite and npm's default when a scope names another registry", () => {

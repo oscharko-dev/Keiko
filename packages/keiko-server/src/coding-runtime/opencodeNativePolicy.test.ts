@@ -985,6 +985,7 @@ describe("native verification commands (#3901, #3897 review)", () => {
     [["node --require ./x.js sum.test.js"]],
     [["node ~/sum.test.js"]],
     [["node $HOME/sum.test.js"]],
+    [["node ..\\other\\sum.test.js"]],
     [["node test/"]],
     // #3897 review: another command decides the line's exit status after a failed check.
     [["npm test; cd ."]],

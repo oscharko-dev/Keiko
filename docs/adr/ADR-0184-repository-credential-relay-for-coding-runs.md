@@ -199,7 +199,12 @@ to a file of the run.
   own default stays for a public default registry. A scope bound to another URL, or a scope without
   a bound default registry, keeps the relay's packument rewrite and npm's default for every registry
   of the run, as before: there a lockfile the run writes pins the relay, and one pinned on the
-  person's registry is not routed. `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run,
+  person's registry is not routed. The routing is npm's install path (`npm install`, `npm ci`,
+  `npx`): a tarball npm fetches outside it, as `npm pack <package>`, `npm cache add` or an install
+  from a lockfile written with `omit-lockfile-registry-resolved` do, is moved by npm's fetcher onto
+  the relay's origin without the relay's path below Full access and fails, and is fetched from the
+  person's registry without the credential at Full access when that registry names a port.
+  `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run,
   extending the inherited list.
   The runtime's environment carries `npm_config_offline=true` below Full access, and npm reads the
   environment before its user config, so the config alone would leave a shell's `npm install` offline.
