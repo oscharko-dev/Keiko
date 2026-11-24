@@ -1744,6 +1744,7 @@
     "keiko-server/coding-runtime/nativeWebSearch",
     "keiko-server/coding-runtime/npmLaneRuntimeApprovals",
     "keiko-server/coding-runtime/opencodeAgents",
+    "keiko-server/coding-runtime/opencodeAutomationRows",
     "keiko-server/coding-runtime/opencodeCommands",
     "keiko-server/coding-runtime/opencodeConfigDocuments",
     "keiko-server/coding-runtime/opencodeFunctionalHarness/_governedTools",

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "85ec35ff648ab13a94799999f9eaaf0927e185e10c1522074462eccedbc2dceb",
+    "catalogDigest": "9249a0fe8d7a4dc5dfad33586b4c2e6866a72230da487369d50c0d88bca36af1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13901,8 +13901,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1730",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1960"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1749",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1979"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18335,6 +18335,7 @@
             "values": [
               "kv-rows",
               "workspace-rows",
+              "machine-rows",
               "job-rows",
               "blob-rows",
               "copy-unreadable",
@@ -18408,7 +18409,7 @@
         "proofIds": ["coding-runtime.session-continuity.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:218",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:371"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingSessionContinuity.ts:372"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -124458,7 +124459,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1733",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1752",
       "package": "keiko-server"
     },
     {

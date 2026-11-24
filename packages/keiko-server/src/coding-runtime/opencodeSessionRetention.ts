@@ -38,9 +38,7 @@ import {
 import {
   AUTOMATION_ID_PATTERN,
   RETIRED_SCHEDULE_ID_PATTERN,
-  RETAINED_SCHEDULE_ACTION_MAX_CHARS,
   RETAINED_SCHEDULE_MAX,
-  RETAINED_SCHEDULE_NAME_MAX_CHARS,
   UNADMITTED_AUTOMATION_PREDICATE,
 } from "./opencodeAutomationRows.js";
 import { SCHEDULER_LEASE_KEY } from "./opencodeScheduleLease.js";
@@ -1165,7 +1163,10 @@ function refusalForClassifiedRows(
   };
 }
 
-export { RETAINED_SCHEDULE_ACTION_MAX_CHARS, RETAINED_SCHEDULE_NAME_MAX_CHARS };
+export {
+  RETAINED_SCHEDULE_ACTION_MAX_CHARS,
+  RETAINED_SCHEDULE_NAME_MAX_CHARS,
+} from "./opencodeAutomationRows.js";
 
 /**
  * Automation rows a retained copy may not carry (`opencodeAutomationRows.ts`): anything but a

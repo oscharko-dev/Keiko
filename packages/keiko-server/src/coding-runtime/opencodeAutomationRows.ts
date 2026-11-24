@@ -26,6 +26,9 @@ export const ADMITTED_AUTOMATION_TRIGGERS: readonly string[] = Object.freeze([
   "cron",
 ]);
 
+/** The admitted triggers as an SQL list (`'at', 'every', 'cron'`). */
+const ADMITTED_TRIGGER_LIST = ADMITTED_AUTOMATION_TRIGGERS.map((type) => `'${type}'`).join(", ");
+
 /** The largest action (its prompt) and name a retained copy may carry, in characters. */
 export const RETAINED_SCHEDULE_ACTION_MAX_CHARS = 16_384;
 export const RETAINED_SCHEDULE_NAME_MAX_CHARS = 256;
@@ -56,7 +59,7 @@ export const UNADMITTED_AUTOMATION_PREDICATE = [
   `length(action) > ${String(RETAINED_SCHEDULE_ACTION_MAX_CHARS)}`,
   `length(COALESCE(name, '')) > ${String(RETAINED_SCHEDULE_NAME_MAX_CHARS)}`,
   `length(COALESCE(last_output, '')) > ${String(RETAINED_SCHEDULE_OUTPUT_MAX_CHARS)}`,
-  `COALESCE(${jsonField("trigger", "$.type")}, '') NOT IN (${ADMITTED_AUTOMATION_TRIGGERS.map((type) => `'${type}'`).join(", ")})`,
+  `COALESCE(${jsonField("trigger", "$.type")}, '') NOT IN (${ADMITTED_TRIGGER_LIST})`,
   `COALESCE(${jsonField("action", "$.type")}, '') <> 'prompt'`,
   `${jsonField("action", "$.to.session")} IS NOT ?`,
 ].join(" OR ");
