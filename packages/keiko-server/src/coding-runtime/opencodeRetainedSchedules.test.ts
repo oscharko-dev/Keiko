@@ -442,7 +442,7 @@ describe("listing a task's retained schedules", () => {
     const f = fixture();
     retain(f, f.source([schedule("aut_a")]), "supervised-coding");
     const path = join(f.root, "retained", retainedSessionKey(TASK), "manifest.json");
-    const { scheduleModes: _dropped, ...rest } = manifest(f) as Record<string, unknown>;
+    const { scheduleModes: _dropped, ...rest } = manifest(f);
     writeFileSync(path, JSON.stringify({ ...rest, runtimeVersion: "2.2.5" }));
 
     expect(listRetainedSchedules(f.store, TASK)?.schedules).toEqual([]);

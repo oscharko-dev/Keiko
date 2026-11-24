@@ -31,6 +31,10 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { isStableVersionString } from "./update-preflight-registry.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = OPENCODE_RUNTIME_VERSION_PINS[0];
+if (PINNED_OPENCODE === undefined) throw new Error("no OpenCode runtime pin");
+
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
 const REVIEWED_COMMIT = "c".repeat(40);
@@ -298,9 +302,9 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
-      tag: OPENCODE_RUNTIME_VERSION_PINS[0]?.tag ?? "",
-      commit: OPENCODE_RUNTIME_VERSION_PINS[0]?.commit ?? "",
+      version: PINNED_OPENCODE.version,
+      tag: PINNED_OPENCODE.tag,
+      commit: PINNED_OPENCODE.commit,
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -309,7 +313,7 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
+      sha256: PINNED_OPENCODE.rawSchemaSha256,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1107,7 +1111,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
+      upstreamVersion: PINNED_OPENCODE.version,
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),

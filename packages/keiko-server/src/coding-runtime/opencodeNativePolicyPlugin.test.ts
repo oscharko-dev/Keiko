@@ -60,7 +60,14 @@ interface Harness {
   readonly evaluate: (event: PermissionEvent) => Promise<void>;
   readonly shell: (event: ShellEvent) => void;
   readonly toolBefore: (event: ToolEvent) => Promise<void>;
-  readonly requests: unknown[];
+  readonly requests: PolicyRequest[];
+}
+
+/** What the generated hook sends the facade, as far as these tests read it. */
+interface PolicyRequest {
+  readonly permission: string;
+  readonly resources: readonly string[];
+  readonly [field: string]: unknown;
 }
 
 /** Runs the generated plugin against a fetch stub that answers `allow` to every request it sees. */
@@ -69,9 +76,9 @@ async function pluginHarness(
   answer: { readonly effect: "allow" | "deny"; readonly message?: string } = { effect: "allow" },
   extraEnv: Readonly<Record<string, string>> = {},
 ): Promise<Harness> {
-  const requests: unknown[] = [];
+  const requests: PolicyRequest[] = [];
   const fetch = (_url: string, init: { body: string }): Promise<Response> => {
-    requests.push(JSON.parse(init.body));
+    requests.push(JSON.parse(init.body) as PolicyRequest);
     return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
   };
   const source = createGeneratedOpenCodeNativePolicyPlugin();

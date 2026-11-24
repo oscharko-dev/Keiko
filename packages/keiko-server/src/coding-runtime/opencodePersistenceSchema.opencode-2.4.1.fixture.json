@@ -9,11 +9,7 @@
     "token_expiry",
     "url"
   ],
-  "account_state": [
-    "active_account_id",
-    "active_org_id",
-    "id"
-  ],
+  "account_state": ["active_account_id", "active_org_id", "id"],
   "automation": [
     "action",
     "directory",
@@ -38,21 +34,8 @@
     "trigger",
     "tz"
   ],
-  "blob": [
-    "bytes",
-    "data",
-    "hash",
-    "height",
-    "mime",
-    "time_created",
-    "width"
-  ],
-  "blob_ref": [
-    "hash",
-    "message_id",
-    "seq",
-    "session_id"
-  ],
+  "blob": ["bytes", "data", "hash", "height", "mime", "time_created", "width"],
+  "blob_ref": ["hash", "message_id", "seq", "session_id"],
   "control_account": [
     "access_token",
     "active",
@@ -74,31 +57,10 @@
     "time_updated",
     "value"
   ],
-  "event": [
-    "aggregate_id",
-    "created",
-    "data",
-    "id",
-    "seq",
-    "type"
-  ],
-  "event_sequence": [
-    "aggregate_id",
-    "owner_id",
-    "seq"
-  ],
-  "instruction_blob": [
-    "hash",
-    "value"
-  ],
-  "instruction_entry": [
-    "key",
-    "removed",
-    "session_id",
-    "time_created",
-    "time_updated",
-    "value"
-  ],
+  "event": ["aggregate_id", "created", "data", "id", "seq", "type"],
+  "event_sequence": ["aggregate_id", "owner_id", "seq"],
+  "instruction_blob": ["hash", "value"],
+  "instruction_entry": ["key", "removed", "session_id", "time_created", "time_updated", "value"],
   "instruction_state": [
     "current_values",
     "epoch_start",
@@ -120,29 +82,10 @@
     "time_updated",
     "title"
   ],
-  "kv": [
-    "key",
-    "time_created",
-    "time_updated",
-    "value"
-  ],
-  "machine": [
-    "id",
-    "key",
-    "time_created"
-  ],
-  "migration": [
-    "id",
-    "time_completed"
-  ],
-  "permission": [
-    "action",
-    "id",
-    "project_id",
-    "resource",
-    "time_created",
-    "time_updated"
-  ],
+  "kv": ["key", "time_created", "time_updated", "value"],
+  "machine": ["id", "key", "time_created"],
+  "migration": ["id", "time_completed"],
+  "permission": ["action", "id", "project_id", "resource", "time_created", "time_updated"],
   "project": [
     "commands",
     "icon_color",
@@ -159,13 +102,7 @@
     "vcs",
     "worktree"
   ],
-  "project_directory": [
-    "directory",
-    "project_id",
-    "strategy",
-    "time_created",
-    "type"
-  ],
+  "project_directory": ["directory", "project_id", "strategy", "time_created", "type"],
   "session_inbox": [
     "delivery",
     "enqueued_seq",
@@ -175,15 +112,7 @@
     "time_created",
     "type"
   ],
-  "session_message": [
-    "data",
-    "id",
-    "seq",
-    "session_id",
-    "time_created",
-    "time_updated",
-    "type"
-  ],
+  "session_message": ["data", "id", "seq", "session_id", "time_created", "time_updated", "type"],
   "session_part": [
     "call_id",
     "data",
@@ -233,17 +162,6 @@
     "version",
     "workspace_id"
   ],
-  "workspace": [
-    "binding",
-    "created_at",
-    "id",
-    "last_used_at",
-    "provider"
-  ],
-  "worktree": [
-    "directory",
-    "project_id",
-    "strategy",
-    "time_created"
-  ]
+  "workspace": ["binding", "created_at", "id", "last_used_at", "provider"],
+  "worktree": ["directory", "project_id", "strategy", "time_created"]
 }

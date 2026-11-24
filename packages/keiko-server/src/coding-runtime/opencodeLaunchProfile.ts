@@ -667,12 +667,13 @@ export function createFixedOpenCodeV2Config(
   return createGovernedOpenCodeV2Config(contextGeometry, unavailableOptionalTools, profile);
 }
 
-function createGovernedOpenCodeV2Config(
+/**
+ * The producer's automatic compaction for one context geometry: the buffer reserves the model's
+ * output (bounded), and the recent turns kept verbatim fill what input remains, within bounds.
+ */
+function openCodeCompaction(
   contextGeometry: OpenCodeContextGeometry,
-  unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName> | undefined,
-  profile: Exclude<OpenCodeToolProfile, "native">,
 ): Readonly<Record<string, unknown>> {
-  const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
     contextGeometry.maxOutputTokens,
@@ -681,6 +682,20 @@ function createGovernedOpenCodeV2Config(
     OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
     Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
   );
+  return {
+    auto: true,
+    background: OPENCODE_COMPACTION_BACKGROUND,
+    keep: { tokens: recent },
+    buffer: reserved,
+  };
+}
+
+function createGovernedOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+  unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName> | undefined,
+  profile: Exclude<OpenCodeToolProfile, "native">,
+): Readonly<Record<string, unknown>> {
+  const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const permissions = [
     { action: "*", resource: "*", effect: "deny" },
     { action: "question", resource: "*", effect: "allow" },
@@ -698,12 +713,7 @@ function createGovernedOpenCodeV2Config(
     providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_PLUGIN_REMOVALS,
-    compaction: {
-      auto: true,
-      background: OPENCODE_COMPACTION_BACKGROUND,
-      keep: { tokens: recent },
-      buffer: reserved,
-    },
+    compaction: openCodeCompaction(contextGeometry),
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     automations: OPENCODE_AUTOMATIONS_OFF,
     experimental: OPENCODE_CLOSED_EXPERIMENTS,
@@ -744,14 +754,6 @@ function createNativeOpenCodeV2Config(
   },
   agentModels: OpenCodeAgentModelsInput | undefined,
 ): Readonly<Record<string, unknown>> {
-  const reserved = Math.min(
-    OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
-    contextGeometry.maxOutputTokens,
-  );
-  const recent = Math.min(
-    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
-    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
-  );
   return {
     update: "disable",
     share: "disabled",
@@ -775,12 +777,7 @@ function createNativeOpenCodeV2Config(
       : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     plugins: OPENCODE_NATIVE_PLUGIN_REMOVALS,
-    compaction: {
-      auto: true,
-      background: OPENCODE_COMPACTION_BACKGROUND,
-      keep: { tokens: recent },
-      buffer: reserved,
-    },
+    compaction: openCodeCompaction(contextGeometry),
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     // The producer offers its automation tools unless this is false; an automation wakes the
     // session only in Keiko's wake run, which alone releases the scheduler lease (#4546).

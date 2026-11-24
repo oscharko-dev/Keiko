@@ -40,6 +40,10 @@ import {
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
 
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = OPENCODE_RUNTIME_VERSION_PINS[0];
+if (PINNED_OPENCODE === undefined) throw new Error("no OpenCode runtime pin");
+
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
@@ -1190,9 +1194,9 @@ function sidecarFixture(lane: FixtureLane = "production"): {
         owner: "anomalyco",
         repository: "opencode",
         name: "opencode",
-        version: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
-        tag: OPENCODE_RUNTIME_VERSION_PINS[0]?.tag ?? "",
-        commit: OPENCODE_RUNTIME_VERSION_PINS[0]?.commit ?? "",
+        version: PINNED_OPENCODE.version,
+        tag: PINNED_OPENCODE.tag,
+        commit: PINNED_OPENCODE.commit,
       },
       adapterCompatibility: {
         adapterName: "keiko-coding-sidecar",
@@ -1201,7 +1205,7 @@ function sidecarFixture(lane: FixtureLane = "production"): {
       },
       protocolSchema: {
         path: "packages/protocol/openapi.json",
-        sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
+        sha256: PINNED_OPENCODE.rawSchemaSha256,
         hashAlgorithm: "sha256",
         hashEncoding: "lowercase-hex",
         digestInput: "upstream-raw-bytes",

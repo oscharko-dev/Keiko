@@ -34,6 +34,10 @@ import {
 } from "./update-portable-staging-shared.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = OPENCODE_RUNTIME_VERSION_PINS[0];
+if (PINNED_OPENCODE === undefined) throw new Error("no OpenCode runtime pin");
+
 const ENC = new TextEncoder();
 const TARGET_VERSION = "0.2.11";
 const RELEASE_ID = 987_654_321;
@@ -222,9 +226,9 @@ function sidecarRuntime(
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
-      tag: OPENCODE_RUNTIME_VERSION_PINS[0]?.tag ?? "",
-      commit: OPENCODE_RUNTIME_VERSION_PINS[0]?.commit ?? "",
+      version: PINNED_OPENCODE.version,
+      tag: PINNED_OPENCODE.tag,
+      commit: PINNED_OPENCODE.commit,
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -233,7 +237,7 @@ function sidecarRuntime(
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
+      sha256: PINNED_OPENCODE.rawSchemaSha256,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1051,7 +1055,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
+      upstreamVersion: PINNED_OPENCODE.version,
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",
