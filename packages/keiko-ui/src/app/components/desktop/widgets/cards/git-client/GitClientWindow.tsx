@@ -62,6 +62,7 @@ import {
 import {
   useCommittedValueRef,
   useHandedOffRepositoryConnection,
+  useMountedRef,
 } from "./useHandedOffRepositoryConnection";
 import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
@@ -1307,15 +1308,17 @@ function repositoryFailureMessage(failure: RepositoryFailure | null): string | n
 
 /**
  * Retry after a repository failure: a failed switch connects its repository again, any other
- * failure reloads the repository list.
+ * failure reloads the repository list. While the list itself has failed nothing can be decided, so
+ * Retry reloads it first, even after a later failed switch.
  */
 function retryRepositoryFailure(
   failure: RepositoryFailure | null,
+  listFailed: boolean,
   reconnect: (path: string) => void,
   reloadList: () => void,
 ): void {
   const failedSwitchPath = failure === null ? null : failure.failedSwitchPath;
-  if (failedSwitchPath === null) reloadList();
+  if (listFailed || failedSwitchPath === null) reloadList();
   else reconnect(failedSwitchPath);
 }
 
@@ -1353,6 +1356,7 @@ export function GitClientWindow({
     configuredPath,
   });
   const pendingHandOffRef = useCommittedValueRef(handOffPath);
+  const mountedRef = useMountedRef();
   // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
   // the current project projection proves that it still has live workspace-manifest membership.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -1738,11 +1742,14 @@ export function GitClientWindow({
       const requestSequence = repositoryConnectSeqRef.current + 1;
       repositoryConnectSeqRef.current = requestSequence;
       const handOffAtStart = pendingHandOffRef.current;
+      // A replaced window (keyed remount) or a newer switch owns the outcome instead.
+      const isLive = (): boolean =>
+        mountedRef.current && requestSequence === repositoryConnectSeqRef.current;
       setReposLoading(true);
       setReposFailure(null);
       void client.reconnectRepository(path).then(
         (response): void => {
-          if (requestSequence !== repositoryConnectSeqRef.current) return;
+          if (!isLive()) return;
           if (supersededByNewerHandOff(handOffAtStart, pendingHandOffRef.current, path)) {
             // The newer hand-off proceeds once the list is read again (#4103 F2).
             loadRepositories();
@@ -1751,7 +1758,7 @@ export function GitClientWindow({
           if (applyConnectedRepository(response.project, path)) loadRepositories();
         },
         (error: unknown): void => {
-          if (requestSequence !== repositoryConnectSeqRef.current) return;
+          if (!isLive()) return;
           setReposLoading(false);
           setReposFailure(
             repositoryFailure(
@@ -1764,12 +1771,12 @@ export function GitClientWindow({
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, optionalT, pendingHandOffRef],
+    [applyConnectedRepository, client, loadRepositories, mountedRef, optionalT, pendingHandOffRef],
   );
 
   const retryRepositoryError = useCallback((): void => {
-    retryRepositoryFailure(reposFailure, reconnectRepository, loadRepositories);
-  }, [loadRepositories, reconnectRepository, reposFailure]);
+    retryRepositoryFailure(reposFailure, reposListFailed, reconnectRepository, loadRepositories);
+  }, [loadRepositories, reconnectRepository, reposFailure, reposListFailed]);
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {

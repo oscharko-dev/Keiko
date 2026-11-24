@@ -1465,6 +1465,148 @@ describe("GitClientWindow — repository list", () => {
     expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
   });
 
+  // The desktop mounts the Git window with `key={projectId}`, so a hand-off to another folder
+  // replaces the window. A registration or switch the replaced window started must not write the
+  // window configuration when it completes (independent audit of #4553).
+  it("ignores a registration that completes after a keyed remount for a newer hand-off", async () => {
+    const handedOff = makeRepo("/repos/handed-off", "handed-off");
+    let resolveRegistration: (value: { readonly project: ProjectWithAvailability }) => void = () =>
+      undefined;
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      registerRepository: vi.fn(
+        async () =>
+          await new Promise<{ readonly project: ProjectWithAvailability }>((resolve) => {
+            resolveRegistration = resolve;
+          }),
+      ),
+    });
+    const view = render(
+      <GitClientWindow
+        key={handedOff.path}
+        projectId={handedOff.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    await waitFor(() => expect(client.registerRepository).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <GitClientWindow
+        key={REPO_B.path}
+        projectId={REPO_B.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    const cfgWritesBefore = updateCfg.mock.calls.length;
+    await act(async () => {
+      resolveRegistration(makeProjectResponse(handedOff));
+      await Promise.resolve();
+    });
+    expect(updateCfg.mock.calls).toHaveLength(cfgWritesBefore);
+    expect(client.reconnectRepository).not.toHaveBeenCalledWith(handedOff.path);
+  });
+
+  it("ignores a repository switch that completes after a keyed remount", async () => {
+    const user = userEvent.setup();
+    const gamma = makeRepo("/repos/gamma", "gamma");
+    let resolveSwitch: (value: { readonly project: ProjectWithAvailability }) => void = () =>
+      undefined;
+    const updateCfg = vi.fn();
+    const connected = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B, gamma] })),
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path !== gamma.path) return makeProjectResponse(REPO_A);
+        return await new Promise<{ readonly project: ProjectWithAvailability }>((resolve) => {
+          resolveSwitch = resolve;
+        });
+      }),
+    });
+    const view = render(
+      <GitClientWindow
+        key={REPO_A.path}
+        projectId={REPO_A.path}
+        client={client}
+        updateCfg={updateCfg}
+        onRepositoryConnected={connected}
+      />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(gamma.path) }));
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(gamma.path));
+
+    view.rerender(
+      <GitClientWindow
+        key={REPO_B.path}
+        projectId={REPO_B.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+        onRepositoryConnected={connected}
+      />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    await act(async () => {
+      resolveSwitch(makeProjectResponse(gamma));
+      await Promise.resolve();
+    });
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: gamma.path });
+    expect(connected).not.toHaveBeenCalledWith(gamma.path);
+  });
+
+  // While the repository list has failed, nothing can be decided, so Retry reloads the list even
+  // when a later switch failed too (independent audit of #4553).
+  it("retries the failed repository list before a failed switch", async () => {
+    const user = userEvent.setup();
+    let listCalls = 0;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => {
+        listCalls += 1;
+        if (listCalls === 1) throw new Error("list down");
+        return { projects: [REPO_A] };
+      }),
+      registerRepository: vi.fn(async () => makeProjectResponse(REPO_B)),
+      reconnectRepository: vi.fn(async () => {
+        throw new Error("folder moved");
+      }),
+    });
+    nativeFileDialogMock.pickWithNativeDialog.mockResolvedValue({
+      kind: "picked",
+      paths: [REPO_B.path],
+    });
+    render(<GitClientWindow client={client} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("list down");
+
+    await user.click(screen.getByRole("button", { name: "Connect repository" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Open local repository" }));
+    await user.click(within(dialog).getByRole("button", { name: "Choose local repository" }));
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText("Local repository path")).toHaveValue(REPO_B.path),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Open repository" }));
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(REPO_B.path));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: folder moved",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(listCalls).toBe(2));
+    expect(client.reconnectRepository).toHaveBeenCalledOnce();
+  });
+
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
   it("connects a handed-off repository after an earlier repository was refused", async () => {
     const legacy = makeRepo("/repos/legacy", "legacy", { available: false });

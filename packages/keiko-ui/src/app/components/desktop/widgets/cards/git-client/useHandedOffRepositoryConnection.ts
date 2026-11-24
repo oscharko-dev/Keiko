@@ -105,6 +105,22 @@ export function useCommittedValueRef<T>(value: T): { readonly current: T } {
   return ref;
 }
 
+/**
+ * A ref that is true while the component is mounted. The desktop mounts the Git window with
+ * `key={projectId}`, so a hand-off to another folder replaces it; an outcome the replaced window
+ * started must change nothing. It is set again on every mount, which StrictMode repeats.
+ */
+export function useMountedRef(): { readonly current: boolean } {
+  const ref = useRef(false);
+  useLayoutEffect((): (() => void) => {
+    ref.current = true;
+    return (): void => {
+      ref.current = false;
+    };
+  }, []);
+  return ref;
+}
+
 /** Returns `connect(path)`, which registers the handed-off path once per pending hand-off. */
 export function useHandedOffRepositoryConnection(
   input: HandedOffRepositoryConnectionInput,
@@ -114,6 +130,7 @@ export function useHandedOffRepositoryConnection(
   const claimedPathsRef = useRef<Set<string>>(new Set());
   // The hand-off pending when an outcome arrives, which may be newer than the one it served.
   const pendingHandOffRef = useCommittedValueRef(handOffPath);
+  const mountedRef = useMountedRef();
   useLayoutEffect((): void => {
     if (handOffPath === null) claimedPathsRef.current.clear();
   }, [handOffPath]);
@@ -124,6 +141,7 @@ export function useHandedOffRepositoryConnection(
       const sequence = actionSequence.current + 1;
       actionSequence.current = sequence;
       const settle = (outcome: RegistrationOutcome): void => {
+        if (!mountedRef.current) return;
         const isCurrent = sequence === actionSequence.current;
         if (pendingHandOffRef.current !== path) {
           claimedPathsRef.current.delete(path);
@@ -142,6 +160,7 @@ export function useHandedOffRepositoryConnection(
       actionSequence,
       client,
       handOffPath,
+      mountedRef,
       onAdded,
       onFailed,
       onSettled,
