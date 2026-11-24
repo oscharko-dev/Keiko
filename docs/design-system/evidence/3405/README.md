@@ -876,3 +876,13 @@ The same rule then reported the multi-root Files roots and the Editor file histo
 action of the focused root and every file history row now name themselves by their visible words
 first, which moved the same two optional-catalog digests again; the producer was rerun on the final
 sources the same way and only the three records were kept.
+
+## Context elision note — 2026-11-24 (#4491)
+
+A Chat answer now carries a short Keiko note when older tool results reached the model only as a
+summary, with a singular and a plural form in both optional catalogs, which changed their two digests. On
+2026-11-24 (UTC) all nine updater cases passed in 1.5 minutes in the Linux arm64 gates container
+with Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` and
+`npm run check:editor-release-evidence` passed there. Only the three producer records were kept;
+the fourteen committed captures, updater assertions and harness inputs retain their existing
+values.
