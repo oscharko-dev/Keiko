@@ -50,7 +50,7 @@ function jsonField(column: string, path: string): string {
  */
 export const UNADMITTED_AUTOMATION_PREDICATE = [
   "session_id IS NOT ?",
-  "status NOT IN ('active', 'paused', 'done')",
+  "COALESCE(status, '') NOT IN ('active', 'paused', 'done')",
   "state IS NOT NULL",
   "event_position IS NOT NULL",
   "id NOT GLOB 'aut_?*'",

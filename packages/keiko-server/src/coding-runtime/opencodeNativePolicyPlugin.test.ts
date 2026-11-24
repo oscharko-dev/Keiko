@@ -401,6 +401,53 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     });
   });
 
+  // The producer drops keys its schema does not name, but a later pin may read one (another
+  // recipient, a working folder): only the 2.4.1 request keys pass, each trigger with its own value
+  // and `tz`, the prompt with `prompt` and the refused `to` (#4546 review).
+  it("refuses an automation creation that carries a key outside the reviewed request shape", async () => {
+    const harness = await pluginHarness("supervised-coding");
+    const at = { type: "at", at: "in 1m" };
+    const prompt = { type: "prompt", prompt: "p" };
+    const inputs = [
+      {
+        name: "n",
+        trigger: { type: "cron", cron: "0 9 * * 1-5", tz: "Europe/Berlin" },
+        action: prompt,
+      },
+      { name: "n", trigger: at, action: prompt, directory: "/elsewhere" },
+      { name: "n", trigger: at, action: prompt, sessionID: "ses_other" },
+      { name: "n", trigger: { ...at, server: "ci" }, action: prompt },
+      { name: "n", trigger: { type: "every", every: "1 hour", at: "x" }, action: prompt },
+      { name: "n", trigger: at, action: { ...prompt, session: "ses_other" } },
+      { name: "n", trigger: at, action: { ...prompt, agent: "build" } },
+    ];
+    for (const input of inputs) await harness.toolBefore({ ...nested("automation_create"), input });
+
+    expect(harness.requests.map((request) => request.resources[1])).toEqual([
+      'when:{"type":"cron","cron":"0 9 * * 1-5","tz":"Europe/Berlin"}',
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+    ]);
+  });
+
+  // An automation tool a later pin adds (an update, a run-now) is refused until it is reviewed,
+  // rather than passing undecided; the listing only reads.
+  it("refuses an automation tool it does not know, and leaves the listing undecided", async () => {
+    const harness = await pluginHarness("autonomous-delivery");
+    await harness.toolBefore({ ...nested("automation_list"), input: {} });
+    await harness.toolBefore({ ...nested("automation_update"), input: { id: "aut_1" } });
+    await harness.toolBefore({ ...nested("automation_run"), input: { id: "aut_1" } });
+
+    expect(harness.requests.map((request) => [request.permission, request.resources])).toEqual([
+      ["opencode_schedule", ["update", "aut_1"]],
+      ["opencode_schedule", ["run", "aut_1"]],
+    ]);
+  });
+
   it("blocks an automation change the policy refuses", async () => {
     const refused = await pluginHarness("governed-assist", {
       effect: "deny",

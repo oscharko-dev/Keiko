@@ -584,6 +584,7 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
         ["create", "refused:trigger"],
         ["create", "refused:action"],
         ["create", "refused:target"],
+        ["create", "refused:shape"],
         ["create", "refused:other"],
         ["list"],
         [],
@@ -595,15 +596,18 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
   });
 
   it("names why an automation is refused, without echoing the request", () => {
-    const messages = ["trigger", "action", "target"].map((kind) => {
+    const messages = ["trigger", "action", "target", "shape", "other"].map((kind) => {
       const decision = decide("autonomous-delivery", "opencode_schedule", [
         "create",
         `refused:${kind}`,
       ]);
       return decision.effect === "deny" ? decision.message : undefined;
     });
-    expect(new Set(messages).size).toBe(3);
-    for (const message of messages) expect(message).toMatch(/^Keiko refused this automation: /u);
+    expect(new Set(messages).size).toBe(5);
+    for (const message of messages.slice(0, 4))
+      expect(message).toMatch(/^Keiko refused this automation: /u);
+    // An unknown refusal falls back to the generic sentence, never to an allow.
+    expect(messages[4]).toBe("Keiko refused this action: it is not a schedule change Keiko knows.");
   });
 
   it("refuses a worktree without one plain name", () => {

@@ -65,7 +65,11 @@ import {
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
-import { holdSchedulerLease, releaseSchedulerLease } from "./opencodeScheduleLease.js";
+import {
+  holdSchedulerLease,
+  releaseSchedulerLease,
+  SCHEDULER_HOLD_OWNER,
+} from "./opencodeScheduleLease.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
   createOpenCodeNativeToolAdvertisement,
@@ -3895,55 +3899,116 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
   ];
   const execute = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
 
-  /** Each program and the one nested decision it must reach (`undefined`: it decides nothing). */
-  function programs(
-    workspace: string,
-    page: string,
-  ): readonly (readonly [string, string, string | undefined])[] {
+  type Mode = "governed-assist" | "autonomous-delivery";
+  /** One program, the one nested decision it must reach, and what its output must show. */
+  interface NestedProgram {
+    readonly name: string;
+    readonly code: string;
+    /** The nested permission and its effect per mode; `undefined`: it decides nothing. */
+    readonly decides?: {
+      readonly permission: string;
+      readonly effect: Readonly<Record<Mode, string>>;
+    };
+    /** The output of a program that decides nothing, so a failed program never passes as a read. */
+    readonly output?: RegExp;
+  }
+  const both = (effect: string): Readonly<Record<Mode, string>> => ({
+    "governed-assist": effect,
+    "autonomous-delivery": effect,
+  });
+  const askThenAllow = { "governed-assist": "ask", "autonomous-delivery": "allow" } as const;
+
+  function programs(workspace: string, page: string): readonly NestedProgram[] {
+    const move = JSON.stringify({ directory: join(workspace, "src") });
+    const remove = JSON.stringify({ directory: join(workspace, "wt") });
     return [
-      [
-        "rename",
-        'return await tools.opencode.session.rename({ title: "renamed" });',
-        "opencode_session_rename",
-      ],
-      [
-        "move",
-        `return await tools.opencode.session.move(${JSON.stringify({ directory: join(workspace, "src") })});`,
-        "opencode_session_move",
-      ],
-      [
-        "worktree create",
-        'return await tools.opencode.worktree_create({ name: "feature-x" });',
-        "opencode_worktree_create",
-      ],
-      [
-        "worktree remove",
-        `return await tools.opencode.worktree_remove(${JSON.stringify({ directory: join(workspace, "wt") })});`,
-        "edit",
-      ],
-      [
-        "MCP resources",
-        'return await tools.opencode.list_mcp_resources({ server: "fixture" });',
-        "opencode_list_mcp_resources",
-      ],
-      [
-        "MCP resource",
-        'return await tools.opencode.read_mcp_resource({ server: "fixture", uri: "file:///x" });',
-        "opencode_read_mcp_resource",
-      ],
-      ["MCP tool", 'return await tools.fixture.echo({ text: "hi" });', "fixture_echo"],
-      ["fetch", `return await (await fetch(${JSON.stringify(page)})).text();`, "webfetch"],
-      [
-        "automation",
-        'return await tools.automation.create({ name: "n", trigger: { type: "at", at: "in 1 hour" }, action: { type: "prompt", prompt: "check" } });',
-        "opencode_schedule",
-      ],
-      ["worktree list", "return await tools.opencode.worktree_list({});", undefined],
-      ["model search", "return await tools.opencode.models({});", undefined],
-      ["automation list", "return await tools.automation.list({});", undefined],
-      ["computation", "return 1 + 1;", undefined],
+      {
+        name: "rename",
+        code: 'return await tools.opencode.session.rename({ title: "renamed" });',
+        decides: { permission: "opencode_session_rename", effect: both("allow") },
+      },
+      {
+        name: "move",
+        code: `return await tools.opencode.session.move(${move});`,
+        decides: { permission: "opencode_session_move", effect: both("allow") },
+      },
+      {
+        name: "worktree create",
+        code: 'return await tools.opencode.worktree_create({ name: "feature-x" });',
+        decides: { permission: "opencode_worktree_create", effect: both("ask") },
+      },
+      {
+        name: "worktree remove",
+        code: `return await tools.opencode.worktree_remove(${remove});`,
+        decides: { permission: "edit", effect: both("deny") },
+      },
+      {
+        name: "MCP resources",
+        code: 'return await tools.opencode.list_mcp_resources({ server: "fixture" });',
+        decides: { permission: "opencode_list_mcp_resources", effect: askThenAllow },
+      },
+      {
+        name: "MCP resource",
+        code: 'return await tools.opencode.read_mcp_resource({ server: "fixture", uri: "file:///x" });',
+        decides: { permission: "opencode_read_mcp_resource", effect: askThenAllow },
+      },
+      {
+        name: "MCP tool",
+        code: 'return await tools.fixture.echo({ text: "hi" });',
+        decides: { permission: "fixture_echo", effect: askThenAllow },
+      },
+      {
+        name: "fetch",
+        code: `return await (await fetch(${JSON.stringify(page)})).text();`,
+        decides: {
+          permission: "webfetch",
+          effect: { "governed-assist": "deny", "autonomous-delivery": "allow" },
+        },
+      },
+      {
+        name: "automation",
+        code: 'return await tools.automation.create({ name: "n", trigger: { type: "at", at: "in 1 hour" }, action: { type: "prompt", prompt: "check" } });',
+        decides: { permission: "opencode_schedule", effect: askThenAllow },
+      },
+      {
+        name: "worktree list",
+        code: "return await tools.opencode.worktree_list({});",
+        output: /"worktrees":\[/u,
+      },
+      {
+        name: "model search",
+        code: "return await tools.opencode.models({});",
+        output: /"providers":\[/u,
+      },
+      {
+        name: "automation list",
+        code: "return await tools.automation.list({});",
+        output: /"automations":\[/u,
+      },
+      { name: "computation", code: "return 1 + 1;", output: /^2$/u },
     ];
   }
+
+  /**
+   * Every name a program can call on this runtime. A new name fails this pin until it has a row
+   * above (a state-changing one with its own decision) or is shown to change nothing.
+   */
+  const NAMESPACE = [
+    ["automation", ["create", "delete", "list", "pause", "resume"]],
+    ["fixture", ["echo", "wipe"]],
+    [
+      "opencode",
+      [
+        "list_mcp_resources",
+        "models",
+        "read_mcp_resource",
+        "session",
+        "worktree_create",
+        "worktree_list",
+        "worktree_remove",
+      ],
+    ],
+  ];
 
   it.skipIf(skip).each(["governed-assist", "autonomous-delivery"] as const)(
     "reaches a decision for every nested effect in %s",
@@ -3968,20 +4033,34 @@ describe("pinned native OpenCode decides every nested effect of a Code Mode prog
               .poll(
                 async () =>
                   await scriptedTurn(run, execute("return Object.keys(tools).join(',');")),
-                {
-                  timeout: 20_000,
-                  interval: 250,
-                },
+                { timeout: 20_000, interval: 250 },
               )
               .toContain("fixture");
+            const names =
+              "return JSON.stringify(Object.keys(tools).sort().map((k) => [k, Object.keys(tools[k]).sort()]));";
+            expect(JSON.parse(await scriptedTurn(run, execute(names)))).toEqual(NAMESPACE);
+            expect(
+              await scriptedTurn(
+                run,
+                execute("return Object.keys(tools.opencode.session).sort().join(',');"),
+              ),
+            ).toBe("move,rename");
             const url = `http://127.0.0.1:${String(page.port)}/notes.txt`;
-            for (const [name, code, expected] of programs(run.fixture.workspace, url)) {
+            for (const program of programs(run.fixture.workspace, url)) {
               run.facade.decisions.length = 0;
-              await scriptedTurn(run, execute(code));
-              const nested = run.facade.decisions
-                .filter((decision) => decision.permission !== "execute")
-                .map((decision) => decision.permission);
-              expect(nested, name).toEqual(expected === undefined ? [] : [expected]);
+              const output = await scriptedTurn(run, execute(program.code));
+              const decided = run.facade.decisions.map((decision) => [
+                decision.permission,
+                decision.effect,
+              ]);
+              expect(decided, program.name).toEqual([
+                ["execute", "allow"],
+                ...(program.decides === undefined
+                  ? []
+                  : [[program.decides.permission, program.decides.effect[mode]]]),
+              ]);
+              if (program.output !== undefined)
+                expect(output, program.name).toMatch(program.output);
             }
           },
         );
@@ -4007,6 +4086,22 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     return join(run.fixture.state, "state", "opencode.db");
   }
 
+  /** Checks of half a second each: 35 s, past the producer's heartbeat and longest timer sleep. */
+  const HELD_LEASE_CHECKS = 70;
+
+  /** The owner named in the producer's scheduler election row, read-only. */
+  function leaseOwner(run: Run): unknown {
+    const db = new DatabaseSync(database(run), { readOnly: true });
+    try {
+      const row = db.prepare("SELECT value FROM kv WHERE key = 'automation:leader'").get();
+      return row === undefined
+        ? undefined
+        : (JSON.parse(String(row.value)) as { owner?: unknown }).owner;
+    } finally {
+      db.close();
+    }
+  }
+
   /** The session's automations as the producer stores them, read-only. */
   function automations(run: Run): readonly Readonly<Record<string, unknown>>[] {
     const db = new DatabaseSync(database(run), { readOnly: true });
@@ -4015,7 +4110,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
         .prepare(
           "SELECT id, status, run_count, action, trigger FROM automation ORDER BY time_created",
         )
-        .all() as Readonly<Record<string, unknown>>[];
+        .all();
     } finally {
       db.close();
     }
@@ -4106,7 +4201,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
   // A shell command, a Code Mode program and an MCP event run without a person, with the runtime
   // server's environment; a prompt with its own recipient reaches another session or a subagent.
   it.skipIf(skip)(
-    "refuses a shell, Code Mode, MCP-event or redirected automation at creation, in Full access",
+    "refuses a shell, Code Mode, MCP-event, redirected or unreviewed automation at creation, in Full access",
     async () => {
       await withRun({ mode: "autonomous-delivery" }, async (run) => {
         const refused: readonly (readonly [string, Readonly<Record<string, unknown>>])[] = [
@@ -4127,6 +4222,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
             "subagent",
             { name: "a", trigger: LATER, action: { ...PROMPT, to: { subagent: "general" } } },
           ],
+          ["unreviewed key", { name: "k", trigger: LATER, action: { ...PROMPT, agent: "build" } }],
         ];
         for (const [name, request] of refused) {
           run.facade.decisions.length = 0;
@@ -4160,10 +4256,20 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
           create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
         );
         const prompts = run.gateway.requests.length;
-        // Longer than the producer's lease heartbeat (10 s) and its longest timer sleep (30 s).
-        await new Promise((resolve) => setTimeout(resolve, 35_000));
-        expect(automations(run)[0]).toMatchObject({ status: "active", run_count: 0 });
-        expect(run.gateway.requests.length).toBe(prompts);
+        // Re-checked for longer than the producer's lease heartbeat (10 s) and its longest timer
+        // sleep (30 s): the automation stays unfired, no prompt reaches the model, and the lease
+        // row still names Keiko, so the runtime looked and stood back rather than never looking.
+        for (let check = 0; check < HELD_LEASE_CHECKS; check += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const [row] = automations(run);
+          const held =
+            row?.status === "active" &&
+            row.run_count === 0 &&
+            run.gateway.requests.length === prompts &&
+            leaseOwner(run) === SCHEDULER_HOLD_OWNER;
+          if (!held)
+            throw new Error(`the runtime fired or took the lease (check ${String(check)})`);
+        }
 
         expect(releaseSchedulerLease(database(run))).toBe(true);
         await expect

@@ -196,6 +196,17 @@ describe("holding a run's scheduler", () => {
     expect(existsSync(h.database)).toBe(false);
   });
 
+  // A native runtime loads the automation plugin, so its bound database has the scheduler tables;
+  // one without them would create them later and lead its scheduler unheld (#4546 review).
+  it("fails a native run's readiness when its database has no scheduler to hold", () => {
+    const h = harness({ scheduler: false });
+
+    expect(() => {
+      holdRunScheduler(h.sink, h.run, "hold", { required: true });
+    }).toThrow();
+    expect(lines(h)).toEqual([expect.objectContaining({ action: "hold", outcome: "failed" })]);
+  });
+
   it("records a missing database as absent where no hold is required", () => {
     const h = harness();
     rmSync(h.database, { force: true });

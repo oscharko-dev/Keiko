@@ -267,8 +267,8 @@ const OPENCODE_AUTOMATIONS_OFF = false;
 const OPENCODE_COMPACTION_BACKGROUND = false;
 
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
-// The pinned runtime (2.2.5) defaults a provider's `headerTimeout` to 300 s and its `chunkTimeout` to
-// 900 s and sets no total `timeout`. Keiko raises both to this bound (owner decision 2026-11-24, so
+// The pinned runtime (2.4.1, as 2.2.5 before it) defaults a provider's `headerTimeout` to 300 s and its
+// `chunkTimeout` to 900 s (`packages/core/src/provider.ts`) and sets no total `timeout`. Keiko raises both to this bound (owner decision 2026-11-24, so
 // a slow prefill of a self-hosted model is not aborted by the runtime at five minutes before
 // Keiko's own gateway bound applies).
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;

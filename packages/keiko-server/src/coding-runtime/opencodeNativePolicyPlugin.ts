@@ -82,6 +82,20 @@ export const OPENCODE_SCHEDULE_TOOLS: Readonly<Record<string, string>> = Object.
 );
 
 /**
+ * The keys the producer's `Automation.Request` names on 2.4.1 for the admitted automation: the
+ * request itself, each time trigger with its own value and an optional time zone, and the prompt
+ * action (whose `to` is refused before this check). Read from `packages/schema/src/automation.ts`
+ * at the pinned commit; a new key is refused as `refused:shape` until it is reviewed (#4546).
+ */
+export const SCHEDULE_REQUEST_SHAPE: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  request: ["name", "trigger", "action", "expires"],
+  at: ["type", "at", "tz"],
+  every: ["type", "every", "tz"],
+  cron: ["type", "cron", "tz"],
+  prompt: ["type", "prompt", "to"],
+});
+
+/**
  * Secrets and Keiko bindings never reach a shell the native agent starts. The server-owned binding
  * carries each relayed MCP server's capability (#3903 AC3), so it stays out of shells too.
  */
@@ -234,6 +248,12 @@ function scheduleSource(): readonly string[] {
     "// Only a prompt to the task itself on a time, an interval or a cron is a scheduled wake. A shell",
     "// command, a Code Mode program, an MCP event watch or a prompt naming another recipient would run",
     "// without a person, so such a creation names its refusal alone, which the policy refuses.",
+    "// The keys of the reviewed 2.4.1 request (`Automation.Request`): anything else could name another",
+    "// recipient or working folder in a later runtime, so a creation that carries one is refused.",
+    `const SCHEDULE_SHAPE = ${JSON.stringify(SCHEDULE_REQUEST_SHAPE)};`,
+    "function onlyKeys(value, keys) {",
+    "  return Object.keys(value).every((key) => keys.includes(key));",
+    "}",
     "function scheduleResources(operation, input) {",
     '  const value = input && typeof input === "object" ? input : {};',
     '  if (operation !== "create") return [operation, String(value.id ?? "")];',
@@ -242,6 +262,7 @@ function scheduleSource(): readonly string[] {
     '  if (trigger.type !== "at" && trigger.type !== "every" && trigger.type !== "cron") return [operation, "refused:trigger"];',
     '  if (action.type !== "prompt") return [operation, "refused:action"];',
     '  if (action.to !== undefined) return [operation, "refused:target"];',
+    '  if (!onlyKeys(value, SCHEDULE_SHAPE.request) || !onlyKeys(trigger, SCHEDULE_SHAPE[trigger.type]) || !onlyKeys(action, SCHEDULE_SHAPE.prompt)) return [operation, "refused:shape"];',
     '  const timing = ["when:" + JSON.stringify(trigger)];',
     '  if (value.expires !== undefined) timing.push("expires:" + JSON.stringify(value.expires));',
     '  if (typeof value.name === "string") timing.push("name:" + value.name);',
@@ -315,7 +336,9 @@ function pluginBodySource(): readonly string[] {
     "    // (`execute`) nor for the nested management tools that change state, so the same policy",
     "    // decides them here; a refusal blocks the call with the policy's message.",
     '    await ctx.tool.hook("execute.before", async (event) => {',
-    "      const scheduleOperation = Object.hasOwn(SCHEDULE_TOOLS, event.tool) ? SCHEDULE_TOOLS[event.tool] : undefined;",
+    "      // An automation tool this list does not know (a later runtime's update or run-now) is decided",
+    "      // under its own name, which the policy refuses; only the listing reads without a decision.",
+    '      const scheduleOperation = Object.hasOwn(SCHEDULE_TOOLS, event.tool) ? SCHEDULE_TOOLS[event.tool] : String(event.tool).startsWith("automation_") && event.tool !== "automation_list" ? String(event.tool).slice("automation_".length) : undefined;',
     "      if (scheduleOperation !== undefined) {",
     '        const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: SCHEDULE_PERMISSION, resources: scheduleResources(scheduleOperation, event.input), targetSessionID: null, effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
     '        if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',

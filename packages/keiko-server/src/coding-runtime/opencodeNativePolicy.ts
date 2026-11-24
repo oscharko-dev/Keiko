@@ -1083,6 +1083,10 @@ const SCHEDULE_REFUSALS: ReadonlyMap<string, string> = new Map([
     "target",
     "Keiko refused this automation: it prompts this task. Leave out the recipient, so the prompt returns to this session.",
   ],
+  [
+    "shape",
+    "Keiko refused this automation: it carries a field Keiko does not review. Create it with a name, a time, an interval or a cron, a prompt and, if needed, when it expires.",
+  ],
 ]);
 
 const SCHEDULE_OPERATIONS: ReadonlySet<string> = new Set(OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS);

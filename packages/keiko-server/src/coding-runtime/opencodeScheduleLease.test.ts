@@ -102,6 +102,12 @@ function addSchedule(
 }
 
 describe("Keiko's scheduler hold", () => {
+  // The key belongs to the runtime (`automation:leader` since 2.3.1), so it is a literal here: a
+  // test that read it from production would move together with a wrong key (#4546 review).
+  it("holds the runtime's own election key", () => {
+    expect(SCHEDULER_LEASE_KEY).toBe("automation:leader");
+  });
+
   it("keeps the runtime from claiming the lease until Keiko releases it", () => {
     const path = database();
     const now = Date.now();

@@ -427,10 +427,42 @@ describe("listing a task's retained schedules", () => {
         consentMode: "autonomous-delivery",
       },
     ]);
+    // The copy's own rows (`aut_a`) are never read under another runtime: only the ledger shows.
+    expect(JSON.stringify(listRetainedSchedules(f.store, TASK))).not.toContain("aut_a");
     expect(JSON.stringify(listRetainedSchedules(f.store, TASK))).not.toContain(PROMPT);
+    expect(controlRetainedSchedule(f.store, TASK, "sch_old", "delete", NOW)).toEqual(
+      controlRetainedSchedule(f.store, TASK, "aut_missing", "delete", NOW),
+    );
     expect(controlRetainedSchedule(f.store, TASK, "sch_old", "delete", NOW)).toMatchObject({
       ok: false,
     });
+  });
+
+  it("lists nothing as removed for an entry of a previous runtime without a schedule ledger", () => {
+    const f = fixture();
+    retain(f, f.source([schedule("aut_a")]), "supervised-coding");
+    const path = join(f.root, "retained", retainedSessionKey(TASK), "manifest.json");
+    const { scheduleModes: _dropped, ...rest } = manifest(f) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...rest, runtimeVersion: "2.2.5" }));
+
+    expect(listRetainedSchedules(f.store, TASK)?.schedules).toEqual([]);
+  });
+
+  it("lists a current entry from its rows, never a ledger id without a row as removed", () => {
+    const f = fixture();
+    retain(f, f.source([schedule("aut_a")]), "supervised-coding");
+    const path = join(f.root, "retained", retainedSessionKey(TASK), "manifest.json");
+    const current = manifest(f) as { readonly scheduleModes?: Record<string, string> };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...current,
+        scheduleModes: { ...current.scheduleModes, aut_gone: "supervised-coding" },
+      }),
+    );
+
+    const listed = listRetainedSchedules(f.store, TASK)?.schedules ?? [];
+    expect(listed.map((entry) => [entry.id, entry.status])).toEqual([["aut_a", "active"]]);
   });
 
   it("returns nothing for a task without an entry, and no schedule for one without a ledger", () => {

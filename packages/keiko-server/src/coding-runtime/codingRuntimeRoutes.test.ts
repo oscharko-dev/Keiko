@@ -2850,6 +2850,13 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
       '{"taskId":"task-1"}',
       404,
     ],
+    // A 2.2.5 schedule id names a row that no longer exists: it is listed as removed, never changed.
+    [
+      "a retired 2.2.5 schedule id",
+      { scheduleId: "sch_a", action: "delete" },
+      '{"taskId":"task-1"}',
+      404,
+    ],
     ["a body without a task", { scheduleId: "aut_a", action: "pause" }, "{}", 400],
     [
       "a body with another field",
