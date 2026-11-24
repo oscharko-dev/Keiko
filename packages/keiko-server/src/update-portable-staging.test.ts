@@ -35,8 +35,11 @@ import {
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
 /** The one approved OpenCode pin; every fixture identity derives from it. */
-const PINNED_OPENCODE = OPENCODE_RUNTIME_VERSION_PINS[0];
-if (PINNED_OPENCODE === undefined) throw new Error("no OpenCode runtime pin");
+const PINNED_OPENCODE = ((): (typeof OPENCODE_RUNTIME_VERSION_PINS)[number] => {
+  const [pin] = OPENCODE_RUNTIME_VERSION_PINS;
+  if (pin === undefined) throw new Error("no OpenCode runtime pin");
+  return pin;
+})();
 
 const ENC = new TextEncoder();
 const TARGET_VERSION = "0.2.11";

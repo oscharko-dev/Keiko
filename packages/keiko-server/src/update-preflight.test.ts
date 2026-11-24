@@ -32,8 +32,11 @@ import { isStableVersionString } from "./update-preflight-registry.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
 /** The one approved OpenCode pin; every fixture identity derives from it. */
-const PINNED_OPENCODE = OPENCODE_RUNTIME_VERSION_PINS[0];
-if (PINNED_OPENCODE === undefined) throw new Error("no OpenCode runtime pin");
+const PINNED_OPENCODE = ((): (typeof OPENCODE_RUNTIME_VERSION_PINS)[number] => {
+  const [pin] = OPENCODE_RUNTIME_VERSION_PINS;
+  if (pin === undefined) throw new Error("no OpenCode runtime pin");
+  return pin;
+})();
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
