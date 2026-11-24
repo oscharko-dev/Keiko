@@ -81,6 +81,7 @@ import {
 } from "../widgets/shared/gatewaySetupBus";
 
 import { sha256Hex } from "./canonical-voice-hasher-runtime";
+import { RESTORED_TURN_POLL_MAX_ATTEMPTS, restoredTurnPollDelayMs } from "./useRestoredToolTurn";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import {
   beginChatScopeTransition,
@@ -2118,7 +2119,11 @@ describe("useChatSession bootstrap", () => {
       vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
       expect(result.current.error).toBeUndefined();
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+        // The whole bounded observation schedule, summed from the production delays.
+        const horizonMs = Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
+          restoredTurnPollDelayMs(attempt),
+        ).reduce((total, delay) => total + delay, 60_000);
+        await vi.advanceTimersByTimeAsync(horizonMs);
       });
       expect(result.current.error).toBe(EN_MESSAGES["chat.pendingObservation.unknown"]);
     } finally {

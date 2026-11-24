@@ -102,6 +102,12 @@ it("aborts its observation and refuses a late response after unmount", async () 
   expect(publish).toHaveBeenCalledTimes(1);
 });
 
+// The whole bounded observation schedule, summed from the production delays, plus one ceiling step.
+const OBSERVATION_HORIZON_MS =
+  Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
+    restoredTurnPollDelayMs(attempt),
+  ).reduce((total, delay) => total + delay, 0) + 60_000;
+
 it("backs the poll spacing off from one second to a ten second ceiling", () => {
   const delays = Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
     restoredTurnPollDelayMs(attempt),
@@ -126,7 +132,7 @@ it("gives up after a bounded number of polls when the turn never settles", async
   const onAbandoned = vi.fn();
   renderHook(() => useRestoredToolTurn(chat, [pending], false, publish, onAbandoned));
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(540 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(OBSERVATION_HORIZON_MS);
   });
   // One recent-window read and one full read per poll while the turn row stays absent.
   const calls = vi.mocked(fetchChatMessages).mock.calls.length;
@@ -136,7 +142,7 @@ it("gives up after a bounded number of polls when the turn never settles", async
     expect.objectContaining({ kind: "other" }),
   );
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(540 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(OBSERVATION_HORIZON_MS);
   });
   expect(vi.mocked(fetchChatMessages)).toHaveBeenCalledTimes(calls);
   expect(publish).toHaveBeenCalledTimes(1);
