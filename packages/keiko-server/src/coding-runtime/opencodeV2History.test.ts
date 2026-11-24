@@ -2417,9 +2417,91 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
     expect(bothReported.at(-1)).toBe("terminal");
   });
 
-  it("owes nothing for a foreground subagent, a launch that failed or a launch naming no child", () => {
+  // 2.4.1 runs every subagent in the background and its subagent tool has no `background`
+  // parameter, so a model's call names none (#4546): such a child still owes its report.
+  it("owes the report of a subagent call that does not say background", () => {
+    expect(
+      kinds([user, launch("ses_child", { background: false }), idle("msg_idle1")]),
+    ).not.toContain("terminal");
+  });
+
+  // 2.4.1 reports each time a child goes idle, so a follow-up (`sessionID`) to a child that already
+  // reported owes one more report.
+  it("owes again after a follow-up to a child that already reported", () => {
+    const first = [user, launch("ses_child"), idle("msg_idle1"), report("ses_child", "msg_r1")];
+    const followUp = [...first, launch("ses_child", { id: "msg_follow" }), idle("msg_idle2")];
+    expect(kinds(followUp).at(-1)).not.toBe("terminal");
+    expect(kinds([...followUp, report("ses_child", "msg_r2"), idle("msg_idle3")]).at(-1)).toBe(
+      "terminal",
+    );
+  });
+
+  // 2.4.1 ends a child's round without an idle message and without a report when the human
+  // dismisses the child's question (#4546). A child that no longer runs and whose newest message is
+  // not an idle message never reports, so it is silent and owes nothing.
+  it("releases a held idle message once every owed child is silent, and counts the release", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const parent = [user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")];
+    const held = projection.project("ses_parent", parent, undefined);
+    expect(held.map((event) => event.kind)).not.toContain("terminal");
+    expect([...projection.owedChildren()]).toEqual(["ses_child"]);
+    const released = projection.project("ses_parent", parent, held.length - 1, {
+      silentChildren: new Set(["ses_child"]),
+    });
+    expect(released.map((event) => event.kind)).toEqual(["terminal"]);
+    expect(released[0]?.sequence).toBe(held.length);
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines.at(-1)?.extra).toMatchObject({ silentReleaseCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain("ses_child");
+    expectActivityLogProof(
+      "coding-runtime.history-projection.emitted-line",
+      formatActivityLogProofLine(lines.at(-1) ?? {}),
+    );
+  });
+
+  it("keeps holding while one owed child is silent and another still owes its report", () => {
+    const parent = [
+      user,
+      launch("ses_child_a", { id: "msg_launch_a" }),
+      launch("ses_child_b", { id: "msg_launch_b" }),
+      idle("msg_idle1"),
+    ];
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const held = projection.project("ses_parent", parent, undefined);
+    expect(
+      projection
+        .project("ses_parent", parent, held.length - 1, {
+          silentChildren: new Set(["ses_child_a"]),
+        })
+        .map((event) => event.kind),
+    ).not.toContain("terminal");
+  });
+
+  it("owes nothing once a child reported, and nothing is owed before any launch", () => {
+    const owed = (messages: readonly Record<string, unknown>[]): readonly string[] => {
+      const projection = createOpenCodeV2HistoryProjection({
+        runId: "background-run",
+        activityLog: undefined,
+        toolProfile: "native",
+      });
+      projection.project("ses_parent", messages, undefined);
+      return [...projection.owedChildren()];
+    };
+    expect(owed([user, idle("msg_idle0")])).toEqual([]);
+    expect(owed([user, launch("ses_child"), idle("msg_idle1"), report("ses_child")])).toEqual([]);
+  });
+
+  it("owes nothing for a launch that failed or a launch naming no child", () => {
     for (const launched of [
-      launch("ses_child", { background: false }),
       launch("ses_child", { status: "error" }),
       launch("ses_child", { sessionID: undefined }),
       launch("ses_child", { sessionID: "not-a-session" }),

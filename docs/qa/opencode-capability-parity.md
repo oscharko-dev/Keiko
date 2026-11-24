@@ -485,6 +485,27 @@ executable on macOS arm64 (#4546). The upgrade changes these rows:
 - **C04: no shared MCP connection.** A run's MCP server is configured with `pool: false`.
 - **T10: shell result text.** The output ends with `Exit code: <n>`; Keiko reads the status from the
   part's metadata.
+- **Protocol surface pinned from the served document.** The pin's `protocolSurfaceSha256` is the
+  projection of the `/openapi.json` the 2.4.1 binary serves. Its component names differ from
+  upstream's committed `openapi.json` (`Event.VersionEncoded_48`, `Shell.Info_1`), so a fixture
+  projected from the committed file failed every start with `protocol-schema-mismatch`.
+- **T08/T09: every subagent runs in the background.** The `subagent` tool has no `background`
+  parameter. Each call returns at once with the child's session, and the parent receives a
+  `<background-result kind="subagent">` synthetic message each time the child goes idle. Keiko holds
+  the parent's idle message for every child called since its last report, a follow-up included
+  (`heldIdleCount`). A dismissed or refused child question ends the child's round with no idle
+  message and no report. Keiko therefore releases the hold once every owed child is silent: it no
+  longer runs, and its newest message is not an idle message (`silentReleaseCount`).
+- **C02: a built-in `automation` command** joins `init` and `review`. Its name is reserved for
+  repository commands and named in the prompt-input log.
+- **T21: Code Mode surface.** The catalog in the system prompt is partial; a program finds the rest
+  with `search(...)`. The hook input gains `codemode` and `info`, and each nested call has its own
+  call id. A hook that renames a nested call runs the renamed tool; only plugin code can do that,
+  and Keiko's policy plugin never does. The interpreter gains a `require` that serves only `buffer`,
+  `crypto`, `url` and `util`; every system, network, process and code-loading module, package and
+  local file is refused (`opencodeNativeProjectBoundary.real.test.ts`).
+- **Compaction.** The runtime compacts before a request that would overflow. When the compacted
+  history still does not fit, it fails that one compaction and stops without sending the request.
 
 ## 4. Keiko capabilities without a native counterpart
 

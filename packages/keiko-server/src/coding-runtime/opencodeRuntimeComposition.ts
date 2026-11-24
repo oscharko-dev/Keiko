@@ -260,6 +260,7 @@ import {
   admitNativeSessionLocation,
   classifyNativeSession,
   createNativeTreeStatusPort,
+  projectNativeParentHistory,
   interruptNativeTree,
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
@@ -3064,10 +3065,17 @@ function readinessV2Ports(
         // A continued session already holds the messages of earlier runs, which Coding History has
         // and the timeline must not show again: the projection starts after them.
         const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
-        const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId], {
-          truncated: window.truncated,
-          anchored: window.anchored,
-        });
+        const events = await projectNativeParentHistory(
+          {
+            client,
+            history,
+            sessionId: fixedSessionId,
+            messages: ownMessages,
+            checkpoint: checkpoints[fixedSessionId],
+            window: { truncated: window.truncated, anchored: window.anchored },
+          },
+          signal,
+        );
         observeNativeStepChanges(input, run, ownMessages);
         staged.clear();
         for (const event of events) {

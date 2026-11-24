@@ -87,6 +87,10 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // The idle messages of this pass that did not end the run's work because a subagent launched in
     // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
     heldIdleCount: OPTIONAL_COUNT_FIELD,
+    // The idle messages of this pass that ended the run's work only because every child still owed
+    // was silent: it no longer runs and its round ended without an idle message, so it never
+    // reports (#4546, a dismissed question in 2.4.1). A count, absent when none.
+    silentReleaseCount: OPTIONAL_COUNT_FIELD,
     // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
     // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
     // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
@@ -174,6 +178,8 @@ interface Candidate {
   readonly nativeRetryState?: true;
   // An idle message that ended the session's execution but not the run's work (see `BackgroundChildren`).
   readonly heldIdle?: true;
+  // An idle message that ends the run's work only because the children it owed are silent.
+  readonly silentRelease?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -187,6 +193,9 @@ interface PendingProjection {
   readonly emptyTextCount: number;
   readonly nativeRetrySignalCount: number;
   readonly heldIdleCount: number;
+  readonly silentReleaseCount: number;
+  /** The children launched and not reported by the end of the scanned messages. */
+  readonly owedChildren: ReadonlySet<string>;
   /** The pass stopped at the event cap, so candidates it did not reach are still to be emitted. */
   readonly capped: boolean;
   /** Where the next sync may start reading; absent when it must read the whole window. */
@@ -405,6 +414,11 @@ export interface OpenCodeV2HistoryWindow {
    * everything before them over. A window that does not begin at that anchor is refused.
    */
   readonly anchored?: boolean | undefined;
+  /**
+   * Children the parent launched that will never report: each no longer runs, and its newest
+   * message is not an idle message, so its round ended without one (#4546). They owe nothing.
+   */
+  readonly silentChildren?: ReadonlySet<string> | undefined;
 }
 
 export interface OpenCodeV2HistoryProjection {
@@ -421,6 +435,11 @@ export interface OpenCodeV2HistoryProjection {
    * call, and those projected again. Counts only, for the projection line and its proofs.
    */
   lastReuse(): OpenCodeV2ProjectionReuse;
+  /**
+   * The children the parent launched that had not reported by the end of the last `project` call:
+   * the only ones whose silence the caller needs to check before the next call.
+   */
+  owedChildren(): ReadonlySet<string>;
   /**
    * Where the next read should start (#4104). Every read before a `project` call asks for it, with
    * the checkpoint it will pass: the plan names an anchor only when the earlier calls are fully
@@ -957,25 +976,29 @@ function messageCandidates(
     ];
   }
   if (message.type === "compaction") return [nativeCompactionCandidate(message, id)];
-  if (message.type === "idle") return [idleCandidate(id, message.outcome, children)];
+  if (message.type === "idle") return idleCandidates(id, message.outcome, children);
   return [candidate(`${id}:other`, "observation", message.type)];
 }
 
 /**
- * What the runtime tells a parent about a subagent it launched in the background
- * (https://opencode.ai/v2/docs/tools/#subagent): the launching tool call returns at once, the parent
- * goes idle while the child keeps working, and when the child ends the runtime appends a synthetic
+ * What the runtime tells a parent about a subagent it launched (https://opencode.ai/v2/docs/tools/#subagent).
+ * The pinned runtime (2.4.1) runs every subagent in the background, and its subagent tool has no
+ * `background` parameter: the call returns at once with the child's session, the parent goes idle
+ * while the child keeps working, and each time the child goes idle the runtime appends a synthetic
  * message naming it (completed, failed or cancelled) and runs the parent again to read it. A parent's
- * idle message is therefore the end of the run's work only when every background child it launched
- * has reported back; before that it ends the parent's execution and nothing more. The rule reads the
- * parent's own history, so it holds across a reconnect and needs no timing: a child launched but not
- * yet reported is "owed", and an owed child is a launch (a completed `subagent` call with
- * `background: true` that names its child session) without a synthetic message carrying that child's
- * id. A failed idle message is a verdict whatever is owed.
+ * idle message is therefore the end of the run's work only when every child it launched has reported
+ * since its last call; before that it ends the parent's execution and nothing more. The rule reads
+ * the parent's own history in order, so it holds across a reconnect and needs no timing: a completed
+ * `subagent` call naming a child session makes that child "owed" (a follow-up to a child that
+ * already reported owes again), and a synthetic message carrying the child's id settles it. A
+ * follow-up that joins a child's running round adds no report, and none is owed for it. A failed
+ * idle message is a verdict whatever is owed.
  */
 interface BackgroundChildren {
   readonly launched: Set<string>;
   readonly reported: Set<string>;
+  /** This pass's silent children (`OpenCodeV2HistoryWindow.silentChildren`); never carried over. */
+  readonly silent?: ReadonlySet<string> | undefined;
 }
 
 const BACKGROUND_CHILD_SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
@@ -984,7 +1007,7 @@ function backgroundLaunch(part: unknown): string | undefined {
   const tool = record(part);
   if (tool?.type !== "tool" || tool.name !== "subagent") return undefined;
   const state = record(tool.state);
-  if (state?.status !== "completed" || record(state.input)?.background !== true) return undefined;
+  if (state?.status !== "completed") return undefined;
   return backgroundChildId(record(state.metadata)?.sessionID);
 }
 
@@ -1007,17 +1030,27 @@ function observeBackgroundChildren(
   if (message.type !== "assistant" || !Array.isArray(message.content)) return;
   for (const part of message.content as readonly unknown[]) {
     const launched = backgroundLaunch(part);
-    if (launched !== undefined) children.launched.add(launched);
+    if (launched === undefined) continue;
+    children.launched.add(launched);
+    // A call to a child that already reported starts a new round, which reports again.
+    children.reported.delete(launched);
   }
 }
 
-function idleCandidate(id: string, outcome: unknown, children: BackgroundChildren): Candidate {
+// The held idle message keeps its own candidate unchanged; a release once every owed child is silent
+// is a candidate of its own, so it is emitted as new and never rewrites what was already shown.
+function idleCandidates(
+  id: string,
+  outcome: unknown,
+  children: BackgroundChildren,
+): readonly Candidate[] {
   const key = `${id}:idle`;
-  if (outcome !== "succeeded") return candidate(key, "terminal-failure", outcome);
-  const owed = [...children.launched].some((child) => !children.reported.has(child));
-  return owed
-    ? { ...candidate(key, "observation", outcome), heldIdle: true }
-    : candidate(key, "terminal", outcome);
+  if (outcome !== "succeeded") return [candidate(key, "terminal-failure", outcome)];
+  const unreported = [...children.launched].filter((child) => !children.reported.has(child));
+  if (unreported.length === 0) return [candidate(key, "terminal", outcome)];
+  const held = { ...candidate(key, "observation", outcome), heldIdle: true as const };
+  if (!unreported.every((child) => children.silent?.has(child) === true)) return [held];
+  return [held, { ...candidate(`${id}:released`, "terminal", outcome), silentRelease: true }];
 }
 
 // A settled assistant message projects to the same candidates as long as nothing it depends on has
@@ -1128,6 +1161,7 @@ interface ScanWindow {
 
 interface ScannedCandidates {
   readonly candidates: readonly Candidate[];
+  readonly owedChildren: ReadonlySet<string>;
   /** The next window's start; absent for an empty window. */
   readonly anchor?:
     | {
@@ -1145,6 +1179,7 @@ interface ScanContext {
   readonly toolProfile: OpenCodeToolProfile;
   readonly activity?: HistoryActivity | undefined;
   readonly reuse?: MessageReuse | undefined;
+  readonly silentChildren?: ReadonlySet<string> | undefined;
 }
 
 interface ScanCursor {
@@ -1212,6 +1247,7 @@ function allCandidates(
     children: {
       launched: new Set(window.start?.launched),
       reported: new Set(window.start?.reported),
+      silent: context.silentChildren,
     },
     parentMessageId: window.start?.parentMessageId,
   };
@@ -1220,7 +1256,9 @@ function allCandidates(
     if (index === window.anchorIndex) anchor = snapshotAnchor(cursor, message);
     scanMessage(cursor, message, context);
   }
-  return { candidates: cursor.candidates, anchor };
+  const { launched, reported } = cursor.children;
+  const owedChildren = new Set([...launched].filter((child) => !reported.has(child)));
+  return { candidates: cursor.candidates, anchor, owedChildren };
 }
 
 function changedNativeRetryCandidates(
@@ -1239,15 +1277,13 @@ function makePending(
   checkpoint: number,
   known: ReadonlyMap<string, KnownCandidate>,
   candidates: readonly Candidate[],
-): PendingProjection {
+): Omit<PendingProjection, "owedChildren"> {
   // Only what this pass changes: copying the whole known set per pass would cost the session's
   // length on every sync, and the set is adopted into the owned map when the checkpoint commits.
   const knownUpdates = new Map<string, KnownCandidate>();
   const events: OpenCodeReconciliationEvent[] = [];
   const signals = new Map<string, CodingSafeActivitySignal>();
-  let emptyTextCount = 0;
-  let nativeRetrySignalCount = 0;
-  let heldIdleCount = 0;
+  const counts = { ...NO_PASS_COUNTS };
   for (const item of candidates) {
     const previous = known.get(item.key);
     if (previous?.digest === item.digest) continue;
@@ -1268,9 +1304,7 @@ function makePending(
       digest: item.digest,
       ...(text === undefined ? {} : { textLength: text.length }),
     });
-    if (item.emptyText) emptyTextCount += 1;
-    nativeRetrySignalCount += Number(item.nativeRetryState === true);
-    heldIdleCount += Number(item.heldIdle === true);
+    countPassCandidate(counts, item);
     const signal = incrementalSignal(item, previous);
     if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
     if (events.length === PASS_EVENT_CAP) break;
@@ -1279,11 +1313,31 @@ function makePending(
     knownUpdates,
     events,
     signals,
-    emptyTextCount,
-    nativeRetrySignalCount,
-    heldIdleCount,
+    ...counts,
     capped: events.length === PASS_EVENT_CAP,
   };
+}
+
+type PassCounts = Pick<
+  PendingProjection,
+  "emptyTextCount" | "nativeRetrySignalCount" | "heldIdleCount" | "silentReleaseCount"
+>;
+
+const NO_PASS_COUNTS: PassCounts = {
+  emptyTextCount: 0,
+  nativeRetrySignalCount: 0,
+  heldIdleCount: 0,
+  silentReleaseCount: 0,
+};
+
+function countPassCandidate(
+  counts: { -readonly [K in keyof PassCounts]: number },
+  item: Candidate,
+): void {
+  counts.emptyTextCount += Number(item.emptyText === true);
+  counts.nativeRetrySignalCount += Number(item.nativeRetryState === true);
+  counts.heldIdleCount += Number(item.heldIdle === true);
+  counts.silentReleaseCount += Number(item.silentRelease === true);
 }
 
 function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
@@ -1368,6 +1422,9 @@ function recordHistoryProjection(
         liveDroppedCount: counts.dropped,
         liveDivergedCount: counts.diverged,
         ...(pending.heldIdleCount === 0 ? {} : { heldIdleCount: pending.heldIdleCount }),
+        ...(pending.silentReleaseCount === 0
+          ? {}
+          : { silentReleaseCount: pending.silentReleaseCount }),
         ...pending.sync,
       },
     ),
@@ -1453,6 +1510,7 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
   // Tail reads since the last complete one, and what the last `readPlan` asked for.
   private tailPasses = 0;
   private plannedMode: OpenCodeV2ReadMode | undefined;
+  private owedOfLastProject: ReadonlySet<string> = new Set();
   private reuseOfLastProject: OpenCodeV2ProjectionReuse = {
     reusedMessageCount: 0,
     projectedMessageCount: 0,
@@ -1479,6 +1537,10 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
 
   lastReuse(): OpenCodeV2ProjectionReuse {
     return this.reuseOfLastProject;
+  }
+
+  owedChildren(): ReadonlySet<string> {
+    return this.owedOfLastProject;
   }
 
   lastSync(): OpenCodeV2SyncStats {
@@ -1548,6 +1610,17 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     return this.tail;
   }
 
+  private scanContext(window: OpenCodeV2HistoryWindow | undefined): ScanContext {
+    return {
+      live: this.live,
+      known: this.known,
+      toolProfile: this.toolProfile,
+      activity: this.activity,
+      reuse: this.reuse,
+      silentChildren: window?.silentChildren,
+    };
+  }
+
   private projectFresh(
     sessionId: string,
     messages: readonly Readonly<Record<string, unknown>>[],
@@ -1556,18 +1629,10 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
   ): PendingProjection {
     const base = this.anchoredBase(messages, window);
     const anchorIndex = Math.max(0, messages.length - this.margin);
-    const scanned = allCandidates(
-      sessionId,
-      messages,
-      {
-        live: this.live,
-        known: this.known,
-        toolProfile: this.toolProfile,
-        activity: this.activity,
-        reuse: this.reuse,
-      },
-      { start: base?.scan, anchorIndex },
-    );
+    const scanned = allCandidates(sessionId, messages, this.scanContext(window), {
+      start: base?.scan,
+      anchorIndex,
+    });
     if (this.reuse !== undefined) this.reuseOfLastProject = settleReuse(this.reuse);
     const made = makePending(sessionId, position, this.known, scanned.candidates);
     // A truncated window never replaces the conversation captured from the complete history.
@@ -1579,8 +1644,10 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
         base === undefined,
       );
     const sync = this.settleSync(base, messages.length, window);
+    this.owedOfLastProject = scanned.owedChildren;
     const pending = {
       ...made,
+      owedChildren: scanned.owedChildren,
       sync,
       tail: made.capped
         ? undefined

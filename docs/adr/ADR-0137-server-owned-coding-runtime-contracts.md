@@ -2701,11 +2701,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the run, instead of settling and reaping a job that was still working. A success or an interruption settles only when the tree is quiet, confirmed by a
     fresh read at the moment of settlement even when a live hint said otherwise; a failed verdict
     ends the run at once, because settling reaps the tree. The history projection closes the gap
-    between a child's end and its parent's restart without a clock: an idle message of a parent
-    that launched a background child (a completed `subagent` call naming its session) which has
-    not yet reported back is an observation, not the end of the work (`heldIdleCount` on the
-    projection line); a failed idle stays a terminal failure. A child that never reports is bounded
-    by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
+    between a child's end and its parent's restart without a clock. A parent's idle message is an
+    observation, not the end of the work, while a child it called has not reported since that
+    call (`heldIdleCount` on the projection line). A call is a completed `subagent` call naming the
+    child's session: the pinned 2.4.1 runs every subagent in the background and has no
+    `background` parameter, and a follow-up to a child that already reported owes one more report.
+    A failed idle stays a terminal failure. A child that no longer runs and whose newest message
+    is not an idle message ended its round without the idle after which the runtime reports (2.4.1
+    does this when a person dismisses the child's question). It is silent, owes nothing, and the
+    held idle is released (`silentReleaseCount`, `projectNativeParentHistory`, #4546). Any other
+    child that never reports is bounded by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
     interrupts the primary, then every owned child still running, and the primary again when it
     came back to read a report, stops every background job of the run with `shell.remove`
     (`DELETE /api/shell/{id}`), and settles on two consecutive inactive reads; budget exhaustion

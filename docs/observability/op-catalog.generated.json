@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8f65adfc884c4259717ef3579feccb8090e4810aad4c04bc5af2024843bc70be",
+    "catalogDigest": "fa416c341e904c4c5255eb993676bfe35f2c3c0e30b4a6d39ce1755709015961",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12151,6 +12151,11 @@
             "dataClass": "count",
             "required": false
           },
+          "silentReleaseCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "readMode": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -12180,7 +12185,7 @@
         "proofIds": ["coding-runtime.history-projection.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:56",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1355"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1390"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13947,8 +13952,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.native-question.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:118",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1328"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:122",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1363"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -84637,6 +84642,12 @@
                   "required": true
                 },
                 {
+                  "name": "silentReleaseCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "windowTruncated",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -124465,7 +124476,7 @@
     {
       "op": "coding-runtime.native-question.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:121",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:125",
       "package": "keiko-server"
     },
     {

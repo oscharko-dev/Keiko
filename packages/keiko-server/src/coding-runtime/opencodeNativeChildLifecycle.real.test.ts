@@ -23,6 +23,7 @@ import {
   admitNativeChildren,
   createNativeTreeStatusPort,
   interruptNativeTree,
+  projectNativeParentHistory,
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
 import {
@@ -56,7 +57,8 @@ const GATEWAY_CAPABILITY = "fixture-gateway-capability";
 const FACADE_CAPABILITY = "fixture-facade-capability";
 const RUN_ID = "run-child-lifecycle";
 const DIGEST = "a".repeat(64);
-const SUBAGENT_REPORT = "<subagent sessionID=";
+// The synthetic message 2.4.1 appends to the parent each time a child goes idle.
+const SUBAGENT_REPORT = '<background-result kind="subagent" sessionID=';
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -509,10 +511,15 @@ async function startOwners(run: Run): Promise<Owners> {
           100,
         ),
       history: async (checkpoints, signal) =>
-        projection.project(
-          sessionId,
-          await client.messages(sessionId, signal),
-          checkpoints[sessionId],
+        projectNativeParentHistory(
+          {
+            client,
+            history: projection,
+            sessionId,
+            messages: await client.messages(sessionId, signal),
+            checkpoint: checkpoints[sessionId],
+          },
+          signal,
         ),
       sessionEcho: () => Promise.resolve(sessionId),
     },
@@ -644,8 +651,10 @@ function launchingParent(background: boolean, agent: string): (context: ModelCon
     return {
       kind: "tool",
       name: "subagent",
+      // 2.4.1's subagent tool has no `background` parameter and runs every child in the background,
+      // so a model's call for one names none (#4546).
       arguments: {
-        background,
+        ...(background ? {} : { background }),
         agent,
         description: "Synthetic child",
         prompt: "CHILD_TASK do the synthetic work.",

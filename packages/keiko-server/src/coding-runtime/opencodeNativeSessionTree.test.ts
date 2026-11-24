@@ -17,6 +17,7 @@ import {
   interruptNativeTree,
   nativeSessionDescendsFromRun,
   nativeTreeActivity,
+  silentNativeChildren,
   type NativeSessionTreeClient,
   type NativeSessionTreeRun,
 } from "./opencodeNativeSessionTree.js";
@@ -579,5 +580,75 @@ describe("the run's native session tree after a move inside the workspace", () =
     expect(outcome).toEqual({ interruptedChildren: 0, stoppedShells: 2, settled: true });
     expect(runtime.removed).toEqual(["sh_root", "sh_moved"]);
     expect(runtime.removedAt).toEqual([WORKSPACE, MOVED]);
+  });
+});
+
+// #4546: 2.4.1 ends a child's round without an idle message and without a report when the human
+// dismisses its question; such a child would hold its parent's run forever.
+describe("silent native children", () => {
+  const idle = { id: "msg_idle", type: "idle", outcome: "succeeded" };
+  const reads: string[] = [];
+  const client = (
+    active: Readonly<Record<string, unknown>>,
+    newest: Readonly<Record<string, string | undefined>>,
+  ): Parameters<typeof silentNativeChildren>[0] => ({
+    active: () => Promise.resolve(active),
+    recentMessages: (sessionId) => {
+      reads.push(sessionId);
+      const type = newest[sessionId];
+      return Promise.resolve({
+        messages: type === undefined ? [] : [{ id: "msg_n", type }],
+        truncated: false,
+        anchored: false,
+      });
+    },
+  });
+
+  it("names an owed child that no longer runs and whose round ended without an idle message", async () => {
+    const silent = await silentNativeChildren(
+      client({}, { ses_a: "assistant", ses_b: "idle", ses_c: "user", ses_d: undefined }),
+      new Set(["ses_a", "ses_b", "ses_c", "ses_d"]),
+      [idle],
+      undefined,
+    );
+    expect([...silent]).toEqual(["ses_a"]);
+  });
+
+  it("never names a child that still runs", async () => {
+    const silent = await silentNativeChildren(
+      client({ ses_a: { type: "busy" } }, { ses_a: "assistant" }),
+      new Set(["ses_a"]),
+      [idle],
+      undefined,
+    );
+    expect([...silent]).toEqual([]);
+  });
+
+  it("reads nothing while the parent works or owes nothing", async () => {
+    reads.length = 0;
+    const working = client({}, { ses_a: "assistant" });
+    const assistant = { id: "msg_a", type: "assistant" };
+    expect([
+      ...(await silentNativeChildren(working, new Set(["ses_a"]), [assistant], undefined)),
+    ]).toEqual([]);
+    expect([...(await silentNativeChildren(working, new Set(["ses_a"]), [], undefined))]).toEqual(
+      [],
+    );
+    expect([...(await silentNativeChildren(working, new Set(), [idle], undefined))]).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  it("throws when a child cannot be read", async () => {
+    await expect(
+      silentNativeChildren(
+        {
+          active: () => Promise.resolve({}),
+          recentMessages: () => Promise.reject(new Error("read failed")),
+        },
+        new Set(["ses_a"]),
+        [idle],
+        undefined,
+      ),
+    ).rejects.toThrow("read failed");
   });
 });

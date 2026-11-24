@@ -19808,6 +19808,12 @@
               "required": true
             },
             {
+              "name": "silentReleaseCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "windowTruncated",
               "type": "boolean",
               "dataClass": "closed-enum",
