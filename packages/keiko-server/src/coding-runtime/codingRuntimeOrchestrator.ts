@@ -1730,10 +1730,14 @@ function verificationFailureEvidence(
   return { check: event.verificationSummary?.verifierId ?? "check", failedCount };
 }
 
-// A summary whose every non-passing step never ran: the check could not run, which is a blocker to
-// report and no failure to repair.
-function verificationNeverRan(event: CodingWorkbenchRuntimeEvent): boolean {
+// A summary in which steps passed and every other step never ran: the check could not fully run,
+// which is a blocker to report and no failure to repair. A summary in which no step ran at all is
+// the tool layer's to classify (`observeVerificationExecution`), which knows the run's profile: a
+// run with its own shell carries a check the governed verifier cannot run here, and that refusal
+// blocks nothing (#4519).
+function verificationPartlyRefused(event: CodingWorkbenchRuntimeEvent): boolean {
   return (
+    (event.passedCount ?? 0) > 0 &&
     (event.failedCount ?? 0) > 0 &&
     (event.failedCount ?? 0) - (event.verificationSummary?.notRunCount ?? 0) < 1
   );
@@ -3257,10 +3261,10 @@ export class CodingRuntimeOrchestrator {
       event.verificationEditRevision,
       verificationFailureEvidence(event),
     );
-    // A summary with a refused step, even beside a passed one, is a check that could not fully run:
-    // a blocker to report. Only a summary at the run's current revision says anything about it.
+    // A passed step beside refused ones is a check that could not fully run: a blocker to report.
+    // Only a summary at the run's current revision says anything about it.
     if (
-      verificationNeverRan(event) &&
+      verificationPartlyRefused(event) &&
       this.effort.summaryIsCurrent(current.runId, event.verificationEditRevision)
     )
       this.effort.verificationBlocked(current.runId, "VERIFICATION_RUNNER_UNAVAILABLE");

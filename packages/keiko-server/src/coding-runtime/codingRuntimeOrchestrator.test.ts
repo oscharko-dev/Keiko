@@ -9267,10 +9267,19 @@ describe("verification truth at task settlement", () => {
     });
   }
 
-  it("sends no continuation when every non-passing step was denied, cancelled or over its limit", async () => {
+  // A summary in which no step ran is the tool layer's to classify (`observeVerificationExecution`,
+  // pinned in productionManagedWorktreeTools.test.ts): denied, cancelled or skipped steps arrive
+  // with its `blocks-repair` blocker, which keeps the continuation from running.
+  it("sends no continuation when the tool layer blocks a check in which no step ran", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
     await summarized(f, 3, 3);
+    f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_NOT_RUN",
+      codingVerificationTargetDigest("test"),
+      "blocks-repair",
+    );
     finish();
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
@@ -9280,6 +9289,34 @@ describe("verification truth at task settlement", () => {
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // #4519, seen in the macOS acceptance task on 2026-11-24: in a run with its own shell a governed
+  // check the host cannot isolate runs no step and blocks nothing (`evidence-only`). The failed
+  // shell check before it is still the fact to repair; the summary alone made it a blocker.
+  it("still repairs a failed shell check after a governed check that ran no step and blocks nothing", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_NOT_RUN",
+      codingVerificationTargetDigest("test"),
+      "evidence-only",
+    );
+    await summarized(f, 1, 1);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    // The repair was dispatched (the fixture refuses it), never skipped as blocked.
+    expect(
+      log.records.filter(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "skipped",
+      ),
+    ).toEqual([]);
   });
 
   // One passed and one denied step: a step was refused, so the check could not fully run. That is a

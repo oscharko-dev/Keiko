@@ -525,7 +525,7 @@ export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): b
 }
 
 /** True exactly when the event is a run settled `failed` with `verification-not-evidenced` (#4491). */
-export function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
+function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return (
     event.kind === "status" &&
     event.state === "failed" &&
