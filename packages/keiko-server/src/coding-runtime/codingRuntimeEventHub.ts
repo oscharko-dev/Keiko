@@ -9,6 +9,7 @@ import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
 
 import {
@@ -30,6 +31,7 @@ export type CodingRuntimeEventHubInput =
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
       readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
     }
   | {
       readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -119,6 +121,7 @@ interface RetainedEvent {
 interface ModelCallFailure {
   readonly failureCode: CodingWorkbenchTurnFailureCode;
   readonly providerUnavailable: boolean;
+  readonly gatewayCut: boolean;
 }
 
 interface RunBuffer {
@@ -216,7 +219,7 @@ export class CodingRuntimeEventHub {
     state: CodingWorkbenchRuntimeStateName,
     revision: number,
     failureCode: CodingWorkbenchTurnFailureCode,
-    evidence: { readonly providerUnavailable?: boolean } = {},
+    evidence: { readonly providerUnavailable?: boolean; readonly gatewayCut?: boolean } = {},
   ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
     if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
@@ -224,6 +227,7 @@ export class CodingRuntimeEventHub {
       this.modelCallFailures.set(runId, {
         failureCode,
         providerUnavailable: evidence.providerUnavailable === true,
+        gatewayCut: evidence.gatewayCut === true,
       });
     }
     return this.publish({
@@ -293,6 +297,14 @@ export class CodingRuntimeEventHub {
    */
   lastModelCallProviderUnavailable(runId: string): boolean {
     return this.modelCallFailures.get(runId)?.providerUnavailable === true;
+  }
+
+  /**
+   * Whether the gateway itself ended the run's most recent failed model call at its output bound,
+   * which no later answered call superseded. A provider's own output exhaustion reports false.
+   */
+  lastModelCallGatewayCut(runId: string): boolean {
+    return this.modelCallFailures.get(runId)?.gatewayCut === true;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
@@ -383,7 +395,7 @@ export class CodingRuntimeEventHub {
     )
       return false;
     while (run.events.length >= this.maxEvents || run.bytes + incoming.bytes > this.maxBytes) {
-      const lossyIndex = run.events.findIndex(({ critical }) => !critical);
+      const lossyIndex = evictionIndex(run, incoming);
       if (lossyIndex < 0) return false;
       const removed = run.events.splice(lossyIndex, 1)[0];
       if (removed === undefined) return false;
@@ -419,6 +431,14 @@ export class CodingRuntimeEventHub {
     for (const subscriber of run.subscribers) close(subscriber);
     run.subscribers.clear();
   }
+}
+
+// A terminal frame always fits: once no ordinary frame is left to evict, it displaces the oldest
+// retained non-terminal frame, so a subscriber that reconnects still learns how the run ended.
+function evictionIndex(run: RunBuffer, incoming: RetainedEvent): number {
+  const lossy = run.events.findIndex(({ critical }) => !critical);
+  if (lossy >= 0 || !isTerminal(incoming.event)) return lossy;
+  return run.events.findIndex(({ event }) => !isTerminal(event));
 }
 
 function validateReplayCursor(
@@ -514,7 +534,7 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
           "schemaVersion",
           "state",
         ]
-      : ["failureCode", "kind", "revision", "runId", "schemaVersion", "state"];
+      : ["failureCode", "verificationGap", "kind", "revision", "runId", "schemaVersion", "state"];
   return keys.every((key) => allowed.includes(key)) && required.every((key) => keys.includes(key));
 }
 

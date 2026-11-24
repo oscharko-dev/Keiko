@@ -5,6 +5,7 @@ import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bf
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { SupportReportButton } from "../../SupportReportButton";
 import {
   CodingWorkbenchRepositorySelector,
@@ -20,7 +21,7 @@ import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
 import { CodingWorkbenchToolCheck } from "./CodingWorkbenchToolCheck";
-import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
+import { CodingTaskForkNotice, completedTaskTitle } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -425,8 +426,9 @@ function consumesTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
 /**
  * Clears the composer's draft once the draft-consuming mutation that WAS pending settles as a
  * success (`mutation-complete` → status "idle"), and only when the draft is still the text that
- * mutation consumed: a failure (`mutation-failed` → status "error") keeps it so the operator can
- * fix and resend, and text added while the mutation was in flight (dictation) is never wiped.
+ * mutation consumed: a failure (`mutation-failed` → status "error") and a cancelled Start
+ * (`mutation-cancelled`) keep it so the operator can fix and resend, and text added while the
+ * mutation was in flight (dictation) is never wiped.
  * Without this, the draft stayed put after every completed Start, Retry or paused-run Send —
  * indistinguishable from an unsent draft, and re-submittable as a brand-new follow-up by mistake.
  */
@@ -445,7 +447,7 @@ function useClearTaskIntentOnMutationSuccess(
       return;
     }
     if (consumesTaskIntent(previous) && mutation.status === "idle") {
-      if (submittedRef.current === taskIntent) setTaskIntent("");
+      if (mutation.cancelled !== true && submittedRef.current === taskIntent) setTaskIntent("");
       submittedRef.current = null;
     }
   }, [mutation, setTaskIntent, taskIntent]);
@@ -976,6 +978,8 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  leftRun,
+  onLeftRun,
 }: {
   /** The Workbench window's own id, which keys its private composer draft. */
   readonly draftKey?: string | undefined;
@@ -985,6 +989,9 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  /** The run this window left with New task, persisted in its window configuration. */
+  readonly leftRun?: string | undefined;
+  readonly onLeftRun?: ((runId: string | undefined) => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -1013,6 +1020,8 @@ export function CodingWorkbenchWindow({
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: (): void => setTaskIntent(""),
+    leftRun,
+    onLeftRun,
   });
   const state = selectedConversationReadiness(
     historyRuntimeState(runtimeState, history),
@@ -1086,6 +1095,11 @@ export function CodingWorkbenchWindow({
     repositoryRoot === null && !runIsActive,
     authority.errorMessage,
   );
+
+  useEffect(() => {
+    // A failed decision leaves the request open; a later disappearance has another cause.
+    if (state.mutation.status === "error") approvalAction.current = false;
+  }, [state.mutation.status]);
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -1587,6 +1601,12 @@ export function sessionGrowthKey(
   return `${String(runtimeEventSignal)}:${feed?.updatedAt ?? ""}:${String(contentLength)}:${String(questionCount)}`;
 }
 
+// The task's stored conversation renders in the same stream: a task picked from Coding History or
+// restored after a reload arrives, and a stored conversation grows, without any live feed growth.
+function transcriptGrowthKey(detail: CodingTaskSession["detail"]): string {
+  return `${detail?.task.id ?? ""}:${String(detail?.messages.length ?? 0)}`;
+}
+
 function workbenchStartBlocker(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -1696,7 +1716,8 @@ function WorkbenchColumns({
   });
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
-  // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
+  // scrolled up into the history, and start following again for every new run (#3257 Wave 0) and
+  // every task shown, so a task opens at its newest message.
   const sessionStreamRef = useRef<HTMLDivElement>(null);
   const {
     onScroll: onStreamScroll,
@@ -1704,12 +1725,13 @@ function WorkbenchColumns({
     resume: followNewest,
   } = useFollowNewest(
     sessionStreamRef,
-    sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
+    `${sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length)}:${transcriptGrowthKey(history.detail)}`,
   );
   const runId = state.run.value?.runId;
+  const shownTaskId = history.detail?.task.id;
   useEffect(() => {
-    if (runId !== undefined) followNewest();
-  }, [followNewest, runId]);
+    if (runId !== undefined || shownTaskId !== undefined) followNewest();
+  }, [followNewest, runId, shownTaskId]);
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
@@ -1767,6 +1789,7 @@ function WorkbenchColumns({
       promptInputs={offeredCodingWorkbenchPromptInputs(state)}
       referenceRoot={composerReferenceRoot(state, runWorkspace, activeWorkspace, repositoryRoot)}
       runId={runId}
+      continuesConversation={history.conversationId !== undefined || history.fork !== null}
       deliveryNotice={promptDelivery.notice}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
@@ -1977,6 +2000,13 @@ function WorkbenchColumns({
               activity={timeline.activity}
               questions={questions}
               focusRef={focusRef}
+              onRunCheck={
+                canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
+                  ? (): void => {
+                      taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
+                    }
+                  : undefined
+              }
             />
             <CodingWorkbenchRevertBar
               revert={revert.revert}
@@ -1993,7 +2023,11 @@ function WorkbenchColumns({
             and leaves the control where the gesture started. */}
         <LocationBindingNotices locationState={locationState} />
         {repositorySelector}
-        <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
+        <CodingTaskForkNotice
+          fork={history.fork}
+          completed={completedTaskTitle(history, runIsActive)}
+          onCancel={history.cancelFork}
+        />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}
@@ -3081,6 +3115,10 @@ function RecoveryPanel({
       {acknowledged && intentEmpty ? (
         <p className={styles.summary}>{t("codingWorkbench.recovery.retryHint")}</p>
       ) : null}
+      <SupportReportButton
+        correlationId={isActivityLogCorrelationId(snapshot.runId) ? snapshot.runId : undefined}
+        errorKey={`coding-run-${snapshot.runId}`}
+      />
     </section>
   );
 }

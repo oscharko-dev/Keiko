@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "39cd7e54d54f46e0f8ba3a73d8151fd86c53583bd98842a9430641826e29b69b"
+    "catalogDigest": "caa856f43cd012d4f51199bb3384649c7ddd76332f638172279ec6231364e142"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 719,
-    "proofCount": 743,
-    "resolvedProofCount": 743,
-    "failureClassCount": 412,
+    "operationCount": 720,
+    "proofCount": 744,
+    "resolvedProofCount": 744,
+    "failureClassCount": 413,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -464,6 +464,7 @@
         "coding-runtime.read-only-child.runner-failed",
         "coding-runtime.readiness.failed",
         "coding-runtime.readiness.phase",
+        "coding-runtime.reap.stage",
         "coding-runtime.remote-skills.admitted",
         "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-items.admitted",
@@ -1015,6 +1016,7 @@
     "coding-runtime-repository-relay": ["tools-workflows.dependency-failure"],
     "coding-runtime-jira-pod": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
+    "coding-runtime-reap": ["tools-workflows.dependency-failure"],
     "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
     "mcp-oauth-issuer": ["tools-workflows.dependency-failure"],
@@ -1984,6 +1986,9 @@
     ],
     "coding-runtime.readiness.phase.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
+    ],
+    "coding-runtime.reap.stage.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeManager.test.ts"
     ],
     "coding-runtime.remote-skills.admitted.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.test.ts"

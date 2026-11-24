@@ -14,7 +14,7 @@ export function deliveredMessageSignal(
   let count = 0;
   for (const turn of feed.turns) {
     for (const message of turn.messages) {
-      if (message.role === "user") count += 1;
+      if (message.role === "user" && message.origin === undefined) count += 1;
     }
   }
   return count;

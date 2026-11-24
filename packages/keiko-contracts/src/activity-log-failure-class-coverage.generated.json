@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 412,
-  "completeClassCount": 412,
+  "supportedClassCount": 413,
+  "completeClassCount": 413,
   "completeness": "complete",
   "classes": [
     {
@@ -14534,6 +14534,18 @@
               "required": false
             },
             {
+              "name": "relayNpmRegistryEnvironment",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "relayNpmTarballRouting",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "relayRefusalReasons",
               "type": "string-array",
               "dataClass": "closed-enum",
@@ -16233,6 +16245,87 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "coding-runtime-reap",
+      "requirementContract": "coding-runtime-reap",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.reap.stage"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.reap.stage",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.reap.stage"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.reap.stage",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "process-lifecycle",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.reap.stage.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "coding-runtime-recovery-acknowledgement",
       "requirementContract": "coding-runtime-recovery-acknowledgement",
       "productSurfaces": ["keiko-server"],
@@ -17685,6 +17778,12 @@
               "name": "verificationCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "verificationGap",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -19201,6 +19300,12 @@
               "required": false
             },
             {
+              "name": "check",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "code",
               "type": "string",
               "dataClass": "opaque-id",
@@ -19213,9 +19318,21 @@
               "required": false
             },
             {
+              "name": "failedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "gap",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -19229,6 +19346,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "skipReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "state",

@@ -17,6 +17,8 @@ import {
   fanOutClientDiagnostic,
   resetClientDiagnosticPostStateForTests,
 } from "@/lib/install-client-diagnostics";
+import * as reportApi from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { Timeline } from "./CodingWorkbenchTimeline";
 import { eventsWithRestoredSettlement } from "./codingWorkbenchRestoredRun";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -1780,6 +1782,65 @@ describe("verification detail and active turn failures", () => {
     expect(screen.getByText("Targeted tests: Failed")).toBeVisible();
   });
 
+  // Lab 2026-11-23: a run that failed its test, repaired the code and passed the same test showed
+  // only the stale "Failed" row, because a failed check asks for attention and a passing one is
+  // routine. The later check of the same verifier replaces the earlier verdict.
+  describe("a check replaced by a later check of the same verifier", () => {
+    const check = (
+      sequence: number,
+      status: "passed" | "failed",
+      verifierId: "test" | "lint" = "test",
+    ): Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }> => ({
+      ...event(sequence),
+      eventKind: "verification-summarized",
+      verificationSummary: {
+        ...summary,
+        verifierId,
+        status,
+        passedCount: status === "passed" ? 1 : 0,
+        failedCount: status === "passed" ? 0 : 1,
+      },
+    });
+
+    it("moves a repaired failure into the run details", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed"), check(2, "passed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container).not.toHaveTextContent("Tests: Failed");
+      expect(container.querySelector('[data-event-tone="attention"]')).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+      expect(container).toHaveTextContent("Tests: Failed");
+      expect(container).toHaveTextContent("Tests: Passed");
+    });
+
+    it("keeps only the latest of two failures in view", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed"), check(2, "failed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelectorAll('[data-event-tone="attention"]')).toHaveLength(1);
+    });
+
+    it("keeps a failure of another verifier in view", () => {
+      const { container } = render(
+        <Timeline
+          events={[check(1, "failed", "lint"), check(2, "passed")]}
+          activity={activityLike(bareFeed())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelectorAll('[data-event-tone="attention"]')).toHaveLength(1);
+      expect(container).toHaveTextContent("Lint: Failed");
+    });
+  });
+
   it("does not advise restarting or changing output settings while a turn is still active", () => {
     const failed = {
       ...event(1),
@@ -2789,5 +2850,354 @@ describe("CodingWorkbenchTimeline long operator messages", () => {
     expect(marks).toHaveLength(1);
     expect(message?.querySelector("p")?.lastElementChild).toBe(marks[0]);
     expect(container).toHaveTextContent("Activity truncated.");
+  });
+});
+
+describe("Timeline — error report on a failed run", () => {
+  const RUN_ID = "run-272120967981827964065820685403290179367";
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    resetSupportReportOutcomesForTests();
+  });
+
+  function settled(
+    state: "failed" | "succeeded" | "cancelled",
+    runId: string = RUN_ID,
+  ): CodingWorkbenchRuntimeSseEvent {
+    const base = {
+      schemaVersion: "1",
+      cursor: "cursor-5",
+      sequence: 5,
+      occurredAt: AT,
+      kind: "status",
+      runId,
+      revision: 5,
+    } as const;
+    if (state === "failed") return { ...base, state, failureCode: "runtime-failed" };
+    return { ...base, state };
+  }
+
+  function renderSettled(
+    state: "failed" | "succeeded" | "cancelled",
+    runId?: string,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        events={[settled(state, runId)]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+  }
+
+  it("offers the error report on a failed run and selects that run by its id", async () => {
+    const report = { fileName: "report.json.gz", reportJson: "{}" };
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:run-report",
+      dispose: vi.fn(),
+    });
+    const { container } = renderSettled("failed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(RUN_ID, expect.any(AbortSignal));
+    expect(container).not.toHaveTextContent(/Activity Log/u);
+
+    const violations = (await axe(container)).violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("falls back to the most recent failure when the run id is not a correlation id", async () => {
+    const create = vi
+      .spyOn(reportApi, "createSupportReport")
+      .mockResolvedValue({ fileName: "report.json.gz", reportJson: "{}" });
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:run-report",
+      dispose: vi.fn(),
+    });
+    renderSettled("failed", "run 1");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
+  });
+
+  it("offers the report on a non-status event whose detail is the internal-error sentence", () => {
+    const redacted: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      runId: RUN_ID,
+      eventKind: "failure-redacted",
+      failureCode: "runtime-failed",
+    };
+    render(
+      <Timeline
+        events={[redacted]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+  });
+
+  it("names the output allowance on a run the gateway cut, and still offers the report", () => {
+    const cut: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      runId: RUN_ID,
+      state: "failed",
+      failureCode: "output-limit-reached",
+    };
+    const { container } = render(
+      <Timeline events={[cut]} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
+    );
+    expect(container).toHaveTextContent(/used up the output allowance of one step/iu);
+    expect(container).not.toHaveTextContent(/internal error|again, after/iu);
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+  });
+
+  it("shows no report on a turn failure that names its own mapped cause", () => {
+    const turn: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      runId: RUN_ID,
+      eventKind: "failure-redacted",
+      failureCode: "provider-failed",
+    };
+    const { container } = render(
+      <Timeline events={[turn]} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
+    );
+    expect(container.querySelector('[data-timeline-kind="event"]')).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+
+  it.each(["succeeded", "cancelled"] as const)("shows no error report on a %s run", (state) => {
+    renderSettled(state);
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+});
+
+// #4491: a run that changed code without a passing check after its last change names the concrete
+// gap in one plain sentence and offers "Run the check now" in place of the error report: nothing
+// broke inside Keiko, and the person can act on the sentence.
+describe("Timeline — verification gap on a failed run", () => {
+  const RUN_ID = "run-272120967981827964065820685403290179367";
+  const GAP_SENTENCES = {
+    "no-check-run": /no check ran after the last change/iu,
+    "check-failed": /A check failed after the last change/iu,
+    "check-not-started": /The check could not start/iu,
+    "budget-exhausted": /used up its budget of tool calls or changed bytes/iu,
+  } as const;
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    resetSupportReportOutcomesForTests();
+  });
+
+  function gapEvent(
+    gap?: keyof typeof GAP_SENTENCES,
+  ): Extract<CodingWorkbenchRuntimeSseEvent, { kind: "status" }> {
+    return {
+      schemaVersion: "1",
+      cursor: "cursor-5",
+      sequence: 5,
+      occurredAt: AT,
+      kind: "status",
+      runId: RUN_ID,
+      revision: 5,
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+      ...(gap === undefined ? {} : { verificationGap: gap }),
+    };
+  }
+
+  function renderGap(
+    gap: keyof typeof GAP_SENTENCES | undefined,
+    onRunCheck?: () => void,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        events={[gapEvent(gap)]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+        onRunCheck={onRunCheck}
+      />,
+    );
+  }
+
+  it.each(Object.entries(GAP_SENTENCES))(
+    "names the gap %s and ends with what the person can do",
+    (gap, sentence) => {
+      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES, vi.fn());
+      expect(container).toHaveTextContent(sentence);
+      expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/internal error/iu);
+    },
+  );
+
+  it("offers Run the check now and no error report, and the button submits the request", () => {
+    const onRunCheck = vi.fn();
+    renderGap("check-failed", onRunCheck);
+
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run the check now" }));
+    expect(onRunCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the generic sentence, with the button, for a run settled before the gap was recorded", () => {
+    const { container } = renderGap(undefined, vi.fn());
+    expect(container).toHaveTextContent(/The task is not verified/u);
+    expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+  });
+
+  it("shows neither button when a new request cannot be sent, and the sentence still reads right", () => {
+    for (const gap of Object.keys(GAP_SENTENCES) as (keyof typeof GAP_SENTENCES)[]) {
+      const { container, unmount } = renderGap(gap);
+      expect(container).toHaveTextContent(GAP_SENTENCES[gap]);
+      // The sentence names the next step, never a control that may not be on the card.
+      expect(container).not.toHaveTextContent(/Run the check now|Select/u);
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+      unmount();
+    }
+  });
+
+  it("restores the gap with the settled snapshot after a reload", () => {
+    const restored = eventsWithRestoredSettlement([], {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: RUN_ID,
+      failureCode: "verification-not-evidenced",
+      verificationGap: "budget-exhausted",
+    });
+    expect(restored).toMatchObject([{ kind: "status", verificationGap: "budget-exhausted" }]);
+  });
+
+  it("keeps the error report on every other failed run", () => {
+    render(
+      <Timeline
+        events={[{ ...gapEvent(), failureCode: "runtime-failed" }]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+        onRunCheck={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+  });
+
+  it("speaks German on the card and on the button", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            events={[gapEvent("no-check-run")]}
+            activity={activityLike(bareFeed())}
+            questions={IDLE_QUESTIONS}
+            onRunCheck={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+      expect(container).toHaveTextContent(/lief keine Prüfung/u);
+      expect(screen.getByRole("button", { name: "Prüfung nachholen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+});
+
+// #4491: a turn Keiko dispatched itself is never the person's own message. It reads as a compact
+// note labelled as Keiko's, collapsed until opened, told apart by the message's own origin.
+describe("Timeline — turns Keiko dispatched itself", () => {
+  afterEach(cleanup);
+
+  function feedWithContinuation(): AvailableCodingSafeActivityFeed {
+    const message = (
+      messageId: string,
+      role: "user" | "assistant",
+      text: string,
+      origin?: "keiko",
+    ): AvailableCodingSafeActivityFeed["turns"][number]["messages"][number] => ({
+      messageId,
+      role,
+      ...(origin === undefined ? {} : { origin }),
+      occurredAt: AT,
+      segments: [{ kind: "text", text, truncated: false }],
+      truncated: false,
+    });
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [
+            message("msg_person", "user", "Fix the parser."),
+            message("msg_answer", "assistant", "Done."),
+          ],
+          tools: [],
+          truncated: false,
+        },
+        {
+          turnId: "turn-2",
+          messages: [message("msg_keiko", "user", "Rerun the failed check.", "keiko")],
+          tools: [],
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  it("shows the person's own message as theirs and Keiko's as a collapsed Keiko note", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithContinuation())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const articles = [...container.querySelectorAll<HTMLElement>("[data-message-role='user']")];
+    expect(articles).toHaveLength(2);
+    expect(articles[0]).toHaveTextContent("You");
+    expect(articles[0]).toHaveTextContent("Fix the parser.");
+    expect(articles[0]).not.toHaveAttribute("data-message-origin");
+
+    const note = articles[1];
+    expect(note).toHaveAttribute("data-message-origin", "keiko");
+    expect(note).not.toHaveTextContent(/^You/u);
+    const details = note?.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent("Keiko");
+    expect(note).toHaveTextContent("Rerun the failed check.");
+  });
+
+  it("labels the note as Keiko's in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            active={false}
+            events={[]}
+            activity={activityLike(feedWithContinuation())}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+      const note = container.querySelector("[data-message-origin='keiko']");
+      expect(note?.querySelector("summary")).toHaveTextContent("Hinweis von Keiko");
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
   });
 });

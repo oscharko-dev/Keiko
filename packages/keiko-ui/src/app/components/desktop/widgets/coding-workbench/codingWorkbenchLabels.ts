@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchVerificationGap,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
@@ -389,11 +390,12 @@ export function eventTitle(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (event.kind === "status")
-    return event.state === "failed"
-      ? t("codingWorkbench.event.runFailed")
-      : runStateLabel(event.state, t);
-  return t(`codingWorkbench.event.${event.eventKind}`);
+  if (event.kind !== "status") return t(`codingWorkbench.event.${event.eventKind}`);
+  // A verification gap names what is missing, as its sentence does, not a generic failure (#4491).
+  if (isVerificationGapEvent(event)) return t("codingWorkbench.event.runUnverified");
+  return event.state === "failed"
+    ? t("codingWorkbench.event.runFailed")
+    : runStateLabel(event.state, t);
 }
 
 export function eventDetail(
@@ -426,6 +428,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["recovery-required", "codingWorkbench.recovery.summary"],
   ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
+  ["output-limit-reached", "codingWorkbench.event.failure.output-limit-reached"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
   ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
   ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
@@ -476,8 +479,70 @@ function eventFailureDetail(
 ): string {
   const turnFailure = turnFailureDetail(event, t);
   if (turnFailure.length > 0) return turnFailure;
-  if (event.failureCode === undefined) return "";
-  return t(RUN_FAILURE_MESSAGES.get(event.failureCode) ?? "codingWorkbench.event.failure.generic");
+  const key = runFailureMessageKey(event);
+  return key === undefined ? "" : t(key);
+}
+
+// #4491: a run that changed code without a passing check after its last change names the concrete
+// gap the server recorded; a run settled before the gap existed keeps the generic sentence.
+const VERIFICATION_GAP_MESSAGES: Readonly<
+  Record<CodingWorkbenchVerificationGap, CodingWorkbenchMessageKey>
+> = {
+  "no-check-run": "codingWorkbench.event.failure.verificationGap.no-check-run",
+  "check-failed": "codingWorkbench.event.failure.verificationGap.check-failed",
+  "check-not-started": "codingWorkbench.event.failure.verificationGap.check-not-started",
+  "budget-exhausted": "codingWorkbench.event.failure.verificationGap.budget-exhausted",
+};
+
+function runFailureMessageKey(
+  event: CodingWorkbenchRuntimeSseEvent,
+): CodingWorkbenchMessageKey | undefined {
+  if (event.failureCode === undefined) return undefined;
+  if (event.kind === "status" && event.verificationGap !== undefined)
+    return VERIFICATION_GAP_MESSAGES[event.verificationGap];
+  return RUN_FAILURE_MESSAGES.get(event.failureCode) ?? "codingWorkbench.event.failure.generic";
+}
+
+const identityTranslate: CodingWorkbenchTranslate = (key) => key;
+
+/**
+ * True exactly when the card tells the person to create an error report: a run that settled
+ * `failed`, or an event whose detail is the internal-error or generic failure sentence. The
+ * timeline renders the report action from this one predicate, so those sentences never point to an
+ * action that is not there.
+ */
+export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): boolean {
+  // A run whose changes were not checked has nothing broken to report, with or without a check to
+  // offer, so it never offers the error report.
+  if (isVerificationGapEvent(event)) return false;
+  if (event.kind === "status" && event.state === "failed") return true;
+  if (turnFailureDetail(event, identityTranslate).length > 0) return false;
+  const key = runFailureMessageKey(event);
+  return (
+    key === "codingWorkbench.event.failure.runtime" ||
+    key === "codingWorkbench.event.failure.generic"
+  );
+}
+
+/** True exactly when the event is a run settled `failed` with `verification-not-evidenced` (#4491). */
+function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
+  return (
+    event.kind === "status" &&
+    event.state === "failed" &&
+    event.failureCode === "verification-not-evidenced"
+  );
+}
+
+/**
+ * True when the card of a verification gap can offer "Run the check now": only while a new request
+ * can be sent (`runCheckAvailable`). The card's sentence names the gap and the next step without
+ * naming a control, so it reads correctly with or without the button.
+ */
+export function eventOffersRunCheck(
+  event: CodingWorkbenchRuntimeSseEvent,
+  runCheckAvailable: boolean,
+): boolean {
+  return runCheckAvailable && isVerificationGapEvent(event);
 }
 
 function turnFailureDetail(

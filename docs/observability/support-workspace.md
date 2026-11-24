@@ -45,7 +45,10 @@ CLI control state instead.
 
 Use **Create error report** on a visible error, then **Download report** to save the report for
 that error's Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the
-same action. Uncaught browser failures expose the action in the existing shell alert area. The
+same action. A Coding Workbench run that settled `failed` shows it on its failure card, including
+when the run is reopened from history; the report is selected by the run's id, which is the run's
+Activity Log correlation id, so it carries that run's lines from its start through its settlement
+however long the run lasted. Uncaught browser failures expose the action in the existing shell alert area. The
 footer retains the centered product version; there is no separate Diagnosis window or incident
 counter for customers. A degraded or unavailable diagnostic writer adds a plain-language workspace
 notice with the same report action. Closed technical reasons remain in `/api/health`, `keiko status`,

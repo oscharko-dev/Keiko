@@ -64,6 +64,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
         "updated",
         "failed",
         "unavailable",
+        "refused",
       ],
     },
     conversationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -130,7 +131,11 @@ type HistoryEvent =
   | "read"
   | "updated"
   | "failed"
-  | "unavailable";
+  | "unavailable"
+  | "refused";
+
+/** The closed kinds a refused history request carries (HTTP 404, 409 and 400). */
+export type CodingHistoryRefusalKind = "unavailable" | "conflict" | "invalid-request";
 
 interface HistoryLogInput {
   readonly correlationId: string;
@@ -147,6 +152,7 @@ interface HistoryLogInput {
   readonly previousStatus?: "active" | "completed";
   readonly status?: "active" | "completed";
   readonly titleChanged?: boolean;
+  readonly refusalKind?: CodingHistoryRefusalKind;
   readonly error?: unknown;
 }
 
@@ -164,14 +170,22 @@ function historyError(error: unknown): {
       };
 }
 
+function historyErrorKind(
+  refusalKind: CodingHistoryRefusalKind | undefined,
+  error: unknown,
+): CodingHistoryRefusalKind | "internal" {
+  if (refusalKind !== undefined) return refusalKind;
+  return error === undefined ? "unavailable" : "internal";
+}
+
 function recordHistory(
   log: ServerLogSink | undefined,
   event: HistoryEvent,
   input: HistoryLogInput,
 ): void {
-  const failed = event === "failed" || event === "unavailable";
+  const failed = event === "failed" || event === "unavailable" || event === "refused";
   const incomplete = failed || input.truncated === true;
-  const { correlationId, messageCount = 0, truncated = false, error, ...ids } = input;
+  const { correlationId, messageCount = 0, truncated = false, error, refusalKind, ...ids } = input;
   log?.write(
     activityLogEvent(
       HISTORY_OPERATION,
@@ -180,7 +194,7 @@ function recordHistory(
         ...(failed
           ? ({
               level: "warn",
-              errorKind: error === undefined ? "unavailable" : "internal",
+              errorKind: historyErrorKind(refusalKind, error),
             } as const)
           : {}),
       },
@@ -200,6 +214,22 @@ function recordHistory(
 /** A V2 prompt carried hidden context while its activity displayed only the human's task. */
 export function recordContextPresentation(log: ServerLogSink | undefined, runId: string): void {
   recordHistory(log, "context-presented", { correlationId: runId, runId, messageCount: 1 });
+}
+
+const TASK_TITLE_MAX_CODE_POINTS = 100;
+
+/**
+ * One clean line: unsafe characters dropped, whitespace collapsed. A longer line is cut by code
+ * point, on its last word when that keeps at least half of it, and ends in "…", so a title in Coding
+ * History never reads as a sentence that simply stops.
+ */
+function taskTitle(intent: string): string {
+  const points = Array.from(stripUnsafeFormatChars(intent).replace(/\s+/gu, " ").trim());
+  if (points.length <= TASK_TITLE_MAX_CODE_POINTS) return points.join("");
+  const head = points.slice(0, TASK_TITLE_MAX_CODE_POINTS - 1);
+  const space = head.lastIndexOf(" ");
+  const kept = space >= TASK_TITLE_MAX_CODE_POINTS / 2 ? head.slice(0, space) : head;
+  return `${kept.join("").trimEnd()}…`;
 }
 
 function digest(value: string): string {
@@ -231,6 +261,8 @@ export interface CodingHistoryMessage {
   readonly messageId: string;
   readonly role: "user" | "assistant";
   readonly content: string;
+  /** A user message Keiko dispatched itself, from the runtime message's origin metadata (#4491). */
+  readonly origin?: "keiko";
 }
 
 /** Native history and the bounded display feed share the same local conversation store. */
@@ -348,6 +380,30 @@ export class CodingRuntimeHistory {
     return detail;
   }
 
+  /** Whether the operator owns the task; a cheap lookup that reads no conversation. */
+  public exists(id: string): boolean {
+    const operator = this.operator();
+    return operator !== undefined && this.store.codingHistory?.get(id, operator) !== undefined;
+  }
+
+  /**
+   * Records a refused history request under the request's correlation id (body-free). The id comes
+   * from the request path, so the line names it only when it is a task this operator owns; an
+   * unknown or malformed id is never written to the log.
+   */
+  public refuse(
+    correlationId: string,
+    refusalKind: CodingHistoryRefusalKind,
+    conversationId?: string,
+  ): void {
+    const known = conversationId !== undefined && this.exists(conversationId);
+    recordHistory(this.log, "refused", {
+      correlationId,
+      refusalKind,
+      ...(known ? { conversationId } : {}),
+    });
+  }
+
   /**
    * The user-controlled local export of one task (#3904). The lookup is the operator-bound read
    * `detail` uses, so a task of another operator is as unavailable here as it is there; a caller
@@ -424,6 +480,13 @@ export class CodingRuntimeHistory {
     });
   }
 
+  /** A completed task is closed: a scheduled wake never reopens it. */
+  public isActive(id: string): boolean {
+    const operator = this.operator();
+    const task = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
+    return task?.status === "active";
+  }
+
   public admits(id: string | undefined, active: ActiveWorkspaceView): boolean {
     if (id === undefined) return true;
     return this.taskIn(id, active.instance);
@@ -469,7 +532,7 @@ export class CodingRuntimeHistory {
     const task = history.begin({
       ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
       projectPath: active.instance.repositoryRoot,
-      title: request.taskIntent.trim().slice(0, 100),
+      title: taskTitle(request.taskIntent),
       modelId: request.modelId ?? "coding",
       workspaceId: active.instance.workspaceId,
       taskId: active.instance.taskId,
@@ -522,7 +585,7 @@ export class CodingRuntimeHistory {
       throw new Error("Coding History unavailable.");
     const forked = history.fork({
       ...forkSourceFields(request.fork, active, source),
-      title: request.taskIntent.trim().slice(0, 100),
+      title: taskTitle(request.taskIntent),
       modelId: request.modelId ?? "coding",
       operatorDigest,
       runId,
@@ -626,6 +689,7 @@ export class CodingRuntimeHistory {
           sourceId,
           message.role,
           content.slice(offset, end),
+          message.origin,
         )
       )
         written += 1;
@@ -647,7 +711,14 @@ export class CodingRuntimeHistory {
     content: CodingSafeActivityContent | null | undefined,
   ): void {
     const task = this.forRun(runId);
-    if (task === undefined) return;
+    if (task === undefined) {
+      recordHistory(this.log, "unavailable", {
+        correlationId: runId,
+        runId,
+        captureSource: "display-projection",
+      });
+      return;
+    }
     const feed = content?.feed;
     if (feed?.availability !== "available" || feed.runId !== runId) {
       recordHistory(this.log, "unavailable", {
@@ -681,7 +752,14 @@ export class CodingRuntimeHistory {
     for (const message of operatorConversation(messages, displayText, intentEchoPresent)) {
       const text = displayText(message);
       if (text.length > 0)
-        this.store.codingHistory?.append(id, runId, message.messageId, message.role, text);
+        this.store.codingHistory?.append(
+          id,
+          runId,
+          message.messageId,
+          message.role,
+          text,
+          message.origin,
+        );
     }
   }
 
@@ -690,16 +768,17 @@ export class CodingRuntimeHistory {
     patch: { readonly title?: string; readonly status?: "active" | "completed" },
     correlationId: string,
   ): CodingHistoryTask | undefined {
-    const before = this.detail(id, correlationId);
+    const operator = this.operator();
+    const before = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
     if (before === undefined) return undefined;
     const task = this.store.codingHistory?.update(id, patch);
     if (task !== undefined)
       recordHistory(this.log, "updated", {
         correlationId,
         conversationId: id,
-        previousStatus: before.task.status,
+        previousStatus: before.status,
         status: task.status,
-        titleChanged: before.task.title !== task.title,
+        titleChanged: before.title !== task.title,
       });
     return task;
   }

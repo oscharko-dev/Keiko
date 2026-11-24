@@ -1242,6 +1242,30 @@ describe("DELETE /api/projects", () => {
     expect(groundedTurnRegistry.lookup(`assistant-${chat.id}`, () => 3)).toBeUndefined();
   });
 
+  it("refuses to remove a project that still holds Coding tasks and keeps them", async () => {
+    store.createProject(projDir);
+    const task = store.codingHistory?.create({
+      projectPath: projDir,
+      title: "Keep my task",
+      modelId: "coding",
+      workspaceId: "ws_keep",
+      taskId: "task_keep",
+      branch: "keiko/task/keep",
+      operatorDigest: "a".repeat(64),
+    });
+    if (task === undefined) throw new Error("Coding History store missing");
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "PROJECT_HAS_CODING_TASKS",
+    );
+    expect(store.codingHistory?.get(task.id)?.title).toBe("Keep my task");
+    expect(store.listProjects()).toHaveLength(1);
+  });
+
   it("returns 404 for unknown project", async () => {
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "DELETE",

@@ -54,6 +54,8 @@ export interface BoundMavenRepository {
 export interface BoundNpmRegistry {
   /** `registry`, or the lower-cased `@scope:registry` key. */
   readonly key: string;
+  /** The normalised upstream URL of the registry. */
+  readonly url: string;
   readonly relayId: string;
   readonly capability: string;
 }
@@ -84,6 +86,7 @@ function bindOne(
   input: NativeRepositoryRelayInput,
   sources: Pick<RepositoryRelaySources, "runId" | "signal">,
   repository: ResolvedRepository,
+  rewritePackumentTarballs?: boolean,
 ): { readonly relayId: string; readonly capability: string } | undefined {
   const { runId, signal } = sources;
   return input.relay.bind({
@@ -94,6 +97,7 @@ function bindOne(
     secrets: [],
     ownOrigin: input.origin,
     ...(signal === undefined ? {} : { signal }),
+    ...(rewritePackumentTarballs === undefined ? {} : { rewritePackumentTarballs }),
   });
 }
 
@@ -154,11 +158,24 @@ function bindNpm(
   resolution: RepositoryResolution,
   refusals: NativeRelayRefusalReason[],
 ): BoundNpmRegistry[] {
+  const keyed = resolution.repositories.map((repository) => ({
+    key: npmKey(repository),
+    url: repository.url,
+    repository,
+  }));
+  const npmRoutes = npmRoutesTarballs(keyed);
+  const fallback = keyed.find((entry) => entry.key === "registry");
+  const fallbackBinding =
+    fallback === undefined ? undefined : bindOne(input, sources, fallback.repository, !npmRoutes);
+  // A default registry the relay refused leaves npm nothing to move a tarball onto: every other
+  // registry of the run keeps the relay's packument rewrite.
+  const routes = npmRoutes && fallbackBinding !== undefined;
   const bound: BoundNpmRegistry[] = [];
-  for (const repository of resolution.repositories) {
-    const binding = bindOne(input, sources, repository);
+  for (const entry of keyed) {
+    const binding =
+      entry === fallback ? fallbackBinding : bindOne(input, sources, entry.repository, !routes);
     if (binding === undefined) refusals.push("bind-refused");
-    else bound.push({ key: npmKey(repository), ...binding });
+    else bound.push({ key: entry.key, url: entry.url, ...binding });
   }
   return bound;
 }
@@ -358,16 +375,119 @@ function npmLineKey(line: string): string {
 }
 
 /**
+ * How a run's npm reaches the tarballs of its bound registries (#4491), a closed value for the
+ * admission line: npm moves them onto the relay itself, `always` or for the default registry's host
+ * (`registry-host`) or by its own default for the public registry (`npm-default`); or the relay moves
+ * a packument's tarball URLs onto itself (`relay-url`), when npm cannot. `npm-default` also stands
+ * for a run with no npm registry bound.
+ */
+export const NPM_TARBALL_ROUTINGS = [
+  "always",
+  "registry-host",
+  "npm-default",
+  "relay-url",
+] as const;
+export type NpmTarballRouting = (typeof NPM_TARBALL_ROUTINGS)[number];
+
+const PUBLIC_NPM_REGISTRY_HOST = "registry.npmjs.org";
+
+/**
+ * npm reads its environment before its user config, and npm exports a configured `registry` as
+ * `npm_config_registry` to every process it starts: a Keiko started through `npx` or `npm run`
+ * hands the person's registry down, and the native profile inherits that name on purpose (#4271).
+ * With the default registry on the relay, an inherited name is replaced by the relay, so the run's
+ * npm never reaches that registry around the relay (#4491) (`relay`). Without an inherited name
+ * the environment sets none and npm's own precedence stands, a project `.npmrc` included (`none`);
+ * with the default registry not bound, an inherited name passes unchanged (`inherited`).
+ */
+export const NPM_REGISTRY_ENVIRONMENTS = ["relay", "inherited", "none"] as const;
+export type NpmRegistryEnvironment = (typeof NPM_REGISTRY_ENVIRONMENTS)[number];
+
+/** How the run's environment names npm's registry, given whether the run inherits one. */
+export function npmRegistryEnvironmentKind(
+  bound: readonly BoundNpmRegistry[],
+  inherited: boolean,
+): NpmRegistryEnvironment {
+  if (!inherited) return "none";
+  return bound.some((entry) => entry.key === "registry") ? "relay" : "inherited";
+}
+
+/** The relay as npm's registry, replacing an inherited name only: never a new precedence. */
+export function npmRegistryEnvironment(
+  origin: string,
+  bound: readonly BoundNpmRegistry[],
+  inherited: boolean,
+): Record<string, string> {
+  const registry = bound.find((entry) => entry.key === "registry");
+  if (!inherited || registry === undefined) return {};
+  const url = repositoryRelayBaseUrl(origin, registry.relayId);
+  return { npm_config_registry: url, NPM_CONFIG_REGISTRY: url };
+}
+
+/**
+ * Whether the run's npm moves the tarballs of its registries onto the relay itself (#4491): a default
+ * registry is bound and every bound registry is that one URL, as when a scope names the same Nexus
+ * group. npm moves a tarball URL only onto the default registry, so then the relay leaves each
+ * packument's tarball URLs on the person's registry, and a lockfile the run writes pins that registry
+ * as the person's own npm would, never Keiko's relay, whose address and binding last one run. A scope
+ * bound to another URL keeps the relay's packument rewrite and npm's default for the whole run: a
+ * tarball moved onto the default registry would reach the wrong binding there.
+ */
+export function npmRoutesTarballs(
+  bound: readonly { readonly key: string; readonly url: string }[],
+): boolean {
+  const registry = bound.find((entry) => entry.key === "registry");
+  return registry !== undefined && bound.every((entry) => entry.url === registry.url);
+}
+
+/**
+ * The `replace-registry-host` that moves the tarballs of a run whose npm routes them itself onto the
+ * relay: a lockfile pins each tarball on the registry's own URL, which npm by default moves only from
+ * `registry.npmjs.org`. Below Full access every registry tarball moves (`always`; the run has no other
+ * way out, and a git or URL dependency fails there anyway). With Full access only the default
+ * registry's host moves, so a git, URL or public-registry tarball keeps its own host, which Full
+ * access may reach. Undefined leaves npm's default: for the public registry, or when the relay
+ * rewrites the packuments instead.
+ */
+export function npmLockfileRegistryHost(
+  bound: readonly BoundNpmRegistry[],
+  networkless: boolean,
+): string | undefined {
+  const registry = bound.find((entry) => entry.key === "registry");
+  if (registry === undefined || !npmRoutesTarballs(bound)) return undefined;
+  if (networkless) return "always";
+  const host = new URL(registry.url).hostname;
+  return host === PUBLIC_NPM_REGISTRY_HOST ? undefined : host;
+}
+
+export function npmTarballRouting(
+  bound: readonly BoundNpmRegistry[],
+  host: string | undefined,
+): NpmTarballRouting {
+  if (bound.length > 0 && !npmRoutesTarballs(bound)) return "relay-url";
+  if (host === undefined) return "npm-default";
+  return host === "always" ? "always" : "registry-host";
+}
+
+/**
  * The sanitized `.npmrc` with each bound registry on the relay and the run's capability as its
  * token under the key npm derives from the relay's address. The relay refuses a POST, so the audit
- * request is switched off.
+ * request is switched off; npm's update check is too, since it reads npm's own packument (tens of
+ * megabytes) through the relay from the person's registry on every run (#4491). `lockfileHost` is
+ * the run's `npmLockfileRegistryHost`.
  */
 export function relayNpmConfig(
   sanitizedText: string,
   bound: readonly BoundNpmRegistry[],
   input: NativeRepositoryRelayInput,
+  lockfileHost?: string,
 ): string {
-  const replaced = new Set([...bound.map((entry) => entry.key.toLowerCase()), "audit"]);
+  const lockfile = lockfileHost === undefined ? [] : [`replace-registry-host=${lockfileHost}`];
+  const replaced = new Set([
+    ...bound.map((entry) => entry.key.toLowerCase()),
+    "audit",
+    "update-notifier",
+  ]);
   const kept = sanitizedText
     .split("\n")
     .filter((line) => line.trim() !== "" && !replaced.has(npmLineKey(line)));
@@ -379,7 +499,8 @@ export function relayNpmConfig(
       `//${host}${new URL(base).pathname}:_authToken=${entry.capability}`,
     ];
   });
-  return `${[...kept, "audit=false", ...relayed].join("\n")}\n`;
+  const quiet = ["audit=false", "update-notifier=false"];
+  return `${[...kept, ...quiet, ...relayed, ...lockfile].join("\n")}\n`;
 }
 
 /** A proxy list the run's tools consult, with loopback added so the relay is never proxied. */

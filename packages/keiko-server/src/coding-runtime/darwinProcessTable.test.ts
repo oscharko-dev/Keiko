@@ -8,6 +8,19 @@ import { darwinProcessTableReader, parseProcessTable } from "./darwinProcessTabl
 const readDarwinProcessTable = darwinProcessTableReader(promisify(execFile));
 
 describe("the host's process table with kernel identities (#3899 AC2, #3901 AC3)", () => {
+  it("bounds the table read in time and ends a stalled reader", async () => {
+    const seen: { timeout?: number; killSignal?: string }[] = [];
+    const reader = darwinProcessTableReader((_file, _args, options) => {
+      seen.push(options);
+      return Promise.resolve({ stdout: "mark 120\n\n" });
+    });
+    await reader();
+
+    expect(seen[0]?.timeout).toBeGreaterThan(0);
+    expect(Number.isFinite(seen[0]?.timeout)).toBe(true);
+    expect(seen[0]?.killSignal).toBe("SIGKILL");
+  });
+
   it("parses identified processes, zombies, gone PIDs and processes of other users", () => {
     expect(
       parseProcessTable(

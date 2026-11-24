@@ -23,8 +23,12 @@ import {
   createRepositoryCredentialRelay,
   repositoryRelayBaseUrl,
   type RepositoryCredentialRelay,
+  type RepositoryRelayTarget,
 } from "../repository-relay/repositoryCredentialRelay.js";
-import { prepareNativeBuildSettings } from "./nativeBuildSettings.js";
+import {
+  prepareNativeBuildSettings,
+  type NativeBuildSettingsResult,
+} from "./nativeBuildSettings.js";
 import { OPENCODE_NATIVE_NPM_RELAY_ENV } from "./opencodeNativePolicyPlugin.js";
 
 // #4522: the run's build settings carry capabilities of Keiko's repository credential relay, never
@@ -112,6 +116,7 @@ function prepare(
     readonly env?: Record<string, string | undefined>;
     readonly relay?: boolean;
     readonly noProxy?: string;
+    readonly inheritedRegistry?: boolean;
     readonly signal?: AbortSignal;
   } = {},
 ): Run {
@@ -140,6 +145,7 @@ function prepare(
       ? {}
       : { repositoryRelay: { relay, origin: ORIGIN, env: options.env ?? {} } }),
     inheritedNoProxy: options.noProxy,
+    inheritedNpmRegistry: options.inheritedRegistry,
     signal: options.signal,
     activityLog: sink,
   });
@@ -293,6 +299,8 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
     expect(refused.result.relay).toEqual({
       mavenBoundCount: 0,
       npmBoundCount: 0,
+      npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "none",
       refusals: ["url-interpolated"],
     });
   });
@@ -345,6 +353,8 @@ describe("the run's npm config with the repository relay (#4522)", () => {
     expect(config).not.toContain("npm.corp.example");
     expect(lines).toContain("audit=false");
     expect(lines).not.toContain("audit=true");
+    // npm's update check would read npm's own packument through the relay on every run (#4491).
+    expect(lines).toContain("update-notifier=false");
     expect(lines).toContain("strict-ssl=true");
     expect(run.result.relay).toMatchObject({ mavenBoundCount: 0, npmBoundCount: 2 });
   });
@@ -387,6 +397,188 @@ describe("the run's npm config with the repository relay (#4522)", () => {
   });
 });
 
+// #4491 (Nexus lab): npm fetches a tarball its lockfile pins from the pinned URL and moves only
+// registry.npmjs.org onto the configured registry by default, so a lockfile written against the
+// person's own registry went around the relay: without the credential, and below Full access
+// without a network.
+// One Nexus group for everything: the scope names the default registry's URL.
+const NPMRC_ONE_REGISTRY = `registry=https://npm.corp.example/registry/
+@corp:registry=https://npm.corp.example/registry/
+//npm.corp.example/registry/:_authToken=${NPM_TOKEN}
+`;
+
+/**
+ * Prepares a run against a relay that records what each binding asked for; `refuseFirst` refuses
+ * the first binding, which is the default registry's.
+ */
+function bindRun(
+  npm: string,
+  options: {
+    readonly mode?: string;
+    readonly refuseFirst?: boolean;
+    readonly inheritedRegistry?: boolean;
+  } = {},
+): { readonly targets: RepositoryRelayTarget[]; readonly result: NativeBuildSettingsResult } {
+  const stateRoot = join(temp(), "run");
+  mkdirSync(stateRoot, { recursive: true });
+  const targets: RepositoryRelayTarget[] = [];
+  const result = prepareNativeBuildSettings({
+    runId: "run-relay-4",
+    mode: options.mode ?? "supervised-coding",
+    realHome: person({ npm }),
+    stateRoot,
+    inheritedNpmRegistry: options.inheritedRegistry,
+    repositoryRelay: {
+      relay: {
+        bind: (target) => {
+          targets.push(target);
+          if (options.refuseFirst === true && targets.length === 1) return undefined;
+          return { relayId: `relay${String(targets.length)}`, capability: "c".repeat(43) };
+        },
+        authenticate: () => undefined,
+        wasRevoked: () => false,
+        releaseRun: () => undefined,
+        revoke: () => undefined,
+      },
+      origin: ORIGIN,
+      env: {},
+    },
+    activityLog: { write: () => undefined },
+  });
+  return { targets, result };
+}
+
+function bindTargets(npm: string, mode?: string): RepositoryRelayTarget[] {
+  return bindRun(npm, mode === undefined ? {} : { mode }).targets;
+}
+
+describe("how the run's npm reaches its registries' tarballs (#4491)", () => {
+  const lines = (run: Run): string[] => run.npmConfig().split("\n");
+  const replacements = (run: Run): string[] =>
+    lines(run).filter((line) => line.startsWith("replace-registry-host="));
+
+  it.each(["governed-assist", "supervised-coding"])(
+    "moves every registry tarball onto the relay in %s",
+    (mode) => {
+      const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }), { mode });
+      expect(replacements(run)).toEqual(["replace-registry-host=always"]);
+      expect(run.npmConfig()).not.toContain("npm.corp.example");
+      expect(run.result.relay?.npmTarballRouting).toBe("always");
+      expect(run.lines[0]?.extra).toMatchObject({ relayNpmTarballRouting: "always" });
+    },
+  );
+
+  // With Full access the run may reach other hosts, so only the default registry's host moves: a
+  // git or URL dependency keeps its host, and so does a tarball pinned on `registry.npmjs.org`,
+  // which npm's own default would have moved onto the relay.
+  it("moves only the default registry's host onto the relay with Full access", () => {
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }), { mode: "autonomous-delivery" });
+    expect(replacements(run)).toEqual(["replace-registry-host=npm.corp.example"]);
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmTarballRouting: "registry-host" });
+  });
+
+  it("leaves the packuments' tarball URLs on the person's registry when npm moves them", () => {
+    const targets = bindTargets(NPMRC_ONE_REGISTRY);
+    expect(targets.map((target) => target.rewritePackumentTarballs)).toEqual([false, false]);
+  });
+
+  // #4491 lab: npm exports a configured registry as `npm_config_registry` to every process it
+  // starts, so a Keiko started through `npx` or `npm run` hands it to the run, and npm reads the
+  // environment before the run's user config: the run's npm reached the registry around the relay.
+  it("names the relay as the registry in the environment npm reads first", () => {
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }), { inheritedRegistry: true });
+    const registry = lines(run)
+      .find((line) => line.startsWith("registry="))
+      ?.slice("registry=".length);
+    expect(registry).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/.+\/$/u);
+    expect(run.result.env).toMatchObject({
+      npm_config_registry: registry,
+      NPM_CONFIG_REGISTRY: registry,
+    });
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmRegistryEnvironment: "relay" });
+  });
+
+  // #4491 audit: the environment outranks a project `.npmrc`, so a name the run does not inherit is
+  // never added; npm's own precedence then stands and the run's user config names the relay.
+  it("adds no registry name to the environment of a run that inherits none", () => {
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }));
+    expect(lines(run).find((line) => line.startsWith("registry="))).toMatch(/127\.0\.0\.1/u);
+    expect(Object.keys(run.result.env)).not.toContain("npm_config_registry");
+    expect(Object.keys(run.result.env)).not.toContain("NPM_CONFIG_REGISTRY");
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmRegistryEnvironment: "none" });
+  });
+
+  it("leaves an inherited registry alone when the default registry is not bound", () => {
+    const { result } = bindRun(NPMRC_ONE_REGISTRY, { refuseFirst: true, inheritedRegistry: true });
+    expect(result.relay?.npmRegistryEnvironment).toBe("inherited");
+    expect(Object.keys(result.env)).not.toContain("npm_config_registry");
+    expect(Object.keys(result.env)).not.toContain("NPM_CONFIG_REGISTRY");
+  });
+
+  // An `.npmrc` often names a scope's registry without its trailing slash, with another host case
+  // or with the default port; the resolved URLs are normalised, so one Nexus group stays one.
+  it("treats a scope spelled differently as the default registry's own URL", () => {
+    const npm = NPMRC_ONE_REGISTRY.replace(
+      "@corp:registry=https://npm.corp.example/registry/",
+      "@corp:registry=https://NPM.corp.example:443/registry",
+    );
+    expect(bindTargets(npm).map((target) => target.rewritePackumentTarballs)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
+  // npm moves a tarball only onto the default registry, which would be the wrong binding for a
+  // scope bound elsewhere: the relay keeps rewriting, as before #4491, and npm keeps its default.
+  it("keeps the relay's rewrite and npm's default when a scope names another registry", () => {
+    const run = prepare(person({ npm: NPMRC }));
+    expect(replacements(run)).toEqual([]);
+    expect(run.result.relay?.npmTarballRouting).toBe("relay-url");
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmTarballRouting: "relay-url" });
+    expect(bindTargets(NPMRC).map((target) => target.rewritePackumentTarballs)).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  // A refused default leaves npm nothing to move a tarball onto, so the scope bound after it keeps
+  // the relay's rewrite and the run's config names no replacement.
+  it("keeps the relay's rewrite for a scope when the default registry cannot be bound", () => {
+    const { targets, result } = bindRun(NPMRC_ONE_REGISTRY, { refuseFirst: true });
+    expect(targets.map((target) => target.rewritePackumentTarballs)).toEqual([false, true]);
+    expect(result.relay).toMatchObject({ npmBoundCount: 1, npmTarballRouting: "relay-url" });
+    expect(readFileSync(result.env.NPM_CONFIG_USERCONFIG ?? "", "utf8")).not.toContain(
+      "replace-registry-host",
+    );
+  });
+
+  it("writes only Keiko's setting, never the person's own", () => {
+    // The sanitizer keeps no `replace-registry-host` of the person's: only Keiko's reaches the run.
+    const own = "replace-registry-host=never\n";
+    expect(replacements(prepare(person({ npm: `${own}${NPMRC_ONE_REGISTRY}` })))).toEqual([
+      "replace-registry-host=always",
+    ]);
+    const scopedOnly = prepare(
+      person({
+        npm: `${own}@corp:registry=https://npm.corp.example/scoped/\n//npm.corp.example/scoped/:_authToken=${NPM_TOKEN}\n`,
+      }),
+    );
+    expect(replacements(scopedOnly)).toEqual([]);
+    expect(scopedOnly.result.relay?.npmTarballRouting).toBe("relay-url");
+  });
+
+  it("keeps npm's default for the public registry with Full access", () => {
+    const run = prepare(person({ npm: "registry=https://registry.npmjs.org/\n" }), {
+      mode: "autonomous-delivery",
+    });
+    expect(replacements(run)).toEqual([]);
+    expect(run.result.relay?.npmTarballRouting).toBe("npm-default");
+    expect(bindTargets("registry=https://registry.npmjs.org/\n", "autonomous-delivery")).toEqual([
+      expect.objectContaining({ rewritePackumentTarballs: false }),
+    ]);
+  });
+});
+
 describe("what stays as it was (#4522)", () => {
   it("changes nothing when no repository resolves", () => {
     const home = person({
@@ -407,7 +599,13 @@ describe("what stays as it was (#4522)", () => {
     expect(normalized(withRelay, withRelay.result.javaProperties)).toBe(
       normalized(without, without.result.javaProperties),
     );
-    expect(withRelay.result.relay).toEqual({ mavenBoundCount: 0, npmBoundCount: 0, refusals: [] });
+    expect(withRelay.result.relay).toEqual({
+      mavenBoundCount: 0,
+      npmBoundCount: 0,
+      npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "none",
+      refusals: [],
+    });
   });
 
   it("changes nothing when the run is not offered a relay", () => {
@@ -522,6 +720,8 @@ describe("release and refusal (#4522)", () => {
     expect(result.relay).toEqual({
       mavenBoundCount: 0,
       npmBoundCount: 0,
+      npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "none",
       refusals: ["bind-refused"],
     });
     expect(existsSync(result.env.NPM_CONFIG_USERCONFIG ?? "")).toBe(true);

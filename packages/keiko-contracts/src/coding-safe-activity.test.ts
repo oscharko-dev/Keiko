@@ -569,6 +569,34 @@ describe("coding safe-activity contract — model reasoning", () => {
   });
 });
 
+// #4491: a turn Keiko dispatched itself says so by a closed origin on its user message.
+describe("coding safe-activity contract — message origin", () => {
+  function withUserOrigin(origin: unknown, role = "user"): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const [user, assistant] = turn.messages;
+    return {
+      ...feed,
+      turns: [{ ...turn, messages: [{ ...user, role, origin }, assistant] }],
+    };
+  }
+
+  it("accepts the closed Keiko origin on a user message", () => {
+    expect(validateCodingSafeActivityFeed(withUserOrigin("keiko")).ok).toBe(true);
+  });
+
+  it.each([
+    ["an unknown word", "scheduler", "user"],
+    ["a person-looking word", "user", "user"],
+    ["on an assistant message", "keiko", "assistant"],
+    ["a non-string", 1, "user"],
+  ] as const)("rejects an origin that is %s", (_label, origin, role) => {
+    expect(validateCodingSafeActivityFeed(withUserOrigin(origin, role)).ok).toBe(false);
+  });
+});
+
 function plan(): CodingSafeActivityPlan {
   return {
     revision: 1,

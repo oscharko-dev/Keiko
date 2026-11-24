@@ -220,6 +220,8 @@ interface TaskStartSectionProps {
   readonly referenceRoot?: string | null | undefined;
   /** The run a paused composer follows up; its runtime lists the slash commands it offers. */
   readonly runId?: string | undefined;
+  /** The next message continues a task's conversation, such as a completed task on display. */
+  readonly continuesConversation?: boolean | undefined;
   /** What the last message sent to the running turn came to; announced beside the composer. */
   readonly deliveryNotice?: PromptDeliveryNotice | undefined;
   /** The MCP servers and Jira Pods the person selects for the next run; absent shows none. */
@@ -680,7 +682,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         id="coding-workbench-task-intent"
         value={input.taskIntent}
         placeholder={t(
-          input.runId === undefined
+          input.runId === undefined && input.continuesConversation !== true
             ? "codingWorkbench.task.placeholder"
             : "codingWorkbench.task.placeholder.followUp",
         )}

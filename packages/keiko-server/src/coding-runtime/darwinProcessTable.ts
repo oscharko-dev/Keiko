@@ -52,11 +52,15 @@ export type ProcessTableExec = (
     readonly encoding: "utf8";
     readonly env: Readonly<Record<string, string>>;
     readonly maxBuffer: number;
+    readonly timeout: number;
+    readonly killSignal: "SIGKILL";
   },
 ) => Promise<{ readonly stdout: string }>;
 
 const PERL_PATH = "/usr/bin/perl";
 const TABLE_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+// A listing that stalls is ended, so a sweep waiting on it fails instead of waiting forever.
+const TABLE_READ_TIMEOUT_MS = 15_000;
 const SZOMB = 5;
 const TABLE_SCRIPT = [
   // The mark: a child forked, identified (alive or a zombie) and reaped before the listing.
@@ -142,6 +146,8 @@ export function darwinProcessTableReader(exec: ProcessTableExec): ProcessTableRe
       encoding: "utf8",
       env: {},
       maxBuffer: TABLE_MAX_BUFFER_BYTES,
+      timeout: TABLE_READ_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return parseProcessTable(stdout);
   };

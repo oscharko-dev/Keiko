@@ -158,7 +158,16 @@ export const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, Activit
  * receives either. Body-free: closed words only, never a path, a message or read text.
  */
 export type CodingToolEditOutcome =
-  | { readonly kind: "applied" }
+  | {
+      readonly kind: "applied";
+      /**
+       * The workspace-relative paths the applied edit changed, for the one decision whether a check
+       * must follow it (`editNeedsVerification`). In memory only: read by the run's effort ledger and
+       * never logged, persisted or sent to the model. Absent when the edit port did not name them,
+       * which reads as code.
+       */
+      readonly changedPaths?: readonly string[] | undefined;
+    }
   | {
       readonly kind: "refused";
       readonly reasonCode: string;
@@ -473,6 +482,11 @@ export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
    * Absent keeps the tool's own meaning: a completed edit tool call is the run's edit.
    */
   readonly workspaceEdit?: boolean | undefined;
+  /**
+   * The workspace-relative files the call's admission named for an edit (in memory only, read for
+   * the documentation-only decision). Absent when the admission named none, which reads as code.
+   */
+  readonly changedPaths?: readonly string[] | undefined;
 }
 
 /** A native verification command's result, as the runtime's own exit status reports it. */
@@ -558,7 +572,7 @@ export interface CodingToolNativeSettlementFacet {
    * An admitted workspace edit whose settlement the runtime reports only on a child session, which
    * the run's own history does not carry (#3901): it is the run's edit from its admission.
    */
-  readonly unsettledEdit?: (() => void) | undefined;
+  readonly unsettledEdit?: ((changedPaths?: readonly string[]) => void) | undefined;
 }
 
 export interface CodingToolFacade {

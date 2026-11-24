@@ -12,6 +12,7 @@ function facts(
   bounds: {
     readonly duration?: boolean;
     readonly providerUnavailable?: boolean;
+    readonly gatewayCut?: boolean;
   } = {},
 ): CodingRuntimeTerminalFacts {
   return {
@@ -19,6 +20,7 @@ function facts(
     lastModelCallFailure: (runId) => (runId === "run-1" ? lastModelCallFailure : undefined),
     lastModelCallProviderUnavailable: (runId) =>
       runId === "run-1" && bounds.providerUnavailable === true,
+    lastModelCallGatewayCut: (runId) => runId === "run-1" && bounds.gatewayCut === true,
   };
 }
 
@@ -61,6 +63,20 @@ describe("classifyTerminalFailure", () => {
       failureCode: "provider-unavailable",
       basis: "model-call-failure",
       modelCallFailure: "provider-failed",
+    });
+  });
+
+  // A call the gateway cut at its own output bound ran no repair, so it is not "again".
+  it("names a gateway output cut by its own cause and a provider exhaustion as repeated", () => {
+    expect(
+      classifyTerminalFailure(facts("output-exhausted", { gatewayCut: true }), "run-1"),
+    ).toEqual({
+      failureCode: "output-limit-reached",
+      basis: "model-call-failure",
+      modelCallFailure: "output-exhausted",
+    });
+    expect(classifyTerminalFailure(facts("output-exhausted"), "run-1")).toMatchObject({
+      failureCode: "output-exhausted-repeated",
     });
   });
 
@@ -162,6 +178,13 @@ describe("terminalFailureErrorKind", () => {
     expect(kind("turn-rejected")).toBe("validation-failed");
     expect(kind("empty-answer")).toBe("unavailable");
     expect(kind("output-exhausted")).toBe("unavailable");
+    expect(
+      terminalFailureErrorKind({
+        failureCode: "output-limit-reached",
+        basis: "model-call-failure",
+        modelCallFailure: "output-exhausted",
+      }),
+    ).toBe("unavailable");
     expect(kind(undefined)).toBe("internal");
   });
 });

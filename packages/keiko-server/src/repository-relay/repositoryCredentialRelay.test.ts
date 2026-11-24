@@ -838,6 +838,7 @@ describe("a relayed npm read (#4522)", () => {
   async function npmFixture(
     answer: Answer,
     transport?: RepositoryRelayUpstream,
+    rewritePackumentTarballs?: boolean,
   ): Promise<{ readonly fx: Fixture; readonly upstream: Upstream }> {
     const upstream = await startUpstream(answer);
     const fx = await fixture({
@@ -846,6 +847,7 @@ describe("a relayed npm read (#4522)", () => {
         ecosystem: "npm",
         upstreamBaseUrl: `${upstream.base}/npm/`,
         credential: { kind: "bearer", token: TOKEN },
+        ...(rewritePackumentTarballs === undefined ? {} : { rewritePackumentTarballs }),
       },
       transport,
     });
@@ -884,6 +886,62 @@ describe("a relayed npm read (#4522)", () => {
     expect(reply.headers["content-length"]).toBe(String(reply.body.length));
     expect(upstream.seen[0]?.url).toBe("/npm/left-pad");
     expect(upstream.seen[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  // #4491: a run whose npm moves the tarballs onto the relay itself (`replace-registry-host`) gets
+  // the packument as the registry wrote it, so a lockfile it writes pins the person's registry and
+  // never the relay's address, which lasts one run. npm then sends the tarball under the base path.
+  it("leaves a packument's tarball URLs on the registry when the run's npm moves them", async () => {
+    const packument = (base: string): string =>
+      JSON.stringify({
+        name: "left-pad",
+        versions: { "1.0.0": { dist: { tarball: `${base}/npm/left-pad/-/left-pad-1.0.0.tgz` } } },
+      });
+    const { fx, upstream } = await npmFixture(
+      (request, response) => {
+        if (request.url?.endsWith(".tgz") === true) response.writeHead(200).end("tgz!");
+        else
+          response
+            .writeHead(200, { "content-type": "application/json" })
+            .end(packument(upstream.base));
+      },
+      undefined,
+      false,
+    );
+    const reply = await send(fx.origin, fx.path("left-pad"), { headers: bearer(fx.capability) });
+    expect(reply.status).toBe(200);
+    expect(JSON.parse(reply.body.toString())).toEqual(JSON.parse(packument(upstream.base)));
+    const tarball = await send(fx.origin, fx.path("npm/left-pad/-/left-pad-1.0.0.tgz"), {
+      headers: bearer(fx.capability),
+    });
+    expect(tarball.status).toBe(200);
+    expect(tarball.body.toString()).toBe("tgz!");
+    expect(upstream.seen.map((seen) => seen.url)).toEqual([
+      "/npm/left-pad",
+      "/npm/left-pad/-/left-pad-1.0.0.tgz",
+    ]);
+  });
+
+  // A bound base without its trailing slash names the same registry: the base path a lockfile's
+  // tarball arrives under is read from the normalised base, so it still matches at a segment.
+  it("admits a lockfile's tarball under a base bound without its trailing slash", async () => {
+    const upstream = await startUpstream((_request, response) => {
+      response.writeHead(200).end("tgz!");
+    });
+    const fx = await fixture({
+      upstream,
+      target: {
+        ecosystem: "npm",
+        upstreamBaseUrl: `${upstream.base}/npm`,
+        credential: { kind: "bearer", token: TOKEN },
+        rewritePackumentTarballs: false,
+      },
+    });
+    const tarball = await send(fx.origin, fx.path("npm/left-pad/-/left-pad-1.0.0.tgz"), {
+      headers: bearer(fx.capability),
+    });
+    expect(tarball.status).toBe(200);
+    expect(upstream.seen.map((seen) => seen.url)).toEqual(["/npm/left-pad/-/left-pad-1.0.0.tgz"]);
   });
 
   // #4530 real-model lab: the dev runner proxies the run's request to the BFF and rewrites Host to

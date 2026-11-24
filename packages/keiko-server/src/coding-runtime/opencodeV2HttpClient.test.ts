@@ -182,6 +182,29 @@ describe("OpenCode V2 event stream (#4271)", () => {
     expect(ids).toEqual(["after"]);
   });
 
+  it("reads frames the way the SSE format allows", async () => {
+    const json = (id: string): string => JSON.stringify({ id, type: "server.connected" });
+    const body = [
+      `: note\ndata: ${json("commented")}\n\n`,
+      "\n\n",
+      `data:${json("nospace")}\n\n`,
+      `id: 7\nretry: 1000\nevent: message\ndata: ${json("meta")}\n\n`,
+      `: only a comment\n\n`,
+    ].join("");
+    const ids = await collect(
+      client(() => streamResponse(body)).events(new AbortController().signal),
+    );
+    expect(ids).toEqual(["commented", "nospace", "meta"]);
+  });
+
+  it("still refuses a frame whose data is not an event", async () => {
+    await expect(
+      collect(
+        client(() => streamResponse('data: {"x":1}\n\n')).events(new AbortController().signal),
+      ),
+    ).rejects.toThrow("opencode-v2-event-invalid");
+  });
+
   it("leaves no timer behind and stops on the caller's abort", async () => {
     const controller = new AbortController();
     const events = client((init) => silentAfter([frame("a")], init)).events(controller.signal);
@@ -189,6 +212,53 @@ describe("OpenCode V2 event stream (#4271)", () => {
     await expect(iterator.next()).resolves.toMatchObject({ value: { id: "a" } });
     controller.abort();
     await expect(iterator.next()).rejects.toThrow();
+  });
+});
+
+describe("OpenCode V2 response body release", () => {
+  it.each([
+    ["an error status", { status: 500, headers: { "content-type": "application/json" } }],
+    ["a wrong content type", { status: 200, headers: { "content-type": "text/html" } }],
+  ])("cancels the unread body of %s", async (_name, init) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const client = createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:4096",
+      password: "test-password",
+      fetch: () => Promise.resolve(new Response(body, init)),
+    });
+    await expect(client.info()).rejects.toThrow();
+    expect(cancelled).toBe(true);
+  });
+
+  it.each([
+    ["an error status", { status: 503, headers: { "content-type": "text/event-stream" } }],
+    ["a wrong content type", { status: 200, headers: { "content-type": "application/json" } }],
+  ])("cancels the unread event-stream body of %s", async (_name, init) => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const client = createOpenCodeV2HttpClient({
+      endpoint: "http://127.0.0.1:4096",
+      password: "test-password",
+      fetch: () => Promise.resolve(new Response(body, init)),
+    });
+    const events = client.events(new AbortController().signal)[Symbol.asyncIterator]();
+    await expect(events.next()).rejects.toThrow("opencode-v2-event-unavailable");
+    expect(cancelled).toBe(true);
   });
 });
 

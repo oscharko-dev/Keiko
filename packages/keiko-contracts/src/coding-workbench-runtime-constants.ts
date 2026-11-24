@@ -118,6 +118,9 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "prompt-allowance-exhausted"
   | "envelope-duration-exhausted"
   | "output-exhausted-repeated"
+  // `output-limit-reached`: the gateway ended the most recent model call itself at the output bound
+  // of one step (no repair ran first), before the model answered or called a tool.
+  | "output-limit-reached"
   | "provider-unavailable"
   | "model-turn-failed"
   // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again settles
@@ -199,6 +202,22 @@ export type CodingWorkbenchTurnFailureCode =
   // gateway made — the model's result, not a provider rejection (1.1.8 lab run).
   | "invalid-tool-call";
 
+/**
+ * Why a run that changed code settled `verification-not-evidenced` (#4491): the concrete gap the
+ * Workbench names instead of a generic "not verified". `no-check-run`: no check ran after the last
+ * change. `check-failed`: a check ran after the last change and failed. `check-not-started`: a check
+ * could not start (it was refused or blocked). `budget-exhausted`: the run's tool-call or patch
+ * budget was used up before a check ran. A closed word, never inferred from text.
+ */
+export const CODING_WORKBENCH_VERIFICATION_GAPS = [
+  "no-check-run",
+  "check-failed",
+  "check-not-started",
+  "budget-exhausted",
+] as const;
+
+export type CodingWorkbenchVerificationGap = (typeof CODING_WORKBENCH_VERIFICATION_GAPS)[number];
+
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",
@@ -229,6 +248,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
+    "output-limit-reached",
     "provider-unavailable",
     "model-turn-failed",
     "edits-blocked",

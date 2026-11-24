@@ -27,6 +27,7 @@ import type {
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchVerificationGap,
   SkillDiscoveryResultV1,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -73,11 +74,14 @@ import {
 import {
   CodingRuntimeRunEffortLedger,
   type CodingRuntimeRunEffortRollUp,
+  type CodingVerificationFailureEvidence,
 } from "./codingRuntimeRunEffort.js";
 import {
   recordVerificationContinuation,
   verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
+  VERIFICATION_GAP_WORDS,
+  type VerificationContinuationSkipReason,
 } from "./codingRuntimeVerificationContinuation.js";
 import type {
   CodingRuntimeApprovalIssueResult,
@@ -267,6 +271,7 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
+    "output-limit-reached",
     "provider-unavailable",
     "model-turn-failed",
     "edits-blocked",
@@ -779,6 +784,14 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...CODING_VERIFICATION_BLOCKED_REASONS],
     },
+    // The concrete gap of a run that settled `verification-not-evidenced` (#4491): no check ran, a
+    // check failed, a check could not start, or the run's budget was used up first.
+    verificationGap: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...VERIFICATION_GAP_WORDS],
+    },
     taskOutcomeStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -1263,7 +1276,13 @@ type RuntimeLifecycleFailureReason =
   | "stale-slot-reaped"
   | "stale-slot-reap-failed"
   // A queued task settlement threw; the run is moved to recovery-required (audit 2026-10).
-  | "settlement-failed";
+  | "settlement-failed"
+  // A caught failure of the runtime manager or the permission port, recorded with its cause so a
+  // run that ends in recovery-required or a refused decision is explained by its log line.
+  | "resume-failed"
+  | "permission-resolve-failed"
+  | "approval-issue-failed"
+  | "reconcile-failed";
 
 function runtimeDiagnosticCorrelationId(runId: string): string {
   return isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
@@ -1700,6 +1719,30 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
+// What the fact-based continuation may say about a failed check: which check and how many steps
+// failed or timed out, from the summary's closed verifier word and counts. Steps that never ran to a
+// verdict (denied, cancelled, resource-exceeded) are no failed check. Never a path or output.
+function verificationFailureEvidence(
+  event: CodingWorkbenchRuntimeEvent,
+): CodingVerificationFailureEvidence | undefined {
+  const failedCount = (event.failedCount ?? 0) - (event.verificationSummary?.notRunCount ?? 0);
+  if (failedCount < 1) return undefined;
+  return { check: event.verificationSummary?.verifierId ?? "check", failedCount };
+}
+
+// A summary in which steps passed and every other step never ran: the check could not fully run,
+// which is a blocker to report and no failure to repair. A summary in which no step ran at all is
+// the tool layer's to classify (`observeVerificationExecution`), which knows the run's profile: a
+// run with its own shell carries a check the governed verifier cannot run here, and that refusal
+// blocks nothing (#4519).
+function verificationPartlyRefused(event: CodingWorkbenchRuntimeEvent): boolean {
+  return (
+    (event.passedCount ?? 0) > 0 &&
+    (event.failedCount ?? 0) > 0 &&
+    (event.failedCount ?? 0) - (event.verificationSummary?.notRunCount ?? 0) < 1
+  );
+}
+
 function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean | null {
   if ((event.failedCount ?? 0) > 0) return false;
   if ((event.passedCount ?? 0) > 0 && event.verificationStatus !== "failed") return true;
@@ -1754,16 +1797,23 @@ function recordRuntimeVerificationSummary(
   return true;
 }
 
+/** What a settlement line names beside the run's state: each fact only when it applies. */
+interface RunSettledLogFacts {
+  readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  readonly cause?: RunSettlementCause | undefined;
+  readonly verificationBlockedReason?: CodingVerificationBlockedReason | undefined;
+  readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
+}
+
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   state: CodingWorkbenchRuntimeStateName,
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
-  failureCode?: CodingWorkbenchRuntimeFailureCode,
-  cause?: RunSettlementCause,
-  verificationBlockedReason?: CodingVerificationBlockedReason,
+  facts: RunSettledLogFacts,
 ): void {
-  const errorKind = settlementErrorKind(state, cause, verificationBlockedReason);
+  const { failureCode, cause, verificationBlockedReason, verificationGap } = facts;
+  const errorKind = settlementErrorKind(state, cause, verificationBlockedReason, verificationGap);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
@@ -1781,6 +1831,7 @@ function recordRuntimeRunSettled(
         terminal: TERMINAL_STATES.has(state),
         ...(failureCode === undefined ? {} : { failureCode }),
         ...(verificationBlockedReason === undefined ? {} : { verificationBlockedReason }),
+        ...(verificationGap === undefined ? {} : { verificationGap }),
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
@@ -1792,6 +1843,8 @@ function recordRuntimeRunSettled(
 interface VerificationFailureSettlement {
   readonly state: "failed";
   readonly failureCode: "verification-not-evidenced";
+  /** Why no passing check followed the run's last change (#4491). */
+  readonly gap: CodingWorkbenchVerificationGap;
 }
 
 // The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
@@ -1807,12 +1860,22 @@ function settlementErrorKind(
   state: CodingWorkbenchRuntimeStateName,
   cause: RunSettlementCause | undefined,
   verificationBlockedReason: CodingVerificationBlockedReason | undefined,
+  verificationGap: CodingWorkbenchVerificationGap | undefined,
 ): ActivityLogErrorKind | undefined {
   // A change kept but not verifiable on this computer is a capability the host lacks, not a Keiko
   // fault: it never settles as `internal`.
   if (cause === undefined && verificationBlockedReason === "VERIFICATION_ISOLATION_UNAVAILABLE") {
     return "unavailable";
   }
+  // A change the run itself left without a passing check is its verification verdict, not a Keiko
+  // fault. A check a person or the host blocked keeps its classification above and below.
+  if (
+    state === "failed" &&
+    cause === undefined &&
+    verificationBlockedReason === undefined &&
+    verificationGap !== undefined
+  )
+    return "validation-failed";
   if (cause === undefined) return runtimeRunSettledErrorKind(state);
   return isRefusalEscalation(cause) ? cause.errorKind : terminalFailureErrorKind(cause);
 }
@@ -2032,15 +2095,6 @@ type DeliveryEvidence =
 
 type DeliveryContinuationRefusal =
   "dispatch-threw" | "dispatch-refused" | "evidence-unreadable" | "run-superseded";
-
-// A settlement target is taken only when the delivery evidence could be read and the transition to
-// it is legal; anything else asks for recovery.
-function isLegalSettlementTarget<T extends { readonly state: CodingWorkbenchRuntimeStateName }>(
-  live: CodingRuntimeSnapshot,
-  target: T | undefined,
-): target is T {
-  return target !== undefined && isLegalCodingWorkbenchRuntimeTransition(live.state, target.state);
-}
 
 interface DeliveryContinuationFields {
   readonly runId: string;
@@ -2326,6 +2380,15 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
+   * Whether a run is actually executing: a run that only awaits recovery acknowledgement holds the
+   * slot but executes nothing, so it never blocks completing a task in Coding History.
+   */
+  hasExecutingRun(): boolean {
+    const current = this.current();
+    return current !== undefined && current.state !== "recovery-required";
+  }
+
+  /**
    * Admits a task-workspace selection: the settled run's undo window ends first, on the serial lane
    * like the next run's start (r4368730403), because its held runtime would otherwise keep the slot
    * and refuse every switch. A staged undo is committed as at any close. A running run or an
@@ -2593,7 +2656,8 @@ export class CodingRuntimeOrchestrator {
     let resumed: ReturnType<CodingRuntimeManager["resume"]>;
     try {
       resumed = this.deps.manager.resume(runId, effectiveMode);
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "resume-failed", error);
       return this.stopAfterResumeFailure(runtimePauseFailureCode("authority-resolution-failed"));
     }
     if (!resumed.ok) {
@@ -2617,8 +2681,9 @@ export class CodingRuntimeOrchestrator {
   private async containPausedRuntime(runId: string): Promise<void> {
     try {
       await this.deps.manager.stop(runId, "failed");
-    } catch {
+    } catch (error) {
       // The failed state publish already put the run in recovery-required; containment stays open.
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
     }
   }
 
@@ -2630,7 +2695,8 @@ export class CodingRuntimeOrchestrator {
       return stopped.ok
         ? this.transition(current, "failed", "authority-expired")
         : this.transition(current, "recovery-required", "recovery-required");
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "stop-failed", error);
       return this.transition(current, "recovery-required", "recovery-required");
     }
   }
@@ -2832,7 +2898,13 @@ export class CodingRuntimeOrchestrator {
     if (this.deps.permissionPort === undefined) return true;
     try {
       return await this.deps.permissionPort.resolve({ runId, requestId, decision });
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        runId,
+        "permission-resolve-failed",
+        error,
+      );
       return false;
     }
   }
@@ -2911,7 +2983,13 @@ export class CodingRuntimeOrchestrator {
         ttlMs: Math.max(1, challenge.expiresAt - this.now().getTime()),
         boundRevision: challenge.revision,
       });
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        current.runId,
+        "approval-issue-failed",
+        error,
+      );
       return this.stopAfterApprovalFailure(current);
     }
     if (!issued.ok) {
@@ -2926,6 +3004,7 @@ export class CodingRuntimeOrchestrator {
   private async stopAfterIssueFailure(
     current: CodingRuntimeSnapshot,
     failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
+    cause?: RunSettlementCause,
   ): Promise<CodingRuntimeOrchestratorResult> {
     let stopped = false;
     try {
@@ -2939,7 +3018,7 @@ export class CodingRuntimeOrchestrator {
     const live = this.current();
     if (live?.runId !== current.runId) return this.settledResult(current.runId);
     return stopped
-      ? this.transition(live, "failed", failureCode)
+      ? this.transition(live, "failed", failureCode, undefined, cause)
       : this.transition(live, "recovery-required", "recovery-required");
   }
 
@@ -3041,19 +3120,26 @@ export class CodingRuntimeOrchestrator {
     }
     const recovery = await this.ingestRecoveryEvent(current, event);
     if (recovery !== undefined) return recovery;
-    if (event.kind === "failure-redacted") {
-      recordRuntimeLifecycleFailure(
-        this.deps.diagnostics,
-        current.runId,
-        "failure-redacted",
-        undefined,
-        event,
-      );
-      return this.stopAfterIssueFailure(current, "runtime-failed");
-    }
+    if (event.kind === "failure-redacted") return this.ingestFailureRedacted(current, event);
     this.observeVerificationSummary(current, event);
     const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
+  }
+
+  private ingestFailureRedacted(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    recordRuntimeLifecycleFailure(
+      this.deps.diagnostics,
+      current.runId,
+      "failure-redacted",
+      undefined,
+      event,
+    );
+    // Read before the stop, as a settled failure does: the facts describe the call that ended it.
+    const cause = this.terminalFailure(current.runId, "failed");
+    return this.stopAfterIssueFailure(current, cause?.failureCode ?? "runtime-failed", cause);
   }
 
   private async ingestRecoveryEvent(
@@ -3173,7 +3259,15 @@ export class CodingRuntimeOrchestrator {
       verificationSummaryPassed(event),
       event.verificationTargetDigest ?? event.verificationKind,
       event.verificationEditRevision,
+      verificationFailureEvidence(event),
     );
+    // A passed step beside refused ones is a check that could not fully run: a blocker to report.
+    // Only a summary at the run's current revision says anything about it.
+    if (
+      verificationPartlyRefused(event) &&
+      this.effort.summaryIsCurrent(current.runId, event.verificationEditRevision)
+    )
+      this.effort.verificationBlocked(current.runId, "VERIFICATION_RUNNER_UNAVAILABLE");
   }
 
   private async ingestActiveEvent(
@@ -3213,7 +3307,14 @@ export class CodingRuntimeOrchestrator {
       return this.transition(current, "cancelled");
     }
     recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "runtime-stopped-live");
-    return this.transition(current, "failed", "runtime-failed");
+    const cause = this.terminalFailure(current.runId, "failed");
+    return this.transition(
+      current,
+      "failed",
+      cause?.failureCode ?? "runtime-failed",
+      undefined,
+      cause,
+    );
   }
 
   private async ingestPermissionRequested(
@@ -3433,7 +3534,13 @@ export class CodingRuntimeOrchestrator {
   }
 
   private queueTaskSettlement(runId: string, outcome: CodingRuntimeTaskOutcome): void {
-    const settlement = this.serial(() => this.settleTask(runId, outcome));
+    const generation = this.operations.currentTaskGeneration(runId);
+    const settlement = this.serial(() =>
+      // A follow-up dispatched while this settlement waited in the lane replaced the turn that ended.
+      this.operations.currentTaskGeneration(runId) === generation
+        ? this.settleTask(runId, outcome)
+        : Promise.resolve(),
+    );
     void settlement.then(
       (): void => undefined,
       (error: unknown): void => {
@@ -3497,7 +3604,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (current?.runId !== runId) return;
     if (outcome.kind === "applied" && EFFORT_COUNTED_STATES.has(current.state))
-      this.effort.edit(runId);
+      this.effort.edit(runId, outcome.changedPaths);
     if (!REFUSAL_COUNTED_STATES.has(current.state)) return;
     const escalation = this.editRefusals.observe(runId, outcome);
     if (escalation === undefined) return;
@@ -3512,6 +3619,7 @@ export class CodingRuntimeOrchestrator {
     const escalation = this.editRefusals.escalation(runId);
     const outcome = escalation === undefined ? reported : "failed";
     const verificationMissing = this.verificationMissing(runId, outcome);
+    if (outcome === "succeeded" && !verificationMissing) this.recordDocumentationOnlySkip(runId);
     const continued = verificationMissing
       ? await this.continueForVerification(current)
       : await this.continueForDelivery(current, outcome);
@@ -3520,7 +3628,11 @@ export class CodingRuntimeOrchestrator {
     // escalation of the run's refused edits wins over them: it names the run's cause (F5).
     const cause = escalation ?? this.terminalFailure(runId, outcome);
     const verificationFailure: VerificationFailureSettlement | undefined = verificationMissing
-      ? { state: "failed", failureCode: "verification-not-evidenced" }
+      ? {
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+          gap: this.verificationGap(runId),
+        }
       : undefined;
     await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
   }
@@ -3534,7 +3646,7 @@ export class CodingRuntimeOrchestrator {
     this.captureHistory(runId);
     const truthfulOutcome = verificationFailure?.state ?? outcome;
     if (verificationFailure !== undefined)
-      this.recordVerificationContinuation(runId, "not-evidenced");
+      this.recordVerificationNotEvidenced(runId, verificationFailure.gap);
     const ended = await this.endForSettlement(runId, truthfulOutcome);
     const live = this.current();
     if (live?.runId === runId)
@@ -3571,64 +3683,105 @@ export class CodingRuntimeOrchestrator {
     return outcome === "succeeded" && this.effort.needsVerification(runId);
   }
 
+  /**
+   * The concrete gap of a run that changed code and has no passing check after its last change
+   * (#4491), the most concrete fact first: a check ran and failed, a check could not start, the
+   * run's budget was used up, or no check ran at all. Read from the ledger and the authority's own
+   * facts. A failed check stays the gap when the budget ran out afterwards; the continuation is
+   * still skipped for the budget.
+   */
+  private verificationGap(runId: string): CodingWorkbenchVerificationGap {
+    if (this.effort.failedCheck(runId) !== undefined) return "check-failed";
+    if (this.effort.verificationBlockedReason(runId) !== undefined) return "check-not-started";
+    return this.deps.toolBudgetExhausted?.(runId) === true ? "budget-exhausted" : "no-check-run";
+  }
+
+  // Why no continuation runs: only a failed check, with a repair still unspent, justifies one.
+  private verificationContinuationSkip(
+    runId: string,
+  ): VerificationContinuationSkipReason | undefined {
+    if ((this.verificationContinuations.get(runId) ?? 0) >= VERIFICATION_CONTINUATION_MAX)
+      return "already-continued";
+    // A failed check is the gap even when the run was blocked or ran out of budget afterwards, but
+    // neither leaves anything the model could still repair, so no continuation runs.
+    if (this.effort.verificationBlockedReason(runId) !== undefined) return "blocked";
+    if (this.deps.toolBudgetExhausted?.(runId) === true) return "budget-exhausted";
+    return this.effort.failedCheck(runId) === undefined ? "no-failed-check" : undefined;
+  }
+
+  /** A run that changed documentation alone asks for no check; the line says why none was asked. */
+  private recordDocumentationOnlySkip(runId: string): void {
+    if (!this.effort.documentationOnly(runId)) return;
+    recordVerificationContinuation(this.deps.activityLog, runId, 0, "skipped", {
+      skipReason: "docs-only",
+    });
+  }
+
   private async continueForVerification(live: CodingRuntimeSnapshot): Promise<boolean> {
-    const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
-    if (
-      live.state !== "running" ||
-      attempt > VERIFICATION_CONTINUATION_MAX ||
-      this.effort.verificationBlockedReason(live.runId) !== undefined
-    )
+    if (live.state !== "running") return false;
+    const skipReason = this.verificationContinuationSkip(live.runId);
+    const failure = this.effort.failedCheck(live.runId);
+    if (skipReason !== undefined || failure === undefined) {
+      recordVerificationContinuation(
+        this.deps.activityLog,
+        live.runId,
+        this.verificationContinuations.get(live.runId) ?? 0,
+        "skipped",
+        { skipReason: skipReason ?? "no-failed-check", gap: this.verificationGap(live.runId) },
+      );
       return false;
+    }
+    const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
+    const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
+    if (dispatched === undefined) return false;
+    if (this.continuationSuperseded(live)) {
+      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
+      return true;
+    }
+    recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
+      failure,
+    });
+    this.operations.observeContinuation(live.runId, dispatched.completion);
+    this.advanceRevision(live, "task-submitted");
+    return true;
+  }
+
+  // The one continuation task, naming the failed check; a refused or thrown dispatch is logged and
+  // leaves the run to settle with its gap.
+  private async dispatchVerificationContinuation(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    failure: CodingVerificationFailureEvidence,
+  ): Promise<Extract<CodingRuntimeTaskDispatchResult, { readonly ok: true }> | undefined> {
     let dispatched: CodingRuntimeTaskDispatchResult;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch({
         runId: live.runId,
         requestId: `verification-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
-        taskIntent: verificationContinuationIntent(this.deps.taskHasShellTool),
+        taskIntent: verificationContinuationIntent(failure, this.deps.taskHasShellTool),
         origin: "verification-continuation",
       });
     } catch (error) {
-      recordVerificationContinuation(
-        this.deps.activityLog,
-        live.runId,
-        attempt,
-        "dispatch-threw",
+      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "dispatch-threw", {
         error,
-      );
-      return false;
+      });
+      return undefined;
     }
-    if (!dispatched.ok) {
-      recordVerificationContinuation(
-        this.deps.activityLog,
-        live.runId,
-        attempt,
-        "dispatch-refused",
-      );
-      return false;
-    }
-    if (this.continuationSuperseded(live)) {
-      recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
-      return true;
-    }
-    this.recordVerificationContinuation(live.runId, "continued");
-    this.operations.observeContinuation(live.runId, dispatched.completion);
-    this.advanceRevision(live, "task-submitted");
-    return true;
+    if (dispatched.ok) return dispatched;
+    recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "dispatch-refused");
+    return undefined;
   }
 
-  private recordVerificationContinuation(
-    runId: string,
-    state: "continued" | "not-evidenced",
-  ): void {
+  private recordVerificationNotEvidenced(runId: string, gap: CodingWorkbenchVerificationGap): void {
+    const blockedReason = this.effort.verificationBlockedReason(runId);
     recordVerificationContinuation(
       this.deps.activityLog,
       runId,
       this.verificationContinuations.get(runId) ?? 0,
-      state,
-      undefined,
-      state === "not-evidenced" ? this.effort.verificationBlockedReason(runId) : undefined,
+      "not-evidenced",
+      { gap, ...(blockedReason === undefined ? {} : { blockedReason }) },
     );
   }
 
@@ -3654,12 +3807,61 @@ export class CodingRuntimeOrchestrator {
       this.settleCancelledTurn(live);
       return;
     }
-    if (!isLegalSettlementTarget(live, target)) {
+    this.settleReachableTarget(live, target, cause, verificationFailure);
+  }
+
+  private settleReachableTarget(
+    live: CodingRuntimeSnapshot,
+    target:
+      | {
+          readonly state: CodingWorkbenchRuntimeStateName;
+          readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+        }
+      | undefined,
+    cause: RunSettlementCause | undefined,
+    verificationFailure: VerificationFailureSettlement | undefined,
+  ): void {
+    if (target === undefined || !this.isReachableSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
+    // The runtime already stopped for this settlement, so a turn that ended while the run waited
+    // (`paused`, `awaiting-approval`) reaches its outcome through `stopping`, as a cancellation does.
+    const settling = this.enterStoppingForSettlement(live, target.state);
+    if (settling === undefined) return;
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
-    this.transition(live, target.state, target.failureCode, undefined, settledCause);
+    this.transition(
+      settling,
+      target.state,
+      target.failureCode,
+      undefined,
+      settledCause,
+      verificationFailure?.gap,
+    );
+  }
+
+  private isReachableSettlementTarget(
+    live: CodingRuntimeSnapshot,
+    target: { readonly state: CodingWorkbenchRuntimeStateName },
+  ): boolean {
+    return (
+      isLegalCodingWorkbenchRuntimeTransition(live.state, target.state) ||
+      (isLegalCodingWorkbenchRuntimeTransition(live.state, "stopping") &&
+        isLegalCodingWorkbenchRuntimeTransition("stopping", target.state))
+    );
+  }
+
+  /** Returns the snapshot the settlement continues from, or undefined once recovery was requested. */
+  private enterStoppingForSettlement(
+    live: CodingRuntimeSnapshot,
+    target: CodingWorkbenchRuntimeStateName,
+  ): CodingRuntimeSnapshot | undefined {
+    if (isLegalCodingWorkbenchRuntimeTransition(live.state, target)) return live;
+    const stopping = this.transition(live, "stopping");
+    const current = stopping.ok ? this.current() : undefined;
+    if (current?.runId === live.runId) return current;
+    if (!stopping.ok) this.transition(live, "recovery-required", "recovery-required");
+    return undefined;
   }
 
   private runtimeAgrees(
@@ -3809,6 +4011,7 @@ export class CodingRuntimeOrchestrator {
         requestId: `delivery-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
         taskIntent: DELIVERY_CONTINUATION_INTENT,
+        origin: "delivery-continuation",
       });
     } catch (error) {
       this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-threw", error);
@@ -3940,7 +4143,8 @@ export class CodingRuntimeOrchestrator {
   ): Promise<boolean> {
     try {
       return (await this.deps.manager.stop(runId, outcome)).ok;
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
       return false;
     }
   }
@@ -4102,6 +4306,7 @@ export class CodingRuntimeOrchestrator {
     return (
       active !== undefined &&
       this.deps.history?.admits(taskId, active) === true &&
+      this.deps.history.isActive(taskId) &&
       this.deps.history.previousRunId(taskId) !== undefined
     );
   }
@@ -4857,8 +5062,9 @@ export class CodingRuntimeOrchestrator {
   private async reconcileQuietly(runId: string): Promise<void> {
     try {
       await this.deps.manager.reconcile(runId);
-    } catch {
+    } catch (error) {
       // Recovery-required remains the only safe projection when host containment cannot be proven.
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "reconcile-failed", error);
     }
   }
 
@@ -4906,8 +5112,14 @@ export class CodingRuntimeOrchestrator {
     if (!stopping.ok) return stopping;
     const settleInterruptedStart = this.interruptStartup(runId);
     const result = await this.executeEndRequest(kind, current.runId);
-    const completed = this.completeEndRequest(kind, runId, result);
-    settleInterruptedStart?.(completed);
+    // A throw while completing the end must still release the interrupted start: it waits on this
+    // promise inside the serial lane, so a promise nobody resolves would queue every later operation.
+    let completed: CodingRuntimeOrchestratorResult = this.fail("runtime-failed");
+    try {
+      completed = this.completeEndRequest(kind, runId, result);
+    } finally {
+      settleInterruptedStart?.(completed);
+    }
     return completed;
   }
 
@@ -4976,7 +5188,8 @@ export class CodingRuntimeOrchestrator {
       return kind === "stop"
         ? await this.deps.manager.stop(runId)
         : await this.deps.manager.takeover(runId);
-    } catch {
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stop-failed", error);
       this.recordEndRequestException(runId);
       // Recovery-required remains the only safe projection when stop/takeover cannot be trusted.
       return undefined;
@@ -5024,12 +5237,19 @@ export class CodingRuntimeOrchestrator {
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
     cause?: RunSettlementCause,
+    verificationGap?: CodingWorkbenchVerificationGap,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
     }
     if (this.isSuperseded(current)) return this.fail("invalid-intent");
-    const next = this.createTransitionSnapshot(current, state, failureCode, pauseReason);
+    const next = this.createTransitionSnapshot(
+      current,
+      state,
+      failureCode,
+      pauseReason,
+      verificationGap,
+    );
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
@@ -5044,6 +5264,7 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
+    verificationGap?: CodingWorkbenchVerificationGap,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -5052,6 +5273,7 @@ export class CodingRuntimeOrchestrator {
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
       ...(pauseReason === undefined ? {} : { pauseReason }),
+      ...(verificationGap === undefined ? {} : { verificationGap }),
       ...(result === undefined ? {} : { result }),
     });
   }
@@ -5098,11 +5320,15 @@ export class CodingRuntimeOrchestrator {
       next,
       state,
       this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
-      failureCode,
-      cause,
-      failureCode === "verification-not-evidenced"
-        ? this.effort.verificationBlockedReason(next.runId)
-        : undefined,
+      {
+        failureCode,
+        cause,
+        verificationBlockedReason:
+          failureCode === "verification-not-evidenced"
+            ? this.effort.verificationBlockedReason(next.runId)
+            : undefined,
+        verificationGap: next.verificationGap,
+      },
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);

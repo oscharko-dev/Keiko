@@ -1381,9 +1381,11 @@ describe("production managed worktree tools", () => {
       { status: "completed" },
     ]);
     expect(action).toHaveBeenCalledTimes(2);
+    // The applied outcome also hands the run's ledger the file the edit changed (#4491); a refused
+    // one names no path.
     expect(outcomes).toEqual([
       { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" },
-      { kind: "applied" },
+      { kind: "applied", changedPaths: ["src/a.ts"] },
     ]);
   });
 
@@ -2227,6 +2229,8 @@ describe("production managed worktree tools", () => {
         passedCount: 0,
         failedCount: 1,
         deniedCount: 1,
+        // A denied step never ran: it is canonical failure, not a check that ran and failed (#4491).
+        notRunCount: 1,
       },
     });
     expect(completeVerification).not.toHaveBeenCalled();

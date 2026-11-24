@@ -5,6 +5,7 @@ import {
   type CodingSessionContinuity,
 } from "./codingSessionContinuity.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
@@ -43,8 +44,7 @@ import {
   DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
 import {
-  VERIFICATION_CONTINUATION_INTENT,
-  VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL,
+  verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
 } from "./codingRuntimeVerificationContinuation.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
@@ -124,6 +124,7 @@ type OptionalOrchestratorDeps = Pick<
   | "runEffort"
   | "runtimeVersion"
   | "taskHasShellTool"
+  | "toolBudgetExhausted"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -190,6 +191,7 @@ function optionalOrchestratorDeps(input: {
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly taskHasShellTool?: boolean | undefined;
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -202,7 +204,20 @@ function optionalOrchestratorDeps(input: {
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
     ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
+    ...runFactDeps(input),
+  };
+}
+
+// The run facts a test sets explicitly: unset reads as unknown, which is not the same as false.
+function runFactDeps(input: {
+  readonly taskHasShellTool?: boolean | undefined;
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
+}): Partial<OptionalOrchestratorDeps> {
+  return {
     ...(input.taskHasShellTool === undefined ? {} : { taskHasShellTool: input.taskHasShellTool }),
+    ...(input.toolBudgetExhausted === undefined
+      ? {}
+      : { toolBudgetExhausted: input.toolBudgetExhausted }),
   };
 }
 
@@ -308,6 +323,8 @@ interface FixtureOptions {
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   // Whether the composed tool profile hands the model a shell tool; unset reads as unknown.
   readonly taskHasShellTool?: boolean | undefined;
+  // Whether the run's tool-call or patch budget is used up (#4491); unset reads as not.
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
 }
 
 /** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
@@ -374,6 +391,7 @@ function fixtureFrom({
   workspaceInventory,
   runtimeVersion,
   taskHasShellTool,
+  toolBudgetExhausted,
 }: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -612,6 +630,7 @@ function fixtureFrom({
         runEffort,
         runtimeVersion,
         taskHasShellTool,
+        toolBudgetExhausted,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -650,6 +669,26 @@ function captureDiagnostics(): {
   };
 }
 
+const PRIVATE_FAILURE_TEXT = "private manager failure text";
+
+function expectRecordedLifecycleFailure(
+  records: readonly ServerDiagnosticRecord[],
+  reason: string,
+  errorClass: string,
+): void {
+  const matching = records.filter((record) => record.code === `stage=lifecycle:reason=${reason}`);
+  expect(matching).toHaveLength(1);
+  const [line] = matching;
+  expect(line).toMatchObject({
+    operation: "coding-runtime.lifecycle",
+    // The fixture's run id is not a valid correlation id, so the line falls back to the sentinel.
+    correlationId: UNKNOWN_CORRELATION_ID,
+    errorClass,
+    message: "runtime-lifecycle-failed",
+  });
+  expect(JSON.stringify(line)).not.toContain(PRIVATE_FAILURE_TEXT);
+}
+
 function captureActivityLog(): {
   readonly activityLog: ServerLogSink;
   readonly records: readonly ServerLogEvent[];
@@ -666,6 +705,18 @@ function captureActivityLog(): {
 function requireLoggedEvent(event: ServerLogEvent | undefined, message: string): ServerLogEvent {
   if (event === undefined) throw new Error(message);
   return event;
+}
+
+/** The fields of the one `skipped` verification-continuation line: why no continuation ran. */
+function skipLine(records: readonly ServerLogEvent[]): ServerLogEvent["extra"] {
+  return requireLoggedEvent(
+    records.find(
+      (event) =>
+        event.op === "coding-runtime.run.verification-continuation" &&
+        event.extra?.state === "skipped",
+    ),
+    "Expected the skipped verification-continuation line",
+  ).extra;
 }
 
 function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
@@ -1744,6 +1795,25 @@ describe("CodingRuntimeOrchestrator", () => {
       expect(f.orchestrator.hasLiveRun()).toBe(false);
     },
   );
+
+  it("releases a start waiting on an operator stop when completing that stop throws", async () => {
+    const f = fixture();
+    const pending = deferredRuntimeStart(f);
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    f.evidence.settle.mockImplementationOnce(() => {
+      throw new Error("evidence store unavailable");
+    });
+
+    await f.orchestrator.stop("run-1", { requestId: "run-1" }).catch(() => undefined);
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+
+    // A wedged start never settles: the test then ends at the vitest timeout.
+    // The stop wins: the released start reports the run the operator cancelled.
+    expect(await started).toMatchObject({ ok: true, snapshot: { state: "cancelled" } });
+  });
 
   it("refuses a late startup success when reconciliation cannot prove the host stopped", async () => {
     const db = new DatabaseSync(":memory:");
@@ -5325,6 +5395,72 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     );
   });
 
+  it("settles a turn that completes while the run is paused as succeeded, not recovery-required", async () => {
+    const f = fixture();
+    let finish: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    await f.orchestrator.start(start);
+    const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    expect(successfulSnapshot(paused).state).toBe("paused");
+
+    finish?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).not.toBe("paused");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+  });
+
+  it("does not let a finished turn's queued settlement stop the follow-up turn dispatched ahead of it", async () => {
+    const f = fixture();
+    let finishFirst: ((outcome: "succeeded") => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">((resolve) => {
+        finishFirst = resolve;
+      }),
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded">(() => undefined),
+    });
+    const started = successfulSnapshot(await f.orchestrator.start(start));
+    // Hold the serial lane so the follow-up queues first and the settlement queues behind it.
+    let releaseLane: (() => void) | undefined;
+    const lane = (
+      f.orchestrator as unknown as { serial: <T>(work: () => Promise<T>) => Promise<T> }
+    ).serial(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseLane = resolve;
+        }),
+    );
+    const followUp = f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-ahead",
+      expectedRevision: started.revision,
+      taskIntent: "continue with this instruction",
+    });
+    finishFirst?.("succeeded");
+    await Promise.resolve();
+    releaseLane?.();
+    await lane;
+    expect((await followUp).ok).toBe(true);
+    // Everything queued behind the follow-up, the finished turn's settlement included, has run.
+    const flush = (): Promise<void> =>
+      (f.orchestrator as unknown as { serial: <T>(work: () => Promise<T>) => Promise<T> }).serial(
+        () => Promise.resolve(),
+      );
+    await flush();
+    await flush();
+
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
   it("stops the paused manager when the durable resumed state cannot be published", async () => {
     const f = await runningFixture();
     await f.orchestrator.pause("run-1", { requestId: "run-1" });
@@ -5540,6 +5676,62 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
       expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
     },
   );
+
+  it("names the cause when the manager resume throws on an operator resume", async () => {
+    const captured = captureDiagnostics();
+    const f = await runningFixture(undefined, captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.manager.resume.mockImplementationOnce(() => {
+      throw new RangeError(PRIVATE_FAILURE_TEXT);
+    });
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("failed");
+    expectRecordedLifecycleFailure(captured.records, "resume-failed", "RangeError");
+  });
+
+  it("names the cause when containing a paused runtime throws after a failed resume publish", async () => {
+    const captured = captureDiagnostics();
+    const f = await runningFixture(undefined, captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.eventHub.publish.mockReturnValueOnce({ ok: false });
+    f.manager.stop.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(captured.records, "stop-failed", "RangeError");
+  });
+
+  it("names the cause when stopping an expired paused runtime throws", async () => {
+    const captured = captureDiagnostics();
+    let nowMs = FIXTURE_NOW_MS;
+    const f = await runningFixture(() => new Date(nowMs), captured.diagnostics);
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-pause-expired",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:02.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "file-edit",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    nowMs += 60_001;
+    f.manager.stop.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+
+    expect(successfulSnapshot(resumed).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(captured.records, "stop-failed", "RangeError");
+  });
 
   it("persists uncertain-write recovery and retains it across late terminal events", async () => {
     const f = await runningFixture();
@@ -7786,6 +7978,7 @@ describe("terminal run cause (F9, #3873)", () => {
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
     envelopeDurationExhausted = false,
     providerUnavailable = false,
+    gatewayCut = false,
   ) {
     return {
       envelopeDurationExhausted: vi.fn(
@@ -7797,6 +7990,7 @@ describe("terminal run cause (F9, #3873)", () => {
       lastModelCallProviderUnavailable: vi.fn(
         (runId: string) => runId === RUN_ID && providerUnavailable,
       ),
+      lastModelCallGatewayCut: vi.fn((runId: string) => runId === RUN_ID && gatewayCut),
     } satisfies CodingRuntimeTerminalFacts;
   }
 
@@ -7883,6 +8077,40 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it.each([
+    [
+      "a failure-redacted event",
+      {
+        kind: "failure-redacted",
+        failureCode: "runtime-failed",
+        failureSummary: "runtime-failed",
+        retryable: true,
+      },
+    ],
+    ["a runtime-stopped event", { kind: "runtime-stopped" }],
+  ] as const)("settles %s under the closed cause the terminal facts name", async (_name, event) => {
+    const { f } = settledWith("failed", terminalFacts(undefined, true));
+    f.taskDispatcher.dispatch.mockReset();
+    f.taskDispatcher.dispatch.mockResolvedValue({
+      ok: true,
+      completion: new Promise<"failed">(() => undefined),
+    });
+    await f.orchestrator.start(start);
+
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-terminal",
+      runId: RUN_ID,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      ...event,
+    });
+
+    expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+      state: "failed",
+      failureCode: "envelope-duration-exhausted",
+    });
+  });
+
+  it.each([
     ["stream-incomplete", "provider-unavailable", "unavailable"],
     ["output-exhausted", "output-exhausted-repeated", "unavailable"],
     ["provider-failed", "model-turn-failed", "unavailable"],
@@ -7902,6 +8130,36 @@ describe("terminal run cause (F9, #3873)", () => {
       });
     },
   );
+
+  it("settles a run whose model call the gateway cut at its output bound as output-limit-reached", async () => {
+    const { f, records } = settledWith(
+      "failed",
+      terminalFacts("output-exhausted", false, false, true),
+    );
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "output-limit-reached",
+      });
+    });
+    const settled = settledLine(records);
+    expect(settled).toMatchObject({
+      correlationId: RUN_ID,
+      errorKind: "unavailable",
+      extra: {
+        failureCode: "output-limit-reached",
+        failureBasis: "model-call-failure",
+        modelCallFailure: "output-exhausted",
+      },
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({ failureCode: "output-limit-reached", failureBasis: "model-call-failure" });
+  });
 
   // F10 (#3873 review, PR #3876): the gateway answers a provider that stayed down past its outage
   // window with `provider-failed`, the same code as a rejection, and states beside it that the
@@ -8301,12 +8559,16 @@ describe("run effort roll-up (#3873)", () => {
 });
 
 describe("verification truth at task settlement", () => {
-  async function runningTask(taskHasShellTool?: boolean) {
+  async function runningTask(
+    taskHasShellTool?: boolean,
+    toolBudgetExhausted?: (runId: string) => boolean,
+  ) {
     const log = captureActivityLog();
     const f = fixtureFrom({
       seededRows: [],
       activityLog: log.activityLog,
       taskHasShellTool,
+      toolBudgetExhausted,
     });
     let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
     const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
@@ -8561,17 +8823,36 @@ describe("verification truth at task settlement", () => {
 
     it("never tells a model without a shell tool to use its shell", async () => {
       const intent = await continuedIntent(false);
-      expect(intent).toBe(VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL);
+      expect(intent).toBe(
+        verificationContinuationIntent({ check: "check", failedCount: 1 }, false),
+      );
       expect(intent.toLowerCase()).not.toContain("shell");
       expect(intent).toContain("governed verification tool");
     });
 
     it.each([true, undefined])(
-      "keeps the shell continuation unchanged where the shell is available or unknown (%s)",
+      "keeps the shell form where the shell is available or unknown (%s)",
       async (hasShell) => {
-        await expect(continuedIntent(hasShell)).resolves.toBe(VERIFICATION_CONTINUATION_INTENT);
+        const intent = await continuedIntent(hasShell);
+        expect(intent).toBe(
+          verificationContinuationIntent({ check: "check", failedCount: 1 }, hasShell),
+        );
+        expect(intent).toContain("in your shell");
       },
     );
+
+    it("names the failed check and its failed steps, never a path or an output line", async () => {
+      const { f, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+      await verification(f, "failed", { passed: 2, failed: 3, skipped: 0 });
+      finish();
+      await vi.waitFor(() => {
+        expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      });
+      const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+      expect(request.taskIntent).toContain("3 steps failed");
+      expect(request.taskIntent).not.toContain("src/a.ts");
+    });
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
@@ -8587,13 +8868,25 @@ describe("verification truth at task settlement", () => {
   });
 
   // #4271 lab (T39): a refusal for a target nobody selected is not an impossible selected verifier.
-  it("still repairs when the verifier refused a target before any target was selected", async () => {
-    const { f, finish } = await runningTask();
+  // Replaces the old pin that sent the model back with a blind continuation: no check ran, so there
+  // is nothing to repair; the run settles with the gap "no check ran" (#4491).
+  it("names no-check-run, without a continuation, when the verifier refused a target nobody selected", async () => {
+    const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
     finish();
     await vi.waitFor(() => {
-      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({
+      state: "skipped",
+      skipReason: "no-failed-check",
+      gap: "no-check-run",
     });
   });
 
@@ -8748,50 +9041,70 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["failed", "partial"] as const)(
-    "does not report success after a %s verification",
-    async (status) => {
-      const { f, log, finish } = await runningTask();
-      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
-      await verification(f, status);
-      finish();
-      await vi.waitFor(() => {
-        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
-          state: "failed",
-          failureCode: "verification-not-evidenced",
-        });
+  it("does not report success after a failed verification: one refused repair, then the truthful gap", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "check-failed",
       });
-      const refused = requireLoggedEvent(
-        log.records.find(
-          (event) =>
-            event.op === "coding-runtime.run.verification-continuation" &&
-            event.extra?.state === "dispatch-refused",
-        ),
-        "Expected refused continuation dispatch",
-      );
-      expect(refused.errorKind).toBe("unavailable");
-      expect(
-        expectActivityLogProof(
-          "coding-runtime.run.verification-continuation.emitted-line",
-          formatActivityLogProofLine(refused),
-        ),
-      ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
-      const line = requireLoggedEvent(
-        log.records.find(
-          (event) =>
-            event.op === "coding-runtime.run.verification-continuation" &&
-            event.extra?.state === "not-evidenced",
-        ),
-        "Expected an unevidenced verification settlement.",
-      );
-      expect(
-        expectActivityLogProof(
-          "coding-runtime.run.verification-continuation.emitted-line",
-          formatActivityLogProofLine(line),
-        ),
-      ).toMatchObject({ state: "not-evidenced", runId: "run-1" });
-    },
-  );
+    });
+    expect(
+      log.records.find(
+        (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+      )?.errorKind,
+    ).toBe("validation-failed");
+    const refused = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "dispatch-refused",
+      ),
+      "Expected refused continuation dispatch",
+    );
+    expect(refused.errorKind).toBe("unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(refused),
+      ),
+    ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "not-evidenced",
+      ),
+      "Expected an unevidenced verification settlement.",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "not-evidenced", runId: "run-1", gap: "check-failed" });
+  });
+
+  // A partial summary with no executed step is no failed check: nothing ran, so nothing is repaired.
+  it("does not report success after a partial verification and sends no continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "partial");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
+  });
 
   it("does not count a pass from before the final edit", async () => {
     const { f, finish } = await runningTask();
@@ -8825,6 +9138,351 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  // #4491 part 4: a change to documentation alone needs no check, so the run settles succeeded
+  // with no continuation, and the line says why none was asked.
+  it("settles a documentation-only change succeeded without a continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", {
+      kind: "applied",
+      changedPaths: ["README.md", "docs/guide.md"],
+    });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ state: "skipped", skipReason: "docs-only" });
+  });
+
+  it("still requires a check when a changed path is code or none is named", async () => {
+    const code = await runningTask();
+    code.f.orchestrator.observeEditOutcome("run-1", {
+      kind: "applied",
+      changedPaths: ["README.md", "src/main.ts"],
+    });
+    code.finish();
+    await vi.waitFor(() => {
+      expect(code.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    const unnamed = await runningTask();
+    unnamed.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    unnamed.finish();
+    await vi.waitFor(() => {
+      expect(unnamed.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("keeps an earlier passing check when a later edit changed documentation alone", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "passed");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["CHANGELOG.md"] });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
+  // #4491 part 5: code changed and no check ran after it. No continuation (nothing to repair); the
+  // run settles with the concrete gap, on its snapshot, its stream frame and its settled line.
+  it("settles a code change no check followed with the gap no-check-run and no continuation", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({
+      skipReason: "no-failed-check",
+      gap: "no-check-run",
+    });
+    const settled = requireLoggedEvent(
+      log.records.find(
+        (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+      ),
+      "Expected the terminal settlement line",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({
+      failureCode: "verification-not-evidenced",
+      verificationGap: "no-check-run",
+      // A missing check is the run's verification verdict, never a Keiko fault (#4491 lab).
+      errorKind: "validation-failed",
+    });
+    expect(f.eventHub.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "status",
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationGap: "no-check-run",
+      }),
+    );
+  });
+
+  // #4491 part 3: after the last code edit a check ran and failed. Exactly one continuation, which
+  // names that fact; the run that still lacks a passing check settles with the gap, never a second.
+  // #4491 audit: a summary's failedCount is canonical (denied, cancelled and resource-exceeded steps
+  // included), but only failed and timed-out steps are a check that ran and did not pass.
+  async function summarized(
+    f: ReturnType<typeof fixture>,
+    failedCount: number,
+    notRunCount: number,
+    options: { readonly passedCount?: number; readonly editRevision?: number | undefined } = {},
+  ): Promise<void> {
+    const passedCount = options.passedCount ?? 0;
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: `verification-${String(f.orchestrator.status().revision)}`,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "verification-summarized",
+      verificationKind: "verification-command",
+      verificationStatus: "failed",
+      passedCount,
+      failedCount,
+      skippedCount: 0,
+      verificationEditRevision:
+        options.editRevision ?? f.orchestrator.verificationRevision("run-1"),
+      verificationTargetDigest: codingVerificationTargetDigest("test"),
+      verificationSummary: {
+        verifierId: "test",
+        status: "failed",
+        passedCount,
+        failedCount,
+        ...(notRunCount === 0 ? {} : { notRunCount }),
+        skippedCount: 0,
+        durationMs: 1,
+      },
+      failureLocationCount: 0,
+      failureLocationsTruncated: false,
+    });
+  }
+
+  // A summary in which no step ran is the tool layer's to classify (`observeVerificationExecution`,
+  // pinned in productionManagedWorktreeTools.test.ts): denied, cancelled or skipped steps arrive
+  // with its `blocks-repair` blocker, which keeps the continuation from running.
+  it("sends no continuation when the tool layer blocks a check in which no step ran", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 3, 3);
+    f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_NOT_RUN",
+      codingVerificationTargetDigest("test"),
+      "blocks-repair",
+    );
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // #4519, seen in the macOS acceptance task on 2026-11-24: in a run with its own shell a governed
+  // check the host cannot isolate runs no step and blocks nothing (`evidence-only`). The failed
+  // shell check before it is still the fact to repair; the summary alone made it a blocker.
+  it("still repairs a failed shell check after a governed check that ran no step and blocks nothing", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_NOT_RUN",
+      codingVerificationTargetDigest("test"),
+      "evidence-only",
+    );
+    await summarized(f, 1, 1);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    // The repair was dispatched (the fixture refuses it), never skipped as blocked.
+    expect(
+      log.records.filter(
+        (event) =>
+          event.op === "coding-runtime.run.verification-continuation" &&
+          event.extra?.state === "skipped",
+      ),
+    ).toEqual([]);
+  });
+
+  // One passed and one denied step: a step was refused, so the check could not fully run. That is a
+  // blocker to report, not a failure to repair, and the gap says so.
+  it("reads a passed step beside a denied one as a check that could not start", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 1, 1, { passedCount: 1 });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // A late summary of an older edit revision says nothing about the current change.
+  it("records no blocker from a denied-only summary at a stale edit revision", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    const stale = f.orchestrator.verificationRevision("run-1");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/b.ts"] });
+    await summarized(f, 2, 2, { editRevision: stale });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "no-check-run",
+      });
+    });
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "no-failed-check" });
+  });
+
+  it("names only the failed and timed-out steps in the continuation of a mixed summary", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await summarized(f, 3, 2);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+    expect(request.taskIntent).toContain(
+      "The test check you ran after your last change failed (1 step failed)",
+    );
+  });
+
+  // #4491 audit: the most concrete fact names the gap. A failed check stays the gap when the budget
+  // ran out afterwards; the continuation is still skipped for the budget.
+  it("names check-failed when the budget ran out after a failed check, and still skips for the budget", async () => {
+    const { f, log, finish } = await runningTask(undefined, () => true);
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-failed",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "budget-exhausted" });
+  });
+
+  it("names check-failed before check-not-started, and check-not-started before the budget", async () => {
+    const failedThenBlocked = await runningTask();
+    failedThenBlocked.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(failedThenBlocked.f, "failed");
+    failedThenBlocked.f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+    );
+    failedThenBlocked.finish();
+    await vi.waitFor(() => {
+      expect(failedThenBlocked.f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-failed",
+      });
+    });
+    expect(failedThenBlocked.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const blockedAndBudget = await runningTask(undefined, () => true);
+    blockedAndBudget.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    blockedAndBudget.f.orchestrator.observeVerificationBlocked(
+      "run-1",
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+    );
+    blockedAndBudget.finish();
+    await vi.waitFor(() => {
+      expect(blockedAndBudget.f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        verificationGap: "check-not-started",
+      });
+    });
+  });
+
+  it("sends exactly one fact-based continuation after a failed check, never a second", async () => {
+    const { f, log, finish } = await runningTask();
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-failed",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1 + VERIFICATION_CONTINUATION_MAX);
+    expect(VERIFICATION_CONTINUATION_MAX).toBe(1);
+    expect(f.taskDispatcher.dispatch.mock.calls[1]?.[0]).toMatchObject({
+      origin: "verification-continuation",
+    });
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "already-continued" });
+    const continued = log.records.find(
+      (event) =>
+        event.op === "coding-runtime.run.verification-continuation" &&
+        event.extra?.state === "continued",
+    );
+    expect(continued?.extra).toMatchObject({ check: "check", failedCount: 1 });
+  });
+
+  // #4491 part 3: a check that could not start is not a failed check; the run is not sent back.
+  it("sends no continuation when the check could not start, and names check-not-started", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_RUNNER_UNAVAILABLE");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "check-not-started",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "blocked" });
+  });
+
+  // #4491 part 3: the budget refusal said "finish and report"; a continuation that said "verify"
+  // would contradict it, so an exhausted budget sends no continuation and names itself.
+  it("sends no continuation after the run's budget ran out, and names budget-exhausted", async () => {
+    const { f, log, finish } = await runningTask(undefined, () => true);
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied", changedPaths: ["src/a.ts"] });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        verificationGap: "budget-exhausted",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(skipLine(log.records)).toMatchObject({ skipReason: "budget-exhausted" });
+  });
+
+  it("carries a gap only on a verification-not-evidenced settlement", async () => {
+    const { f, finish } = await runningTask();
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")).not.toHaveProperty("verificationGap");
+  });
+
   it("allows a read-only task to complete without inventing verification work", async () => {
     const { f, finish } = await runningTask();
     finish();
@@ -8849,7 +9507,7 @@ describe("verification truth at task settlement", () => {
     expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith(
       expect.objectContaining({
         runId: "run-1",
-        taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        taskIntent: verificationContinuationIntent({ check: "check", failedCount: 1 }, undefined),
         // It continues the human's request, so an undo reaches back to it (r4368344091).
         origin: "verification-continuation",
       }),
@@ -8880,6 +9538,7 @@ describe("verification truth at task settlement", () => {
   it("keeps the attempted ordinal and actual cause when verification continuation transport throws", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
     const error = Object.assign(
       new Error("PRIVATE_CONTINUATION_CANARY", { cause: new TypeError("PRIVATE_CAUSE_CANARY") }),
       { code: "TRANSPORT_UNAVAILABLE" },
@@ -8929,6 +9588,7 @@ describe("verification truth at task settlement", () => {
   it("records an actual operator stop that supersedes verification continuation dispatch", async () => {
     const { f, log, finish } = await runningTask();
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed");
     let release: ((result: CodingRuntimeTaskDispatchResult) => void) | undefined;
     f.taskDispatcher.dispatch.mockImplementationOnce(
       () =>
@@ -9221,6 +9881,26 @@ describe("native session continuity requested by a start", () => {
         refusal: "invalid-intent",
       });
       expect(w.f.manager.start).not.toHaveBeenCalled();
+    });
+
+    it("admits a wake only for a task that is still active, never for a completed one", () => {
+      const w = world();
+      const task = w.store.codingHistory?.create({
+        projectPath: tmpdir(),
+        title: "Scheduled task",
+        modelId: "coding",
+        workspaceId: "ws-sched",
+        taskId: "task-sched",
+        branch: "keiko/task/sched",
+        operatorDigest: createHash("sha256").update("operator").digest("hex"),
+      });
+      if (task === undefined) throw new Error("History unavailable");
+      const host = w.f.orchestrator.scheduledWakeHost();
+      expect(host.taskAdmitted(task.id)).toBe(true);
+
+      w.store.codingHistory?.update(task.id, { status: "completed" });
+
+      expect(host.taskAdmitted(task.id)).toBe(false);
     });
 
     it("starts nothing once the orchestrator shuts down", async () => {
@@ -9780,6 +10460,121 @@ describe("coding runtime lifecycle races", () => {
     expect(record?.errorClass).toBe("RangeError");
     expect(JSON.stringify(record)).not.toContain("snapshot store unavailable");
   });
+  it.each(["stop", "takeover"] as const)(
+    "names the cause when the manager %s throws on an operator end request",
+    async (kind) => {
+      const f = raceFixture();
+      await runningRace(f);
+      f.manager[kind === "stop" ? "stop" : "takeover"].mockRejectedValueOnce(
+        new RangeError("manager unavailable"),
+      );
+
+      await f.orchestrator[kind]("run-1", { requestId: "run-1" });
+
+      const record = f.diagnosticRecords.find(
+        (candidate) => candidate.code === "stage=lifecycle:reason=stop-failed",
+      );
+      expect(record?.errorClass).toBe("RangeError");
+      expect(JSON.stringify(record)).not.toContain("manager unavailable");
+    },
+  );
+
+  it("names the cause when the manager stop throws while settling a completed turn", async () => {
+    const f = raceFixture();
+    f.manager.stop.mockRejectedValueOnce(new RangeError("manager unavailable"));
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: Promise.resolve("succeeded"),
+    });
+
+    await f.orchestrator.start(start);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    const record = f.diagnosticRecords.find(
+      (candidate) => candidate.code === "stage=lifecycle:reason=stop-failed",
+    );
+    expect(record?.errorClass).toBe("RangeError");
+  });
+
+  it("names the cause when the permission port throws while an approval is resolved", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    await f.orchestrator.ingest(RACE_PERMISSION);
+    f.permissionPort.resolve.mockRejectedValueOnce(new RangeError("port unavailable"));
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: f.orchestrator.status().revision,
+    });
+
+    expect(
+      f.diagnosticRecords.some(
+        (candidate) =>
+          candidate.code === "stage=lifecycle:reason=permission-resolve-failed" &&
+          candidate.errorClass === "RangeError",
+      ),
+    ).toBe(true);
+  });
+
+  it("names the cause when issuing approved authority throws", async () => {
+    const f = raceFixture();
+    await runningRace(f);
+    await f.orchestrator.ingest(RACE_PERMISSION);
+    f.approvalAuthority.issue.mockImplementationOnce(() => {
+      throw new RangeError(PRIVATE_FAILURE_TEXT);
+    });
+
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-1",
+      decision: "approved",
+      expectedRevision: f.orchestrator.status().revision,
+    });
+
+    expectRecordedLifecycleFailure(f.diagnosticRecords, "approval-issue-failed", "RangeError");
+  });
+
+  it("names the cause when the quiet reconcile after a failed start throws", async () => {
+    const f = raceFixture();
+    f.manager.start.mockRejectedValueOnce(new Error("start failed"));
+    f.manager.reconcile.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    const started = await f.orchestrator.start(start);
+
+    expect(successfulSnapshot(started).state).toBe("recovery-required");
+    expectRecordedLifecycleFailure(f.diagnosticRecords, "reconcile-failed", "RangeError");
+  });
+
+  it("threads a production-shaped run id into a recorded lifecycle failure", async () => {
+    const runId = `run-${"7".repeat(39)}`;
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const captured = captureDiagnostics();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      captured.diagnostics,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (): string => runId,
+      createCodingRuntimeSnapshotStore(db),
+    );
+    f.manager.start.mockRejectedValueOnce(new Error("start failed"));
+    f.manager.reconcile.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
+
+    await f.orchestrator.start(start);
+
+    const line = captured.records.find(
+      (record) => record.code === "stage=lifecycle:reason=reconcile-failed",
+    );
+    expect(line?.correlationId).toBe(runId);
+  });
+
   // Audit finding 6: a failed stop at an undo window's close left the manager in recovery-required
   // with its slot taken, and every later start was refused with runtime-already-running.
   it("reaps a settled run's stale runtime slot before the next start", async () => {

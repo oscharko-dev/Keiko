@@ -101,7 +101,9 @@
   display: flex;
   gap: 2px;
   height: var(--control-height);
+  min-width: 0;
   box-sizing: border-box;
+  margin: 0;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
@@ -331,6 +333,18 @@
   max-width: 100%;
   margin-inline-start: auto;
   background: var(--surface-secondary);
+}
+.cmpMessage[data-origin="keiko"] {
+  width: 100%;
+  margin-inline-start: 0;
+  border-style: dashed;
+  padding: var(--space-1) var(--space-3);
+  background: transparent;
+  color: var(--text-secondary);
+}
+.cmpMessage[data-origin="keiko"] > details > summary {
+  cursor: pointer;
+  font-size: var(--text-caption);
 }
 .cmpMessage[data-role="assistant"] {
   padding: var(--space-2) 0;

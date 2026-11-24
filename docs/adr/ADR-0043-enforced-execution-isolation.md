@@ -786,8 +786,11 @@ A refused, failed or timed-out host-shell install does not replace the step resu
 facade presents it as a verification failure that names the dependency failure, with one fixed
 sentence for the model per refusal reason and one for every other failure of this install, and the
 Workbench card shows `dependencies-unavailable` ("Dependencies missing"), never a failing check;
-nothing is reported as verified. An install for the verifier's own steps keeps its card and its
-answer. On Linux the native runtime needs bubblewrap, which also isolates the steps,
+nothing is reported as verified. For `unapproved-source` that sentence tells the model to install
+in its shell with the project's own command and to run the check there, because a registry the
+person configured for npm reaches the shell through the credential relay (ADR-0184); only when that
+install fails too does it report the blocker (#4491: the general sentence made it stop at once). An
+install for the verifier's own steps keeps its card and its answer. On Linux the native runtime needs bubblewrap, which also isolates the steps,
 so a Linux run keeps the plan above, and every container-backed path, including
 `install-target-foreign` for a container whose target differs from the host, is unchanged. A Mac
 whose container runtime is running keeps that plan too: its container steps can run, so the
