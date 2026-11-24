@@ -57,7 +57,7 @@ export function CodingTaskForkNotice({
       <output className={styles.cmpForkNotice}>
         <CheckIcon />
         <span className={styles.cmpForkNoticeText}>
-          {t("codingWorkbench.history.completedNotice", { title: completed })}
+          {t("codingWorkbench.history.completedNotice")}
         </span>
       </output>
     );

@@ -62,7 +62,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Open a workspace first. The task is imported into the active workspace.",
   "codingWorkbench.history.importError": "The task could not be imported. Try again.",
   "codingWorkbench.history.completedNotice":
-    "“{title}” is completed. Your next message reopens the task and continues this conversation.",
+    "This task is completed. Your next message reopens it and continues this conversation.",
   "codingWorkbench.history.importedNotice":
     "“{title}” was imported from a file. Your next message continues it as a new task that keeps this conversation and does not change “{title}”.",
   "codingWorkbench.history.finish": "Complete task",
@@ -1228,7 +1228,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.readiness": "Readiness details",
   "codingWorkbench.runStatus.agent.plan": "Plan agent",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
-  "codingWorkbench.announcement.runChecking": "Run status checking.",
+  "codingWorkbench.announcement.runChecking": "Checking the run status.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
   "codingWorkbench.announcement.recoveryComplete": "Recovery acknowledgement complete.",
   "codingWorkbench.announcement.setupReady": "Authentication setup plan ready.",
@@ -1332,6 +1332,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.runCheck.request":
     "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
   "codingWorkbench.event.runFailed": "Coding run failed",
+  "codingWorkbench.event.runUnverified": "Changes not checked",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

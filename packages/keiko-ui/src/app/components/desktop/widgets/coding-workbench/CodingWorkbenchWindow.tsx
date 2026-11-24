@@ -1781,6 +1781,7 @@ function WorkbenchColumns({
       promptInputs={offeredCodingWorkbenchPromptInputs(state)}
       referenceRoot={composerReferenceRoot(state, runWorkspace, activeWorkspace, repositoryRoot)}
       runId={runId}
+      continuesConversation={history.conversationId !== undefined}
       deliveryNotice={promptDelivery.notice}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}

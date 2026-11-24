@@ -98,7 +98,7 @@ describe("CodingTaskForkNotice", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "“Repair the parser” is completed. Your next message reopens the task and continues this conversation.",
+      "This task is completed. Your next message reopens it and continues this conversation.",
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
 

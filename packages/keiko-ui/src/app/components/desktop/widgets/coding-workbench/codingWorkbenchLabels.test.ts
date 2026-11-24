@@ -307,7 +307,6 @@ describe("eventDetail auxiliary outcome", () => {
     ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
     ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
     ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
-    ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
     ["runtime-failed", "codingWorkbench.event.failure.runtime"],
     // ADR-0137 D10: a start the server refused before its first turn, because a file the first
     // prompt referenced or the slash command it opened with was not accepted.
@@ -412,6 +411,27 @@ describe("eventDetail auxiliary outcome", () => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(key);
+  });
+  // #4491 night walk: the card of a run that ended without a passing check after its last change
+  // is titled by that gap; "Coding run failed" above "the changes were not checked" contradicted
+  // a model that reported its tests green.
+  it("titles a verification gap by what is missing", () => {
+    const settled = runtimeEvent({
+      kind: "status",
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+    });
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runUnverified");
+    // Moved from the F9 cause table above: the card still names its closed cause.
+    expect(eventDetail(settled, t)).toBe(
+      "codingWorkbench.event.failure.verification-not-evidenced",
+    );
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.runUnverified")).toBe(
+      "Changes not checked",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.runUnverified")).toBe(
+      "Änderungen nicht geprüft",
+    );
   });
 });
 

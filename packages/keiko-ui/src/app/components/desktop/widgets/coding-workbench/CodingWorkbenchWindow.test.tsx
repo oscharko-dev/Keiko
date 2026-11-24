@@ -770,9 +770,9 @@ describe("CodingWorkbenchWindow", () => {
       });
     }
 
-    function settledRows(): readonly Element[] {
+    function settledRows(title = "Coding run failed"): readonly Element[] {
       return [...document.querySelectorAll('[data-timeline-kind="event"]')].filter((row) =>
-        row.textContent?.includes("Coding run failed"),
+        row.textContent?.includes(title),
       );
     }
 
@@ -821,8 +821,9 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
-      const [card] = settledRows();
+      const [card] = settledRows("Changes not checked");
       expect(card).toHaveTextContent("no check ran after the last change");
+      expect(card).not.toHaveTextContent("Coding run failed");
       expect(
         within(card as HTMLElement).queryByRole("button", { name: "Create error report" }),
       ).toBeNull();

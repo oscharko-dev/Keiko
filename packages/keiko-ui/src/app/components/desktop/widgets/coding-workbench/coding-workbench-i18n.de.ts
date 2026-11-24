@@ -70,7 +70,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.importError":
     "Die Aufgabe konnte nicht importiert werden. Bitte erneut versuchen.",
   "codingWorkbench.history.completedNotice":
-    "„{title}“ ist abgeschlossen. Deine nächste Nachricht öffnet die Aufgabe wieder und setzt diesen Verlauf fort.",
+    "Diese Aufgabe ist abgeschlossen. Deine nächste Nachricht öffnet sie wieder und setzt diesen Verlauf fort.",
   "codingWorkbench.history.importedNotice":
     "„{title}“ wurde aus einer Datei importiert. Deine nächste Nachricht setzt sie als neue Aufgabe fort, die diesen Verlauf behält und „{title}“ nicht verändert.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",
@@ -1378,6 +1378,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.runCheck.request":
     "Führe jetzt die Prüfung des Projekts aus (Tests, Typprüfung oder Build), behebe einen Fehler, den du beheben kannst, und sag mir das Ergebnis.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
+  "codingWorkbench.event.runUnverified": "Änderungen nicht geprüft",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

@@ -390,11 +390,12 @@ export function eventTitle(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
-  if (event.kind === "status")
-    return event.state === "failed"
-      ? t("codingWorkbench.event.runFailed")
-      : runStateLabel(event.state, t);
-  return t(`codingWorkbench.event.${event.eventKind}`);
+  if (event.kind !== "status") return t(`codingWorkbench.event.${event.eventKind}`);
+  // A verification gap names what is missing, as its sentence does, not a generic failure (#4491).
+  if (isVerificationGapEvent(event)) return t("codingWorkbench.event.runUnverified");
+  return event.state === "failed"
+    ? t("codingWorkbench.event.runFailed")
+    : runStateLabel(event.state, t);
 }
 
 export function eventDetail(
