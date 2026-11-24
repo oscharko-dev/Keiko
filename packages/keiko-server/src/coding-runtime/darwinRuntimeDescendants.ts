@@ -220,7 +220,10 @@ export class RuntimeDescendantTracker {
 
   public constructor(private readonly options: DescendantTrackerOptions) {}
 
-  /** Ends what the exited service left behind, once; later callers share the first result. */
+  /**
+   * Ends what the exited service left behind; callers share the sweep in flight and any proven
+   * result. A sweep that proved nothing is not kept: a later call sweeps again.
+   */
   public sweep(): Promise<DescendantSweep> {
     this.swept ??= this.runSweep();
     return this.swept;
@@ -228,8 +231,11 @@ export class RuntimeDescendantTracker {
 
   private async runSweep(): Promise<DescendantSweep> {
     const startedAt = performance.now();
+    this.counters.failure = undefined;
     const result = await this.sweepOnce();
-    this.options.membership?.close();
+    // The member stays open for a retry until a sweep proves the end; a run without one cannot improve.
+    if (sweepProvesEnd(result)) this.options.membership?.close();
+    else if (this.options.membership !== undefined) this.swept = undefined;
     recordDescendantSweep(this.options, result, performance.now() - startedAt);
     return result;
   }

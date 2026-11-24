@@ -1,6 +1,12 @@
 import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
 import { PortableTreeAttestationError } from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  recordReapStage,
+  type RuntimeReapOutcome,
+  type RuntimeReapStage,
+} from "./codingRuntimeReapEvidence.js";
 import { draftPendingApprovalReview } from "./productionDraftDeliveryRuntime.js";
 import { createHash } from "node:crypto";
 import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -309,6 +315,8 @@ export interface CodingRuntimeManagerDeps {
   readonly onSandboxAttestation?:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** The Activity Log port; the process-wide sink by default. */
+  readonly activityLog?: ServerLogSink | undefined;
   readonly openCodeLifecycleAdapter?: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter?: CodexLifecycleAdapter | undefined;
   /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
@@ -486,6 +494,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly onSandboxAttestation:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly activityLog: ServerLogSink;
   readonly openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined;
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   readonly codexLocalSecretRoot: string | undefined;
@@ -785,6 +794,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     onSandboxAttestation: deps.onSandboxAttestation,
     diagnostics: deps.diagnostics,
+    activityLog: deps.activityLog ?? processServerLogSink(),
     openCodeLifecycleAdapter: deps.openCodeLifecycleAdapter,
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
     codexLocalSecretRoot: deps.codexLocalSecretRoot,
@@ -1570,6 +1580,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   }
 
   private async reapTree(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    return (await this.gracefulReap(active)) ?? (await this.forceReap(active));
+  }
+
+  private async gracefulReap(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    const startedAt = this.deps.now();
     try {
       this.deps.supervisor.terminate(active.tree, "graceful");
       const exit = await this.deps.supervisor.waitForCompleteTreeExit(
@@ -1577,24 +1592,34 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         active.shutdownTimeoutMs,
       );
       if (exit.status === "reaped") return exit.receipt;
-      return await this.forceReap(active);
-    } catch {
-      try {
-        return await this.forceReap(active);
-      } catch {
-        // The caller moves the run to recovery-required when reap cannot be proven.
-        return undefined;
-      }
+      recordReapOf(this.deps, active, "graceful-timed-out", "escalated", startedAt);
+    } catch (error) {
+      recordReapOf(this.deps, active, "graceful-failed", "escalated", startedAt, error);
     }
+    return undefined;
   }
 
   private async forceReap(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
-    this.deps.supervisor.terminate(active.tree, "force");
-    const exit = await this.deps.supervisor.waitForCompleteTreeExit(
-      active.tree,
-      active.shutdownTimeoutMs,
-    );
-    return exit.status === "reaped" ? exit.receipt : undefined;
+    const startedAt = this.deps.now();
+    try {
+      this.deps.supervisor.terminate(active.tree, "force");
+      const exit = await this.deps.supervisor.waitForCompleteTreeExit(
+        active.tree,
+        active.shutdownTimeoutMs,
+      );
+      recordReapOf(
+        this.deps,
+        active,
+        "forced",
+        exit.status === "reaped" ? "reaped" : "unproven",
+        startedAt,
+      );
+      return exit.status === "reaped" ? exit.receipt : undefined;
+    } catch (error) {
+      // The caller moves the run to recovery-required when reap cannot be proven.
+      recordReapOf(this.deps, active, "force-failed", "unproven", startedAt, error);
+      return undefined;
+    }
   }
 
   private attachRuntime(active: ActiveRuntime): void {
@@ -1712,10 +1737,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   private async enterRecoveryRequired(active: ActiveRuntime): Promise<void> {
     active.status = "recovery-required";
+    const startedAt = this.deps.now();
     try {
       await this.deps.markRuntimeRecoveryRequired(active.context.runId);
-    } catch {
+      recordReapOf(this.deps, active, "recovery-required", "unproven", startedAt);
+    } catch (error) {
       // The manager remains fail-closed even if authority-state projection fails.
+      recordReapOf(this.deps, active, "recovery-mark-failed", "failed", startedAt, error);
     }
   }
 
@@ -2269,6 +2297,23 @@ async function boundedLifecycleDisposal(
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function recordReapOf(
+  deps: NormalizedCodingRuntimeManagerDeps,
+  active: ActiveRuntime,
+  stage: RuntimeReapStage,
+  outcome: RuntimeReapOutcome,
+  startedAt: number,
+  error?: unknown,
+): void {
+  recordReapStage(deps.activityLog, {
+    runId: active.context.runId,
+    stage,
+    outcome,
+    durationMs: deps.now() - startedAt,
+    ...(error === undefined ? {} : { error }),
+  });
 }
 
 function emitRuntimeDisposalFailure(

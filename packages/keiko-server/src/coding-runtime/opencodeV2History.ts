@@ -42,6 +42,7 @@ import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
 import { OPTIONAL_COUNT_FIELD } from "../activity-log-field-shapes.js";
+import { keikoContinuationOrigin } from "./opencodeTurnOrigin.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
@@ -207,9 +208,20 @@ function settledReadMode(
   if (planned === "tail") return "anchor-lost";
   return planned ?? "full";
 }
+/** The one refusal that depends on the projection's own checkpoint, so a fresh read may pass. */
+export const OPENCODE_V2_TEXT_PREFIX_INVALID = "reason=text-prefix-invalid";
+
 export class OpenCodeV2HistoryError extends Error {
   constructor(readonly safeCode: string) {
     super("opencode-v2-history-invalid");
+  }
+
+  /**
+   * True when every read of the same history is refused again. A text that no longer extends what
+   * this projection already showed depends on its own checkpoint, so a fresh read may pass.
+   */
+  get permanent(): boolean {
+    return this.safeCode !== OPENCODE_V2_TEXT_PREFIX_INVALID;
   }
 }
 
@@ -934,6 +946,10 @@ function messageCandidates(
       candidate(`${id}:message`, "observation", id, {
         kind: "message",
         role: "user",
+        // A turn Keiko dispatched itself says so in its own metadata; the text never decides it.
+        ...(keikoContinuationOrigin(message.metadata) === undefined
+          ? {}
+          : { origin: "keiko" as const }),
         messageId: id,
         occurredAt,
       }),
@@ -1296,7 +1312,7 @@ function incrementalSignal(
   const offset = previous?.textLength;
   if (text === undefined || offset === undefined) return item.signal;
   if (offset > text.length || digest([item.key, text.slice(0, offset)]) !== previous?.digest)
-    throw new OpenCodeV2HistoryError("reason=text-prefix-invalid");
+    throw new OpenCodeV2HistoryError(OPENCODE_V2_TEXT_PREFIX_INVALID);
   const growing = growingTextSignal(item);
   return growing === undefined ? item.signal : { ...growing, text: text.slice(offset) };
 }

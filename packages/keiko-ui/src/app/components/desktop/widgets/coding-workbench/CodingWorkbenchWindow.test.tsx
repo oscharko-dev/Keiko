@@ -13,6 +13,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import * as reportApi from "@/lib/support-report-api";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -769,9 +770,9 @@ describe("CodingWorkbenchWindow", () => {
       });
     }
 
-    function settledRows(): readonly Element[] {
+    function settledRows(title = "Coding run failed"): readonly Element[] {
       return [...document.querySelectorAll('[data-timeline-kind="event"]')].filter((row) =>
-        row.textContent?.includes("Coding run failed"),
+        row.textContent?.includes(title),
       );
     }
 
@@ -785,10 +786,117 @@ describe("CodingWorkbenchWindow", () => {
       expect(timeline).toHaveTextContent("I read the parser and ran the tests.");
       expect(settledRows()).toHaveLength(1);
       expect(settledRows()[0]).toHaveAttribute("data-event-tone", "attention");
-      expect(settledRows()[0]).toHaveTextContent("The coding run ended with an internal error");
+      expect(settledRows()[0]).toHaveTextContent("because of an internal error");
+      expect(
+        within(settledRows()[0] as HTMLElement).getByRole("button", {
+          name: "Create error report",
+        }),
+      ).toBeInTheDocument();
       const transcript = screen.getByRole("region", { name: "Previous conversation" });
       expect(transcript).toHaveTextContent("Earlier request");
       expect(transcript).not.toHaveTextContent("I read the parser");
+    });
+
+    // Seen in a real-model walk on 2026-11-24: a task opened from Coding History rendered its stored
+    // conversation scrolled to the first message, so the newest answer, where the person continues,
+    // stayed out of view. The stored transcript never reached the stream's growth key.
+    it("shows a task picked from Coding History at its newest message", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const log = screen.getByRole("log");
+      const scrollTop = pinLogGeometry(log);
+      // The reader had scrolled up into the previous task's history.
+      scrollTop.value = 100;
+      fireEvent.scroll(log);
+
+      const shown = restoredSession();
+      taskSessionHookMock.mockReturnValue({
+        ...shown,
+        conversationId: "task-8",
+        detail: { ...shown.detail!, task: { ...shown.detail!.task, id: "task-8" } },
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(1720);
+    });
+
+    it("follows a stored conversation that grows while the reader is at its end", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const scrollTop = pinLogGeometry(screen.getByRole("log"));
+
+      taskSessionHookMock.mockReturnValue(restoredSession(grownRunMessages()));
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(1720);
+    });
+
+    it("does not yank a reader who scrolled up when the same task's conversation grows", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const log = screen.getByRole("log");
+      const scrollTop = pinLogGeometry(log);
+      scrollTop.value = 100;
+      fireEvent.scroll(log);
+
+      taskSessionHookMock.mockReturnValue(restoredSession(grownRunMessages()));
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(100);
+    });
+
+    function grownRunMessages(): readonly HistoryMessage[] {
+      return [
+        historyMessage("m-3", "run-7", "user", "Repair the parser"),
+        historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+        historyMessage("m-5", "run-7", "assistant", "The tests pass now."),
+      ];
+    }
+
+    // #4491: a run whose changes were not checked names the gap and offers the check; the button
+    // starts the check through the composer's own start path, as the person's own request.
+    it("offers Run the check now on a not-verified run and starts the check as the person's request", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      const liveActions = renderWorkbench(
+        liveState({
+          canStart: true,
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({
+              state: "failed",
+              runId: "run-7",
+              revision: 9,
+              updatedAt: SETTLED_AT,
+              failureCode: "verification-not-evidenced",
+              verificationGap: "no-check-run",
+              conversationId: "task-7",
+            }),
+          },
+        }),
+      );
+
+      const [card] = settledRows("Changes not checked");
+      expect(card).toHaveTextContent("no check ran after the last change");
+      expect(card).not.toHaveTextContent("Coding run failed");
+      expect(
+        within(card as HTMLElement).queryByRole("button", { name: "Create error report" }),
+      ).toBeNull();
+      fireEvent.click(
+        within(card as HTMLElement).getByRole("button", { name: "Run the check now" }),
+      );
+
+      expect(liveActions.start).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(liveActions.start).mock.calls[0]?.[0]).toBe(
+        "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
+      );
     });
 
     it("keeps the server's own activity projection while it is still held", () => {
@@ -1338,6 +1446,35 @@ describe("CodingWorkbenchWindow", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
 
     expect(taskInput).toHaveValue("");
+  });
+
+  // A cancelled Start returns the mutation to idle without succeeding: the person's text stays so
+  // they can change and resend it.
+  it("keeps the composer draft when the person cancels a pending Start", async () => {
+    const user = userEvent.setup();
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    const taskInput = screen.getByLabelText("Task instructions");
+    await user.type(taskInput, "Investigate the failing test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        mutation: { status: "idle", kind: null, requestId: null, error: null, cancelled: true },
+      }),
+      actions: liveActions,
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(taskInput).toHaveValue("Investigate the failing test");
   });
 
   it("restores the unsent task text after a reload while Start was pending (#4271)", async () => {
@@ -2902,6 +3039,41 @@ describe("CodingWorkbenchWindow", () => {
     expect(approveB).not.toHaveFocus();
   });
 
+  it("does not move focus when the permission disappears after a failed approval", () => {
+    approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
+    const pending = nativeAskState("shell");
+    runtimeHookMock.mockReturnValue({ state: pending, actions: actions() });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...pending,
+        mutation: {
+          status: "error",
+          kind: "approval",
+          requestId: "req-a",
+          error: { code: "failed", message: "failed" } as never,
+        },
+      },
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+      }),
+      actions: actions(),
+    });
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("#3897: the same approval request keeps its prompt across unrelated re-renders", () => {
     approvalReviewHookMock.mockReturnValue(nativeReview("shell", ["echo hello"]));
     runtimeHookMock.mockReturnValue({ state: nativeAskState("shell"), actions: actions() });
@@ -3700,7 +3872,7 @@ describe("CodingWorkbenchWindow", () => {
   // control left. Every recovery state names a way forward: acknowledge, retry with a description
   // or leave with a new task, and nothing is sent again by itself.
   describe("the way out of Recovery required (F30)", () => {
-    const recoveryState = (acknowledged: boolean): ReturnType<typeof liveState> =>
+    const recoveryState = (acknowledged: boolean, runId = "run-1"): ReturnType<typeof liveState> =>
       liveState({
         canStart: acknowledged,
         canRetry: acknowledged,
@@ -3709,7 +3881,7 @@ describe("CodingWorkbenchWindow", () => {
           error: null,
           value: snapshot({
             state: "recovery-required",
-            runId: "run-1",
+            runId,
             failureCode: "recovery-required",
             ...(acknowledged ? { recoveryAcknowledged: true } : {}),
           }),
@@ -3719,6 +3891,22 @@ describe("CodingWorkbenchWindow", () => {
     it("says plainly that Keiko does not know whether the change went through", () => {
       renderWorkbench(recoveryState(false));
       expect(screen.getByText(/does not know whether the last action went through/)).toBeVisible();
+    });
+
+    it("offers the error report for the run that needs recovery", async () => {
+      const runId = "run-272120967981827964065820685403290179367";
+      const create = vi
+        .spyOn(reportApi, "createSupportReport")
+        .mockResolvedValue({ fileName: "report.json.gz", reportJson: "{}" });
+      vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+        href: "blob:run-report",
+        dispose: vi.fn(),
+      });
+      renderWorkbench(recoveryState(false, runId));
+      fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+      await screen.findByRole("link", { name: "Download report" });
+      expect(create).toHaveBeenCalledWith(runId, expect.any(AbortSignal));
+      expect(await axe(document.body)).toHaveNoViolations();
     });
 
     it("offers a new task before the recovery is acknowledged", async () => {
@@ -4343,6 +4531,21 @@ describe("CodingWorkbenchWindow live stream follows the newest activity", () => 
     expect(scrollTop.value).toBe(100);
   });
 });
+
+// jsdom lays nothing out: pin the log region's geometry and record every scroll the view applies.
+function pinLogGeometry(log: HTMLElement): { value: number } {
+  const scrollTop = { value: 0 };
+  Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1720 });
+  Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 292 });
+  Object.defineProperty(log, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop.value,
+    set: (next: number) => {
+      scrollTop.value = next;
+    },
+  });
+  return scrollTop;
+}
 
 function activityFeed(): AvailableCodingSafeActivityFeed {
   return {

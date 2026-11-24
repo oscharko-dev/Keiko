@@ -51,6 +51,7 @@ const CONFIGURED_KEY = "configured-provider-credential-0123456789";
 let deps: UiHandlerDeps;
 let history: CodingRuntimeHistory;
 const live = vi.fn(() => false);
+const executing = vi.fn(() => false);
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "coding-history-route-"));
@@ -75,9 +76,14 @@ beforeEach(() => {
   if (!paired.paired) throw new Error("Pairing failed");
   cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
   live.mockReturnValue(false);
+  executing.mockReturnValue(false);
   deps = {
     codingAppSessionChannel: channel,
-    codingRuntimeOrchestrator: { getHistory: () => history, hasLiveRun: live },
+    codingRuntimeOrchestrator: {
+      getHistory: () => history,
+      hasLiveRun: live,
+      hasExecutingRun: executing,
+    },
     env: { KEIKO_DEFAULT_API_KEY: CONFIGURED_KEY },
   } as unknown as UiHandlerDeps;
 });
@@ -153,6 +159,39 @@ describe("paired coding history routes", () => {
     expect((await updateCodingHistory({ ...context(), params: {} }, deps)).status).toBe(404);
   });
 
+  it("logs each history refusal under the request's correlation id with a closed kind", async () => {
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    const refusals = (): Record<string, unknown>[] =>
+      sink.events
+        .filter((event) => event.correlationId === "history-route-test")
+        .map((event) => JSON.parse(formatActivityLogProofLine(event)) as Record<string, unknown>);
+
+    expect(readCodingHistory(context("{}", "unknown"), deps).status).toBe(404);
+    expect(await updateCodingHistory(context('{"title":"x"}', "unknown"), deps)).toMatchObject({
+      status: 404,
+    });
+    executing.mockReturnValue(true);
+    expect((await updateCodingHistory(context('{"status":"completed"}'), deps)).status).toBe(409);
+    expect((await updateCodingHistory(context('{"extra":true}'), deps)).status).toBe(400);
+
+    expect(refusals().map((line) => [line.op, line.errorKind])).toEqual([
+      ["coding-runtime.history", "unavailable"],
+      ["coding-runtime.history", "unavailable"],
+      ["coding-runtime.history", "conflict"],
+      ["coding-runtime.history", "invalid-request"],
+    ]);
+  });
+
+  it("writes no history line for a caller that is not paired yet (#4068 W9)", async () => {
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    expect(listCodingHistory(context("{}", id, false), deps).status).toBe(404);
+    expect(readCodingHistory(context("{}", id, false), deps).status).toBe(404);
+    expect((await updateCodingHistory(context('{"title":"x"}', id, false), deps)).status).toBe(404);
+    expect(sink.events.filter((event) => event.op === "coding-runtime.history")).toEqual([]);
+  });
+
   it("renames, completes and reopens the durable task", async () => {
     for (const patch of [{ title: "New title" }, { status: "completed" }, { status: "active" }]) {
       const result = await updateCodingHistory(context(JSON.stringify(patch)), deps);
@@ -161,8 +200,18 @@ describe("paired coding history routes", () => {
     }
   });
 
+  it("completes a task while the current run only awaits recovery acknowledgement", async () => {
+    live.mockReturnValue(true);
+    executing.mockReturnValue(false);
+    expect(await updateCodingHistory(context('{"status":"completed"}'), deps)).toMatchObject({
+      status: 200,
+      body: { task: { id, status: "completed" } },
+    });
+  });
+
   it("blocks completion while execution is live without blocking a rename", async () => {
     live.mockReturnValue(true);
+    executing.mockReturnValue(true);
     expect(await updateCodingHistory(context('{"status":"completed"}'), deps)).toMatchObject({
       status: 409,
       body: { error: { code: "ACTIVE_RUN_CONFLICT" } },

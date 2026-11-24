@@ -7,6 +7,7 @@ import {
   CODING_WORKBENCH_COMMAND_DESCRIPTION_MAX_CHARS,
   CODING_WORKBENCH_COMMANDS_MAX,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_PROMPT_DELIVERIES,
   CODING_WORKBENCH_PROMPT_REFERENCE_PATH_MAX_CHARS,
@@ -894,6 +895,77 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // #4491: the concrete gap of a run that settled without a passing check after its last change.
+  it("binds the verification gap to a verification-not-evidenced snapshot and status frame only", () => {
+    const failed = {
+      schemaVersion: "1",
+      state: "failed",
+      revision: 5,
+      updatedAt: AT,
+      runId: "run-1",
+      failureCode: "verification-not-evidenced",
+    };
+    for (const gap of CODING_WORKBENCH_VERIFICATION_GAPS) {
+      const snapshot = { ...failed, verificationGap: gap };
+      expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toEqual({
+        ok: true,
+        value: snapshot,
+      });
+      const frame = {
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode: "verification-not-evidenced",
+        verificationGap: gap,
+      };
+      expect(validateCodingWorkbenchRuntimeSseEvent(frame)).toEqual({ ok: true, value: frame });
+    }
+    expect(validateCodingWorkbenchRuntimeSnapshot(failed)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...failed, verificationGap: "no-check" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...failed,
+        failureCode: "model-turn-failed",
+        verificationGap: "no-check-run",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode: "model-turn-failed",
+        verificationGap: "no-check-run",
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        schemaVersion: "1",
+        cursor: "cursor-1",
+        sequence: 1,
+        occurredAt: AT,
+        kind: "runtime-event",
+        eventKind: "permission-requested",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        verificationGap: "no-check-run",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("projects recovery acknowledgement only as durable recovery-required server truth", () => {
     const recovery = {
       schemaVersion: "1",
@@ -1647,6 +1719,29 @@ describe("body-free Workbench verifier metadata", () => {
       });
     },
   );
+
+  it.each([
+    [{ failedCount: 3, notRunCount: 2 }],
+    [{ failedCount: 3, deniedCount: 1, notRunCount: 2 }],
+    [{ failedCount: 1, notRunCount: 1, deniedCount: 1 }],
+  ])("accepts a not-run subset of the canonical failures: %j", (counts) => {
+    const enriched = { ...event, verificationSummary: { ...verificationSummary, ...counts } };
+    expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toEqual({ ok: true, value: enriched });
+  });
+
+  it.each([
+    { notRunCount: -1 },
+    { notRunCount: 0.5 },
+    { notRunCount: "1" },
+    { notRunCount: 2 },
+    { failedCount: 3, deniedCount: 2, notRunCount: 1 },
+  ])("rejects a not-run count outside the canonical failures %j", (invalid) => {
+    const enriched = {
+      ...event,
+      verificationSummary: { ...verificationSummary, failedCount: 1, ...invalid },
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toMatchObject({ ok: false });
+  });
 
   it.each([
     { stdout: "private verifier output" },

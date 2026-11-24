@@ -281,11 +281,70 @@ verification, inspect observed failures and verify the repair without weakening 
 OpenCode owns that coding loop. A text-only native terminal turn is not semantic proof that
 requested work happened (live qualification F29, #3873). Planning-only tasks and read-only answers
 remain valid without invented edits or verification. This guidance does not introduce a keyword
-classifier or execute model prose. The existing post-edit and per-target verification continuation
-currently remains a bounded completion safeguard where the run has observed required verification;
-its removal requires native-loop qualification with truthful settlement preserved. Final
-qualification must independently prove the requested read/edit/test journey. The configured
-addendum digest identifies Keiko's guidance separately from the launch configuration digest.
+classifier or execute model prose. Final qualification must independently prove the requested
+read/edit/test journey. The configured addendum digest identifies Keiko's guidance separately from
+the launch configuration digest.
+
+**Verification is asked for up front, not nagged for at the end** (#4491). Each profile's own
+instructions (the governed system prompt's "Verify" step and both addenda above) tell the model to
+verify code changes before it reports them complete, that a change to documentation files alone
+needs no check, and that an environment which prevents a check for a reason outside the task is
+reported once with its exact cause and never retried in a loop. Keiko no longer dispatches a fixed,
+generic "verification is not complete" request at the end of a run. Three facts replace it:
+
+- A change needs a check only when it touched more than documentation. An applied edit carries the
+  workspace-relative paths it changed (in memory only, read by the run's effort ledger, never logged,
+  persisted or sent to the model) and `editNeedsVerification` (`codingRuntimeDocumentationPaths.ts`)
+  decides. A file is documentation by its extension (`.md`, `.mdx`, `.markdown`, `.txt`,
+  `.rst`, `.adoc`, `.asciidoc`, plus the extensionless `README`, `LICENSE`, `NOTICE`, `CHANGELOG`,
+  `CONTRIBUTING` and `AUTHORS`) unless one of its directory segments, in any letter case, is a directory code or tests read
+  (`CODE_READ_DIRECTORIES`: test, spec, resource, fixture, snapshot, mock, prompt, template and skill
+  folders, plus `src`, `data`, `i18n`, `locales`, `.claude` and `.github`), because
+  `src/test/resources/expected.txt` is a golden file and a prompt or skill `.md` is read by code. A
+  conventional documentation name (`README`, `CHANGELOG`, `CONTRIBUTING`, `LICENSE`, `SECURITY` and
+  similar) stays documentation under the broad segments (`src/foo/README.md`) but not under the
+  strict test, fixture, resource, prompt, template, skill and mock ones. Folders that hold plain
+  documentation (`app`, `lib`, `assets`, `public`, `static`) are not listed. A `docs/` folder is deliberately not enough on its own, because
+  `docs/conf.py` or an example source file in it is code a check covers, and a CMake list and a pip
+  requirements or constraints `.txt` are build input. An edit that names no path reads as code.
+  A documentation-only edit demands no verification and leaves earlier check results standing; a run
+  that changed documentation alone settles `succeeded`, and its `coding-runtime.run.verification-continuation`
+  line says `skipped` with `skipReason: docs-only`.
+- At most one automatic continuation per run (`VERIFICATION_CONTINUATION_MAX` is 1), and only when,
+  after the run's last code change, a check actually ran and failed and the model ended its turn
+  without a passing one. The continuation names that fact and nothing else of the run (which check
+  and how many steps failed or timed out, from the governed verifier's closed result or a counted
+  shell check; a denied, cancelled or resource-exceeded step never ran to a verdict, is carried
+  apart as the summary's `notRunCount`, and makes a summary with no other failure a check that
+  could not start)
+  and asks to repair the cause and rerun that check, or to state exactly why it cannot. It never
+  runs when no check ran at all (`no-failed-check`), when a check could not start or was refused or
+  blocked (`blocked`, any `CODING_VERIFICATION_BLOCKED_REASONS` member), when the run's tool-call or
+  patch budget refused a delegation (`budget-exhausted`; the budget refusal tells the model to
+  finish and report, so a request to verify would contradict it) or when the run already continued
+  once (`already-continued`). Each of these decisions is logged as `state: skipped` with its closed
+  `skipReason`, so a support analysis sees why no continuation ran.
+- A run that changed code and ends without a passing check after its last change settles as before
+  (`failed` with `verification-not-evidenced`, the change kept), and the settlement carries the
+  concrete gap as the closed `verificationGap`: `no-check-run`, `check-failed`, `check-not-started`
+  or `budget-exhausted`, decided with the most concrete fact first: `check-failed`, then
+  `check-not-started`, then `budget-exhausted`, then `no-check-run`. A failed check stays the gap when the
+  budget ran out afterwards; the continuation is still skipped for the budget. The gap rides the snapshot
+  (persisted by the snapshot store's `verification_gap` column, schema version 83), the `status`
+  frame, `coding-runtime.run.settled` and the `not-evidenced` continuation line. Without a blocker,
+  `coding-runtime.run.settled` classifies such a run `errorKind=validation-failed`, not `internal`:
+  the gap is the run's verdict, not a Keiko fault. A blocked check keeps its classification. The Workbench names
+  it in one plain sentence that ends with what the person can do, and offers "Run the check now"
+  (de: "Prüfung nachholen") in place of the error report: the button starts the existing composer
+  request with a short localized sentence in the person's own name, because it is the person's own
+  click.
+
+A turn Keiko dispatches itself (the one verification continuation above and the delivery
+continuation) is never shown as the person's own message. Its runtime message carries the closed
+origin metadata (`keikoTurnOriginV1`: `verification-continuation` or `delivery-continuation`); the
+transcript projection reads it from that metadata alone, never from the text, and hands the UI the
+closed message origin `keiko`, which the timeline and the Coding History transcript render as a
+collapsed note labelled "Keiko" (de: "Hinweis von Keiko").
 
 **A run whose edits keep being refused settles instead of looping** (F5 of the live Gemma
 qualification, #3873). A run whose workspace had no connected Workbench logged eleven
@@ -434,7 +493,8 @@ model learns the true cause instead of inventing one ("remote inaccessible", liv
 authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
 evidenced, the orchestrator dispatches a fixed, server-authored continuation into the live session
 instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
-`coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
+`coding-runtime.run.delivery-continued`. The turn carries the origin `delivery-continuation`, so it
+renders as a Keiko note and never as the person's own message (#4491). The continuation restates only the accepted task's
 delivery goal; every effect still goes through the governed tools and nothing widens authority. A
 continuation the orchestrator does not send — `coding-runtime.run.delivery-continuation-refused`
 with `reason` `dispatch-threw` (with its `errorKind`), `dispatch-refused`, or
@@ -463,7 +523,10 @@ hub keeps the closed cause the coding sidecar gateway reported for the run's mos
 model call until a later call of the run is answered, with the gateway's own fact that the provider
 could not serve that call. In that order, the run settles `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
-again), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
+again), `output-limit-reached` (the gateway itself ended the call at its output bound, a reasoning or
+answer stream past its byte bound or a finished answer past the budget, so no repair preceded it; a
+finished answer that still exceeds the budget after the gateway's repair ran is the model exhausting
+its output again and settles `output-exhausted-repeated`; the cut is kept as the run's last failed call and never counts as an answer), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
 failed turn's own frame names), and `runtime-failed` (the runtime crashed or failed internally) only
 when no such cause is on record. `provider-unavailable` is the provider that could not be reached,
 stopped answering, or stayed down: the gateway's `stream-incomplete` (a timeout, a refused or
@@ -747,8 +810,8 @@ A run whose model has a shell of its own (the native profile) is instead told
 counts. For it a governed check whose every unrun step is `isolation-unavailable` or
 `native-shell-required` is no evidence either way and no blocker: it enters the ledger with the
 `evidence-only` scope, so its empty summary changes no target, an earlier shell pass stands, and a
-failing shell check still gets its repair continuation instead of settling as blocked (#4519,
-2026-11-22). Every other unrun step keeps the default `blocks-repair` scope.
+failing shell check still gets its one fact-based repair continuation instead of settling as blocked
+(#4519, 2026-11-22; #4491). Every other unrun step keeps the default `blocks-repair` scope.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
 `waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,
@@ -2479,7 +2542,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Build tools in a nested monorepo (#4271) follow the same shape. The build names `JAVA_HOME`,
   `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME`, `MAVEN_OPTS`, `MAVEN_ARGS`, `GRADLE_OPTS`, the proxy family,
   `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `npm_config_registry` are inherited
-  (`nativeBuildInheritedEnvNames`) only when the value carries no credential (URL user-info, or a
+  (`nativeBuildInheritedEnvNames`; a default npm registry bound to the repository credential relay
+  replaces the inherited registry with the relay's, ADR-0184 D5) only when the value carries no credential (URL user-info, or a
   Maven/Gradle option naming a password or token); the JDK or build tool they name, and the JDK of the
   first `java` on `PATH`, open read-only through `nativeBuildToolReadRoots` under the toolchain root
   rule, and only when the directory holds the tool's `bin/` executable. The private `HOME` hides the
@@ -2688,7 +2752,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   in every mode, and only the runtime's own snapshots write files, inside the task workspace. An
   undo stops the turn in flight (the runtime refuses to rewind a busy session), stages
   `session.revert.stage` at the first user message of the newest turn and leaves the run live. A
-  turn Keiko itself starts to continue the human's request (the automatic verification
+  turn Keiko itself starts to continue the human's request (the automatic verification or delivery
   continuation) carries `keikoTurnOriginV1` on its prompt metadata and belongs to that request: the
   newest turn, its `session.diff` (`from` its first user message) and its witnesses reach back
   across it to the human's own turn, so a verification-only continuation cannot hide the human's

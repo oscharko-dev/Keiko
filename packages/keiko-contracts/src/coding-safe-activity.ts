@@ -13,6 +13,12 @@ import { EDITOR_AGENT_CONFLICT_CODES, EDITOR_AGENT_FAILURE_CODES } from "./edito
 
 export const CODING_SAFE_ACTIVITY_CONTRACT_VERSION = "1" as const;
 export const CODING_SAFE_ACTIVITY_MESSAGE_ROLES = ["user", "assistant"] as const;
+/**
+ * Who wrote a `user` message when it was not the person: `keiko` is a turn Keiko dispatched itself
+ * (a continuation of the accepted request), read from the runtime message's own origin metadata,
+ * never inferred from its text (#4491). Absent means the person's own message.
+ */
+export const CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS = ["keiko"] as const;
 export const CODING_SAFE_ACTIVITY_TOOL_STATES = [
   "pending",
   "running",
@@ -138,6 +144,7 @@ export interface CodingSafeActivityToolPresentation {
 }
 
 export type CodingSafeActivityMessageRole = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ROLES)[number];
+export type CodingSafeActivityMessageOrigin = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS)[number];
 export type CodingSafeActivityToolState = (typeof CODING_SAFE_ACTIVITY_TOOL_STATES)[number];
 export type CodingSafeActivityPlanStepState =
   (typeof CODING_SAFE_ACTIVITY_PLAN_STEP_STATES)[number];
@@ -171,6 +178,8 @@ export interface CodingSafeActivityMessage {
   readonly occurredAt: string;
   readonly segments: readonly CodingSafeActivityTextSegment[];
   readonly truncated: boolean;
+  /** User messages only; see `CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS`. Absent: the person's own. */
+  readonly origin?: CodingSafeActivityMessageOrigin;
   /** Assistant messages only; absent when the model returned no reasoning or it is not shown. */
   readonly reasoning?: CodingSafeActivityReasoning;
 }
@@ -428,10 +437,11 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   errors.push(
     ...exactKeys(
       value,
-      ["messageId", "role", "occurredAt", "segments", "truncated", "reasoning"],
+      ["messageId", "role", "occurredAt", "segments", "truncated", "reasoning", "origin"],
       path,
     ),
   );
+  validateMessageOrigin(value, path, errors);
   validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
   if (!isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES)) {
     errors.push(`${path}.role is invalid`);
@@ -449,6 +459,19 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
     serializedBytes(value) > CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES
   ) {
     errors.push(`${path} exceeds the message UTF-8 byte budget`);
+  }
+}
+
+function validateMessageOrigin(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (!("origin" in value)) return;
+  if (!isOneOf(value.origin, CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS)) {
+    errors.push(`${path}.origin is invalid`);
+  } else if (value.role !== "user") {
+    errors.push(`${path}.origin is only allowed on user`);
   }
 }
 

@@ -2331,18 +2331,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.enterRecoveryRequired",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.reapTree",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "CodingRuntimeManagerImpl.releaseAfterReap",
       "kind": "unregistered-catch",
       "count": 1
@@ -2421,12 +2409,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.containPausedRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
       "owner": "CodingRuntimeOrchestrator.deliveryEvidence",
       "kind": "unregistered-catch",
       "count": 1
@@ -2434,48 +2416,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
       "owner": "CodingRuntimeOrchestrator.dispatchDeliveryContinuation",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.executeEndRequest",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.issueApprovedAuthority",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.reconcileQuietly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.resolveRuntimePermission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.resumeManagerAfterTransition",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.stopExpiredPausedRuntime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts",
-      "owner": "CodingRuntimeOrchestrator.stopForSettlement",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2674,12 +2614,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "cancelSubscription",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "monitorLoop",
       "kind": "unregistered-catch",
       "count": 1
     },

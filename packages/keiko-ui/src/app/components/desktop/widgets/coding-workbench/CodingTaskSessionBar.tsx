@@ -49,6 +49,23 @@ interface SessionAction {
   readonly disabled: boolean;
 }
 
+// A completed task on display is complete already: its next message reopens it (#4491).
+function finishActions(
+  session: CodingTaskSession,
+  locked: boolean,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
+  if (session.detail?.task.status === "completed") return [];
+  return [
+    {
+      label: t("codingWorkbench.history.finish"),
+      icon: Icons.check,
+      run: (): void => void session.finish(),
+      disabled: locked || session.detail === null,
+    },
+  ];
+}
+
 function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const locked = active || session.pending;
@@ -68,12 +85,7 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
       disabled: locked || session.detail === null || session.fork !== null,
     },
     ...continueActions(session, locked, t),
-    {
-      label: t("codingWorkbench.history.finish"),
-      icon: Icons.check,
-      run: (): void => void session.finish(),
-      disabled: locked || session.detail === null,
-    },
+    ...finishActions(session, locked, t),
     {
       label: t("codingWorkbench.history.new"),
       icon: Icons.plus,
@@ -203,11 +215,40 @@ function transcriptAuthor(
 ):
   | "codingWorkbench.history.you"
   | "codingWorkbench.history.agent"
+  | "codingWorkbench.history.keiko"
   | "codingWorkbench.history.scheduled" {
   if (message.role !== "user") return "codingWorkbench.history.agent";
+  // A turn Keiko dispatched itself (#4491) is never labelled as the person's own message.
+  if (message.taskType === "keiko-continuation") return "codingWorkbench.history.keiko";
   return message.taskType === "scheduled-continuation"
     ? "codingWorkbench.history.scheduled"
     : "codingWorkbench.history.you";
+}
+
+// #4491: a turn Keiko dispatched itself is a collapsed note labelled as Keiko's, never the person's
+// own message, and it offers no fork: the person did not write it.
+function KeikoTranscriptNote({
+  message,
+  showText,
+}: {
+  readonly message: TranscriptMessage;
+  readonly showText: boolean;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <article className={styles.cmpMessage} data-role="user" data-origin="keiko">
+      {showText ? (
+        <details>
+          <summary>{t("codingWorkbench.history.keiko")}</summary>
+          <SafeMarkdownBoundary
+            source={message.content}
+            diagnosticMessageId={message.id}
+            richContent={undefined}
+          />
+        </details>
+      ) : null}
+    </article>
+  );
 }
 
 function TranscriptMessageCard({
@@ -220,6 +261,8 @@ function TranscriptMessageCard({
   readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  if (message.role === "user" && message.taskType === "keiko-continuation")
+    return <KeikoTranscriptNote message={message} showText={showText} />;
   return (
     <article className={styles.cmpMessage} data-role={message.role}>
       {showText ? (

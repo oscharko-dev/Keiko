@@ -186,3 +186,45 @@ describe("coding history navigation", () => {
     expect(updateCodingTask).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("history panel messages, focus and dates", () => {
+  it("names a list failure and a rename failure with their own messages", async () => {
+    vi.mocked(fetchCodingHistory).mockRejectedValueOnce(new Error("unavailable"));
+    vi.mocked(updateCodingTask).mockRejectedValueOnce(new Error("unavailable"));
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading tasks…");
+    expect(await screen.findByRole("alert")).toHaveTextContent("task list could not be loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be renamed");
+  });
+
+  it("returns focus to the Rename button after Save and after Cancel", async () => {
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Rename" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename" })).toHaveFocus());
+  });
+
+  it("groups the status filter buttons", async () => {
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    await screen.findByText(task.title);
+    expect(screen.getByRole("group", { name: "Task status" })).toBeVisible();
+  });
+
+  it("formats dates in the app locale and survives an invalid timestamp", async () => {
+    const browserLocale = vi.spyOn(Date.prototype, "toLocaleString");
+    vi.mocked(fetchCodingHistory).mockResolvedValue([
+      task,
+      { ...task, id: "task-bad", title: "Broken date", updatedAt: Number.NaN },
+    ]);
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    expect(await screen.findByText("Broken date")).toBeVisible();
+    expect(browserLocale).not.toHaveBeenCalled();
+    browserLocale.mockRestore();
+  });
+});

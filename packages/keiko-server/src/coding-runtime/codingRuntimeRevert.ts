@@ -29,12 +29,13 @@ export const CODING_RUNTIME_REVERT_REFUSALS = [
 export type CodingRuntimeRevertRefusal = (typeof CODING_RUNTIME_REVERT_REFUSALS)[number];
 
 /**
- * Who started a turn the operator did not. Keiko's automatic verification continuation continues
- * the human's accepted request, so an undo of the newest turn reaches back across it to that request
+ * Who started a turn the operator did not. Keiko's automatic verification and delivery continuations
+ * continue the human's accepted request, so an undo of the newest turn reaches back across it to that request
  * (#3904 AC3). A scheduled wake (#4271) posts nothing: the runtime fires the session's due schedule
  * itself, and its message, which carries the schedule, is the turn's own boundary.
  */
-export type CodingRuntimeTurnOrigin = "verification-continuation" | "schedule-wake";
+export type CodingRuntimeTurnOrigin =
+  "verification-continuation" | "delivery-continuation" | "schedule-wake";
 
 export interface CodingRuntimeRevertCounts {
   readonly fileCount: number;

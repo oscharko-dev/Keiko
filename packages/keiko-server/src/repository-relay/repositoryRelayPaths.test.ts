@@ -91,7 +91,63 @@ describe("admitRepositoryPath (npm)", () => {
     ["@scope", "path-unsupported"],
     ["left_pad:x", "path-unsupported"],
     ["https://evil.example/left-pad", "path-invalid"],
+    ["left-pad/extra/-/left-pad-1.3.0.tgz", "path-unsupported"],
   ] as const)("refuses %s as %s", (path, reason) => {
     expect(admitRepositoryPath("npm", path)).toEqual({ ok: false, reason });
+  });
+
+  // #4491: npm keeps a lockfile URL's path when it moves the URL onto the relay, so a tarball pinned
+  // on a registry at `.../repository/npm-group/` arrives with that base path in front.
+  describe("under the registry's own base path", () => {
+    const base = "repository/npm-group/";
+
+    it.each([
+      ["repository/npm-group/left-pad/-/left-pad-1.3.0.tgz", "left-pad/-/left-pad-1.3.0.tgz"],
+      ["repository/npm-group/@scope/name/-/name-1.0.0.tgz", "@scope/name/-/name-1.0.0.tgz"],
+      [
+        "repository/npm-group/@scope/name/-/@scope/name-1.0.0.tgz",
+        "@scope/name/-/@scope/name-1.0.0.tgz",
+      ],
+    ])("admits the pinned tarball %s as %s", (path, upstreamPath) => {
+      expect(admitRepositoryPath("npm", path, base)).toEqual({
+        ok: true,
+        kind: "npm-tarball",
+        upstreamPath,
+      });
+      expect(admitRepositoryPath("npm", path)).toEqual({ ok: false, reason: "path-unsupported" });
+    });
+
+    it("still admits a path relative to the base, and nothing but a tarball under it", () => {
+      expect(admitRepositoryPath("npm", "left-pad/-/left-pad-1.3.0.tgz", base)).toMatchObject({
+        ok: true,
+        upstreamPath: "left-pad/-/left-pad-1.3.0.tgz",
+      });
+      expect(admitRepositoryPath("npm", "left-pad", base)).toMatchObject({
+        kind: "npm-packument",
+      });
+      for (const path of [
+        "repository/npm-group/left-pad",
+        "repository/npm-group/@scope%2fname",
+        "repository/npm-group/left-pad/-/sub/left-pad-1.3.0.tgz",
+        "repository/npm-other/left-pad/-/left-pad-1.3.0.tgz",
+        "repository/npm-group/../left-pad/-/left-pad-1.3.0.tgz",
+      ]) {
+        expect(admitRepositoryPath("npm", path, base).ok).toBe(false);
+      }
+    });
+
+    it("strips the base path once, for a package named like its first segment too", () => {
+      expect(admitRepositoryPath("npm", "foo/foo/-/foo-1.0.0.tgz", "foo/")).toEqual({
+        ok: true,
+        kind: "npm-tarball",
+        upstreamPath: "foo/-/foo-1.0.0.tgz",
+      });
+    });
+
+    it("leaves a Maven path as it is", () => {
+      expect(
+        admitRepositoryPath("maven", "repository/maven/org/acme/a/1/a-1.pom", "repository/maven/"),
+      ).toMatchObject({ ok: true, upstreamPath: "repository/maven/org/acme/a/1/a-1.pom" });
+    });
   });
 });

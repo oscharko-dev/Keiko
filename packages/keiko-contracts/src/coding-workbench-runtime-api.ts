@@ -39,17 +39,21 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
-import type {
-  CodingWorkbenchGatewayEventKind,
-  CodingWorkbenchTurnFailureCode,
+import {
+  CODING_WORKBENCH_VERIFICATION_GAPS,
+  type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchTurnFailureCode,
+  type CodingWorkbenchVerificationGap,
 } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
 import { isChatJiraPodId } from "./bff-wire.js";
 import { isMcpServerName, MCP_SERVER_MAX } from "./mcp-servers.js";
 export {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  CODING_WORKBENCH_VERIFICATION_GAPS,
   type CodingWorkbenchGatewayEventKind,
   type CodingWorkbenchTurnFailureCode,
+  type CodingWorkbenchVerificationGap,
 } from "./coding-workbench-runtime-constants.js";
 import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
@@ -1231,6 +1235,11 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly modelId?: string | undefined;
   readonly agent?: CodingWorkbenchAgent | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /**
+   * Present exactly when `failureCode` is `verification-not-evidenced` and the server recorded the
+   * concrete gap (#4491); absent on a run settled by an older Keiko, which reads as a generic gap.
+   */
+  readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
   /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
   /** Present only when durable server truth records acknowledgement for a recovery-required run. */
@@ -1289,6 +1298,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
       readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      /** See `CodingWorkbenchRuntimeSnapshot.verificationGap`. */
+      readonly verificationGap?: CodingWorkbenchVerificationGap | undefined;
     }
   | {
       readonly schemaVersion: typeof CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
@@ -1736,6 +1747,7 @@ const CODING_WORKBENCH_RUNTIME_SNAPSHOT_KEYS = [
   "modelId",
   "agent",
   "failureCode",
+  "verificationGap",
   "contextUsage",
   "recoveryAcknowledged",
   "pendingPermission",
@@ -2264,6 +2276,7 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
   validateOptionalSnapshotFields(value, errors);
   validateFailureCode(value.failureCode, errors);
+  validateVerificationGap(value, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
   validatePauseReason(value, errors);
@@ -2347,6 +2360,19 @@ function validatePendingPermission(value: Record<string, unknown>, errors: strin
   const validation = validateCodingWorkbenchPermissionRequest(value.pendingPermission);
   if (!validation.ok) {
     errors.push(...validation.errors.map((error) => `pendingPermission.${error}`));
+  }
+}
+
+// A gap names why a run ended `verification-not-evidenced`; on any other code it would describe a
+// failure the run did not have.
+function validateVerificationGap(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationGap === undefined) return;
+  if (!isOneOf(value.verificationGap, CODING_WORKBENCH_VERIFICATION_GAPS)) {
+    errors.push("verificationGap is invalid");
+    return;
+  }
+  if (value.failureCode !== "verification-not-evidenced") {
+    errors.push("verificationGap is only allowed with failureCode verification-not-evidenced");
   }
 }
 

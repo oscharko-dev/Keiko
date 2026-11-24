@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchOperatorDecision,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_VERIFICATION_GAPS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "../store/schema.js";
@@ -425,6 +426,80 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(s.get("run-1")).toBeDefined();
     s.deletePruned([]);
     expect(s.get("run-1")).toBeDefined();
+  });
+});
+
+// #4491: why a run that settled `verification-not-evidenced` has no passing check after its last
+// change is durable, so a reload or restart still names the concrete gap.
+describe("verificationGap persistence (schema v83)", () => {
+  function gapRow(db: DatabaseSync): string | null {
+    return (
+      db
+        .prepare("SELECT verification_gap FROM coding_runtime_snapshots WHERE run_id = ?")
+        .get("run-1") as { verification_gap: string | null }
+    ).verification_gap;
+  }
+
+  it.each(CODING_WORKBENCH_VERIFICATION_GAPS)(
+    "round-trips the gap %s through the settlement, including the persisted column",
+    (verificationGap) => {
+      const db = new DatabaseSync(":memory:");
+      runMigrations(db);
+      const s = createCodingRuntimeSnapshotStore(db);
+      s.create(snapshot());
+      s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+      const failed = s.transition("run-1", {
+        state: "failed",
+        revision: 2,
+        updatedAt: at,
+        failureCode: "verification-not-evidenced",
+        verificationGap,
+      });
+
+      expect(failed.verificationGap).toBe(verificationGap);
+      expect(s.get("run-1")?.verificationGap).toBe(verificationGap);
+      expect(gapRow(db)).toBe(verificationGap);
+      db.close();
+    },
+  );
+
+  it("refuses a gap on any settlement that is not verification-not-evidenced", () => {
+    const s = store();
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    expect(() =>
+      s.transition("run-1", {
+        state: "failed",
+        revision: 2,
+        updatedAt: at,
+        failureCode: "runtime-failed",
+        verificationGap: "no-check-run",
+      }),
+    ).toThrow("verificationGap is only valid with verification-not-evidenced");
+  });
+
+  it("writes the gap on every transition, so a later state never keeps it", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "failed",
+      revision: 2,
+      updatedAt: at,
+      failureCode: "verification-not-evidenced",
+      verificationGap: "check-failed",
+    });
+    s.transition("run-1", {
+      state: "failed",
+      revision: 3,
+      updatedAt: at,
+      failureCode: "runtime-failed",
+    });
+    expect(s.get("run-1")?.verificationGap).toBeUndefined();
+    expect(gapRow(db)).toBeNull();
+    db.close();
   });
 });
 

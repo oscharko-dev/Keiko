@@ -541,7 +541,7 @@ function runBoundFacts(
   { runEffort, toolProfile }: Pick<RunComposition, "runEffort" | "toolProfile">,
 ): Pick<
   QualifiedProductionCodingRuntime,
-  "runEffort" | "envelopeDurationExhausted" | "taskHasShellTool"
+  "runEffort" | "envelopeDurationExhausted" | "taskHasShellTool" | "toolBudgetExhausted"
 > {
   return {
     runEffort: { read: runEffort.read },
@@ -550,6 +550,7 @@ function runBoundFacts(
     taskHasShellTool: toolProfile === "native",
     envelopeDurationExhausted: (runId) =>
       authority.envelopeDurationExhausted(runId, runtimeNow(input).getTime()),
+    toolBudgetExhausted: (runId) => authority.toolBudgetExhausted(runId),
   };
 }
 

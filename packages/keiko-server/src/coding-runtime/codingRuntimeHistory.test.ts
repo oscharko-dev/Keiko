@@ -436,6 +436,47 @@ describe("paired coding conversation history", () => {
     },
   );
 
+  it("titles a task with one clean line cut at 100 code points, never inside a surrogate pair", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const intent = `Fix\n\n  the\tbug \u202Eevil ${"a".repeat(80)}${"\u{1F600}".repeat(20)}`;
+    history.begin(
+      {
+        requestId: "title-request",
+        taskIntent: intent,
+        requestedMode: "governed-assist" as const,
+      },
+      activeWorkspace(),
+      "title-run",
+    );
+    const title = history.forRun("title-run")?.title ?? "";
+    expect(title).not.toMatch(/[\n\r\t\u202E]/u);
+    expect(title.startsWith("Fix the bug evil a")).toBe(true);
+    expect(Array.from(title)).toHaveLength(100);
+    // No word ends in the second half, so the cut falls inside the emoji run, on a whole one.
+    expect(title.endsWith("\u{1F600}…")).toBe(true);
+    expect(title).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
+  // #4491 lab: a title cut at the limit read as a sentence that simply stopped in Coding History.
+  it("cuts a long title on its last word and marks the cut", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const begin = (runId: string, taskIntent: string): string => {
+      history.begin(
+        { requestId: `${runId}-request`, taskIntent, requestedMode: "governed-assist" as const },
+        activeWorkspace(),
+        runId,
+      );
+      return history.forRun(runId)?.title ?? "";
+    };
+    const long =
+      "Die Funktion sum in src/sum.js liefert falsche Ergebnisse. Bitte korrigiere sie und prüfe es mit den Tests.";
+    expect(begin("word-cut-run", long)).toBe(
+      "Die Funktion sum in src/sum.js liefert falsche Ergebnisse. Bitte korrigiere sie und prüfe es mit…",
+    );
+    const exact = "x".repeat(100);
+    expect(begin("exact-run", exact)).toBe(exact);
+  });
+
   it("preserves a completed conversation when a continuation's intent cannot be written", () => {
     store.close();
     const db = openNodeUiDatabase(join(root, "history.sqlite"));
@@ -568,6 +609,57 @@ describe("paired coding conversation history", () => {
     ]);
     expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_TITLE");
   });
+
+  it("updates a task without reading its whole conversation, and logs a missing run capture", () => {
+    const { history, id, sink } = fixture();
+    history.update(id, { status: "completed" }, "update-no-read");
+    const events = sink.events.filter((event) => event.correlationId === "update-no-read");
+    expect(events.map((event) => event.extra?.event)).toEqual(["updated"]);
+
+    history.capture("run-without-task", completedFeed());
+    const missing = sink.events.at(-1);
+    if (missing === undefined) throw new Error("Missing event");
+    expect(JSON.parse(formatActivityLogProofLine(missing))).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: "run-without-task",
+      event: "unavailable",
+      errorKind: "unavailable",
+    });
+  });
+
+  it.each(["unavailable", "conflict", "invalid-request"] as const)(
+    "records a refused history request with the closed kind %s",
+    (kind) => {
+      const { history, id, sink } = fixture();
+      history.refuse("refusal-correlation", kind, id);
+      const event = sink.events.at(-1);
+      if (event === undefined) throw new Error("Missing event");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.history.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({
+        correlationId: "refusal-correlation",
+        errorKind: kind,
+        conversationId: id,
+      });
+    },
+  );
+
+  it.each(["a b/../c", "/etc/passwd", "me@example.com", "x".repeat(200), "unknown-task"])(
+    "records a refusal for the unknown id %s without the id and without event loss",
+    (unknown) => {
+      const { history, sink } = fixture();
+      history.refuse("unknown-refusal", "unavailable", unknown);
+      const lines = sink.events.filter((event) => event.correlationId === "unknown-refusal");
+      expect(lines.map((event) => [event.op, event.extra?.event])).toEqual([
+        ["coding-runtime.history", "refused"],
+      ]);
+      expect(sink.events.map((event) => event.op)).not.toContain("server-log.write-failed");
+      expect(JSON.stringify(sink.events)).not.toContain(unknown);
+    },
+  );
 
   it("keeps bounded continuation context valid JSON and marks omitted history", () => {
     const { history, id, sink } = fixture();

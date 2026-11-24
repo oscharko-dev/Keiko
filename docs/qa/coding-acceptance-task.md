@@ -81,9 +81,12 @@ In the skipped, stale and denied cases the fix is right, so the tester's own che
 Keiko must still not report success: the outcome follows what the run verified, not the file's
 true state.
 
-Before a run ends this way, Keiko sends the model back to verify, up to its bound of two
-continuations (`coding-runtime.run.verification-continuation`, state `continued`). A check the
-person denied blocks that continuation. Either way the last continuation line has state
+Before a run ends this way, Keiko sends the model back once, and only when a check ran after the
+last code change and failed (`coding-runtime.run.verification-continuation`, state `continued`,
+naming the check and how many steps failed). A check that never ran, one that could not start, a
+check the person denied and an exhausted budget each send no continuation (state `skipped`, with its
+closed `skipReason`), and the run settles `verification-not-evidenced` with the concrete
+`verificationGap` on `coding-runtime.run.settled`. Either way the last continuation line has state
 `not-evidenced`. In every case, whatever the outcome, the entries outside the source (`src/`, or `src/main`)
 stay unchanged, the project's count matches the reported checks and the runtime started inside the boundary.
 

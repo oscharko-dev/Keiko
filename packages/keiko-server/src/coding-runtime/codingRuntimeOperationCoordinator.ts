@@ -950,6 +950,15 @@ export class CodingRuntimeOperationCoordinator {
     );
   }
 
+  /**
+   * The generation of the run's newest turn. A settlement queued behind other operations compares it
+   * with the value read when it was queued: a follow-up dispatched in between replaced that turn,
+   * and the replaced turn's outcome must not stop the new one.
+   */
+  public currentTaskGeneration(runId: string): number | undefined {
+    return this.taskGenerations.get(runId);
+  }
+
   private settleTaskCompletion(
     runId: string,
     generation: number,

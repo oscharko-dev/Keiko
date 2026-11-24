@@ -22,11 +22,8 @@ import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
-import {
-  OPENCODE_TURN_ORIGIN_METADATA,
-  type OpenCodeV2FileDiff,
-  type OpenCodeV2HttpClient,
-} from "./opencodeV2HttpClient.js";
+import { keikoContinuationOrigin } from "./opencodeTurnOrigin.js";
+import type { OpenCodeV2FileDiff, OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 /**
  * Turn revert for a live native OpenCode run (B3, S04), built on the producer's snapshots
@@ -370,13 +367,7 @@ export function newestTurnBoundary(
 }
 
 function continuesRequest(message: Readonly<Record<string, unknown>>): boolean {
-  const metadata = message.metadata;
-  return (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    (metadata as Readonly<Record<string, unknown>>)[OPENCODE_TURN_ORIGIN_METADATA] ===
-      "verification-continuation"
-  );
+  return keikoContinuationOrigin(message.metadata) !== undefined;
 }
 
 /** What the newest turn changed, from its human request on: Keiko's continuations included. */

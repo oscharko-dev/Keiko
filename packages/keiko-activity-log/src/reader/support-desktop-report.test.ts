@@ -45,6 +45,7 @@ import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   SUPPORT_INCIDENT_DIRECTORY_NAME,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -531,6 +532,26 @@ describe("desktop canonical support report", () => {
     );
     return analyzeSupportReport(response.reportJson);
   }
+
+  it("selects every line of a correlation by its closure, however far apart in time they are", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    const span = 3 * 60 * 60_000;
+    const lines = [0, span / 2, span].map((offset, index) =>
+      fixtureLine(process, now - span + offset, {
+        op: "client.diagnostic",
+        correlationId: "long-run-root",
+        level: index === 2 ? "error" : "info",
+        errorKind: "internal",
+        fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, now - span, 1), lines);
+    const analyzed = transientReport("long-run-root");
+    const selected = analyzed.analysis.timelines.flatMap((timeline) => timeline.lines);
+    expect(selected).toHaveLength(lines.length);
+    expect(SUPPORT_INCIDENT_WINDOW_BEFORE_MS).toBeLessThan(span / 2);
+  });
 
   it.each(["warn", "error"] as const)(
     "prefers a framed error diagnostic over a %s summary in the selected child closure",

@@ -709,6 +709,21 @@ truncated.". Counts only — never a message, path or run name. An explicit Stop
 run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
 with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
 
+`coding-runtime.history` also records a refused history request as `event=refused` under the
+request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
+`invalid-request` (400). A status or title update checks that the task exists without reading its
+messages, so completing a task records `updated` alone. Removing a project that still holds Coding
+tasks is refused with `PROJECT_HAS_CODING_TASKS` and deletes nothing, because a removed project
+would take its Coding tasks with it. A scheduled wake continues only a task that is still active;
+for a completed task it keeps waiting (#4491).
+
+`coding-runtime.reap.stage` records each step by which the runtime manager ends a run's process
+tree, under the run's correlation id: the closed `stage` (`graceful-timed-out`, `graceful-failed`,
+`forced`, `force-failed`, `recovery-required`, `recovery-mark-failed`), the closed `outcome`
+(`escalated`, `reaped`, `unproven`, `failed`) and `durationMs`; a failing step adds `frames` and
+`causeChain`. A run that needs recovery therefore names the step that left its tree unproven
+(#4491).
+
 `coding-runtime.history.export` records the human's local export of a Coding History task (Export
 JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
 `completed` or `refused` under the request's correlation. A refusal carries one closed reason
@@ -736,9 +751,16 @@ line records `bind`
 summary per binding when its run is released (request, relayed, refused, failed, cancelled,
 upstream client and server error and redirect counts, bytes, duration), under the run's
 correlation. The admission line `coding-runtime.native-build-settings.admitted` adds
-`relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount` and the closed
+`relayMavenBoundCount`, `relayNpmBoundCount`, `relayRefusedCount`, the closed
 `relayRefusalReasons` (including `id-ambiguous`, `rewrite-missed` and the informational
-`profile-inactive`). Never a URL, host, path, artifact coordinate, user name or credential; a
+`profile-inactive`) and the closed `relayNpmTarballRouting`: how the run's npm reaches its
+registries' tarballs. npm moves them onto the relay itself when the default registry is bound and
+every bound registry is that URL (`always` below Full access, `registry-host` at Full access,
+`npm-default` for the public registry or when no npm registry is bound); otherwise the relay
+rewrites each packument's tarball URLs (`relay-url`). The closed `relayNpmRegistryEnvironment` says
+how the run's environment names npm's registry: `relay` when an inherited `npm_config_registry` is
+replaced by the relay of the bound default registry, `inherited` when an inherited name passes
+unchanged because the default registry is not bound, and `none` when the run inherits no name. Never a URL, host, path, artifact coordinate, user name or credential; a
 credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
 never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
 user-level files are read.
@@ -776,7 +798,13 @@ run status sentence, and holds its secondary notices until it is paired; each ho
 `editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
 reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
 (`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
-`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). What a delivery card showed is `delivery-step-shown` with the closed
+`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). A run that changed code and
+ended without a passing check after its last change records why, on `coding-runtime.run.settled` as the closed
+`verificationGap` (`no-check-run`, `check-failed`, `check-not-started`, `budget-exhausted`; #4491) with
+`errorKind=validation-failed` unless a check was blocked, and why no
+continuation ran on `coding-runtime.run.verification-continuation` as `state: skipped` with the closed `skipReason`
+(`docs-only`, `no-failed-check`, `blocked`, `budget-exhausted`, `already-continued`); the one continuation that does
+run records `state: continued` with the failed `check` and its `failedCount`, never a path or output. What a delivery card showed is `delivery-step-shown` with the closed
 `deliveryStep` (`delivery-review`, `stage-review`, `unstage-review`, `commit-review`,
 `commit-result`, `draft-delivery`, `ci-readiness`, `journey`) and only that step's closed
 `deliveryState` (a review's load state, a commit status, a delivery phase, a CI or journey state;

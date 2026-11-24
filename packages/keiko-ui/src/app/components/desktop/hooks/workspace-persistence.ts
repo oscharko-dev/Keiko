@@ -129,7 +129,8 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // #4271: the Workbench's own repository, branch and location selection. Without it a reload left
   // the window to whichever of the shell's project and the active task binding loaded first. A
   // Coding History pick (`historySelection`) is consumed once and stays out.
-  coding: ["repositoryPath", "targetBranch", "targetBranchRoot", "executionLocation"],
+  // `leftRunId` is the run the person left with New task, so a reload does not follow it back.
+  coding: ["repositoryPath", "targetBranch", "targetBranchRoot", "executionLocation", "leftRunId"],
   // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
   // server-held retained description proposal it must review. Each key has a closed value shape
   // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
@@ -244,6 +245,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "coding:targetBranch": sanitizeCodingBranch,
   "coding:targetBranchRoot": sanitizeCodingRoot,
   "coding:executionLocation": sanitizeCodingExecutionLocation,
+  "coding:leftRunId": sanitizeOpaqueReferenceValue,
   "files:rootBinding": sanitizeCodingRepositoryBinding,
   "editor:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,

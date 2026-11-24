@@ -285,10 +285,12 @@ function gatewayDeps(
     /** Receives the provider-reported prompt tokens of every settled call. */
     readonly settled?: number[] | undefined;
     readonly stream?: (() => AsyncIterable<GatewayStreamChunk>) | undefined;
+    /** Settings of the one provider, such as a required reasoning continuation. */
+    readonly providerSettings?: Partial<ModelProviderConfig> | undefined;
   } = {},
 ): UiHandlerDeps {
   const config: GatewayConfig = {
-    providers: [provider()],
+    providers: [{ ...provider(), ...options.providerSettings }],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
     capabilities: [capability()],
   };
@@ -399,6 +401,14 @@ function terminalFailure(
     envelopeDurationExhausted: (runId) => minted.authority.envelopeDurationExhausted(runId),
   });
   return classifyTerminalFailure(facts, RUN_ID);
+}
+
+function turnFailureFrames(hub: CodingRuntimeEventHub): readonly unknown[] {
+  const replay = hub.replay(RUN_ID);
+  if (!replay.ok) throw new Error("expected a replay");
+  return replay.events.filter(
+    (event) => event.kind === "runtime-event" && event.eventKind === "failure-redacted",
+  );
 }
 
 describe("terminal model-call cause through the coding sidecar gateway route (F9)", () => {
@@ -591,6 +601,180 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
         basis: "model-call-failure",
         modelCallFailure: "provider-failed",
       });
+    });
+  });
+
+  // A call the gateway itself ended at its output bound (a reasoning or answer stream past its byte
+  // bound, or a finished answer past the budget) is a failed model call, not an answered one: the run
+  // that then fails names the output bound instead of settling as an internal error.
+  describe("a call the gateway cut at its output bound", () => {
+    const OVER_BOUND = "x".repeat(40_000);
+    const cutOutcomes: readonly (readonly [string, () => AsyncIterable<GatewayStreamChunk>])[] = [
+      [
+        "a reasoning stream",
+        (): AsyncIterable<GatewayStreamChunk> =>
+          (async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "reasoning", token: OVER_BOUND };
+            yield { type: "reasoning", token: OVER_BOUND };
+          })(),
+      ],
+      [
+        "an answer stream",
+        (): AsyncIterable<GatewayStreamChunk> =>
+          (async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: OVER_BOUND };
+          })(),
+      ],
+    ];
+    const OUTPUT_LIMIT_SETTLEMENT = {
+      failureCode: "output-limit-reached",
+      basis: "model-call-failure",
+      modelCallFailure: "output-exhausted",
+    } as const;
+
+    it.each(cutOutcomes)(
+      "keeps %s as the run's output-bound failure instead of an answer",
+      async (_label, stream) => {
+        const minted = mintedAuthority();
+        const hub = new CodingRuntimeEventHub();
+
+        await callGatewayStreamed(minted, hub, stream);
+
+        expect(hub.lastModelCallFailure(RUN_ID)).toBe("output-exhausted");
+        expect(hub.lastModelCallGatewayCut(RUN_ID)).toBe(true);
+        expect(terminalFailure(minted, hub)).toEqual(OUTPUT_LIMIT_SETTLEMENT);
+        const [frame] = turnFailureFrames(hub);
+        expect(frame).toMatchObject({ failureCode: "output-exhausted" });
+      },
+    );
+
+    it("publishes exactly one turn-failure frame for one cut", async () => {
+      const minted = mintedAuthority();
+      const hub = new CodingRuntimeEventHub();
+
+      await callGatewayStreamed(
+        minted,
+        hub,
+        cutOutcomes[0]?.[1] as () => AsyncIterable<GatewayStreamChunk>,
+      );
+
+      const frames = turnFailureFrames(hub);
+      expect(frames).toHaveLength(1);
+    });
+
+    it("keeps the cut over an earlier provider failure, and a real answer still supersedes it", async () => {
+      const minted = mintedAuthority();
+      const hub = new CodingRuntimeEventHub();
+      await callGateway(minted, hub, [failing(new TransportError("synthetic reset"))]);
+      expect(hub.lastModelCallFailure(RUN_ID)).toBe("stream-incomplete");
+
+      await callGatewayStreamed(
+        minted,
+        hub,
+        cutOutcomes[1]?.[1] as () => AsyncIterable<GatewayStreamChunk>,
+      );
+      expect(terminalFailure(minted, hub)).toEqual(OUTPUT_LIMIT_SETTLEMENT);
+
+      await expect(callGateway(minted, hub, [answered()])).resolves.toMatchObject({ status: 200 });
+      expect(hub.lastModelCallFailure(RUN_ID)).toBeUndefined();
+      expect(hub.lastModelCallGatewayCut(RUN_ID)).toBe(false);
+    });
+
+    // A finished answer that still exceeds the budget is the gateway's cut only when no steered
+    // repair preceded it; after a repair ran, the model exhausted its output again.
+    function overBudgetFinished(
+      outputRepair: NormalizedResponse["outputRepair"],
+    ): () => AsyncIterable<GatewayStreamChunk> {
+      return (): AsyncIterable<GatewayStreamChunk> =>
+        (async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          const base = answer();
+          yield {
+            type: "done",
+            response: {
+              ...base,
+              usage: { ...base.usage, completionTokens: 5_000 },
+              ...(outputRepair === undefined ? {} : { outputRepair }),
+            },
+          };
+        })();
+    }
+
+    it.each([
+      [undefined, "output-limit-reached", true],
+      ["recovered", "output-exhausted-repeated", false],
+    ] as const)(
+      "settles a finished over-budget answer after repair %s as %s",
+      async (repair, failureCode, gatewayCut) => {
+        const minted = mintedAuthority();
+        const hub = new CodingRuntimeEventHub();
+
+        await callGatewayStreamed(minted, hub, overBudgetFinished(repair));
+
+        expect(hub.lastModelCallGatewayCut(RUN_ID)).toBe(gatewayCut);
+        expect(terminalFailure(minted, hub)).toEqual({
+          failureCode,
+          basis: "model-call-failure",
+          modelCallFailure: "output-exhausted",
+        });
+        expect(turnFailureFrames(hub)).toHaveLength(1);
+      },
+    );
+
+    // The buffered delivery's two output-bound refusals: a finished answer past the budget, and the
+    // reasoning a provider with a required continuation returned past its bound. Each is one failed
+    // call the gateway cut, published once and settled as the output bound.
+    const BUFFERED_REASONING_BOUND = "r".repeat(20_000);
+    const bufferedCuts: readonly (readonly [string, NormalizedResponse, boolean])[] = [
+      [
+        "a finished answer past the budget",
+        { ...answer(), usage: { ...answer().usage, completionTokens: 5_000 } },
+        false,
+      ],
+      [
+        "the reasoning of a required continuation past its bound",
+        { ...answer(), reasoning: BUFFERED_REASONING_BOUND },
+        true,
+      ],
+    ];
+
+    it.each(bufferedCuts)(
+      "settles a buffered call cut as %s with one output-exhausted frame",
+      async (_label, response, requiredContinuation) => {
+        const minted = mintedAuthority();
+        const hub = new CodingRuntimeEventHub();
+
+        await handleCodingSidecarGatewayChatCompletions(
+          chatRequest(minted.capability, "synthetic"),
+          gatewayDeps(minted, hub, [(): Promise<NormalizedResponse> => Promise.resolve(response)], {
+            providerSettings: requiredContinuation
+              ? { reasoningContinuation: "required-with-tools" }
+              : undefined,
+          }),
+        );
+
+        expect(turnFailureFrames(hub)).toEqual([
+          expect.objectContaining({ failureCode: "output-exhausted" }),
+        ]);
+        expect(terminalFailure(minted, hub)).toEqual(OUTPUT_LIMIT_SETTLEMENT);
+      },
+    );
+
+    it("lets a later provider failure replace the cut's evidence", async () => {
+      const minted = mintedAuthority();
+      const hub = new CodingRuntimeEventHub();
+      await callGatewayStreamed(
+        minted,
+        hub,
+        cutOutcomes[1]?.[1] as () => AsyncIterable<GatewayStreamChunk>,
+      );
+
+      await callGateway(minted, hub, [failing(new TransportError("synthetic reset"))]);
+
+      expect(hub.lastModelCallGatewayCut(RUN_ID)).toBe(false);
+      expect(terminalFailure(minted, hub).failureCode).toBe("provider-unavailable");
     });
   });
 

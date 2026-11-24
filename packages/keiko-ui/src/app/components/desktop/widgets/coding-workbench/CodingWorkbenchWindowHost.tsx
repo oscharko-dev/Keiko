@@ -176,6 +176,8 @@ export function CodingWorkbenchWindowHost({
         historySelection={historySelection}
         onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
         onOpenHistory={() => context.openWindow("codingHistory")}
+        leftRun={typeof cfg.leftRunId === "string" ? cfg.leftRunId : undefined}
+        onLeftRun={(leftRunId) => context.updateCfg({ leftRunId })}
         selectedRoot={root ?? undefined}
         selectedBranch={targetBranch}
         selectedLocation={selectedLocation}

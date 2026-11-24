@@ -768,3 +768,16 @@ describe("the @ file picker for a new task", () => {
     expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
   });
 });
+
+// #4491 night walk: a completed task opened from Coding History has no followed run, yet the next
+// message continues its conversation, so the composer asks for a reply, not for a new task.
+describe("the composer's placeholder", () => {
+  it.each([
+    [{}, "Ask Keiko to inspect, explain, implement, test, or repair something in this project…"],
+    [{ continuesConversation: true }, "Reply to Keiko, or ask for the next change…"],
+    [{ runId: "run-1" }, "Reply to Keiko, or ask for the next change…"],
+  ] as const)("with %o reads %s", (overrides, placeholder) => {
+    render(<TaskStartSection {...props("idle", actions(), overrides)} />);
+    expect(textbox()).toHaveAttribute("placeholder", placeholder);
+  });
+});

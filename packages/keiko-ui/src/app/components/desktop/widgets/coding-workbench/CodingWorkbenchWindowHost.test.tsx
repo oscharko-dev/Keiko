@@ -28,6 +28,8 @@ interface WindowProps {
   readonly onOpenGit?: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository?: (root: string) => void;
   readonly onSelectBranch?: (branch: string) => void;
+  readonly leftRun?: string | undefined;
+  readonly onLeftRun?: (runId: string | undefined) => void;
 }
 
 const windowRendered = vi.hoisted(() => vi.fn<(props: WindowProps) => void>());
@@ -399,6 +401,15 @@ describe("CodingWorkbenchWindowHost", () => {
     const after = windowRendered.mock.calls.at(-1)?.[0];
     expect(after?.selectedRoot).toBe("/repos/b");
     expect(after?.selectedBranch).toBeUndefined();
+  });
+
+  it("keeps the run the window left with New task in its own configuration (#4491)", () => {
+    windowRendered.mockClear();
+    const context = renderHost({ repositoryPath: "/repos/a", leftRunId: "run-7" });
+    const props = windowRendered.mock.calls.at(-1)?.[0];
+    expect(props?.leftRun).toBe("run-7");
+    props?.onLeftRun?.("run-8");
+    expect(context.updateCfg).toHaveBeenCalledWith({ leftRunId: "run-8" });
   });
 
   it("clears saved location and branch when consuming a history selection", () => {

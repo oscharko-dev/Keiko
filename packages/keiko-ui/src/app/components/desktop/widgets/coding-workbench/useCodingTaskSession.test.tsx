@@ -1065,3 +1065,483 @@ describe("history activation settlement", () => {
     );
   });
 });
+
+describe("a followed run's revision bumps refresh the task in the background", () => {
+  function running(revision: number): CodingWorkbenchRuntimeSnapshot {
+    return { ...snapshot("chat-one"), state: "running", revision };
+  }
+
+  function renderRevisions(): {
+    readonly result: { readonly current: ReturnType<typeof useCodingTaskSession> };
+    readonly rerender: (props: { revision: number }) => void;
+  } {
+    return renderHook(
+      ({ revision }: { revision: number }) =>
+        useCodingTaskSession({
+          snapshot: running(revision),
+          active: true,
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: undefined,
+        }),
+      { initialProps: { revision: 1 } },
+    );
+  }
+
+  it("never shows the loading state again and reads a bounded number of times", async () => {
+    const { result, rerender } = renderRevisions();
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    const pendingStates: boolean[] = [];
+    const history = vi.fn();
+    window.addEventListener("keiko:coding-history-changed", history);
+    for (let revision = 2; revision <= 21; revision += 1) {
+      rerender({ revision });
+      pendingStates.push(result.current.pending);
+    }
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    window.removeEventListener("keiko:coding-history-changed", history);
+    expect(pendingStates).not.toContain(true);
+    expect(read.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(history.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it("drops a queued refresh once a task is picked from Coding History", async () => {
+    const { result, rerender } = renderHook(
+      ({ revision, selection }: { revision: number; selection: string | undefined }) =>
+        useCodingTaskSession({
+          snapshot: running(revision),
+          active: false,
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection,
+        }),
+      { initialProps: { revision: 1, selection: undefined as string | undefined } },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    const inflight = deferred<CodingHistoryDetail>();
+    read.mockReturnValueOnce(inflight.promise);
+    rerender({ revision: 2, selection: undefined });
+    rerender({ revision: 3, selection: undefined });
+    const picked: CodingHistoryDetail = {
+      ...detail,
+      task: { ...detail.task, id: "chat-two", latestRunId: "run-two" },
+    };
+    read.mockResolvedValueOnce(picked);
+    rerender({ revision: 3, selection: "chat-two" });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    await act(async () => {
+      inflight.resolve(detail);
+      await inflight.promise;
+    });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(read.mock.calls.map(([id]: unknown[]) => id)).toEqual([
+      "chat-one",
+      "chat-one",
+      "chat-two",
+    ]);
+    expect(result.current.detail?.task.id).toBe("chat-two");
+  });
+
+  it("raises no error when a background read fails", async () => {
+    const { result, rerender } = renderRevisions();
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    read.mockRejectedValue(new Error("temporarily unavailable"));
+    const history = vi.fn();
+    window.addEventListener("keiko:coding-history-changed", history);
+    rerender({ revision: 2 });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reportClientDiagnostic).toHaveBeenCalled());
+    window.removeEventListener("keiko:coding-history-changed", history);
+    expect(result.current.error).toBe(false);
+    expect(result.current.detail?.task.id).toBe("chat-one");
+    expect(history).not.toHaveBeenCalled();
+  });
+});
+
+describe("a task the person left stays left after a reload (#4491)", () => {
+  function render(input: {
+    leftRun?: string;
+    onLeftRun?: (runId: string | undefined) => void;
+  }): ReturnType<typeof renderHook<ReturnType<typeof useCodingTaskSession>, unknown>> {
+    return renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+        location: "local",
+        ...input,
+      }),
+    );
+  }
+
+  it("does not follow a run back into its completed task", async () => {
+    read.mockResolvedValue({ ...detail, task: { ...detail.task, status: "completed" } });
+    const { result } = render({});
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+  });
+
+  it("remembers the run the person left with New task and does not follow it on the next mount", async () => {
+    const onLeftRun = vi.fn();
+    const first = render({ onLeftRun });
+    await waitFor(() => expect(first.result.current.detail?.task.id).toBe("chat-one"));
+    await act(async () => {
+      await first.result.current.newTask();
+    });
+    expect(onLeftRun).toHaveBeenCalledWith("run-one");
+    first.unmount();
+    read.mockClear();
+    const second = render({ leftRun: "run-one" });
+    await waitFor(() => expect(second.result.current.pending).toBe(false));
+    expect(read).not.toHaveBeenCalled();
+    expect(second.result.current.detail).toBeNull();
+    expect(second.result.current.conversationId).toBeUndefined();
+  });
+});
+
+describe("switching back to a repository shows its open task (#4491)", () => {
+  function workspaceOf(workspaceId: string, root: string): ActiveWorkspaceApi {
+    const base = activeWorkspace();
+    if (base.activeInstance === null) throw new Error("fixture has an active instance");
+    return {
+      ...base,
+      activeInstance: { ...base.activeInstance, workspaceId, repositoryRoot: root },
+    };
+  }
+  const other: CodingHistoryDetail = {
+    ...detail,
+    task: {
+      ...detail.task,
+      id: "chat-two",
+      projectPath: "/repo-b",
+      workspaceId: "ws-two",
+      latestRunId: "run-two",
+    },
+  };
+
+  it("restores the first repository's task after a run in the second one", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const first = { snapshot: snapshot("chat-one"), root: "/repo", workspace: activeWorkspace() };
+    const second = {
+      snapshot: { ...snapshot("chat-two"), runId: "run-two" },
+      root: "/repo-b",
+      workspace: workspaceOf("ws-two", "/repo-b"),
+    };
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(result.current.conversationId).toBe("chat-one");
+  });
+
+  it("does not restore a task the person left with New task", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const first = { snapshot: snapshot("chat-one"), root: "/repo", workspace: activeWorkspace() };
+    const second = {
+      snapshot: { ...snapshot("chat-two"), runId: "run-two" },
+      root: "/repo-b",
+      workspace: workspaceOf("ws-two", "/repo-b"),
+    };
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({
+          ...props,
+          active: false,
+          selection: undefined,
+          location: "local",
+        }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    await act(async () => {
+      await result.current.newTask();
+    });
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+  });
+});
+
+describe("an update of the displayed task (#4491)", () => {
+  it("shows a rename made in Coding History without reading the task again", async () => {
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.detail?.task.title).toBe("Inspect"));
+    read.mockClear();
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", {
+          detail: { ...detail.task, title: "Renamed" },
+        }),
+      );
+    });
+    expect(result.current.detail?.task.title).toBe("Renamed");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", {
+          detail: { ...detail.task, id: "chat-other", title: "Other" },
+        }),
+      );
+    });
+    expect(result.current.detail?.task.title).toBe("Renamed");
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Coding History pick while a run is active (#4491)", () => {
+  it("keeps the running task on display and opens the pick once the run has ended", async () => {
+    const picked: CodingHistoryDetail = {
+      ...detail,
+      task: { ...detail.task, id: "chat-two", projectPath: "/repo-b", latestRunId: "run-two" },
+    };
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? picked : detail));
+    const running = { ...snapshot("chat-one"), state: "running" as const };
+    interface Props {
+      readonly root: string;
+      readonly selection: string | undefined;
+      readonly active: boolean;
+    }
+    const initialProps: Props = { root: "/repo", selection: undefined, active: true };
+    const { result, rerender } = renderHook(
+      (props: Props) =>
+        useCodingTaskSession({
+          ...props,
+          snapshot: props.active ? running : snapshot("chat-one"),
+          workspace: activeWorkspace(),
+        }),
+      { initialProps },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender({ root: "/repo-b", selection: "chat-two", active: true });
+    expect(result.current.detail?.task.id).toBe("chat-one");
+    rerender({ root: "/repo-b", selection: "chat-two", active: false });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+  });
+});
+
+describe("completed tasks and the current task (#4491 audit)", () => {
+  const completed: CodingHistoryDetail = {
+    ...detail,
+    task: { ...detail.task, status: "completed" },
+  };
+  const other: CodingHistoryDetail = {
+    ...detail,
+    task: {
+      ...detail.task,
+      id: "chat-two",
+      projectPath: "/repo-b",
+      workspaceId: "ws-two",
+      latestRunId: "run-two",
+    },
+  };
+  function workspaceOf(workspaceId: string, root: string): ActiveWorkspaceApi {
+    const base = activeWorkspace();
+    if (base.activeInstance === null) throw new Error("fixture has an active instance");
+    return {
+      ...base,
+      activeInstance: { ...base.activeInstance, workspaceId, repositoryRoot: root },
+    };
+  }
+  function readsOf(id: string): number {
+    return read.mock.calls.filter((call: unknown[]) => call[0] === id).length;
+  }
+  function switching(): {
+    readonly first: {
+      snapshot: CodingWorkbenchRuntimeSnapshot;
+      root: string;
+      workspace: ActiveWorkspaceApi;
+    };
+    readonly second: {
+      snapshot: CodingWorkbenchRuntimeSnapshot;
+      root: string;
+      workspace: ActiveWorkspaceApi;
+    };
+  } {
+    return {
+      first: { snapshot: snapshot("chat-one"), root: "/repo", workspace: activeWorkspace() },
+      second: {
+        snapshot: { ...snapshot("chat-two"), runId: "run-two" },
+        root: "/repo-b",
+        workspace: workspaceOf("ws-two", "/repo-b"),
+      },
+    };
+  }
+
+  it("keeps a completed task picked from Coding History once its run is followed", async () => {
+    read.mockResolvedValue(completed);
+    const { result, rerender } = renderHook(
+      ({ run }: { readonly run: CodingWorkbenchRuntimeSnapshot | null }) =>
+        useCodingTaskSession({
+          snapshot: run,
+          active: false,
+          root: "/repo",
+          workspace: activeWorkspace(),
+          selection: "chat-one",
+        }),
+      { initialProps: { run: null as CodingWorkbenchRuntimeSnapshot | null } },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender({ run: snapshot("chat-one") });
+    await waitFor(() => expect(readsOf("chat-one")).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail?.task.id).toBe("chat-one");
+  });
+
+  it("does not restore a repository's task that was completed meanwhile", async () => {
+    let done = false;
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? other : done ? completed : detail),
+    );
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    done = true;
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(readsOf("chat-one")).toBe(2));
+    await act(async () => Promise.resolve());
+    expect(result.current.detail).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+  });
+
+  // Lab (#4491): the repository selector binds the repository's workspace only after the window's
+  // root moved, so the first render back still has the other repository's workspace active.
+  it("restores the task once the repository's workspace is active again", async () => {
+    read.mockImplementation((id: string) => Promise.resolve(id === "chat-two" ? other : detail));
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...second, root: "/repo" });
+    await act(async () => Promise.resolve());
+    expect(result.current.detail).toBeNull();
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(readsOf("chat-one")).toBe(2);
+  });
+
+  it("shows the remembered task when the followed run names a task no repository remembers", async () => {
+    const third: CodingHistoryDetail = {
+      ...other,
+      task: { ...other.task, id: "chat-three", status: "completed", latestRunId: "run-three" },
+    };
+    read.mockImplementation((id: string) =>
+      Promise.resolve(id === "chat-two" ? other : id === "chat-three" ? third : detail),
+    );
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: { ...snapshot("chat-three"), runId: "run-three" } });
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    expect(result.current.conversationId).toBe("chat-one");
+  });
+
+  it("raises no error for a remembered task that is gone, on every switch back", async () => {
+    let gone = false;
+    read.mockImplementation((id: string) =>
+      id === "chat-two"
+        ? Promise.resolve(other)
+        : gone
+          ? Promise.reject(new Error("CODING_TASK_NOT_FOUND"))
+          : Promise.resolve(detail),
+    );
+    const { first, second } = switching();
+    const { result, rerender } = renderHook(
+      (props: typeof first) =>
+        useCodingTaskSession({ ...props, active: false, selection: undefined }),
+      { initialProps: first },
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    gone = true;
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(readsOf("chat-one")).toBe(2));
+    await act(async () => Promise.resolve());
+    expect(result.current.error).toBe(false);
+    rerender(second);
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-two"));
+    rerender({ ...first, snapshot: second.snapshot });
+    await waitFor(() => expect(readsOf("chat-one")).toBe(3));
+    await act(async () => Promise.resolve());
+    expect(result.current.error).toBe(false);
+    expect(result.current.detail).toBeNull();
+  });
+
+  it("leaves the displayed task once it is completed in Coding History", async () => {
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", { detail: completed.task }),
+      );
+    });
+    expect(result.current.detail).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+  });
+
+  it("shows a rename of a completed task opened from Coding History", async () => {
+    read.mockResolvedValue(completed);
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: null,
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: "chat-one",
+      }),
+    );
+    await waitFor(() => expect(result.current.detail?.task.id).toBe("chat-one"));
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:coding-history-changed", {
+          detail: { ...completed.task, title: "Renamed" },
+        }),
+      );
+    });
+    expect(result.current.detail?.task.title).toBe("Renamed");
+  });
+});

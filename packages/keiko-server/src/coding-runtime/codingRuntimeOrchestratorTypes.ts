@@ -135,6 +135,8 @@ export interface CodingRuntimeOrchestratorDeps {
    * the continuation keeps its shell form, as before.
    */
   readonly taskHasShellTool?: boolean | undefined;
+  /** Whether the run's tool-call or patch budget is used up (#4491); absent reads as not. */
+  readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
   /**

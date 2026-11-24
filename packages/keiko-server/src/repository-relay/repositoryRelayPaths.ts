@@ -77,12 +77,18 @@ function npmTarball(segments: readonly string[]): RepositoryPathAdmission | unde
   const marker = segments.indexOf("-");
   if (marker < 1 || marker > 2) return undefined;
   const name = npmPackageName(segments.slice(0, marker));
-  const file = segments.slice(marker + 1);
-  const scoped = file.length === 2 && file[0] !== undefined && NPM_SCOPE.test(file[0]);
+  // The name is everything before the `-` directory: `pkg/extra/-/pkg-1.0.0.tgz` names no package.
+  if (name?.split("/").length !== marker) return undefined;
+  return isTarballFile(segments.slice(marker + 1))
+    ? { ok: true, kind: "npm-tarball", upstreamPath: segments.join("/") }
+    : undefined;
+}
+
+// The file after the `-` directory: `name-1.0.0.tgz`, or `@scope/name-1.0.0.tgz`.
+function isTarballFile(file: readonly string[]): boolean {
   const last = file.at(-1);
-  if (name === undefined || last === undefined || !NPM_TARBALL_FILE.test(last)) return undefined;
-  if (file.length !== 1 && !scoped) return undefined;
-  return { ok: true, kind: "npm-tarball", upstreamPath: segments.join("/") };
+  if (last === undefined || !NPM_TARBALL_FILE.test(last)) return false;
+  return file.length === 1 || (file.length === 2 && NPM_SCOPE.test(file[0] ?? ""));
 }
 
 // The one encoded character an npm client sends is the slash of a scoped packument name.
@@ -107,14 +113,29 @@ function pathShapeRefusal(rawPath: string): RepositoryPathRefusal | undefined {
 }
 
 /**
+ * A tarball a lockfile pins on the registry's own URL. Once npm moves such a URL onto the relay
+ * (`replace-registry-host`), it keeps the URL's path, so the registry's own base path stands in
+ * front of the tarball path (#4491): `repository/npm-group/pkg/-/pkg-1.0.0.tgz` for a registry at
+ * `.../repository/npm-group/`. Only a tarball shape right under that base path is admitted.
+ */
+function lockfileTarball(path: string, basePath: string): RepositoryPathAdmission | undefined {
+  if (basePath === "" || !path.startsWith(basePath) || path.includes("%")) return undefined;
+  return npmTarball(path.slice(basePath.length).split("/"));
+}
+
+/**
  * The upstream path of a repository request, or why it is refused. `rawPath` is the path as it was
  * sent, after the relay's own prefix and without its query: encoded characters are still encoded.
+ * `upstreamBasePath` is the repository's own base path as its URL normalises it, without the
+ * leading slash (`repository/npm-group/`, or empty for a registry at the root).
  */
 export function admitRepositoryPath(
   ecosystem: RepositoryEcosystem,
   rawPath: string,
+  upstreamBasePath = "",
 ): RepositoryPathAdmission {
   const refusal = pathShapeRefusal(rawPath);
   if (refusal !== undefined) return { ok: false, reason: refusal };
-  return ecosystem === "maven" ? mavenPath(rawPath) : npmPath(rawPath);
+  if (ecosystem === "maven") return mavenPath(rawPath);
+  return lockfileTarball(rawPath, upstreamBasePath) ?? npmPath(rawPath);
 }

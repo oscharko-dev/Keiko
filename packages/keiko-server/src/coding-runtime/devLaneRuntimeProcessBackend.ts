@@ -64,6 +64,10 @@ import {
 // sandbox (darwinProcessTable.ts); this process layer runs it.
 const readDarwinProcessTable = darwinProcessTableReader(promisify(execFile));
 
+// Reconciliation awaits an exited tree's sweep, but not without end: a stalled member or process
+// table leaves the tree unproven (`runtime-reap-unproven`) after this bound.
+const RECONCILE_SWEEP_BOUND_MS = 60_000;
+
 /**
  * Gateway-enforcing POSIX process backend. macOS uses Seatbelt for development/evaluation while a
  * release-qualified Linux runtime uses the namespace-to-gateway launcher. Both routes consume the
@@ -239,18 +243,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       shell: false,
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
-    const tree = ownTree(
-      `dev-lane-opencode-${String(this.nextTreeId++)}`,
-      child,
-      request.parentLifetime,
-      (error) => {
-        recordChildConfinementFailure(this.activityLog, request.runId, child, error);
-      },
-    );
-    this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
-    return tree;
+    return this.ownLaunchedTree(child, request, () => {
+      this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
+    });
   }
 
   private spawnConfinedTree(
@@ -275,15 +270,26 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       shell: false,
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    this.attachLaunchPorts(child, request, decision.attestation.backend, setLaunchPhase);
-    recordRuntimeGatewayConfinementSpawned(
-      this.activityLog,
-      request.runId,
-      recordedConfinementBackend(decision.attestation.backend),
-      policy,
-      gitExecutable,
-      request.parentLifetime,
-    );
+    return this.ownLaunchedTree(child, request, () => {
+      this.attachLaunchPorts(child, request, decision.attestation.backend, setLaunchPhase);
+      recordRuntimeGatewayConfinementSpawned(
+        this.activityLog,
+        request.runId,
+        recordedConfinementBackend(decision.attestation.backend),
+        policy,
+        gitExecutable,
+        request.parentLifetime,
+      );
+    });
+  }
+
+  // The child's error listener exists from the moment it is spawned; a step that fails before the
+  // tree is owned must not leave the detached process behind.
+  private ownLaunchedTree(
+    child: DevLaneRuntimeChildProcess,
+    request: RuntimeSupervisorLaunchRequest,
+    beforeOwned: () => void,
+  ): RuntimeProcessTree {
     const tree = ownTree(
       `dev-lane-opencode-${String(this.nextTreeId++)}`,
       child,
@@ -292,8 +298,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
         recordChildConfinementFailure(this.activityLog, request.runId, child, error);
       },
     );
-    this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
+    try {
+      beforeOwned();
+      this.ownedTrees.add(tree);
+      this.trackDescendants(tree, request.runId);
+    } catch (error) {
+      terminateUnownedChild(child, this.killProcessGroup);
+      throw error;
+    }
     return tree;
   }
 
@@ -364,15 +376,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
   ): void {
     setLaunchPhase("tree-ownership");
-    assertStdinLifetime(child, request.parentLifetime, this.killProcessGroup);
+    assertStdinLifetime(child, request.parentLifetime);
     setLaunchPhase("launcher-diagnostics");
-    attachOrTerminateLinuxGatewayDiagnostics(
-      child,
-      this.activityLog,
-      request.runId,
-      backend,
-      this.killProcessGroup,
-    );
+    attachLinuxGatewayDiagnostics(child, this.activityLog, request.runId, backend);
     setLaunchPhase("tree-ownership");
   }
 
@@ -412,7 +418,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     if (!tree.exited && timeoutMs > 0) await this.rootExit(tree, timeoutMs);
     if (!this.completedTreeExit(tree)) return false;
     // Reconciliation answers for an exited tree: its sweep is awaited to its own end.
-    const remaining = timeoutMs > 0 ? deadline - performance.now() : Number.POSITIVE_INFINITY;
+    const remaining = timeoutMs > 0 ? deadline - performance.now() : RECONCILE_SWEEP_BOUND_MS;
     return descendantsEnded(await sweepWithin(tree, remaining));
   }
 
@@ -452,8 +458,7 @@ function sweepWithin(
   if (tree.descendants === undefined) return Promise.resolve("untracked");
   if (!tree.exited) return Promise.resolve(undefined);
   const sweep = tree.descendants.sweep();
-  if (!Number.isFinite(remainingMs)) return sweep;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const timeout = setTimeout(
       () => {
         resolve(undefined);
@@ -461,10 +466,17 @@ function sweepWithin(
       Math.max(0, remainingMs),
     );
     timeout.unref();
-    void sweep.then((result) => {
-      clearTimeout(timeout);
-      resolve(result);
-    });
+    // A failed sweep reaches the caller, whose reap stage records it, as an awaited sweep did.
+    sweep.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error instanceof Error ? error : new Error("descendant-sweep-failed"));
+      },
+    );
   });
 }
 
@@ -665,21 +677,6 @@ function attachLinuxGatewayDiagnostics(
   });
 }
 
-function attachOrTerminateLinuxGatewayDiagnostics(
-  child: DevLaneRuntimeChildProcess,
-  sink: ServerLogSink,
-  runId: string,
-  backend: string,
-  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
-): void {
-  try {
-    attachLinuxGatewayDiagnostics(child, sink, runId, backend);
-  } catch (error) {
-    terminateUnownedChild(child, killProcessGroup);
-    throw error;
-  }
-}
-
 function terminateUnownedChild(
   child: DevLaneRuntimeChildProcess,
   killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
@@ -703,13 +700,11 @@ function terminateUnownedChild(
 function assertStdinLifetime(
   child: DevLaneRuntimeChildProcess,
   parentLifetime: "stdin-eof" | undefined,
-  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
 ): void {
   if (parentLifetime === undefined) return;
   const stdin = child.stdin;
   if (stdin instanceof Writable && stdin.writable && !stdin.destroyed && !stdin.writableEnded)
     return;
-  terminateUnownedChild(child, killProcessGroup);
   throw new TypeError("runtime-stdin-lifetime-unavailable");
 }
 

@@ -721,6 +721,12 @@ export interface CodingWorkbenchVerificationSummary {
   readonly failedCount: number;
   /** Denied steps included in failedCount; absent on historical summaries. Never grants a pass. */
   readonly deniedCount?: number;
+  /**
+   * Steps that never ran to a verdict (denied, cancelled or resource-exceeded), included in
+   * failedCount; absent on historical summaries. Only failed and timed-out steps are a check that
+   * ran and did not pass (#4491).
+   */
+  readonly notRunCount?: number;
   readonly skippedCount: number;
   /** Actual VerificationReport duration, in milliseconds. */
   readonly durationMs: number;

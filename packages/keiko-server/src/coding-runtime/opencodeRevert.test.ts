@@ -246,6 +246,21 @@ describe("newestTurnBoundary", () => {
     expect(newestTurnBoundary(twice)).toBe("msg_turn_user");
   });
 
+  // #4491: Keiko's delivery continuation continues the human's request the same way.
+  it("reaches back across Keiko's delivery continuation to the human's request", () => {
+    expect(
+      newestTurnBoundary([
+        ...TURN,
+        {
+          id: "msg_delivery",
+          type: "user",
+          metadata: { keikoTurnOriginV1: "delivery-continuation" },
+        },
+        { id: "msg_delivery_idle", type: "idle" },
+      ]),
+    ).toBe("msg_turn_user");
+  });
+
   it("stops at the human's newest request and treats any other metadata as human", () => {
     expect(
       newestTurnBoundary([

@@ -23,11 +23,13 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TURNS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   isCodingSafeActivityToolPresentation,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityMessageOrigin,
   type CodingSafeActivityReasoning,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
@@ -228,6 +230,11 @@ export type CodingSafeActivitySignal =
       readonly kind: "message";
       readonly messageId: string;
       readonly role: CodingSafeActivityMessageRole;
+      /**
+       * A `user` message Keiko dispatched itself, read from the runtime message's origin metadata
+       * (#4491). Absent: the person's own message.
+       */
+      readonly origin?: CodingSafeActivityMessageOrigin | undefined;
       readonly parentMessageId?: string | undefined;
       /** Committed native metadata; the backend projects it separately without retaining bodies. */
       readonly nativeRetry?: CodingWorkbenchNativeRetry;
@@ -352,6 +359,7 @@ export interface CodingSafeActivityProjection {
 interface MutableMessage {
   messageId: string;
   role: CodingSafeActivityMessageRole;
+  origin?: CodingSafeActivityMessageOrigin;
   occurredAt: string;
   segments: CodingSafeActivityTextSegment[];
   truncated: boolean;
@@ -1012,6 +1020,7 @@ function newMessage(
   return {
     messageId: signal.messageId,
     role: signal.role,
+    ...(signal.origin === undefined ? {} : { origin: signal.origin }),
     occurredAt: signal.occurredAt,
     segments: [],
     truncated: false,
@@ -1563,11 +1572,23 @@ function validSignalBase(signal: CodingSafeActivitySignal): boolean {
   );
 }
 
+// An origin names a user message Keiko dispatched itself, by the contract's closed word.
+function validMessageOrigin(
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
+): boolean {
+  if (signal.origin === undefined) return true;
+  return (
+    signal.role === "user" &&
+    (CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS as readonly string[]).includes(signal.origin)
+  );
+}
+
 function validMessageSignal(
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
 ): boolean {
   return (
     safeId(signal.messageId) &&
+    validMessageOrigin(signal) &&
     (signal.parentMessageId === undefined || safeId(signal.parentMessageId)) &&
     (signal.nativeRetry === undefined ||
       (signal.role === "assistant" && isCodingWorkbenchNativeRetry(signal.nativeRetry)))
@@ -1658,7 +1679,7 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 
 /** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
-  message: ["messageId", "role", "parentMessageId", "nativeRetry"],
+  message: ["messageId", "role", "origin", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   plan: ["anchorMessageId", "steps"],
