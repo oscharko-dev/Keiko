@@ -2188,7 +2188,9 @@ describe("production pending-spawn lease binding", () => {
       };
       expect(backend.canSpawnRuntime(launch)).toBe(true);
       if (kind === "revoked") await backend.authorityLifecycle.revokeRuntime(request.runId);
-      if (kind === "expired") fixture.advanceNow(121 * 60_000);
+      // One minute past the minted envelope, derived from the production default (#2643).
+      if (kind === "expired")
+        fixture.advanceNow(runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES) + 60_000);
       const replacements = {
         run: { runId: "foreign-run" },
         tree: { treeBindingId: "0".repeat(64) },
@@ -2211,7 +2213,11 @@ import {
 } from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
-import { productionRuntimeAuthorityFacts } from "./productionRuntimeWorkspaceAuthority.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  productionRuntimeAuthorityFacts,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 
 function acceptedInitializationProjectionFixture() {
   const base = catalogRuntimeFixture("autonomous-delivery");

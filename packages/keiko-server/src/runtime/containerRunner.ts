@@ -15,13 +15,13 @@ import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
-  DEFAULT_SANDBOX_POLICY,
   runCommand,
   type CommandResult,
   type RunCommandDeps,
   type SandboxPolicy,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
+import { COMMAND_SANDBOX_POLICY } from "../command-wall-time.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
@@ -362,7 +362,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   public constructor(opts: ContainerRunnerManagerOptions) {
     this.store = opts.store;
     this.evidenceStore = opts.evidenceStore;
-    this.policy = opts.policy ?? DEFAULT_SANDBOX_POLICY;
+    this.policy = opts.policy ?? COMMAND_SANDBOX_POLICY;
     this.executionPolicy = opts.executionPolicy ?? DEFAULT_CONTAINER_EXECUTION_POLICY;
     this.catalog = opts.catalog ?? DEFAULT_CONTAINER_TASKS;
     this.processEnv = opts.processEnv ?? process.env;

@@ -7,7 +7,7 @@
 // invented here — the executor allowlist (COMMAND_TASK_RULES) and the discovery source are the only
 // additions over the proven ADR-0018 terminal machinery this module mirrors.
 //
-// Reuse (UNCHANGED): runCommand + DEFAULT_SANDBOX_POLICY (@oscharko-dev/keiko-tools), readWorkspaceFile
+// Reuse (UNCHANGED): runCommand (@oscharko-dev/keiko-tools) under the command wall time, readWorkspaceFile
 // + path containment (@oscharko-dev/keiko-workspace), EvidenceStore (@oscharko-dev/keiko-evidence),
 // ProjectStore (./store). New (bounded composition): CommandRunnerManager + content-free run evidence.
 
@@ -16,7 +16,6 @@ import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
-  DEFAULT_SANDBOX_POLICY,
   runCommand,
   type CommandResult,
   type RunCommandDeps,
@@ -24,6 +23,7 @@ import {
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
+import { COMMAND_SANDBOX_POLICY } from "./command-wall-time.js";
 import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -75,7 +75,7 @@ const MAX_SCRIPT_NAME_LENGTH = 120;
 // allowed, so a discovered name can never smuggle a flag or shell metacharacter into `npm run`.
 const SAFE_SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const COMMAND_RUNNER_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
-  ...DEFAULT_SANDBOX_POLICY,
+  ...COMMAND_SANDBOX_POLICY,
   network: "none",
   filesystem: "execution-root",
 });

@@ -7,7 +7,12 @@ import {
   useWorkspaceConnectorWindows,
 } from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
-import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
+import {
+  ClaimNoticeLine,
+  ContextElisionLine,
+  useClaimNoticeText,
+  useContextElisionText,
+} from "./ClaimNoticeLine";
 import { useTurnEndText } from "./turnEndText";
 import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
@@ -56,6 +61,7 @@ import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ChatClaimNotice,
+  type ChatToolContextElision,
   type ChatToolTranscript,
   type ChatToolTurnEnd,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -605,15 +611,25 @@ export function turnEndOfAnswer(
   return transcriptOfAnswer(messages, answer)?.turnEnd;
 }
 
-/** The stored facts of the turn only its closing answer carries: the claim marker and the ending. */
+/**
+ * The stored facts of the turn only its closing answer carries: the claim marker, the ending and
+ * the context note.
+ */
 function turnClosingProps(
   userMessage: ChatMessage | null | undefined,
   closing: boolean,
-): { readonly claimNotice?: ChatClaimNotice; readonly turnEnd?: ChatToolTurnEnd } {
+): {
+  readonly claimNotice?: ChatClaimNotice;
+  readonly turnEnd?: ChatToolTurnEnd;
+  readonly contextElision?: ChatToolContextElision;
+} {
   const transcript = closing ? userMessage?.toolTranscript : undefined;
   return {
     ...(transcript?.claimNotice === undefined ? {} : { claimNotice: transcript.claimNotice }),
     ...(transcript?.turnEnd === undefined ? {} : { turnEnd: transcript.turnEnd }),
+    ...(transcript?.contextElision === undefined
+      ? {}
+      : { contextElision: transcript.contextElision }),
   };
 }
 
@@ -1148,10 +1164,13 @@ function ChatBubbleImpl({
   layout = "stack",
   claimNotice,
   turnEnd,
+  contextElision,
 }: {
   readonly message: ChatMessage;
   /** The stored turn's marker; only the first answer of the turn carries it, never a regeneration. */
   readonly claimNotice?: ChatClaimNotice | undefined;
+  /** Older tool results the turn sent the model only as a summary; first answer only, as above. */
+  readonly contextElision?: ChatToolContextElision | undefined;
   /** The stored ending of a turn that ended early; the answer is then worded from it (#4355). */
   readonly turnEnd?: ChatToolTurnEnd | undefined;
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
@@ -1198,9 +1217,9 @@ function ChatBubbleImpl({
   const evidence = useConnectedEvidenceReferences(displayedMessage.groundedAnswer, repositoryRoots);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
-  const claimNoticeText = useClaimNoticeText(
-    !isUser && (displayedMessage.responseVersion ?? 1) === 1 ? claimNotice : undefined,
-  );
+  const firstAnswer = !isUser && (displayedMessage.responseVersion ?? 1) === 1;
+  const claimNoticeText = useClaimNoticeText(firstAnswer ? claimNotice : undefined);
+  const contextElisionText = useContextElisionText(firstAnswer ? contextElision : undefined);
   const citationPreview = usePdfCitationPreviewController({
     answer: displayedMessage.groundedAnswer,
     chatId: activeChat?.id,
@@ -1259,6 +1278,7 @@ function ChatBubbleImpl({
           citationPreview={citationPreview}
         />
         <ClaimNoticeLine text={claimNoticeText} />
+        <ContextElisionLine text={contextElisionText} />
         <JiraChatTools
           transcript={message.toolTranscript}
           messageId={message.id}

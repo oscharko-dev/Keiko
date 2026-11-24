@@ -3155,6 +3155,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "No downloadable Jira report was generated in this turn. Code blocks can be copied, but are not report exports.",
   "chat.claimNotice.toolCallNotExecuted":
     "A tool call written as text in this answer was not executed.",
+  "chat.contextElision.note.one":
+    "To keep this conversation within the model's context window, Keiko sent the model only a summary of one older tool result. The full result is still listed with its tool call.",
+  "chat.contextElision.note.other":
+    "To keep this conversation within the model's context window, Keiko sent the model only a summary of {count} older tool results. The full results are still listed with the tool calls.",
   "chat.turnEnd.lead": "This request was not finished.",
   "chat.turnEnd.reason.budgetExhausted": "This turn used up its tool-call budget.",
   "chat.turnEnd.reason.deadline": "This turn reached its time limit.",

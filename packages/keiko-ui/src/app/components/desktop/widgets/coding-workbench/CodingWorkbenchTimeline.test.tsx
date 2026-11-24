@@ -971,7 +971,7 @@ describe("CodingWorkbenchTimeline", () => {
 
   // F9 (#3873): run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with
   // a model call in flight and read "The coding run ended with an internal error". The settled
-  // failure now names the time limit and the setting that lengthens it.
+  // failure now names the time limit and the setting that sets it.
   it("names the exhausted time limit on a run that reached its envelope's end", async () => {
     const failure: CodingWorkbenchRuntimeSseEvent = {
       ...event(5),

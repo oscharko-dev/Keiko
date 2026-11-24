@@ -143,9 +143,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatMessage } from "./store/index.js";
 import {
-  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
-  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
   chatToolExchangeReservation,
+  chatToolTranscriptAdmits,
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
@@ -444,6 +443,7 @@ function reportTurnFailure(
     | "chat.tool-turn.selection-release"
     | "chat.tool-turn.claim-notice"
     | "chat.tool-turn.turn-end"
+    | "chat.tool-turn.context-elision"
     | "chat.tool-turn.state-unreadable"
     | "chat.tool-turn.finalize" = "chat.tool-turn.batch-progress",
 ): void {
@@ -533,7 +533,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private readonly nestedModelConfirmations = new WeakMap<NormalizedResponse, () => void>();
   private readonly limits: HarnessLimits;
   private elidedResults = 0;
-  private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
+  /** Worst-case bytes of the calls started and not yet settled, by call id. */
+  private readonly inFlightTranscriptBytes = new Map<string, number>();
   private readonly instruction: GatewayMessage;
   private toolDefinitions: readonly ToolDefinition[];
   /** The correction the next round carries after the gateway's own correction was rejected too. */
@@ -1096,8 +1097,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       "replay-conflict",
     );
     this.callIds.add(call.id);
-    await this.startExchange(call, call.invocation);
     const identity = sha256Hex(canonicalise({ messageId: message.id, callId: call.id }));
+    await this.startExchange(call, call.invocation);
     try {
       await this.prepareInvocation(call, identity);
       const { outcome, progress } = await this.dispatchWithProgress(call, identity);
@@ -1129,6 +1130,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.appendObservedExchange(call.id, origin);
       await this.publish();
     } finally {
+      this.inFlightTranscriptBytes.delete(call.id);
       this.options.finalizeInvocation?.(identity);
     }
   }
@@ -1140,26 +1142,39 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const publicCall = publicToolCall(call);
     const operationBinding = startedOperationBinding(invocation);
     this.reserveTranscript(publicCall, invocation.toolRef.canonicalId);
-    deps.store.updateChatToolTranscript(
-      message.id,
-      {
-        kind: "started",
-        call: publicCall,
-        ...(operationBinding === undefined ? {} : { operationBinding }),
-      },
-      correlationId,
-    );
-    await this.publish();
+    // Until dispatch takes the call over, a failed write or publish releases its worst case here.
+    let started = false;
+    try {
+      deps.store.updateChatToolTranscript(
+        message.id,
+        {
+          kind: "started",
+          call: publicCall,
+          ...(operationBinding === undefined ? {} : { operationBinding }),
+        },
+        correlationId,
+      );
+      await this.publish();
+      started = true;
+    } finally {
+      if (!started) this.inFlightTranscriptBytes.delete(call.id);
+    }
   }
-  /** A call whose worst-case exchange no longer fits the stored transcript ends the turn. */
+  /**
+   * A call whose worst-case exchange no longer fits beside the transcript's stored bytes and the
+   * worst case of the calls still in flight ends the turn. A settled call stops holding its worst
+   * case: the stored transcript then carries its actual result.
+   */
   private reserveTranscript(call: ChatToolExchange["call"], canonicalId: string): void {
     const descriptor = this.managed.catalog.descriptors.find(
       (entry) => entry.toolRef.canonicalId === canonicalId,
     );
     requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
-    const reserved = this.reservedTranscriptBytes + chatToolExchangeReservation(call, descriptor);
-    requireDispatch(reserved <= CHAT_TOOL_TRANSCRIPT_MAX_BYTES, "denied", "budget-exhausted");
-    this.reservedTranscriptBytes = reserved;
+    const stored = this.options.deps.store.chatToolTranscriptSize(this.options.message.id).bytes;
+    const held = [...this.inFlightTranscriptBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
+    const bytes = chatToolExchangeReservation(call, descriptor);
+    requireDispatch(chatToolTranscriptAdmits(stored, held, bytes), "denied", "budget-exhausted");
+    this.inFlightTranscriptBytes.set(call.id, bytes);
   }
   private appendObservedExchange(id: string, origin: "runtime" | undefined): void {
     const stored = this.options.deps.store
@@ -1722,8 +1737,27 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         elidedResultCount: fitted.elidedCount,
         continuationMessageCount: continuation.length,
       });
+      this.storeContextElision(fitted.elidedCount);
     }
     return fitted.messages;
+  }
+
+  /**
+   * Trimming the conversation to the model's window is shown, never silent (owner decision
+   * 2026-11-24): the answer carries how many older tool results reached the model only as a summary.
+   */
+  private storeContextElision(elidedResultCount: number): void {
+    const { deps, message, correlationId } = this.options;
+    try {
+      deps.store.updateChatToolTranscript(
+        message.id,
+        { kind: "context-elision", elision: { elidedResultCount } },
+        correlationId,
+      );
+    } catch (error: unknown) {
+      // The answer is still published unchanged; the missing note is a diagnostic, not a failure.
+      reportTurnFailure(this.options, error, "chat.tool-turn.context-elision");
+    }
   }
 
   /** A bounded source-membership receipt, through the same offered catalog and authority as reads. */

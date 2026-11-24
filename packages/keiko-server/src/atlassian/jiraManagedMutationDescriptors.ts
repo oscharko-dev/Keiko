@@ -146,6 +146,7 @@ import {
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -391,6 +392,8 @@ export const GATED_RESULT_BYTES_MAX =
 // top of its own work (ADR-0175). Charging the decision to the work budget ended every card after
 // 90 seconds, however much time the approval itself still had.
 const WRITE_DURATION_MS_MAX = 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS;
+/** Create-all ends ten minutes before the Chat turn that dispatches it, after the batch draft. */
+export const JIRA_CREATE_ALL_DURATION_MS_MAX = CHAT_TOOL_TURN_BUDGET.maxRuntimeMs - 10 * 60_000;
 const GATED_RESULT_BOUNDS = {
   maxResultBytes: GATED_RESULT_BYTES_MAX,
   maxDurationMs: WRITE_DURATION_MS_MAX,
@@ -724,7 +727,7 @@ const DEFINITIONS: Readonly<
     // reported by counts and key ranges, never cut (#4178).
     bounds: {
       maxResultBytes: 262144,
-      maxDurationMs: 3000000,
+      maxDurationMs: JIRA_CREATE_ALL_DURATION_MS_MAX,
       maxResultCount: JIRA_DRAFT_RESULT_ROWS_MAX,
     },
   },

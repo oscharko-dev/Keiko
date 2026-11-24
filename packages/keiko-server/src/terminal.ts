@@ -32,10 +32,10 @@ import {
   type RunCommandDeps,
   isTerminalCommandAllowed,
   TERMINAL_COMMAND_RULES,
-  DEFAULT_SANDBOX_POLICY,
   type SandboxPolicy,
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
+import { COMMAND_SANDBOX_POLICY } from "./command-wall-time.js";
 import {
   isWithinWorkspace,
   resolveWithinWorkspace,
@@ -733,7 +733,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   public constructor(opts: TerminalExecutionManagerOptions) {
     this.store = opts.store;
     this.evidenceStore = opts.evidenceStore;
-    this.policy = opts.policy ?? DEFAULT_SANDBOX_POLICY;
+    this.policy = opts.policy ?? COMMAND_SANDBOX_POLICY;
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? defaultRedactor;
     this.diagnostics = opts.diagnostics;
@@ -1119,7 +1119,7 @@ const ALLOWED_COMMAND_NAMES: readonly string[] = Object.freeze(
 );
 
 export function buildTerminalPolicySummary(
-  policy: SandboxPolicy = DEFAULT_SANDBOX_POLICY,
+  policy: SandboxPolicy = COMMAND_SANDBOX_POLICY,
 ): TerminalPolicySummary {
   return {
     commands: ALLOWED_COMMAND_NAMES,

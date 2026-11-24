@@ -20,6 +20,7 @@ import {
   CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
   CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
   chatToolExchangeReservation,
+  chatToolTranscriptAdmits,
   chatToolTranscriptOccupancy,
 } from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -227,12 +228,29 @@ describe("ordinary Chat structured tool transcript", () => {
     const { store, db, id } = fixture();
     // The bound is one exchange per tool call the largest turn envelope admits (#4175).
     const bound = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
-    for (let index = 0; index < bound; index++)
-      store.updateChatToolTranscript(
-        id,
-        { kind: "started", call: { ...call, id: `call-${String(index)}` } },
-        "bounded",
-      );
+    // One real update, then the stored text is widened to the full bound: ten thousand rewrites
+    // of a growing transcript would measure the test, not the bound.
+    store.updateChatToolTranscript(
+      id,
+      { kind: "started", call: { ...call, id: "call-0" } },
+      "bounded",
+    );
+    const seeded = db
+      .prepare("SELECT tool_transcript_json AS body FROM chat_messages WHERE id = ?")
+      .get(id)?.body;
+    const stored = JSON.parse(typeof seeded === "string" ? seeded : "{}") as {
+      exchanges: { call: { id: string } }[];
+    };
+    const first = stored.exchanges[0];
+    if (first === undefined) throw new TypeError("Missing seeded exchange");
+    stored.exchanges = Array.from({ length: bound }, (_, index) => ({
+      ...first,
+      call: { ...first.call, id: `call-${String(index)}` },
+    }));
+    db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+      JSON.stringify(stored),
+      id,
+    );
     expect(() => {
       store.updateChatToolTranscript(
         id,
@@ -245,6 +263,34 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(() => {
       store.updateChatToolTranscript(id, { kind: "started", call }, "terminated");
     }).toThrow("no longer pending");
+  });
+
+  it("reports the stored transcript bytes of a pending turn, and none before a first update", () => {
+    const { store, db, id, chatId } = fixture();
+    expect(store.chatToolTranscriptSize(id)).toEqual({ chatId, bytes: 0 });
+    const wide = { ...call, arguments: { jql: "Prüfung äöü 測試" } };
+    store.updateChatToolTranscript(id, { kind: "started", call: wide }, "bytes");
+    const body = String(
+      db.prepare("SELECT tool_transcript_json AS body FROM chat_messages WHERE id = ?").get(id)
+        ?.body,
+    );
+    // Bytes, not characters: the bound is a byte bound.
+    expect(Buffer.byteLength(body)).toBeGreaterThan(body.length);
+    expect(store.chatToolTranscriptSize(id)).toEqual({ chatId, bytes: Buffer.byteLength(body) });
+    expect(chatToolTranscriptOccupancy(db, id).bytes).toBe(Buffer.byteLength(body));
+    expect(() => store.chatToolTranscriptSize("missing")).toThrow("Message");
+    db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(id);
+    expect(() => store.chatToolTranscriptSize(id)).toThrow("no longer pending");
+  });
+
+  it("admits an exchange only while the base share stays free beside the stored and held bytes", () => {
+    const room = CHAT_TOOL_TRANSCRIPT_MAX_BYTES - CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
+    expect(chatToolTranscriptAdmits(0, 0, room)).toBe(true);
+    expect(chatToolTranscriptAdmits(0, 0, room + 1)).toBe(false);
+    expect(chatToolTranscriptAdmits(room - 10, 0, 10)).toBe(true);
+    expect(chatToolTranscriptAdmits(room - 10, 0, 11)).toBe(false);
+    expect(chatToolTranscriptAdmits(room - 10, 5, 5)).toBe(true);
+    expect(chatToolTranscriptAdmits(room - 10, 6, 5)).toBe(false);
   });
 
   it("stores a public consent view only for its owning Chat", () => {
@@ -403,12 +449,59 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(line).not.toContain("jira_create");
   });
 
+  // Owner decision 2026-11-24: trimming the conversation to the model's window is shown, never
+  // silent. Only the count is stored and logged.
+  function storedElision(store: UiStore, id: string): unknown {
+    return store.findMessageById(id)?.toolTranscript?.contextElision;
+  }
+  function storeElision(store: UiStore, id: string, elision: unknown): void {
+    store.updateChatToolTranscript(
+      id,
+      {
+        kind: "context-elision",
+        elision: elision as { readonly elidedResultCount: number } | undefined,
+      },
+      "fitted",
+    );
+  }
+
+  it("stores how many tool results reached the model only as a summary and refuses anything else", () => {
+    const { store, id } = fixture();
+    expect(storedElision(store, id)).toBeUndefined();
+    storeElision(store, id, { elidedResultCount: 7 });
+    expect(storedElision(store, id)).toEqual({ elidedResultCount: 7 });
+    for (const bad of [
+      { elidedResultCount: 0 },
+      { elidedResultCount: 1.5 },
+      { elidedResultCount: "7" },
+      { elidedResultCount: 7, tool: "jira_create" },
+    ]) {
+      expect(() => {
+        storeElision(store, id, bad);
+      }).toThrow("Invalid context elision");
+    }
+    expect(storedElision(store, id)).toEqual({ elidedResultCount: 7 });
+    storeElision(store, id, undefined);
+    expect(storedElision(store, id)).toBeUndefined();
+  });
+
+  it("logs only the count of summarised tool results", () => {
+    const { store, id, logs } = fixture();
+    storeElision(store, id, { elidedResultCount: 7 });
+    const event = logs.events.filter((entry) => entry.op === "chat.tool-transcript.updated").at(-1);
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-transcript.updated.line", line);
+    expect(line).toContain("context-elision");
+    expect(event?.extra).toMatchObject({ phase: "context-elision", elidedResultCount: 7 });
+  });
+
   // An invalid optional marker must never cost the conversation its tool history: it is dropped on
   // read (the stored English answer is what the Chat shows) and recorded once, body-free.
   it.each([
     ["turnEnd", { reason: "Jira is down" }, "turn-end"],
     ["turnEnd", "not an object", "turn-end"],
     ["claimNotice", "Note from Keiko", "claim-notice"],
+    ["contextElision", { elidedResultCount: -1 }, "context-elision"],
   ] as const)("drops an invalid %s on read and keeps the exchanges (#4355)", (key, bad, name) => {
     const { store, db, id, logs } = fixture();
     store.updateChatToolTranscript(id, { kind: "started", call }, "keep");
@@ -1086,8 +1179,9 @@ describe("transcript byte reservation (#4175)", () => {
     expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThanOrEqual(
       chatToolExchangeReservation(largeCall, descriptor),
     );
-    // Reads at the full result bound fit far fewer than the 250 admitted calls, so the turn ends
-    // as budget-exhausted before persistence could refuse a started call.
+    // Reads at the full result bound fit far fewer than the admitted calls when every result is
+    // as large as its bound, so such a turn ends as budget-exhausted before persistence could
+    // refuse a started call; small results settle their reservation and admit many more.
     const fitting = Math.floor(
       (CHAT_TOOL_TRANSCRIPT_MAX_BYTES - CHAT_TOOL_TRANSCRIPT_BASE_BYTES) /
         chatToolExchangeReservation(call, descriptor),

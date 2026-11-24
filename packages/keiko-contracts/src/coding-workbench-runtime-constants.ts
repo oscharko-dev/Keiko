@@ -127,7 +127,7 @@ export type CodingWorkbenchRuntimeFailureCode =
   // with the refusal class instead of looping until an operator stops it. `edits-blocked`: three
   // refusals since the run's last applied edit that the model cannot repair by changing its edit —
   // no connected Workbench, lost workspace access, a denied path or policy, a governed read of a
-  // file that cannot be edited. `edit-retries-exhausted`: six refusals of any kind since then (an
+  // file that cannot be edited. `edit-retries-exhausted`: fifteen refusals of any kind since then (an
   // edit that does not apply, a stale base), alone or mixed with those. The settlement line names
   // the latest refusal's closed reason.
   | "edits-blocked"

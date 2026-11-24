@@ -102,6 +102,12 @@ it("aborts its observation and refuses a late response after unmount", async () 
   expect(publish).toHaveBeenCalledTimes(1);
 });
 
+// The whole bounded observation schedule, summed from the production delays, plus one ceiling step.
+const OBSERVATION_HORIZON_MS =
+  Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
+    restoredTurnPollDelayMs(attempt),
+  ).reduce((total, delay) => total + delay, 0) + 60_000;
+
 it("backs the poll spacing off from one second to a ten second ceiling", () => {
   const delays = Array.from({ length: RESTORED_TURN_POLL_MAX_ATTEMPTS }, (_, attempt) =>
     restoredTurnPollDelayMs(attempt),
@@ -112,8 +118,9 @@ it("backs the poll spacing off from one second to a ten second ceiling", () => {
   expect(delays[45]).toBe(8000);
   expect(Math.max(...delays)).toBe(10_000);
   expect(delays).toEqual([...delays].sort((left, right) => left - right));
-  // The schedule outlasts the ten minute approval lifetime, so a live review is observed to its end.
-  expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThan(10 * 60 * 1000);
+  // The schedule outlasts the 480-minute Chat tool turn (owner decision 2026-11-24), so a live
+  // turn, a long review included, is observed to its end.
+  expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThan(480 * 60 * 1000);
 });
 
 it("gives up after a bounded number of polls when the turn never settles", async () => {
@@ -125,7 +132,7 @@ it("gives up after a bounded number of polls when the turn never settles", async
   const onAbandoned = vi.fn();
   renderHook(() => useRestoredToolTurn(chat, [pending], false, publish, onAbandoned));
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(OBSERVATION_HORIZON_MS);
   });
   // One recent-window read and one full read per poll while the turn row stays absent.
   const calls = vi.mocked(fetchChatMessages).mock.calls.length;
@@ -135,7 +142,7 @@ it("gives up after a bounded number of polls when the turn never settles", async
     expect.objectContaining({ kind: "other" }),
   );
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(OBSERVATION_HORIZON_MS);
   });
   expect(vi.mocked(fetchChatMessages)).toHaveBeenCalledTimes(calls);
   expect(publish).toHaveBeenCalledTimes(1);

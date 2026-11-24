@@ -14,7 +14,7 @@ import { jiraBrowseBaseFor } from "./jira-browse-url.js";
 //   - Transport: the sync lane's budget-/deadline-/retry-aware wrapper
 //     (`createAtlassianBudgetedRetryingPort`) — identical D3 429/5xx backoff with capped
 //     Retry-After, backoff never overshooting the deadline, continuous byte accounting.
-//   - Bounds (ADR-0128 D3/D5): 15 000 ms wall-clock budget for the whole action, `maxResults`
+//   - Bounds (ADR-0128 D3/D5): 60 000 ms wall-clock budget for the whole action, `maxResults`
 //     capped at ATLASSIAN_LIVE_SEARCH_MAX_RESULTS (100); pagination stops AT the cap with
 //     `truncated: true`, and a hostile or degenerate token chain terminates at a hard page
 //     ceiling with the collected slice reported truncated (honest coverage, never a spin).
@@ -63,9 +63,10 @@ import {
 } from "./jira-issue-document.js";
 import { JIRA_LIST_RESPONSE_MAX_BYTES, nextSearchToken } from "./jira-sync-adapter.js";
 
-// ADR-0128 D3: the live JQL search action's wall-clock budget (15 s), covering every page
-// request and every backoff wait inside one call.
-export const ATLASSIAN_LIVE_SEARCH_TIMEOUT_MS = 15_000;
+// ADR-0128 D3: the live JQL search action's wall-clock budget, covering every page request and
+// every backoff wait inside one call.
+// Owner decision 2026-11-24: 60 s (was 15 s), the most the HTTP port admits for one request.
+export const ATLASSIAN_LIVE_SEARCH_TIMEOUT_MS = 60_000;
 // Hard ceiling on pagination requests: a conforming provider serves ≤ 100 capped results in one
 // or two pages; a degenerate or hostile token chain terminates here with truncated coverage.
 export const JIRA_LIVE_SEARCH_MAX_PAGE_REQUESTS = 10;

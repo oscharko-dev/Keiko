@@ -2,14 +2,16 @@ import { DEFAULT_LIMITS, type HarnessLimits } from "@oscharko-dev/keiko-contract
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 
 /**
- * The Authority Envelope budget of one accepted Chat tool turn (#4175). It is sized for backlog
- * work — dozens of reads and approved writes with a slow local model — and it is the only turn
+ * The Authority Envelope budget of one accepted Chat tool turn (#4175). It is sized for long
+ * backlog work — hundreds of reads and approved writes with a slow local model — and it is the only turn
  * bound (Keiko does not limit tokens, #4346): the loop derives its iteration and model-call ceilings from it instead of the coding
  * harness defaults. The human can stop the turn at any time; approval semantics are unchanged.
  */
 export const CHAT_TOOL_TURN_BUDGET: ChatToolAuthorityEnvelope["budget"] = Object.freeze({
-  maxRuntimeMs: 60 * 60_000,
-  maxToolCalls: 250,
+  // Owner decision 2026-11-24: the models run on the customer's own hardware, so the bounds that
+  // end healthy long work are raised (a 200-300 requirement import, long Jira/MCP analyses).
+  maxRuntimeMs: 480 * 60_000,
+  maxToolCalls: 10_000,
   maxPatchBytes: 0,
 });
 

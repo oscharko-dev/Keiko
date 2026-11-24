@@ -6,7 +6,10 @@ import {
 } from "./catalogToolBinder.js";
 import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GOVERNED_CHANGESET_EDIT_TOOL_ID,
@@ -47,6 +50,7 @@ import {
   type OpenCodeToolProfile,
 } from "../coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
+import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
 import {
@@ -273,14 +277,22 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
   }
 }
 
+// The governed command action is no catalog tool: the governed delegate runs it through the command
+// runner at the command ceiling (30 minutes, owner decision 2026-11-24), already approved by the
+// redeemed proof it carries, and it settles one grace past that work, like the verification tool.
+const GOVERNED_COMMAND_SETTLEMENT_BUDGET_MS =
+  COMMAND_RUN_MAX_DURATION_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
+
 /**
- * The catalog settlement budget of the tool a facade request dispatches to, or undefined for a
- * request no catalog tool serves. The sidecar tool bridge's deadline is derived from this one
- * declaration (PR #3452, F43/F44).
+ * The settlement budget of the tool a facade request dispatches to: its catalog budget, the governed
+ * command's own budget, or undefined for a request no catalog tool serves. The sidecar tool bridge's
+ * deadline is derived from this one declaration (PR #3452, F43/F44), so a governed command is no
+ * longer cut off at the bridge's 120-second default while its runner allows 30 minutes.
  */
 export function openCodeCatalogSettlementBudgetMs(
   request: CodingToolActionRequest,
 ): number | undefined {
+  if (request.action === "command") return GOVERNED_COMMAND_SETTLEMENT_BUDGET_MS;
   const toolId = catalogActionFor(request)?.toolId;
   return toolId === undefined
     ? undefined
@@ -288,11 +300,11 @@ export function openCodeCatalogSettlementBudgetMs(
 }
 
 /**
- * Whether the tool a request dispatches to may park on a human decision: exactly the tools whose
- * settlement budget exceeds the sandbox default (verification at its derived budget and the
- * proposal tools, which add the operator's approval wait). Those calls hold their admission slot
- * for minutes, so the facade and the tool bridge count them in a lane of their own and a read or
- * search is never refused `busy` because eight approvals are pending (audit 2026-11-06, finding 9).
+ * Whether the tool a request dispatches to may hold its slot for minutes: exactly the tools whose
+ * settlement budget exceeds the sandbox default (verification at its derived budget, the proposal
+ * tools, which add the operator's approval wait, and the governed command at its 30-minute ceiling).
+ * The facade and the tool bridge count them in a lane of their own, so a read or search is never
+ * refused `busy` because eight approvals or long builds are pending (audit 2026-11-06, finding 9).
  */
 export function openCodeToolMayAwaitOperator(request: CodingToolActionRequest): boolean {
   const budgetMs = openCodeCatalogSettlementBudgetMs(request);

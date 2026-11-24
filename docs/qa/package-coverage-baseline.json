@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1249,
+      "files": 1250,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,

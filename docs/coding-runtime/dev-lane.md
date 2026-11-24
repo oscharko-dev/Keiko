@@ -159,7 +159,7 @@ only, never a parent directory or a symlink) as labelled, untrusted context, so 
 repository's conventions and verification guidance from its first turn (ADR-0137 D1). The file is
 read through the same secure read helper `keiko_workspace_read` uses, only while the run's own
 workspace is the active one. On the mapped profiles the model receives the window that read would
-answer for the first 800 lines, cut at a line boundary to 16,384 bytes and to the turn's remaining
+answer for the first 3,200 lines, cut at a line boundary to 65,536 bytes and to the turn's remaining
 prompt budget (a cut file ends with one explicit truncation line naming the total line count),
 inside a nonce-framed `repository-instructions` block of the initial turn that grants no authority
 and cannot change the tool rules or the autonomy mode. That block is re-sent with every turn; the

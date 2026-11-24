@@ -1873,6 +1873,7 @@
     "keiko-server/command-runner-errors",
     "keiko-server/command-runner-evidence",
     "keiko-server/command-runner-routes",
+    "keiko-server/command-wall-time",
     "keiko-server/connected-folder-chat-authority",
     "keiko-server/connected-folder-chat-catalog",
     "keiko-server/connected-folder-chat-turn",

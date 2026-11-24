@@ -302,18 +302,18 @@ describe("executeJiraLiveSearch — bounds at boundary values (Issue #2248 AC6)"
     expect(live).toEqual({ ok: false, reason: "malformed-payload" });
   });
 
-  it("fails the whole action with timeout when the 15s deadline passes mid-walk", async () => {
+  it("fails the whole action with timeout when the live-search deadline passes mid-walk", async () => {
     const issues = Array.from({ length: 25 }, (_, index) => plainIssue(index));
     let clock = 0;
     const { port, requests } = countingFixture(issues, { searchPageSize: 10 });
     const live = await executeJiraLiveSearch(
       {
         http: (request) => {
-          // Every page consumes 10s of the 15s budget: pages 1 and 2 are admitted (0s and 10s
-          // elapsed), page 3 is refused by the deadline check before any connection is
+          // Every page consumes 60% of the budget: pages 1 and 2 are admitted
+          // (0% and 60% elapsed), page 3 is refused by the deadline check before any connection is
           // attempted — the whole action fails closed as a typed timeout, never a partial
           // result.
-          clock += 10_000;
+          clock += ATLASSIAN_LIVE_SEARCH_TIMEOUT_MS * 0.6;
           return port(request);
         },
         now: () => clock,
@@ -322,7 +322,7 @@ describe("executeJiraLiveSearch — bounds at boundary values (Issue #2248 AC6)"
     );
     expect(live).toEqual({ ok: false, reason: "timeout" });
     expect(requests).toHaveLength(2);
-    expect(ATLASSIAN_LIVE_SEARCH_TIMEOUT_MS).toBe(15_000);
+    expect(ATLASSIAN_LIVE_SEARCH_TIMEOUT_MS).toBe(60_000);
   });
 
   it("throws the custody validation error on out-of-bounds caller input", async () => {

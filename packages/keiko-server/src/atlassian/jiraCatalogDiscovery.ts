@@ -19,6 +19,7 @@ import { jiraOperationInReleaseScope } from "@oscharko-dev/keiko-contracts/runti
 import { jiraOperationDefinitions } from "./jiraOperationRegistry.js";
 import { JIRA_OPERATION_SUMMARIES } from "./jiraOperationSummaries.generated.js";
 import { object, text } from "./jiraManagedSchemas.js";
+import { JIRA_READ_DURATION_MS } from "./actionApprovalLimits.js";
 
 /** Local catalog metadata operations; these never construct or dispatch Jira HTTP requests. */
 export const JIRA_CATALOG_DISCOVERY_TOOLS = ["jira.discover", "jira.describe"] as const;
@@ -600,7 +601,7 @@ function discoveryDescriptor(
       maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
       maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
       maxResultCount: TOOL_CATALOG_LIMITS.maxArrayItems,
-      maxDurationMs: 15000,
+      maxDurationMs: JIRA_READ_DURATION_MS,
     },
     idempotency: "server-key-required",
     cancellation: "before-effect",

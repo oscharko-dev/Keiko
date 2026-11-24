@@ -244,8 +244,10 @@ a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagno
 deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
 off long before its own five-minute ceiling (F43/F44, PR #3452).
 A Chat write tool waits the same way: Jira and external MCP write descriptors declare their own work
-budget plus the ten-minute approval lifetime (`ATLASSIAN_ACTION_APPROVAL_TTL_MS`) in
-`maxDurationMs`, and a read tool keeps its work budget. A write budget of 90 s (Jira) or 60 s (MCP)
+budget plus the approval lifetime (`ATLASSIAN_ACTION_APPROVAL_TTL_MS`, sixty minutes since the
+2026-11-24 owner decision, ten before) in `maxDurationMs`, and a read tool keeps its work budget (an
+external MCP call the client's own 300 s ceiling plus the 15 s settlement grace since that decision,
+so the client's own timeout answers first). A write budget of 90 s (Jira) or 60 s (MCP)
 ended the turn while its approval card still offered a decision (#4173).
 An approval-required action is eligible only when the current mode/envelope permits that action
 and a valid approval channel can complete the existing approval protocol; listing is not approval.

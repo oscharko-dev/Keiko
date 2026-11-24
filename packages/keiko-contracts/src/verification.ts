@@ -47,7 +47,9 @@ export interface VerificationResourceLimits {
 // Wave-1 defaults. maxMemoryBytes is undefined by default: memory enforcement is opt-in and
 // Linux-only (ADR-0007 D2/D3). network defaults to the no-network posture, documented-not-enforced.
 export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
-  wallTimeMs: 120_000,
+  // Owner decision 2026-11-24: one governed step (a Maven build, a full test suite) may run 30
+  // minutes; the settlement budget below is derived from this value.
+  wallTimeMs: 1_800_000,
   maxOutputBytes: 1_048_576,
   maxMemoryBytes: undefined,
   network: "none",
@@ -62,7 +64,8 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
 // disabled — it executes no package or project code — so it is the one verification command that
 // keeps host network; the code it fetches runs only inside the sandboxed steps that follow.
 export const DEPENDENCY_INSTALL_LIMITS: VerificationResourceLimits = {
-  wallTimeMs: 240_000,
+  // Owner decision 2026-11-24: a first install of a large dependency tree may take 20 minutes.
+  wallTimeMs: 1_200_000,
   maxOutputBytes: 1_048_576,
   maxMemoryBytes: undefined,
   network: "inherit",

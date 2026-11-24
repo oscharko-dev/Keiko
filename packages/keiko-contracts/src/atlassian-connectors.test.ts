@@ -926,10 +926,11 @@ describe("decideAtlassianConnectorAction — full D4 matrix (action × mode × s
 
 describe("D5 sync bound defaults (ADR-0128)", () => {
   it("declares the exact D5 defaults", () => {
+    // Owner decision 2026-11-24: 20,000 items, 256 MB, 120 minutes (were 2,000, 50 MB, 15 minutes).
     expect(DEFAULT_ATLASSIAN_SYNC_BOUNDS).toEqual({
-      maxItems: 2_000,
-      maxBytes: 50_000_000,
-      maxDurationMs: 900_000,
+      maxItems: 20_000,
+      maxBytes: 256_000_000,
+      maxDurationMs: 7_200_000,
       maxConcurrency: 4,
     });
     expect(ATLASSIAN_LIVE_SEARCH_MAX_RESULTS).toBe(100);

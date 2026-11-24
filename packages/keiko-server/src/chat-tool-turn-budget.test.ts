@@ -5,8 +5,30 @@ import {
   chatToolTurnBudget,
   chatToolTurnLimits,
 } from "./chat-tool-turn-budget.js";
+import { JIRA_DRAFT_BATCH_DURATION_MS_MAX } from "./atlassian/jiraDraftBatchDescriptor.js";
+import { jiraMutationDeclarations } from "./atlassian/jiraManagedMutationDescriptors.js";
 
 describe("chat tool turn budget (#4175)", () => {
+  // Owner decision 2026-11-24: self-hosted models cost nothing per call, so healthy long work
+  // (a 200-300 requirement import, long Jira/MCP analyses) is never ended by a small bound.
+  it("pins the owner-decided turn bounds", () => {
+    expect(CHAT_TOOL_TURN_BUDGET.maxToolCalls).toBe(10_000);
+    expect(CHAT_TOOL_TURN_BUDGET.maxRuntimeMs).toBe(480 * 60_000);
+    expect(chatToolTurnLimits(CHAT_TOOL_TURN_BUDGET)).toMatchObject({
+      maxIterations: 10_001,
+      maxModelCalls: 20_002,
+      maxWallTimeMs: 480 * 60_000,
+    });
+  });
+
+  it("keeps the Jira batch deadlines below the turn deadline", () => {
+    expect(JIRA_DRAFT_BATCH_DURATION_MS_MAX).toBe(CHAT_TOOL_TURN_BUDGET.maxRuntimeMs - 15 * 60_000);
+    const draft = jiraMutationDeclarations().find((entry) => entry.name === "jira.draft");
+    expect(draft?.descriptor.bounds.maxDurationMs).toBe(
+      CHAT_TOOL_TURN_BUDGET.maxRuntimeMs - 10 * 60_000,
+    );
+  });
+
   it("is sized beyond the former fixed coding-harness caps", () => {
     expect(CHAT_TOOL_TURN_BUDGET.maxRuntimeMs).toBeGreaterThan(DEFAULT_LIMITS.maxWallTimeMs);
     expect(CHAT_TOOL_TURN_BUDGET.maxToolCalls).toBeGreaterThan(DEFAULT_LIMITS.maxToolCalls);

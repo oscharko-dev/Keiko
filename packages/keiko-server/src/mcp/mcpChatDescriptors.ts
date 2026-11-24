@@ -8,9 +8,16 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
+import { MCP_EXTERNAL_CALL_MAX_MS } from "@oscharko-dev/keiko-mcp";
+import { GOVERNED_TOOL_SETTLEMENT_GRACE_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "../atlassian/actionApprovalLimits.js";
 import type { McpChatCatalogTool } from "./mcpChatCatalogConsumer.js";
+
+// Owner decision 2026-11-24: a call may work as long as the external client lets it (300 s). The
+// settlement grace on top lets the client's own timeout answer first, so a slow server ends as that
+// typed client failure instead of the catalog's generic deadline.
+const MCP_CHAT_CALL_MS = MCP_EXTERNAL_CALL_MAX_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
 
 export type McpChatDeclaration = ManagedMcpToolDeclaration & McpChatCatalogTool;
 
@@ -48,7 +55,8 @@ export function mcpChatDeclaration(
         maxResultBytes: 262144,
         maxResultCount: 1,
         // A write waits in place for the human's decision on top of its own work (ADR-0175).
-        maxDurationMs: risk === "read" ? 60000 : 60000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        maxDurationMs:
+          risk === "read" ? MCP_CHAT_CALL_MS : MCP_CHAT_CALL_MS + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

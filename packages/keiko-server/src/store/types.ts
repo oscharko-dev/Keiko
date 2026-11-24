@@ -234,6 +234,11 @@ export interface UiStore {
     update: ChatToolTranscriptUpdate,
     correlationId: string,
   ) => void;
+  /** Body-free stored size of a pending turn's tool transcript, for the admission of a call. */
+  readonly chatToolTranscriptSize: (messageId: string) => {
+    readonly chatId: string;
+    readonly bytes: number;
+  };
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly createTurnAssistant: (

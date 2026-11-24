@@ -7,6 +7,7 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { object, text } from "./jiraManagedSchemas.js";
 import {
   JIRA_DRAFT_ID_SCHEMA,
@@ -20,8 +21,11 @@ export const JIRA_DRAFT_BATCH_GROUPING_CHARS_MAX = 500;
 export const JIRA_DRAFT_BATCH_GUIDANCE_CHARS_MAX = 1000;
 /** Requirement references a result names as not drafted. */
 export const JIRA_DRAFT_BATCH_FAILED_REFS_MAX = 32;
-/** A batch of a few hundred requirements takes tens of model calls; this is its whole deadline. */
-export const JIRA_DRAFT_BATCH_DURATION_MS_MAX = 2_700_000;
+/**
+ * A batch of a few hundred requirements takes tens of model calls; this is its whole deadline. It
+ * ends fifteen minutes before the Chat turn that dispatches it, so the turn can still answer.
+ */
+export const JIRA_DRAFT_BATCH_DURATION_MS_MAX = CHAT_TOOL_TURN_BUDGET.maxRuntimeMs - 15 * 60_000;
 
 const DESCRIPTION =
   "Draft Jira issues from this Chat's Knowledge requirements in ONE call; Keiko pages them itself. " +

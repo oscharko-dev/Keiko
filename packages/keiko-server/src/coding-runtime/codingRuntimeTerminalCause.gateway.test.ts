@@ -6,12 +6,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import type {
-  GatewayConfig,
-  GatewayStreamChunk,
-  ModelCapability,
-  ModelProviderConfig,
-  NormalizedResponse,
+import {
+  resolveCodingSafeSidecarGatewayProfile,
+  type GatewayConfig,
+  type GatewayStreamChunk,
+  type ModelCapability,
+  type ModelProviderConfig,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   AuthenticationError,
@@ -27,7 +28,10 @@ import {
 } from "@oscharko-dev/keiko-security/errors/gateway";
 
 import { mockRequest, mockResponse } from "../_support.js";
-import { handleCodingSidecarGatewayChatCompletions } from "../coding-sidecar-gateway.js";
+import {
+  handleCodingSidecarGatewayChatCompletions,
+  outputByteBackstop,
+} from "../coding-sidecar-gateway.js";
 import {
   buildRedactor,
   codingSidecarGatewayEvidenceRecorder,
@@ -276,6 +280,17 @@ type ModelCallAdmission = (capability: string, estimatedPromptTokens: number) =>
  * calls, the real hub receives its failed-call causes, and the evidence recorder production
  * composes clears a recovered failure. Each model call answers with the next scripted outcome.
  */
+// The output allowance the coding profile admits for this file's provider and capability.
+function profileMaxOutputTokens(): number {
+  const profile = resolveCodingSafeSidecarGatewayProfile({
+    providers: [provider()],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [capability()],
+  });
+  if (profile.status !== "available") throw new Error("expected an available coding profile");
+  return profile.runMetadata.maxOutputTokens;
+}
+
 function gatewayDeps(
   minted: ReturnType<typeof mintedAuthority>,
   hub: CodingRuntimeEventHub,
@@ -726,7 +741,9 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     // The buffered delivery's two output-bound refusals: a finished answer past the budget, and the
     // reasoning a provider with a required continuation returned past its bound. Each is one failed
     // call the gateway cut, published once and settled as the output bound.
-    const BUFFERED_REASONING_BOUND = "r".repeat(20_000);
+    // Owner decision 2026-11-24: the fixture sits one byte past the gateway's own reasoning bound at
+    // the profile's output allowance rather than at a restated size or ratio.
+    const BUFFERED_REASONING_BOUND = "r".repeat(outputByteBackstop(profileMaxOutputTokens()) + 1);
     const bufferedCuts: readonly (readonly [string, NormalizedResponse, boolean])[] = [
       [
         "a finished answer past the budget",

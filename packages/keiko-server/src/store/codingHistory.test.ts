@@ -136,6 +136,8 @@ describe("Coding History on the existing conversation store", () => {
     store.visitGatewayMessageUnits(task.id, "", visit);
     expect(visit).not.toHaveBeenCalled();
     expect(() => store.chatHistoryRevision(task.id)).toThrow("Chat");
+    const userMessageId = history.detail(task.id, "a".repeat(64))?.messages[0]?.id ?? "";
+    expect(() => store.chatToolTranscriptSize(userMessageId)).toThrow("Chat");
     expect(history.update(task.id, { status: "completed" }).status).toBe("completed");
     expect(history.update(task.id, { status: "active" }).status).toBe("active");
     expect(history.detail(task.id, "a".repeat(64))?.messages[1]?.content).toBe(

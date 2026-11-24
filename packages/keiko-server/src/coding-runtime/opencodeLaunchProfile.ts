@@ -218,6 +218,10 @@ const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
 });
 
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
+// The pinned runtime (2.2.5) defaults a provider's `headerTimeout` to 300 s and its `chunkTimeout` to
+// 900 s and sets no total `timeout`. Keiko raises both to this bound (owner decision 2026-11-24, so
+// a slow prefill of a self-hosted model is not aborted by the runtime at five minutes before
+// Keiko's own gateway bound applies).
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 
 export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
@@ -475,9 +479,11 @@ function fixedOpenCodeProvider(
       },
       options: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-        // The pinned child (`OPENCODE_PINNED_VERSION`) defaults provider chunks to 10 seconds. Coding turns can
-        // legitimately reason longer while Keiko's gateway still enforces its shorter provider
-        // deadline; align the child watchdog with the outer hard turn/authority ceiling.
+        // The pinned child (`OPENCODE_PINNED_VERSION`) defaults the wait for response headers to 300
+        // seconds and the wait between chunks to 900 seconds. Coding turns can legitimately prefill
+        // or reason longer while Keiko's gateway enforces its own provider deadline; align both
+        // child watchdogs with the outer hard turn/authority ceiling.
+        headerTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
         headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
       },
@@ -875,6 +881,7 @@ function fixedOpenCodeV2Provider(
       },
       settings: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
+        headerTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
       },
       headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },

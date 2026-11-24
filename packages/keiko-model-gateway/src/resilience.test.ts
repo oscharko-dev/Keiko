@@ -15,6 +15,8 @@ import {
   CircuitBreaker,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  GATEWAY_CODING_OUTAGE_WINDOW_MS,
+  GATEWAY_SILENCE_FLOOR_MS,
   GATEWAY_STREAM_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
@@ -556,7 +558,9 @@ describe("streamRequestBudgetMs: the output allowance sizes the budget of a live
 
   it("keeps the thirty-minute floor for a call without an allowance or with a small one", () => {
     expect(streamRequestBudgetMs(provider)).toBe(GATEWAY_STREAM_BUDGET_FLOOR_MS);
-    expect(streamRequestBudgetMs(provider, 4_096)).toBe(GATEWAY_STREAM_BUDGET_FLOOR_MS);
+    // Owner decision 2026-11-24: the allowance includes the 15-minute first-byte wait, so only a
+    // genuinely small allowance stays below the floor.
+    expect(streamRequestBudgetMs(provider, 256)).toBe(GATEWAY_STREAM_BUDGET_FLOOR_MS);
   });
 
   it("grants a 32k-token answer the time it needs at the slowest granted rate", () => {
@@ -570,6 +574,32 @@ describe("streamRequestBudgetMs: the output allowance sizes the budget of a live
 
   it("never exceeds the timer ceiling", () => {
     expect(streamRequestBudgetMs(provider, Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_DELAY_MS);
+  });
+});
+
+// Owner decision 2026-11-24: Keiko runs on the customer's own models, so a slow prefill waits up to
+// fifteen minutes for its first byte and between stream events.
+describe("GATEWAY_SILENCE_FLOOR_MS", () => {
+  it("waits fifteen minutes for silence, and the stream budget still covers it", () => {
+    expect(GATEWAY_SILENCE_FLOOR_MS).toBe(900_000);
+    expect(GATEWAY_STREAM_BUDGET_FLOOR_MS).toBeGreaterThan(GATEWAY_SILENCE_FLOOR_MS);
+    expect(streamRequestBudgetMs({ timeoutMs: 1_000 })).toBeGreaterThanOrEqual(
+      GATEWAY_SILENCE_FLOOR_MS,
+    );
+  });
+
+  it("keeps room in the default coding outage window to retry one silent streamed attempt", () => {
+    expect(GATEWAY_CODING_OUTAGE_WINDOW_MS).toBe(1_800_000);
+    expect(GATEWAY_CODING_OUTAGE_WINDOW_MS).toBeGreaterThanOrEqual(2 * GATEWAY_SILENCE_FLOOR_MS);
+  });
+
+  it("gives a whole-body answer thirty minutes, never less than the silence floor", () => {
+    expect(GATEWAY_BUFFERED_BUDGET_FLOOR_MS).toBe(1_800_000);
+    expect(GATEWAY_BUFFERED_BUDGET_FLOOR_MS).toBeGreaterThanOrEqual(GATEWAY_SILENCE_FLOOR_MS);
+    const provider = { timeoutMs: 1_000, maxRetries: 0, retryBaseDelayMs: 10 };
+    expect(providerRetryConfig(provider).attemptTimeoutMs).toBeGreaterThanOrEqual(
+      GATEWAY_SILENCE_FLOOR_MS,
+    );
   });
 });
 

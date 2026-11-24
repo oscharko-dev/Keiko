@@ -5,6 +5,10 @@ import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "./activity-line-fields.js";
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import {
   CancelledError,
   CircuitOpenError,
   ContextOverflowError,
@@ -313,13 +317,13 @@ const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
 const SIDECAR_SSE_HEARTBEAT_MS = 5_000;
-// Bytes per token the sidecar ESTIMATES with (usage reporting, the reasoning allowance). It never
-// ends an answer by itself: a legitimate answer can be denser than this.
+// Bytes per token the sidecar ESTIMATES usage with. It never ends an answer by itself: a legitimate answer can be denser than this.
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // The runaway backstop for a provider that ignores its output limit: a turn is cut only once its
 // output is this many bytes per allowed token. It sits at twice the estimate so that dense tokenizers,
 // escaped tool arguments and whitespace-heavy files that obey `max_tokens` are never cut mid-answer,
-// and is applied identically while streaming and on the finished answer.
+// and is applied identically while streaming and on the finished answer. A reasoning is bounded by
+// the same allowance (owner decision 2026-11-24: eight bytes per token, one constant for both).
 const OUTPUT_BYTES_PER_TOKEN_BACKSTOP = 8;
 // The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
 // judgeable once the replayed history holds the two system messages, the task prompt, and three
@@ -2113,7 +2117,7 @@ function recordGatewayOutcome(
 ): void {
   const { completionTokens, outputBytes } = metrics;
   const answered = outcome === "accepted" && isServingFinish(metrics.finishReason);
-  if (answered) providerUnavailableWindows.delete(runId);
+  if (answered) forgetProviderUnavailableRun(runId);
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
@@ -2202,11 +2206,8 @@ function reportGatewayOutputCut(
   });
 }
 
-function outputByteBudget(maxOutputTokens: number): number {
-  return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_LIMIT;
-}
-
-function outputByteBackstop(maxOutputTokens: number): number {
+/** The byte bound of one output (an answer's text or a reasoning) at `maxOutputTokens`. */
+export function outputByteBackstop(maxOutputTokens: number): number {
   return maxOutputTokens * OUTPUT_BYTES_PER_TOKEN_BACKSTOP;
 }
 
@@ -2894,16 +2895,19 @@ function runtimeRetryFor(
   return isFinalProviderRejection(error, failureCode) ? "refused" : "allowed";
 }
 
-// The runtime retries a provider that stayed unavailable without end: each retry is a new call that
-// rides out its own outage window (default 600 s), so a gateway that never recovers held a run in
-// "waiting for the model" for hours. After this many CONSECUTIVE unavailable windows of one run the
-// turn is final and the runtime reads the closed unavailable message. A turn the provider answers
-// resets the count. The map is per process and bounded by the oldest-first eviction below.
-const MAX_CONSECUTIVE_PROVIDER_UNAVAILABLE_WINDOWS = 2;
+// The runtime retries a provider that stayed unavailable: each retry is a new call that rides out
+// its own outage window. Owner decision 2026-11-24: Keiko runs on the customer's own models, so a
+// provider outage ends no run by a count of windows; the run waits for as long as its own duration
+// envelope allows, and the person's Stop ends it earlier. Only an outage that has outlasted the
+// longest supported run duration is final, and the runtime then reads the closed unavailable
+// message. A turn the provider answers resets the streak. The map is per process and bounded by the
+// oldest-first eviction below.
+const MAX_PROVIDER_UNAVAILABLE_STREAK_MS = runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES);
 const MAX_TRACKED_UNAVAILABLE_RUNS = 256;
 const PROVIDER_UNAVAILABLE_MESSAGE =
   "The model provider stayed unavailable. Start a new coding task once it is back.";
 const providerUnavailableWindows = new Map<string, number>();
+const providerUnavailableSince = new Map<string, number>();
 const unavailableCappedErrors = new WeakSet();
 
 // One more consecutive unavailable window for the run; the oldest tracked run is dropped past the bound.
@@ -2911,17 +2915,23 @@ function countProviderUnavailableWindow(runId: string): number {
   const windows = (providerUnavailableWindows.get(runId) ?? 0) + 1;
   providerUnavailableWindows.delete(runId);
   providerUnavailableWindows.set(runId, windows);
+  if (!providerUnavailableSince.has(runId)) providerUnavailableSince.set(runId, Date.now());
   if (providerUnavailableWindows.size > MAX_TRACKED_UNAVAILABLE_RUNS) {
     const oldest = providerUnavailableWindows.keys().next().value;
-    if (oldest !== undefined) providerUnavailableWindows.delete(oldest);
+    if (oldest !== undefined) forgetProviderUnavailableRun(oldest);
   }
   return windows;
 }
 
+function forgetProviderUnavailableRun(runId: string): void {
+  providerUnavailableWindows.delete(runId);
+  providerUnavailableSince.delete(runId);
+}
+
 /**
- * What the runtime may do after a failed turn of this run: `runtimeRetryFor`, then the per-run cap on
- * consecutive provider-unavailable windows. The count is the number of windows the run has now
- * spent, readable by the turn-failed line through `providerUnavailableWindowCount`.
+ * What the runtime may do after a failed turn of this run: `runtimeRetryFor`, then the bound on how
+ * long one outage may last. The count is the number of windows the run has now spent, readable by
+ * the turn-failed line through `providerUnavailableWindows`.
  */
 function runtimeRetryForRun(
   runId: string,
@@ -2933,12 +2943,13 @@ function runtimeRetryForRun(
   // A turn the run cancelled is no window the provider spent.
   if (cancelled) return retry;
   if (failureCode !== "provider-failed" || !providerUnavailableFault(error)) {
-    providerUnavailableWindows.delete(runId);
+    forgetProviderUnavailableRun(runId);
     return retry;
   }
   if (retry === "refused") return retry;
-  const windows = countProviderUnavailableWindow(runId);
-  if (windows < MAX_CONSECUTIVE_PROVIDER_UNAVAILABLE_WINDOWS) return retry;
+  countProviderUnavailableWindow(runId);
+  const since = providerUnavailableSince.get(runId) ?? Date.now();
+  if (Date.now() - since <= MAX_PROVIDER_UNAVAILABLE_STREAK_MS) return retry;
   if (typeof error === "object" && error !== null) unavailableCappedErrors.add(error);
   return "refused";
 }
@@ -2946,6 +2957,7 @@ function runtimeRetryForRun(
 /** Test seam: forget every run's consecutive-unavailable count. */
 export function resetProviderUnavailableWindowsForTests(): void {
   providerUnavailableWindows.clear();
+  providerUnavailableSince.clear();
 }
 
 // How the repaired attempt of each model-answer failure ends when the model fails that way again.
@@ -4391,7 +4403,7 @@ async function streamGatewayReasoning(
   const passages = requiresReasoningContinuation(session.answeredConfig, session.modelId)
     ? 1
     : REASONING_PASSAGES_PER_TURN;
-  const overBudget = total > outputByteBudget(request.maxOutputTokens ?? 1) * passages;
+  const overBudget = total > outputByteBackstop(request.maxOutputTokens ?? 1) * passages;
   const forwarded = await forwardStreamText(
     session,
     { reasoning_content: token },
@@ -4600,7 +4612,7 @@ function answerShares(response: NormalizedResponse): AnswerShares {
 function exceedsReasoningBudget(response: NormalizedResponse, maxOutputTokens: number): boolean {
   return (
     response.reasoning !== undefined &&
-    Buffer.byteLength(response.reasoning, "utf8") > outputByteBudget(maxOutputTokens)
+    Buffer.byteLength(response.reasoning, "utf8") > outputByteBackstop(maxOutputTokens)
   );
 }
 
