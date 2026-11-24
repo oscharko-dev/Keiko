@@ -588,35 +588,66 @@ describe("the run's native session tree after a move inside the workspace", () =
 describe("silent native children", () => {
   const idle = { id: "msg_idle", type: "idle", outcome: "succeeded" };
   const reads: string[] = [];
+  type SilenceClient = Parameters<typeof silentNativeChildren>[0];
   const client = (
     active: Readonly<Record<string, unknown>>,
-    newest: Readonly<Record<string, string | undefined>>,
-  ): Parameters<typeof silentNativeChildren>[0] => ({
+    newest: Readonly<Record<string, Readonly<Record<string, unknown>> | undefined>>,
+  ): SilenceClient => ({
     active: () => Promise.resolve(active),
-    recentMessages: (sessionId) => {
+    recentMessages: (sessionId): ReturnType<SilenceClient["recentMessages"]> => {
       reads.push(sessionId);
-      const type = newest[sessionId];
+      const message = newest[sessionId];
       return Promise.resolve({
-        messages: type === undefined ? [] : [{ id: "msg_n", type }],
+        messages: message === undefined ? [] : [{ id: "msg_n", ...message }],
         truncated: false,
         anchored: false,
       });
     },
   });
+  // What 2.4.1 leaves as a child's newest message when the human dismisses its question.
+  const interrupted = { type: "assistant", finish: "error", error: { type: "aborted" } };
 
-  it("names an owed child that no longer runs and whose round ended without an idle message", async () => {
+  it("names an owed child that no longer runs and whose round ended in an interrupted step", async () => {
     const silent = await silentNativeChildren(
-      client({}, { ses_a: "assistant", ses_b: "idle", ses_c: "user", ses_d: undefined }),
-      new Set(["ses_a", "ses_b", "ses_c", "ses_d"]),
+      client(
+        {},
+        {
+          ses_a: interrupted,
+          ses_b: { type: "idle" },
+          ses_c: { type: "user" },
+          ses_d: undefined,
+          ses_e: { type: "idle", finish: "error" },
+        },
+      ),
+      new Set(["ses_a", "ses_b", "ses_c", "ses_d", "ses_e"]),
       [idle],
       undefined,
     );
     expect([...silent]).toEqual(["ses_a"]);
   });
 
+  // The runtime may list a child as no longer running a moment before it appends the idle message
+  // its report follows: a step that ended normally is that moment, never a silent child.
+  it("never names a child whose newest step ended normally", async () => {
+    const silent = await silentNativeChildren(
+      client(
+        {},
+        {
+          ses_a: { type: "assistant", finish: "tool_calls" },
+          ses_b: { type: "assistant", finish: "stop" },
+          ses_c: { type: "assistant" },
+        },
+      ),
+      new Set(["ses_a", "ses_b", "ses_c"]),
+      [idle],
+      undefined,
+    );
+    expect([...silent]).toEqual([]);
+  });
+
   it("never names a child that still runs", async () => {
     const silent = await silentNativeChildren(
-      client({ ses_a: { type: "busy" } }, { ses_a: "assistant" }),
+      client({ ses_a: { type: "busy" } }, { ses_a: interrupted }),
       new Set(["ses_a"]),
       [idle],
       undefined,
@@ -626,7 +657,7 @@ describe("silent native children", () => {
 
   it("reads nothing while the parent works or owes nothing", async () => {
     reads.length = 0;
-    const working = client({}, { ses_a: "assistant" });
+    const working = client({}, { ses_a: interrupted });
     const assistant = { id: "msg_a", type: "assistant" };
     expect([
       ...(await silentNativeChildren(working, new Set(["ses_a"]), [assistant], undefined)),

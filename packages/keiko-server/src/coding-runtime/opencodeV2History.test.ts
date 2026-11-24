@@ -16,6 +16,7 @@ import { createOpenCodeReconciler } from "./opencodeReconciler.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import { recordContextTelemetry } from "./productionOpenCodeBackend.js";
 import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
+import { projectNativeParentHistory } from "./opencodeNativeSessionTree.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -2449,7 +2450,7 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
     const parent = [user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")];
     const held = projection.project("ses_parent", parent, undefined);
     expect(held.map((event) => event.kind)).not.toContain("terminal");
-    expect([...projection.owedChildren()]).toEqual(["ses_child"]);
+    expect([...projection.owedChildren(parent, held.length - 1)]).toEqual(["ses_child"]);
     const released = projection.project("ses_parent", parent, held.length - 1, {
       silentChildren: new Set(["ses_child"]),
     });
@@ -2462,6 +2463,32 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
       "coding-runtime.history-projection.emitted-line",
       formatActivityLogProofLine(lines.at(-1) ?? {}),
     );
+  });
+
+  // A sync that reads the launch and the idle message together (the first after a reconnect, or a
+  // burst of events read at once) may be the last: a silent child sends nothing that hints another.
+  it("releases in the one sync that reads the launch and the idle message together", async () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const dismissed = { id: "msg_child", type: "assistant", finish: "error" };
+    const events = await projectNativeParentHistory(
+      {
+        client: {
+          active: () => Promise.resolve({}),
+          recentMessages: () =>
+            Promise.resolve({ messages: [dismissed], truncated: false, anchored: false }),
+        },
+        history: projection,
+        sessionId: "ses_parent",
+        messages: [user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")],
+        checkpoint: undefined,
+      },
+      undefined,
+    );
+    expect(events.map((event) => event.kind).at(-1)).toBe("terminal");
   });
 
   it("keeps holding while one owed child is silent and another still owes its report", () => {
@@ -2493,8 +2520,7 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
         activityLog: undefined,
         toolProfile: "native",
       });
-      projection.project("ses_parent", messages, undefined);
-      return [...projection.owedChildren()];
+      return [...projection.owedChildren(messages, undefined)];
     };
     expect(owed([user, idle("msg_idle0")])).toEqual([]);
     expect(owed([user, launch("ses_child"), idle("msg_idle1"), report("ses_child")])).toEqual([]);

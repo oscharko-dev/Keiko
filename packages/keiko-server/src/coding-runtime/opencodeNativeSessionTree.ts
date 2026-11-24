@@ -440,11 +440,13 @@ function recordNativeSessionTree(
 
 /**
  * The children a parent still owes a report for that will never send one (#4546): each no longer
- * runs, and its newest message is an assistant message, so its round ended without the idle message
- * after which the runtime reports (2.4.1 ends a child's round this way when the human dismisses its
- * question). A child that runs, that has no message yet, or whose newest message is an idle message
- * (its report follows) is not silent. Read only once the parent's newest message is an idle message,
- * so a working parent costs nothing; a failed read throws, as an unproven state is not a silent one.
+ * runs, and its newest message is an assistant step that ended in an error, so its round ended
+ * without the idle message after which the runtime reports (2.4.1 ends a child's round this way,
+ * with `finish: "error"`, when the human dismisses its question). A child that runs, that has no
+ * message yet, whose newest message is an idle message (its report follows), or whose newest step
+ * ended normally (the runtime may stop listing it a moment before it appends that idle message) is
+ * not silent. Read only once the parent's newest message is an idle message, so a working parent
+ * costs nothing; a failed read throws, as an unproven state is not a silent one.
  */
 export async function silentNativeChildren(
   client: Pick<OpenCodeV2HttpClient, "active" | "recentMessages">,
@@ -458,7 +460,7 @@ export async function silentNativeChildren(
   for (const child of owed) {
     if (Object.hasOwn(active, child)) continue;
     const newest = (await client.recentMessages(child, signal)).messages.at(-1);
-    if (newest?.type === "assistant") silent.add(child);
+    if (newest?.type === "assistant" && newest.finish === "error") silent.add(child);
   }
   return silent;
 }
@@ -481,7 +483,7 @@ export async function projectNativeParentHistory(
   const { client, history, sessionId, messages, checkpoint, window } = input;
   const silentChildren = await silentNativeChildren(
     client,
-    history.owedChildren(),
+    history.owedChildren(messages, checkpoint, window),
     messages,
     signal,
   );

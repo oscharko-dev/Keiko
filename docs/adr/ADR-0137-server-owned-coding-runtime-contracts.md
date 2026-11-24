@@ -2707,9 +2707,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     child's session: the pinned 2.4.1 runs every subagent in the background and has no
     `background` parameter, and a follow-up to a child that already reported owes one more report.
     A failed idle stays a terminal failure. A child that no longer runs and whose newest message
-    is not an idle message ended its round without the idle after which the runtime reports (2.4.1
-    does this when a person dismisses the child's question). It is silent, owes nothing, and the
-    held idle is released (`silentReleaseCount`, `projectNativeParentHistory`, #4546). Any other
+    is an assistant step that ended in an error (`finish: "error"`) ended its round without the
+    idle after which the runtime reports (2.4.1 does this when a person dismisses the child's
+    question). It is silent, owes nothing, and the held idle is released (`silentReleaseCount`,
+    `projectNativeParentHistory`, #4546). A step that ended normally is never silence: the runtime
+    may stop listing a child a moment before it appends the idle message. The owed children are
+    taken from the messages being projected, so the one sync that reads a launch and the idle
+    message together can release. Any other
     child that never reports is bounded by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
     interrupts the primary, then every owned child still running, and the primary again when it
     came back to read a report, stops every background job of the run with `shell.remove`

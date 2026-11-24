@@ -495,7 +495,8 @@ executable on macOS arm64 (#4546). The upgrade changes these rows:
   the parent's idle message for every child called since its last report, a follow-up included
   (`heldIdleCount`). A dismissed or refused child question ends the child's round with no idle
   message and no report. Keiko therefore releases the hold once every owed child is silent: it no
-  longer runs, and its newest message is not an idle message (`silentReleaseCount`).
+  longer runs, and its newest message is an assistant step that ended in an error
+  (`finish: "error"`, `silentReleaseCount`). A step that ended normally never counts as silence.
 - **C02: a built-in `automation` command** joins `init` and `review`. Its name is reserved for
   repository commands and named in the prompt-input log.
 - **T21: Code Mode surface.** The catalog in the system prompt is partial; a program finds the rest

@@ -416,7 +416,7 @@ export interface OpenCodeV2HistoryWindow {
   readonly anchored?: boolean | undefined;
   /**
    * Children the parent launched that will never report: each no longer runs, and its newest
-   * message is not an idle message, so its round ended without one (#4546). They owe nothing.
+   * step ended in an error, so its round ended without an idle message (#4546). They owe nothing.
    */
   readonly silentChildren?: ReadonlySet<string> | undefined;
 }
@@ -436,10 +436,16 @@ export interface OpenCodeV2HistoryProjection {
    */
   lastReuse(): OpenCodeV2ProjectionReuse;
   /**
-   * The children the parent launched that had not reported by the end of the last `project` call:
-   * the only ones whose silence the caller needs to check before the next call.
+   * The children the parent launched that have not reported by the end of these messages: the only
+   * ones whose silence the caller checks before it projects them with the same checkpoint and window.
+   * They come from these messages, not an earlier call, so the sync that first reads a launch and
+   * the idle message after it can release that idle message (#4546).
    */
-  owedChildren(): ReadonlySet<string>;
+  owedChildren(
+    messages: readonly Readonly<Record<string, unknown>>[],
+    checkpoint: number | undefined,
+    window?: OpenCodeV2HistoryWindow,
+  ): ReadonlySet<string>;
   /**
    * Where the next read should start (#4104). Every read before a `project` call asks for it, with
    * the checkpoint it will pass: the plan names an anchor only when the earlier calls are fully
@@ -1256,9 +1262,11 @@ function allCandidates(
     if (index === window.anchorIndex) anchor = snapshotAnchor(cursor, message);
     scanMessage(cursor, message, context);
   }
-  const { launched, reported } = cursor.children;
-  const owedChildren = new Set([...launched].filter((child) => !reported.has(child)));
-  return { candidates: cursor.candidates, anchor, owedChildren };
+  return { candidates: cursor.candidates, anchor, owedChildren: owedOf(cursor.children) };
+}
+
+function owedOf(children: BackgroundChildren): ReadonlySet<string> {
+  return new Set([...children.launched].filter((child) => !children.reported.has(child)));
 }
 
 function changedNativeRetryCandidates(
@@ -1510,7 +1518,6 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
   // Tail reads since the last complete one, and what the last `readPlan` asked for.
   private tailPasses = 0;
   private plannedMode: OpenCodeV2ReadMode | undefined;
-  private owedOfLastProject: ReadonlySet<string> = new Set();
   private reuseOfLastProject: OpenCodeV2ProjectionReuse = {
     reusedMessageCount: 0,
     projectedMessageCount: 0,
@@ -1539,8 +1546,20 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     return this.reuseOfLastProject;
   }
 
-  owedChildren(): ReadonlySet<string> {
-    return this.owedOfLastProject;
+  owedChildren(
+    messages: readonly Readonly<Record<string, unknown>>[],
+    checkpoint: number | undefined,
+    window?: OpenCodeV2HistoryWindow,
+  ): ReadonlySet<string> {
+    const position = checkpoint ?? -1;
+    this.settle(position);
+    // A pending page is what `project` returns for this checkpoint, so its owed children apply.
+    if (this.pending !== undefined && position === this.pendingStart)
+      return this.pending.owedChildren;
+    const start = this.anchoredBase(messages, window)?.scan;
+    const children = { launched: new Set(start?.launched), reported: new Set(start?.reported) };
+    for (const message of messages) observeBackgroundChildren(message, children);
+    return owedOf(children);
   }
 
   lastSync(): OpenCodeV2SyncStats {
@@ -1644,7 +1663,6 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
         base === undefined,
       );
     const sync = this.settleSync(base, messages.length, window);
-    this.owedOfLastProject = scanned.owedChildren;
     const pending = {
       ...made,
       owedChildren: scanned.owedChildren,
