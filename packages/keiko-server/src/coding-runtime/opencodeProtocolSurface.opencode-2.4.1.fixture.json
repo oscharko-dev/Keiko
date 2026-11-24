@@ -2697,7 +2697,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Shell.Info"
+                        "$ref": "#/components/schemas/Shell.Info_1"
                       }
                     }
                   },
@@ -4173,7 +4173,7 @@
           }
         ]
       },
-      "Shell.Info": {
+      "Shell.Info_1": {
         "type": "object",
         "properties": {
           "id": {
@@ -6300,7 +6300,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6382,7 +6382,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6437,7 +6437,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6492,7 +6492,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6550,7 +6550,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6602,7 +6602,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6654,7 +6654,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6706,7 +6706,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6758,7 +6758,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6807,7 +6807,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6895,7 +6895,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c3ea984aceae"
+                "$ref": "#/components/schemas/Event.VersionEncoded_38"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -6944,7 +6944,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c3ea984aceae"
+                "$ref": "#/components/schemas/Event.VersionEncoded_38"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7011,7 +7011,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7063,7 +7063,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7118,7 +7118,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7170,7 +7170,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7225,7 +7225,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7274,7 +7274,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7323,7 +7323,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7375,7 +7375,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7428,7 +7428,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c3ea984aceae"
+                "$ref": "#/components/schemas/Event.VersionEncoded_38"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7494,7 +7494,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7549,7 +7549,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7607,7 +7607,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7659,7 +7659,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7734,7 +7734,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7800,7 +7800,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7852,7 +7852,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7904,7 +7904,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -7930,7 +7930,7 @@
                 "type": "string"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               },
               "cost": {
                 "$ref": "#/components/schemas/Money.USD"
@@ -7981,7 +7981,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8014,7 +8014,7 @@
                 "type": "string"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               },
               "cost": {
                 "$ref": "#/components/schemas/Money.USD"
@@ -8065,7 +8065,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8166,7 +8166,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8193,7 +8193,7 @@
                 "type": "string"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "ordinal", "text"],
@@ -8229,7 +8229,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8253,7 +8253,7 @@
                 "maximum": 9007199254740991
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "ordinal"],
@@ -8333,7 +8333,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8360,7 +8360,7 @@
                 "type": "string"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "ordinal", "text"],
@@ -8396,7 +8396,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8496,7 +8496,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8554,7 +8554,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8582,7 +8582,7 @@
                 "type": "boolean"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "id", "input", "executed"],
@@ -8660,7 +8660,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c3ea984aceae"
+                "$ref": "#/components/schemas/Event.VersionEncoded_38"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8685,12 +8685,12 @@
                 "type": "array",
                 "prefixItems": [
                   {
-                    "$ref": "#/components/schemas/Tool.Content"
+                    "$ref": "#/components/schemas/Tool.Content_1"
                   }
                 ],
                 "minItems": 1,
                 "items": {
-                  "$ref": "#/components/schemas/Tool.Content"
+                  "$ref": "#/components/schemas/Tool.Content_1"
                 }
               },
               "metadata": {
@@ -8700,7 +8700,7 @@
                 "type": "boolean"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "id", "content", "executed"],
@@ -8736,7 +8736,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c3ea984aceae"
+                "$ref": "#/components/schemas/Event.VersionEncoded_38"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8764,12 +8764,12 @@
                 "type": "array",
                 "prefixItems": [
                   {
-                    "$ref": "#/components/schemas/Tool.Content"
+                    "$ref": "#/components/schemas/Tool.Content_1"
                   }
                 ],
                 "minItems": 1,
                 "items": {
-                  "$ref": "#/components/schemas/Tool.Content"
+                  "$ref": "#/components/schemas/Tool.Content_1"
                 }
               },
               "metadata": {
@@ -8779,7 +8779,7 @@
                 "type": "boolean"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               }
             },
             "required": ["sessionID", "assistantMessageID", "id", "error", "executed"],
@@ -8815,7 +8815,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8880,7 +8880,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8972,7 +8972,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -8995,7 +8995,7 @@
                 "$ref": "#/components/schemas/Model.Ref"
               },
               "native": {
-                "$ref": "#/components/schemas/Session.Message.Native"
+                "$ref": "#/components/schemas/Session.Message.Native_1"
               },
               "text": {
                 "type": "string"
@@ -9040,7 +9040,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -9105,7 +9105,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -9157,7 +9157,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -9206,7 +9206,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -9540,7 +9540,7 @@
                 "$ref": "#/components/schemas/Event.Seq"
               },
               "version": {
-                "$ref": "#/components/schemas/Event.VersionEncoded_c77c5abcb68d"
+                "$ref": "#/components/schemas/Event.VersionEncoded_48"
               }
             },
             "required": ["aggregateID", "seq", "version"],
@@ -11513,11 +11513,11 @@
         "minimum": 0,
         "maximum": 9007199254740991
       },
-      "Event.VersionEncoded_c77c5abcb68d": {
+      "Event.VersionEncoded_48": {
         "type": "number",
         "enum": [1]
       },
-      "Event.VersionEncoded_c3ea984aceae": {
+      "Event.VersionEncoded_38": {
         "type": "number",
         "enum": [2]
       },
@@ -11552,7 +11552,7 @@
                 "enum": ["user"]
               },
               "payload": {
-                "$ref": "#/components/schemas/Session.Inbox.UserPayload"
+                "$ref": "#/components/schemas/Session.Inbox.UserPayload_1"
               },
               "delivery": {
                 "$ref": "#/components/schemas/Session.Inbox.Delivery"
@@ -11569,7 +11569,7 @@
                 "enum": ["synthetic"]
               },
               "payload": {
-                "$ref": "#/components/schemas/Session.Inbox.SyntheticPayload"
+                "$ref": "#/components/schemas/Session.Inbox.SyntheticPayload_1"
               },
               "delivery": {
                 "$ref": "#/components/schemas/Session.Inbox.Delivery"
@@ -11614,13 +11614,69 @@
           }
         ]
       },
-      "Tool.Content": {
+      "Shell.Info": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Shell.ID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "exited", "timeout", "killed"]
+          },
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "exit": {
+            "type": "number"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "started": {
+                "type": "number"
+              },
+              "completed": {
+                "type": "number"
+              }
+            },
+            "required": ["started"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "status", "command", "cwd", "shell", "file", "metadata", "time"],
+        "additionalProperties": false
+      },
+      "Session.Message.Native_1": {
+        "type": "object"
+      },
+      "Tool.Content_1": {
         "anyOf": [
           {
             "$ref": "#/components/schemas/Tool.TextContent"
           },
           {
-            "$ref": "#/components/schemas/Tool.FileContent"
+            "$ref": "#/components/schemas/Tool.FileContent_1"
           }
         ]
       },
@@ -11863,7 +11919,7 @@
             "type": "string"
           },
           "metadata": {
-            "$ref": "#/components/schemas/Form.Metadata"
+            "$ref": "#/components/schemas/Form.Metadata_1"
           },
           "fields": {
             "$ref": "#/components/schemas/Form.Fields_1"
@@ -12159,6 +12215,50 @@
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9._-]*$"
       },
+      "Session.Inbox.UserPayload_1": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prompt.FileAttachment"
+            }
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prompt.AgentAttachment"
+            }
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prompt.SkillAttachment"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "Session.Inbox.SyntheticPayload_1": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      },
       "Session.Inbox.MovePayload_1": {
         "type": "object",
         "properties": {
@@ -12189,7 +12289,7 @@
         "required": ["type", "text"],
         "additionalProperties": false
       },
-      "Tool.FileContent": {
+      "Tool.FileContent_1": {
         "type": "object",
         "properties": {
           "type": {
@@ -12376,6 +12476,9 @@
         "required": ["kind", "id", "sessionID", "status", "time"],
         "additionalProperties": false
       },
+      "Form.Metadata_1": {
+        "type": "object"
+      },
       "Form.Fields_1": {
         "type": "array",
         "prefixItems": [
@@ -12442,6 +12545,16 @@
           }
         ]
       },
+      "Tool.Content": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Tool.TextContent"
+          },
+          {
+            "$ref": "#/components/schemas/Tool.FileContent"
+          }
+        ]
+      },
       "Job.Status": {
         "type": "string",
         "enum": ["running", "completed", "error", "cancelled"]
@@ -12480,6 +12593,33 @@
             "$ref": "#/components/schemas/Form.ExternalField"
           }
         ]
+      },
+      "Tool.FileContent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["file"]
+          },
+          "uri": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["type", "uri", "mime"],
+        "additionalProperties": false
       },
       "Form.StringField_1": {
         "type": "object",
