@@ -2,6 +2,10 @@
 // the connected-repository list. An explicit hand-off from the Files window names the folder to show
 // and wins over the current selection (#4103 F2), so a second hand-off into an open window switches
 // it; a configuration change that is not a hand-off never replaces what the person selected.
+//
+// A repository list that failed to load blocks every decision until it loads again. An error about
+// one repository (refused, or its connection failed) keeps the window where it is until the person
+// acts, and an explicit new hand-off is such an act: it supersedes that error.
 
 import type { ProjectWithAvailability } from "@/lib/types";
 
@@ -25,6 +29,9 @@ export interface RepositorySelectionInput {
   readonly handOffPending: boolean;
   readonly selectedPath: string | null;
   readonly reposLoading: boolean;
+  /** The repository list itself failed to load, so no repository can be decided. */
+  readonly reposListFailed: boolean;
+  /** The window's current repository error, from the list or from one repository. */
   readonly reposError: string | null;
   readonly repositories: readonly ProjectWithAvailability[];
 }
@@ -36,8 +43,26 @@ export function configuredRepositoryPath(projectId: string | undefined): string 
   return projectId !== undefined && projectId !== "" ? projectId : null;
 }
 
-function handOffPathOf(input: RepositorySelectionInput): string | null {
-  return input.handOffPending && !input.lockedToActiveRoot ? input.configuredPath : null;
+export interface HandOffState {
+  readonly handOffPending: boolean;
+  readonly lockedToActiveRoot: boolean;
+  readonly configuredPath: string | null;
+}
+
+/**
+ * The folder an explicit, unsettled hand-off names, or null. A window locked to the active task
+ * workspace never follows a hand-off.
+ */
+export function handedOffRepositoryPath(state: HandOffState): string | null {
+  return state.handOffPending && !state.lockedToActiveRoot ? state.configuredPath : null;
+}
+
+function waitsForRepositoryState(
+  input: RepositorySelectionInput,
+  handOffPath: string | null,
+): boolean {
+  if (input.reposLoading || input.reposListFailed) return true;
+  return input.reposError !== null && handOffPath === null;
 }
 
 function decideListedRepository(
@@ -69,8 +94,8 @@ export function decideRepositorySelection(
   if (input.lockedToActiveRoot && input.configuredPath !== null) {
     return { kind: "bind-locked", path: input.configuredPath };
   }
-  if (input.reposLoading || input.reposError !== null) return WAIT;
-  const handOffPath = handOffPathOf(input);
+  const handOffPath = handedOffRepositoryPath(input);
+  if (waitsForRepositoryState(input, handOffPath)) return WAIT;
   const requestedPath = handOffPath ?? input.selectedPath ?? input.configuredPath;
   if (requestedPath === null) return WAIT;
   const repository = input.repositories.find((candidate) => candidate.path === requestedPath);

@@ -58,6 +58,29 @@ interface RecentRepositoriesProps {
   readonly onRetry: () => void;
 }
 
+interface RepositoryErrorNoticeProps {
+  readonly error: string;
+  readonly onRetry: () => void;
+}
+
+/**
+ * A repository failure with its retry, which reloads the repository list. The connected view shows
+ * it too (#4103 F2), so a failure never hides behind the repository the window still shows.
+ */
+export function RepositoryErrorNotice({ error, onRetry }: RepositoryErrorNoticeProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+      <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, margin: 0 }}>
+        {error}
+      </p>
+      <button type="button" style={SECONDARY_BTN} onClick={onRetry}>
+        {t("gitDelivery.action.retry")}
+      </button>
+    </div>
+  );
+}
+
 function RecentRepositories({
   repositories,
   loading,
@@ -66,18 +89,7 @@ function RecentRepositories({
   onRetry,
 }: RecentRepositoriesProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  if (error !== null) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
-        <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, margin: 0 }}>
-          {error}
-        </p>
-        <button type="button" style={SECONDARY_BTN} onClick={onRetry}>
-          {t("gitDelivery.action.retry")}
-        </button>
-      </div>
-    );
-  }
+  if (error !== null) return <RepositoryErrorNotice error={error} onRetry={onRetry} />;
   if (loading && repositories.length === 0) {
     return (
       <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>

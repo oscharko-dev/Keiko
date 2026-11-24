@@ -1235,6 +1235,132 @@ describe("GitClientWindow — repository list", () => {
     );
   });
 
+  // CodeRabbit on #4553: the window follows the hand-off, so a failed connection of the handed-off
+  // folder is shown instead of hiding behind the repository the window showed before.
+  it("shows a failed hand-off connection while another repository was shown", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      registerRepository: vi.fn(async () => {
+        throw new Error("not a git repository");
+      }),
+    });
+    const view = render(
+      <GitClientWindow projectId={REPO_A.path} client={client} updateCfg={updateCfg} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+
+    view.rerender(
+      <GitClientWindow
+        projectId="/repos/not-git"
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: not a git repository",
+    );
+    expect(client.registerRepository).toHaveBeenCalledOnce();
+    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+  });
+
+  // The same failure class without a hand-off: another repository picked from the toolbar that
+  // cannot connect is reported while the window keeps showing the current one.
+  it("shows a failed repository switch from the toolbar", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path === REPO_B.path) throw new Error("folder moved");
+        return makeProjectResponse(REPO_A);
+      }),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(REPO_B.path) }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Repository reconnection failed: folder moved",
+    );
+    expect(vi.mocked(client.getStatus).mock.calls.map((call) => call[0])).not.toContain(
+      REPO_B.path,
+    );
+  });
+
+  // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
+  it("connects a handed-off repository after an earlier repository was refused", async () => {
+    const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [legacy, REPO_B] })),
+    });
+    const view = render(<GitClientWindow projectId={legacy.path} client={client} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This local repository is unavailable.",
+    );
+
+    view.rerender(
+      <GitClientWindow projectId={REPO_B.path} connectHandedOffRepository client={client} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // CodeRabbit on #4553: a registration that settles after a newer hand-off neither ends that
+  // hand-off nor selects or persists its own folder.
+  it("keeps a newer hand-off when an earlier registration settles", async () => {
+    const handedOff = makeRepo("/repos/handed-off", "handed-off");
+    let resolveRegistration: (value: { readonly project: ProjectWithAvailability }) => void = () =>
+      undefined;
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      registerRepository: vi.fn(
+        async () =>
+          await new Promise<{ readonly project: ProjectWithAvailability }>((resolve) => {
+            resolveRegistration = resolve;
+          }),
+      ),
+    });
+    const view = render(
+      <GitClientWindow
+        projectId={handedOff.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    await waitFor(() => expect(client.registerRepository).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <GitClientWindow
+        projectId={REPO_B.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    await act(async () => {
+      resolveRegistration(makeProjectResponse(handedOff));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    expect(client.reconnectRepository).not.toHaveBeenCalledWith(handedOff.path);
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: handedOff.path });
+    expect(vi.mocked(client.getStatus).mock.calls.map((call) => call[0])).not.toContain(
+      handedOff.path,
+    );
+    // Only the newer hand-off ended, once its folder was shown.
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+  });
+
   it("offers Connect repository and Clone from URL actions in the connect panel", async () => {
     render(<GitClientWindow client={makeClient()} />);
     expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
