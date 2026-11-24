@@ -44,6 +44,18 @@ describe("Coding Workbench translations", () => {
   // person (a message, the runtime) and stays.
   it("addresses the person informally in every German sentence", () => {
     const formal = /[^.!?—\s]\s+(?:Sie|Ihnen|Ihre?[mnrs]?)\b|^(?:Ihnen|Ihre?[mnrs]?)\b/u;
+    // Controls: the pattern still flags a formal address and spares the third person.
+    for (const sentence of [
+      "Starten Sie Keiko neu.",
+      "Sie benötigt Ihre Eingabe.",
+      "bis Sie antworten",
+    ])
+      expect(formal.test(sentence), sentence).toBe(true);
+    for (const sentence of [
+      "Nachricht gesendet. Sie erreicht die Aufgabe.",
+      "Sie trägt keine Signatur.",
+    ])
+      expect(formal.test(sentence), sentence).toBe(false);
     const mixed = Object.entries(DE_CODING_WORKBENCH_MESSAGES)
       .filter(([, sentence]) => formal.test(sentence))
       .map(([key]) => key);
