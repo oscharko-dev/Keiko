@@ -1364,6 +1364,16 @@ function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
   };
 }
 
+/** The fixture's host environment: PATH and HOME, plus the names a test hands down (#4491). */
+function fixtureProcessEnv(control: StartBridgeControl | undefined): Record<string, string> {
+  return { PATH: "/host/toolchain/bin", HOME: "/host/home", ...control?.processEnv };
+}
+
+/** A test's extra host names are inherited by name, as the native profile's allowlist does. */
+function fixtureInheritedEnvAllowlist(control: StartBridgeControl | undefined): string[] {
+  return Object.keys(control?.processEnv ?? {});
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -1618,7 +1628,7 @@ async function startBridgeFixture(
     ...buildSettingsHomeOption(control),
     // #3897: the host environment is offered to every profile; only the native profile's
     // allowlist copies anything from it, so a mapped launch must still carry no PATH.
-    processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home", ...control?.processEnv },
+    processEnv: fixtureProcessEnv(control),
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     contextGeometry: fixtureContextGeometry(control),
@@ -1686,7 +1696,7 @@ async function startBridgeFixture(
       gatewayUrl: fixtureGatewayUrl(control),
       modelProfileId: "coding-safe-openai-compatible",
       args: [],
-      inheritedEnvAllowlist: Object.keys(control?.processEnv ?? {}),
+      inheritedEnvAllowlist: fixtureInheritedEnvAllowlist(control),
       shutdownTimeoutMs: fixtureShutdownTimeout(control),
       // Ordinary tests exercise live filesystem setup; deadline tests pass their own short bound.
       startTimeoutMs: control?.startTimeoutMs ?? 5_000,
