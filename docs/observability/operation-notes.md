@@ -745,7 +745,10 @@ correlation. The admission line `coding-runtime.native-build-settings.admitted` 
 registries' tarballs. npm moves them onto the relay itself when the default registry is bound and
 every bound registry is that URL (`always` below Full access, `registry-host` at Full access,
 `npm-default` for the public registry or when no npm registry is bound); otherwise the relay
-rewrites each packument's tarball URLs (`relay-url`). Never a URL, host, path, artifact coordinate, user name or credential; a
+rewrites each packument's tarball URLs (`relay-url`). The closed `relayNpmRegistryEnvironment` says
+whether the run's environment names the relay as npm's registry (`relay`, with the default registry
+bound, so an inherited `npm_config_registry` cannot lead around the relay) or sets none
+(`unchanged`). Never a URL, host, path, artifact coordinate, user name or credential; a
 credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
 never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
 user-level files are read.

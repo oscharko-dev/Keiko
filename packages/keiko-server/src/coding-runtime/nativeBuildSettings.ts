@@ -17,6 +17,10 @@ import {
   NATIVE_RELAY_REFUSAL_REASONS,
   NPM_TARBALL_ROUTINGS,
   npmLockfileRegistryHost,
+  NPM_REGISTRY_ENVIRONMENTS,
+  npmRegistryEnvironment,
+  npmRegistryEnvironmentKind,
+  type NpmRegistryEnvironment,
   npmTarballRouting,
   relayMavenSettings,
   relayNpmConfig,
@@ -335,6 +339,14 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...NPM_TARBALL_ROUTINGS],
     },
+    // Whether the run's environment names the relay as npm's registry (#4491): npm reads it before
+    // the run's user config, and a Keiko started through npx or npm run inherits the person's.
+    relayNpmRegistryEnvironment: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...NPM_REGISTRY_ENVIRONMENTS],
+    },
     relayRefusedCount: { type: "integer", dataClass: "count", required: false },
     relayRefusalReasons: {
       type: "string-array",
@@ -380,6 +392,7 @@ export interface NativeRelayBindingSummary {
   readonly mavenBoundCount: number;
   readonly npmBoundCount: number;
   readonly npmTarballRouting: NpmTarballRouting;
+  readonly npmRegistryEnvironment: NpmRegistryEnvironment;
   readonly refusals: readonly string[];
 }
 
@@ -622,6 +635,9 @@ function relayEnvironment(
     NO_PROXY: noProxy,
     no_proxy: noProxy,
     ...(bound.npm.length > 0 ? { [OPENCODE_NATIVE_NPM_RELAY_ENV]: "bound" } : {}),
+    ...(input.repositoryRelay === undefined
+      ? {}
+      : npmRegistryEnvironment(input.repositoryRelay.origin, bound.npm)),
   };
 }
 
@@ -757,6 +773,7 @@ function relaySummary(
     mavenBoundCount: bound.maven.length,
     npmBoundCount: bound.npm.length,
     npmTarballRouting: npmTarballRouting(bound.npm, lockfileHost),
+    npmRegistryEnvironment: npmRegistryEnvironmentKind(bound.npm),
     refusals: bound.refusals,
   };
 }
@@ -767,6 +784,7 @@ function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<strin
     relayMavenBoundCount: relay.mavenBoundCount,
     relayNpmBoundCount: relay.npmBoundCount,
     relayNpmTarballRouting: relay.npmTarballRouting,
+    relayNpmRegistryEnvironment: relay.npmRegistryEnvironment,
     relayRefusedCount: relay.refusals.length,
     ...(relay.refusals.length === 0
       ? {}

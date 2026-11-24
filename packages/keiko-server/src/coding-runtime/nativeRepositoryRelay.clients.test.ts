@@ -221,6 +221,9 @@ function runEnvironment(): Record<string, string> {
   return {
     PATH: process.env.PATH ?? "",
     ...(process.env.JAVA_HOME === undefined ? {} : { JAVA_HOME: process.env.JAVA_HOME }),
+    // A Keiko started through `npx` or `npm run` inherits the person's registry this way (npm
+    // exports it to every process it starts), and the native profile hands it to the run (#4491).
+    npm_config_registry: `${scene.npm.url}/`,
     HOME: home,
     ...prepared.env,
     JAVA_TOOL_OPTIONS: javaToolOptions(undefined, {

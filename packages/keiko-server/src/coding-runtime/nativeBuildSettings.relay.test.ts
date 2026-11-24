@@ -298,6 +298,7 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "unchanged",
       refusals: ["url-interpolated"],
     });
   });
@@ -474,6 +475,29 @@ describe("how the run's npm reaches its registries' tarballs (#4491)", () => {
     expect(targets.map((target) => target.rewritePackumentTarballs)).toEqual([false, false]);
   });
 
+  // #4491 lab: npm exports a configured registry as `npm_config_registry` to every process it
+  // starts, so a Keiko started through `npx` or `npm run` hands it to the run, and npm reads the
+  // environment before the run's user config: the run's npm reached the registry around the relay.
+  it("names the relay as the registry in the environment npm reads first", () => {
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }));
+    const registry = lines(run)
+      .find((line) => line.startsWith("registry="))
+      ?.slice("registry=".length);
+    expect(registry).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/.+\/$/u);
+    expect(run.result.env).toMatchObject({
+      npm_config_registry: registry,
+      NPM_CONFIG_REGISTRY: registry,
+    });
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmRegistryEnvironment: "relay" });
+  });
+
+  it("leaves an inherited registry alone when the default registry is not bound", () => {
+    const { result } = bindRun(NPMRC_ONE_REGISTRY, { refuseFirst: true });
+    expect(result.relay?.npmRegistryEnvironment).toBe("unchanged");
+    expect(Object.keys(result.env)).not.toContain("npm_config_registry");
+    expect(Object.keys(result.env)).not.toContain("NPM_CONFIG_REGISTRY");
+  });
+
   // An `.npmrc` often names a scope's registry without its trailing slash, with another host case
   // or with the default port; the resolved URLs are normalised, so one Nexus group stays one.
   it("treats a scope spelled differently as the default registry's own URL", () => {
@@ -562,6 +586,7 @@ describe("what stays as it was (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "unchanged",
       refusals: [],
     });
   });
@@ -679,6 +704,7 @@ describe("release and refusal (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
+      npmRegistryEnvironment: "unchanged",
       refusals: ["bind-refused"],
     });
     expect(existsSync(result.env.NPM_CONFIG_USERCONFIG ?? "")).toBe(true);

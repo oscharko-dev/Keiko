@@ -2542,7 +2542,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Build tools in a nested monorepo (#4271) follow the same shape. The build names `JAVA_HOME`,
   `MAVEN_HOME`/`M2_HOME`/`GRADLE_HOME`, `MAVEN_OPTS`, `MAVEN_ARGS`, `GRADLE_OPTS`, the proxy family,
   `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `npm_config_registry` are inherited
-  (`nativeBuildInheritedEnvNames`) only when the value carries no credential (URL user-info, or a
+  (`nativeBuildInheritedEnvNames`; a default npm registry bound to the repository credential relay
+  replaces the inherited registry with the relay's, ADR-0184 D5) only when the value carries no credential (URL user-info, or a
   Maven/Gradle option naming a password or token); the JDK or build tool they name, and the JDK of the
   first `java` on `PATH`, open read-only through `nativeBuildToolReadRoots` under the toolchain root
   rule, and only when the directory holds the tool's `bin/` executable. The private `HOME` hides the

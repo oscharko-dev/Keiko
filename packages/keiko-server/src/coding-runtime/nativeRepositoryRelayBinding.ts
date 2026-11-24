@@ -392,6 +392,33 @@ export type NpmTarballRouting = (typeof NPM_TARBALL_ROUTINGS)[number];
 const PUBLIC_NPM_REGISTRY_HOST = "registry.npmjs.org";
 
 /**
+ * npm reads its environment before its user config, and npm exports a configured `registry` as
+ * `npm_config_registry` to every process it starts: a Keiko started through `npx` or `npm run`
+ * hands the person's registry down, and the native profile inherits that name on purpose (#4271).
+ * With the default registry on the relay, both spellings name the relay too, so the run's npm never
+ * reaches that registry around the relay (#4491).
+ */
+export const NPM_REGISTRY_ENVIRONMENTS = ["relay", "unchanged"] as const;
+export type NpmRegistryEnvironment = (typeof NPM_REGISTRY_ENVIRONMENTS)[number];
+
+/** Whether the run's environment names the relay as npm's registry: only with the default bound. */
+export function npmRegistryEnvironmentKind(
+  bound: readonly BoundNpmRegistry[],
+): NpmRegistryEnvironment {
+  return bound.some((entry) => entry.key === "registry") ? "relay" : "unchanged";
+}
+
+export function npmRegistryEnvironment(
+  origin: string,
+  bound: readonly BoundNpmRegistry[],
+): Record<string, string> {
+  const registry = bound.find((entry) => entry.key === "registry");
+  if (registry === undefined) return {};
+  const url = repositoryRelayBaseUrl(origin, registry.relayId);
+  return { npm_config_registry: url, NPM_CONFIG_REGISTRY: url };
+}
+
+/**
  * Whether the run's npm moves the tarballs of its registries onto the relay itself (#4491): a default
  * registry is bound and every bound registry is that one URL, as when a scope names the same Nexus
  * group. npm moves a tarball URL only onto the default registry, so then the relay leaves each

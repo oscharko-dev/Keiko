@@ -12917,6 +12917,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["always", "registry-host", "npm-default", "relay-url"],
       },
+      relayNpmRegistryEnvironment: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["relay", "unchanged"],
+      },
       relayRefusedCount: {
         type: "integer",
         dataClass: "count",

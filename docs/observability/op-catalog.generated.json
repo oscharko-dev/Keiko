@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d2367e3f6fab34e96208e31f082922bd95a657954a02082fec9ff1c21e6994a8",
+    "catalogDigest": "df9ed7018bea4e88293d79cd73599f2f4b65f63f2547e0d295076988f15ad3ce",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13424,6 +13424,12 @@
             "required": false,
             "values": ["always", "registry-host", "npm-default", "relay-url"]
           },
+          "relayNpmRegistryEnvironment": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["relay", "unchanged"]
+          },
           "relayRefusedCount": {
             "type": "integer",
             "dataClass": "count",
@@ -13461,8 +13467,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:280",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:726"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:284",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:742"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13889,8 +13895,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1729",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1959"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1730",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1960"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -79326,6 +79332,12 @@
                   "required": false
                 },
                 {
+                  "name": "relayNpmRegistryEnvironment",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "relayNpmTarballRouting",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -124391,14 +124403,14 @@
     {
       "op": "coding-runtime.native-build-settings",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:426",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:439",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-build-settings.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:283",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:287",
       "package": "keiko-server"
     },
     {
@@ -124434,7 +124446,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1732",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1733",
       "package": "keiko-server"
     },
     {

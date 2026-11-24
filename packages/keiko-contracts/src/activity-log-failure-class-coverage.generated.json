@@ -14534,6 +14534,12 @@
               "required": false
             },
             {
+              "name": "relayNpmRegistryEnvironment",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "relayNpmTarballRouting",
               "type": "string",
               "dataClass": "closed-enum",

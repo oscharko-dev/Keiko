@@ -199,11 +199,17 @@ to a file of the run.
   own default stays for a public default registry. A scope bound to another URL, or a scope without
   a bound default registry, keeps the relay's packument rewrite and npm's default for every registry
   of the run, as before: there a lockfile the run writes pins the relay, and one pinned on the
-  person's registry is not routed. The routing is npm's install path (`npm install`, `npm ci`,
-  `npx`): a tarball npm fetches outside it, as `npm pack <package>`, `npm cache add` or an install
-  from a lockfile written with `omit-lockfile-registry-resolved` do, is moved by npm's fetcher onto
-  the relay's origin without the relay's path below Full access and fails, and is fetched from the
-  person's registry without the credential at Full access when that registry names a port.
+  person's registry is not routed. The routing covers npm's install path (`npm install`, `npm ci`,
+  `npx`). For `npm pack <package>`, `npm cache add` and an install from a lockfile written with
+  `omit-lockfile-registry-resolved`, npm's own fetcher applies the setting instead: it moves the
+  tarball onto the relay's origin without the relay's path, which fails, below Full access and at
+  Full access for a registry without a port, and fetches it from the person's registry without the
+  credential at Full access for a registry that names a port.
+  npm reads its environment before its user config, and npm exports a configured `registry` as
+  `npm_config_registry` to every process it starts, so a Keiko started through `npx` or `npm run`
+  hands the person's registry to the run (the native profile inherits that name, ADR-0137): with
+  the default registry bound, the run's environment names the relay as `npm_config_registry` and
+  `NPM_CONFIG_REGISTRY` too, and the run's npm never reaches that registry around the relay.
   `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run,
   extending the inherited list.
   The runtime's environment carries `npm_config_offline=true` below Full access, and npm reads the
@@ -230,7 +236,8 @@ to a file of the run.
   list: the resolution refusals (including the informational `profile-inactive`) plus
   `bind-refused`, `id-missing`, `id-ambiguous` and `rewrite-missed`, and `relayNpmTarballRouting`
   (`always`, `registry-host`, `npm-default` or `relay-url`), how the run's npm reaches its
-  registries' tarballs.
+  registries' tarballs, and `relayNpmRegistryEnvironment` (`relay` or `unchanged`), whether the
+  run's environment names the relay as npm's registry.
 
 ### D6 — Modes
 
