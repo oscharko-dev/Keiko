@@ -116,6 +116,7 @@ function prepare(
     readonly env?: Record<string, string | undefined>;
     readonly relay?: boolean;
     readonly noProxy?: string;
+    readonly inheritedRegistry?: boolean;
     readonly signal?: AbortSignal;
   } = {},
 ): Run {
@@ -144,6 +145,7 @@ function prepare(
       ? {}
       : { repositoryRelay: { relay, origin: ORIGIN, env: options.env ?? {} } }),
     inheritedNoProxy: options.noProxy,
+    inheritedNpmRegistry: options.inheritedRegistry,
     signal: options.signal,
     activityLog: sink,
   });
@@ -298,7 +300,7 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
-      npmRegistryEnvironment: "unchanged",
+      npmRegistryEnvironment: "none",
       refusals: ["url-interpolated"],
     });
   });
@@ -411,7 +413,11 @@ const NPMRC_ONE_REGISTRY = `registry=https://npm.corp.example/registry/
  */
 function bindRun(
   npm: string,
-  options: { readonly mode?: string; readonly refuseFirst?: boolean } = {},
+  options: {
+    readonly mode?: string;
+    readonly refuseFirst?: boolean;
+    readonly inheritedRegistry?: boolean;
+  } = {},
 ): { readonly targets: RepositoryRelayTarget[]; readonly result: NativeBuildSettingsResult } {
   const stateRoot = join(temp(), "run");
   mkdirSync(stateRoot, { recursive: true });
@@ -421,6 +427,7 @@ function bindRun(
     mode: options.mode ?? "supervised-coding",
     realHome: person({ npm }),
     stateRoot,
+    inheritedNpmRegistry: options.inheritedRegistry,
     repositoryRelay: {
       relay: {
         bind: (target) => {
@@ -479,7 +486,7 @@ describe("how the run's npm reaches its registries' tarballs (#4491)", () => {
   // starts, so a Keiko started through `npx` or `npm run` hands it to the run, and npm reads the
   // environment before the run's user config: the run's npm reached the registry around the relay.
   it("names the relay as the registry in the environment npm reads first", () => {
-    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }));
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }), { inheritedRegistry: true });
     const registry = lines(run)
       .find((line) => line.startsWith("registry="))
       ?.slice("registry=".length);
@@ -491,9 +498,19 @@ describe("how the run's npm reaches its registries' tarballs (#4491)", () => {
     expect(run.lines[0]?.extra).toMatchObject({ relayNpmRegistryEnvironment: "relay" });
   });
 
+  // #4491 audit: the environment outranks a project `.npmrc`, so a name the run does not inherit is
+  // never added; npm's own precedence then stands and the run's user config names the relay.
+  it("adds no registry name to the environment of a run that inherits none", () => {
+    const run = prepare(person({ npm: NPMRC_ONE_REGISTRY }));
+    expect(lines(run).find((line) => line.startsWith("registry="))).toMatch(/127\.0\.0\.1/u);
+    expect(Object.keys(run.result.env)).not.toContain("npm_config_registry");
+    expect(Object.keys(run.result.env)).not.toContain("NPM_CONFIG_REGISTRY");
+    expect(run.lines[0]?.extra).toMatchObject({ relayNpmRegistryEnvironment: "none" });
+  });
+
   it("leaves an inherited registry alone when the default registry is not bound", () => {
-    const { result } = bindRun(NPMRC_ONE_REGISTRY, { refuseFirst: true });
-    expect(result.relay?.npmRegistryEnvironment).toBe("unchanged");
+    const { result } = bindRun(NPMRC_ONE_REGISTRY, { refuseFirst: true, inheritedRegistry: true });
+    expect(result.relay?.npmRegistryEnvironment).toBe("inherited");
     expect(Object.keys(result.env)).not.toContain("npm_config_registry");
     expect(Object.keys(result.env)).not.toContain("NPM_CONFIG_REGISTRY");
   });
@@ -586,7 +603,7 @@ describe("what stays as it was (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
-      npmRegistryEnvironment: "unchanged",
+      npmRegistryEnvironment: "none",
       refusals: [],
     });
   });
@@ -704,7 +721,7 @@ describe("release and refusal (#4522)", () => {
       mavenBoundCount: 0,
       npmBoundCount: 0,
       npmTarballRouting: "npm-default",
-      npmRegistryEnvironment: "unchanged",
+      npmRegistryEnvironment: "none",
       refusals: ["bind-refused"],
     });
     expect(existsSync(result.env.NPM_CONFIG_USERCONFIG ?? "")).toBe(true);

@@ -12921,7 +12921,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["relay", "unchanged"],
+        values: ["relay", "inherited", "none"],
       },
       relayRefusedCount: {
         type: "integer",

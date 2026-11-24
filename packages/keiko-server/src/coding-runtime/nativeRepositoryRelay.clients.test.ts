@@ -204,6 +204,8 @@ beforeAll(async () => {
     realHome: personHome,
     stateRoot,
     repositoryRelay: { relay: server.relay, origin: server.origin, env: {} },
+    // The run below inherits the person's registry by name, as from an npm-started Keiko.
+    inheritedNpmRegistry: true,
     activityLog: { write: () => undefined },
   });
   scene = { maven, npm, server, prepared, stateRoot, home: join(stateRoot, "home"), root };

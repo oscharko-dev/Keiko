@@ -2220,6 +2220,9 @@ function admitNativeBuildSettings(
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
     repositoryRelay: input.repositoryRelay,
     inheritedNoProxy: request.env.NO_PROXY ?? request.env.no_proxy,
+    inheritedNpmRegistry:
+      request.env.npm_config_registry !== undefined ||
+      request.env.NPM_CONFIG_REGISTRY !== undefined,
     signal: request.signal,
     activityLog: input.activityLog,
   });

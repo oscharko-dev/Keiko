@@ -746,9 +746,9 @@ registries' tarballs. npm moves them onto the relay itself when the default regi
 every bound registry is that URL (`always` below Full access, `registry-host` at Full access,
 `npm-default` for the public registry or when no npm registry is bound); otherwise the relay
 rewrites each packument's tarball URLs (`relay-url`). The closed `relayNpmRegistryEnvironment` says
-whether the run's environment names the relay as npm's registry (`relay`, with the default registry
-bound, so an inherited `npm_config_registry` cannot lead around the relay) or sets none
-(`unchanged`). Never a URL, host, path, artifact coordinate, user name or credential; a
+how the run's environment names npm's registry: `relay` when an inherited `npm_config_registry` is
+replaced by the relay of the bound default registry, `inherited` when an inherited name passes
+unchanged because the default registry is not bound, and `none` when the run inherits no name. Never a URL, host, path, artifact coordinate, user name or credential; a
 credential in a response is refused (`credential-in-response`), never rewritten. A repository URL is
 never interpolated, a resolver never reads a `KEIKO_*` or provider variable, and only the person's
 user-level files are read.

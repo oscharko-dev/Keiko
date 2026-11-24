@@ -208,8 +208,12 @@ to a file of the run.
   npm reads its environment before its user config, and npm exports a configured `registry` as
   `npm_config_registry` to every process it starts, so a Keiko started through `npx` or `npm run`
   hands the person's registry to the run (the native profile inherits that name, ADR-0137): with
-  the default registry bound, the run's environment names the relay as `npm_config_registry` and
-  `NPM_CONFIG_REGISTRY` too, and the run's npm never reaches that registry around the relay.
+  the default registry bound, an inherited name is replaced by the relay in both spellings, and the
+  run's npm never reaches that registry around the relay. A run that inherits no name gets none, so
+  npm's own precedence stands and a project `.npmrc` keeps outranking the run's user config. With
+  the default registry not bound, an inherited name passes unchanged: it carries no credential, the
+  run is offline below Full access, and at Full access the registry refuses the unauthenticated
+  request.
   `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run,
   extending the inherited list.
   The runtime's environment carries `npm_config_offline=true` below Full access, and npm reads the
@@ -236,8 +240,8 @@ to a file of the run.
   list: the resolution refusals (including the informational `profile-inactive`) plus
   `bind-refused`, `id-missing`, `id-ambiguous` and `rewrite-missed`, and `relayNpmTarballRouting`
   (`always`, `registry-host`, `npm-default` or `relay-url`), how the run's npm reaches its
-  registries' tarballs, and `relayNpmRegistryEnvironment` (`relay` or `unchanged`), whether the
-  run's environment names the relay as npm's registry.
+  registries' tarballs, and `relayNpmRegistryEnvironment` (`relay`, `inherited` or `none`), how
+  the run's environment names npm's registry.
 
 ### D6 — Modes
 

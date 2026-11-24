@@ -395,25 +395,31 @@ const PUBLIC_NPM_REGISTRY_HOST = "registry.npmjs.org";
  * npm reads its environment before its user config, and npm exports a configured `registry` as
  * `npm_config_registry` to every process it starts: a Keiko started through `npx` or `npm run`
  * hands the person's registry down, and the native profile inherits that name on purpose (#4271).
- * With the default registry on the relay, both spellings name the relay too, so the run's npm never
- * reaches that registry around the relay (#4491).
+ * With the default registry on the relay, an inherited name is replaced by the relay, so the run's
+ * npm never reaches that registry around the relay (#4491) (`relay`). Without an inherited name
+ * the environment sets none and npm's own precedence stands, a project `.npmrc` included (`none`);
+ * with the default registry not bound, an inherited name passes unchanged (`inherited`).
  */
-export const NPM_REGISTRY_ENVIRONMENTS = ["relay", "unchanged"] as const;
+export const NPM_REGISTRY_ENVIRONMENTS = ["relay", "inherited", "none"] as const;
 export type NpmRegistryEnvironment = (typeof NPM_REGISTRY_ENVIRONMENTS)[number];
 
-/** Whether the run's environment names the relay as npm's registry: only with the default bound. */
+/** How the run's environment names npm's registry, given whether the run inherits one. */
 export function npmRegistryEnvironmentKind(
   bound: readonly BoundNpmRegistry[],
+  inherited: boolean,
 ): NpmRegistryEnvironment {
-  return bound.some((entry) => entry.key === "registry") ? "relay" : "unchanged";
+  if (!inherited) return "none";
+  return bound.some((entry) => entry.key === "registry") ? "relay" : "inherited";
 }
 
+/** The relay as npm's registry, replacing an inherited name only: never a new precedence. */
 export function npmRegistryEnvironment(
   origin: string,
   bound: readonly BoundNpmRegistry[],
+  inherited: boolean,
 ): Record<string, string> {
   const registry = bound.find((entry) => entry.key === "registry");
-  if (registry === undefined) return {};
+  if (!inherited || registry === undefined) return {};
   const url = repositoryRelayBaseUrl(origin, registry.relayId);
   return { npm_config_registry: url, NPM_CONFIG_REGISTRY: url };
 }

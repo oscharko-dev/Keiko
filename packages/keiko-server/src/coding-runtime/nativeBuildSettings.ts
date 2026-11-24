@@ -339,8 +339,8 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...NPM_TARBALL_ROUTINGS],
     },
-    // Whether the run's environment names the relay as npm's registry (#4491): npm reads it before
-    // the run's user config, and a Keiko started through npx or npm run inherits the person's.
+    // How the run's environment names npm's registry (#4491): npm reads it before the run's user
+    // config, and a Keiko started through npx or npm run inherits the person's.
     relayNpmRegistryEnvironment: {
       type: "string",
       dataClass: "closed-enum",
@@ -382,6 +382,8 @@ export interface NativeBuildSettingsInput {
   readonly repositoryRelay?: NativeRepositoryRelayInput | undefined;
   /** The run's inherited `NO_PROXY`, which the relay's loopback exemption extends. */
   readonly inheritedNoProxy?: string | undefined;
+  /** Whether the run inherits npm's registry by name (a Keiko started through npx or npm run). */
+  readonly inheritedNpmRegistry?: boolean | undefined;
   /** The run's signal: its bindings are revoked when it aborts, before the run is released. */
   readonly signal?: AbortSignal | undefined;
   readonly activityLog?: ServerLogSink | undefined;
@@ -512,7 +514,7 @@ export function prepareNativeBuildSettings(
     npmConfig: npm.disposition,
     gradleProperties: gradle.disposition,
     ...droppedCounts(maven, npm, gradle),
-    ...(bound === undefined ? {} : { relay: relaySummary(bound, input.mode) }),
+    ...(bound === undefined ? {} : { relay: relaySummary(bound, input) }),
   };
   recordNativeBuildSettingsAdmitted(input, result);
   return result;
@@ -637,7 +639,11 @@ function relayEnvironment(
     ...(bound.npm.length > 0 ? { [OPENCODE_NATIVE_NPM_RELAY_ENV]: "bound" } : {}),
     ...(input.repositoryRelay === undefined
       ? {}
-      : npmRegistryEnvironment(input.repositoryRelay.origin, bound.npm)),
+      : npmRegistryEnvironment(
+          input.repositoryRelay.origin,
+          bound.npm,
+          input.inheritedNpmRegistry === true,
+        )),
   };
 }
 
@@ -766,14 +772,17 @@ function compareCodeUnits(left: string, right: string): number {
 
 function relaySummary(
   bound: BoundRepositories,
-  mode: string | undefined,
+  input: NativeBuildSettingsInput,
 ): NativeRelayBindingSummary {
-  const lockfileHost = npmLockfileRegistryHost(bound.npm, nativeBuildCacheAdmitted(mode));
+  const lockfileHost = npmLockfileRegistryHost(bound.npm, nativeBuildCacheAdmitted(input.mode));
   return {
     mavenBoundCount: bound.maven.length,
     npmBoundCount: bound.npm.length,
     npmTarballRouting: npmTarballRouting(bound.npm, lockfileHost),
-    npmRegistryEnvironment: npmRegistryEnvironmentKind(bound.npm),
+    npmRegistryEnvironment: npmRegistryEnvironmentKind(
+      bound.npm,
+      input.inheritedNpmRegistry === true,
+    ),
     refusals: bound.refusals,
   };
 }
