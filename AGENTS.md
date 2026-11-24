@@ -107,6 +107,9 @@ before you change that area.
   `coding-repository` binding, and a Files title never names a different root than its tree shows.
 - **No prompt-token cap (2026-11-11):** never reintroduce a cumulative prompt-token allowance;
   cost control is the Model Gateway spend ceiling (ADR-0137, #4346).
+- **Coding run limits (2026-11-24):** new runs get the longest supported duration (480 minutes)
+  and a 10,000-call tool budget that only a runaway loop reaches; never lower either to ration
+  ordinary work (ADR-0137).
 - **Knowledge Pods (2026-11-04):** local storage, no sharing roadmap or placeholders; the create
   dialog asks only for a name.
 - **Linux is a community tier (2026-11-12):** feature parity is promised for macOS and Windows

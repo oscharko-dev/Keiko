@@ -192,11 +192,13 @@ Minting requires a server-issued, action-bound, one-use human confirmation. The 
 itself is retained for the complete run so the existing registry remains the sole source of
 cumulative runtime/tool/patch budgets. One of those bounds is an operator setting, read once at
 composition and copied into every newly minted envelope: the envelope duration
-`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120; positive decimal integers from 1 to 480),
+`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 480, the maximum; positive decimal integers from 1 to 480),
 from which both `budget.maxRuntimeMs` and `expiresAt` derive. An invalid value fails the composition
 closed; the setting cannot alter an existing envelope or reset its usage, and a run that exhausts it
 still fails closed at its next delegation. The envelope carries no prompt-token bound (owner
-decision 2026-11-11, below). The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
+decision 2026-11-11, below). The cumulative tool-call allowance `budget.maxToolCalls` is not an
+operator setting either: every envelope is minted with 10,000 calls (owner decision 2026-11-24,
+below; previously 256), so the duration ends ordinary work and the count stops only a runaway loop. The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
 envelope is minted with `CODING_RUNTIME_PATCH_BUDGET_BYTES` (64 MiB, owner decision 2026-10-28;
 previously 256 KiB), eight changesets of the per-changeset cap of ADR-0125 D3, charged by the size of
 the diff each edit renders. Native context compaction changes subsequent request size, not
@@ -239,7 +241,7 @@ better guard against a model that loops unnoticed is tracked in #4346; the refus
 below already ends the known loop.
 A slow self-hosted model (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per
 turn) turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit, so the
-duration default is 120 minutes. The minted duration is reported body-free as `maxRuntimeMs` on
+duration default was raised to 120 minutes and, on 2026-11-24, to the 480-minute maximum. The minted duration is reported body-free as `maxRuntimeMs` on
 `coding-runtime.authority.minted`. Every other bound that must not be shorter than the run follows
 the configured duration: the safe-activity projection retains a run's feed for the duration plus a
 margin, and the OpenCode adapter bounds one submitted task's whole agent loop by the run's
@@ -251,13 +253,21 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
-**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the duration
+**Default envelope widened — owner decision (2026-10-07, PR #3876; the duration default is superseded below).** Raising the duration
 default widens the default Authority Envelope of every installation: four times the duration, and
 with `expiresAt` a minted run capability that lives up to 120 minutes instead of 30. The owner
 decided to ship 120 minutes for every installation, with `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`
 as the operator's opt-down, and a run still fails closed at that bound. (The same decision raised the
 prompt-token allowance tenfold; the allowance itself was removed on 2026-11-11, above.) Operators who
 need a per-provider cost bound configure a Model Gateway spend ceiling.
+
+**Longest duration and a loop-only tool-call bound — owner decision (2026-11-24).** Keiko runs on
+the customer's own models, so a bound that ends healthy work protects nothing. A long analysis on a
+self-hosted model reached the 256-call allowance and stopped unfinished; a long ordinary run makes
+several hundred to more than a thousand tool calls. The owner decided that every new run gets the
+longest supported duration (480 minutes, `DEFAULT_RUNTIME_MAX_DURATION_MINUTES` equals
+`MAX_RUNTIME_MAX_DURATION_MINUTES`; the setting remains the operator's opt-down) and a 10,000-call
+allowance that only a runaway loop reaches. Both bounds still fail the run's next delegation closed.
 
 The same aggregate answers a budget question without spending: `delegationFits` says whether one
 more delegation of a given usage would still fit the run's budget, for the same capability, run and

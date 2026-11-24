@@ -104,7 +104,7 @@ minting a silently defaulted envelope (fail closed):
 
 | Setting                                     | Meaning                                            | Default | Accepted values                       |
 | ------------------------------------------- | -------------------------------------------------- | ------- | ------------------------------------- |
-| `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` | Envelope duration (`maxRuntimeMs` and `expiresAt`) | 120     | decimal integer 1 through 480 minutes |
+| `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` | Envelope duration (`maxRuntimeMs` and `expiresAt`) | 480     | decimal integer 1 through 480 minutes |
 
 It is copied into each newly minted envelope and reported body-free as `maxRuntimeMs` on the
 existing `coding-runtime.authority.minted` activity event. It does not change a live or exhausted

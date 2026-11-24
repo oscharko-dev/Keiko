@@ -55,6 +55,15 @@ Model Gateway spend ceiling. Per-request context-window fitting, output limits, 
 and patch budgets remain. Never reintroduce a token-count quota; a better guard against a model
 that loops unnoticed is tracked in #4346 (ADR-0137).
 
+## Coding run limits (2026-11-24)
+
+Keiko runs on the customer's own models, so a run limit that ends healthy work protects nothing.
+Every new Coding run gets the longest supported duration (480 minutes; the setting
+`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` can only shorten it) and a 10,000-call tool budget that
+only a runaway loop reaches, because a long ordinary run makes several hundred to more than a
+thousand tool calls. Never lower either default to ration ordinary work; the duration, the
+person's Stop and the hard denials remain the guards (ADR-0137).
+
 ## Knowledge Pod scope (2026-11-04)
 
 Knowledge Pods use local storage and have
