@@ -474,7 +474,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.help":
     "Pausiere den Lauf, um die Rückfrage zu senden. Für diesen Lauf ist keine Warteschlange verfügbar.",
   "codingWorkbench.composer.workspaceMismatch":
-    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechseln Sie über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
+    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechsle über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
   "codingWorkbench.composer.blocked.emptyStart": "Beschreibe zuerst, was Keiko tun soll.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Schreibe zuerst eine Rückfrage.",
@@ -498,27 +498,27 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.eyebrow": "Eingabe erforderlich",
   "codingWorkbench.questions.title": "Laufzeitfragen",
   "codingWorkbench.questions.help":
-    "Der Lauf bleibt pausiert, bis Sie antworten oder ablehnen. Fragetext ist flüchtig und wird niemals gespeichert.",
-  "codingWorkbench.questions.ready": "{count} Fragesatz wartet auf Ihre Eingabe.",
+    "Der Lauf bleibt pausiert, bis du antwortest oder ablehnst. Fragetext ist flüchtig und wird niemals gespeichert.",
+  "codingWorkbench.questions.ready": "{count} Fragesatz wartet auf deine Eingabe.",
   "codingWorkbench.questions.loading": "Suche nach Laufzeitfragen…",
   "codingWorkbench.questions.empty": "Keine ausstehenden Laufzeitfragen.",
   "codingWorkbench.questions.offline": "Der Fragedienst ist offline.",
   "codingWorkbench.questions.error": "Fragen konnten nicht aktualisiert werden.",
   "codingWorkbench.questions.stale": "Fragestatus geändert. Erneut prüfen, um fortzufahren.",
-  "codingWorkbench.questions.submitting": "Ihre Antwort wird übermittelt…",
+  "codingWorkbench.questions.submitting": "Deine Antwort wird übermittelt…",
   "codingWorkbench.questions.terminal": "Der Coding-Lauf ist beendet.",
   "codingWorkbench.questions.unpaired":
-    "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starten Sie Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
+    "Dieses Fenster ist nicht für Frageinhalte gekoppelt. Starte Keiko über den Launcher neu, um eine neue App-Sitzung zu koppeln.",
   "codingWorkbench.pairing.unpaired": "Workbench nicht gekoppelt. Keiko über den Launcher öffnen.",
   "codingWorkbench.questions.answerFailed":
-    "Ihre Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — senden Sie sie erneut.",
+    "Deine Antwort wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — sende sie erneut.",
   "codingWorkbench.questions.answerRejected":
-    "Wählen Sie für jede Frage eine der aufgeführten Optionen. Geben Sie freien Text nur ein, wenn eine eigene Antwort angeboten wird. Die Frage ist weiterhin offen ({code}).",
+    "Wähle für jede Frage eine der aufgeführten Optionen. Gib freien Text nur ein, wenn eine eigene Antwort angeboten wird. Die Frage ist weiterhin offen ({code}).",
   "codingWorkbench.questions.rejectFailed":
-    "Das Ablehnen der Frage wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — versuchen Sie es erneut.",
+    "Das Ablehnen der Frage wurde nicht angenommen ({code}). Die Frage ist weiterhin offen — versuche es erneut.",
   "codingWorkbench.questions.retry": "Erneut prüfen",
-  "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt Ihre Eingabe",
-  "codingWorkbench.questions.required": "Beantworten Sie jede Frage vor dem Senden.",
+  "codingWorkbench.questions.requestTitle": "Die Laufzeit benötigt deine Eingabe",
+  "codingWorkbench.questions.required": "Beantworte jede Frage vor dem Senden.",
   "codingWorkbench.questions.answer": "Antwort senden",
   "codingWorkbench.questions.reject": "Frage ablehnen",
   "codingWorkbench.questions.multipleHint": "Alle zutreffenden auswählen.",
@@ -616,7 +616,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Reparatur wurde nicht abgeschlossen. Aktualisiere die Task Workspaces und versuche es erneut.",
   "codingWorkbench.setup.findingUnknown": "sein Zustand konnte nicht erneut verifiziert werden",
   "codingWorkbench.gatewayService.unqualified":
-    "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
+    "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Diese brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
   "codingWorkbench.installVolume.notLocal":
     "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
   "codingWorkbench.installVolume.unverified":
@@ -712,7 +712,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.unavailable":
     "Änderungen sind nicht verfügbar. Die App-Sitzung muss möglicherweise erneut gekoppelt werden; es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.unpaired":
-    "Browserfenster nicht gekoppelt — öffnen Sie Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
+    "Browserfenster nicht gekoppelt — öffne Keiko über den Launcher, um den Aufgaben-Workspace dieses Laufs zu lesen. Es wird kein Diff angezeigt.",
   "codingWorkbench.changes.error":
     "Änderungen konnten nicht aktualisiert werden. Es wird kein veraltetes Diff angezeigt.",
   "codingWorkbench.changes.retry": "Änderungen aktualisieren",
@@ -994,7 +994,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.reason.preflight-failed":
     "Die Voraussetzungen für die Übermittlung waren nicht erfüllt.",
   "codingWorkbench.draftDelivery.pendingApprovalHint":
-    "Reagieren Sie auf die ausstehende Berechtigungsanfrage, um diese Übermittlung freizugeben oder abzulehnen.",
+    "Reagiere auf die ausstehende Berechtigungsanfrage, um diese Übermittlung freizugeben oder abzulehnen.",
   "codingWorkbench.draftDelivery.pullRequest": "Pull Request #{number}",
   "codingWorkbench.draftDelivery.remoteState": "Zuletzt beobachteter PR-Status",
   "codingWorkbench.draftDelivery.remoteHead": "Zuletzt beobachteter PR-Commit",
@@ -1049,7 +1049,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.descriptionStatus.review": "Exakten Entwurf prüfen",
   "codingWorkbench.descriptionStatus.write": "Beschreibung verfassen",
   "codingWorkbench.descriptionStatus.unavailable":
-    "Dieser gespeicherte Entwurf ist nicht mehr verfügbar. Aktualisieren Sie den Laufstatus.",
+    "Dieser gespeicherte Entwurf ist nicht mehr verfügbar. Aktualisiere den Laufstatus.",
   "codingWorkbench.commitResult.title": "Commit-Ergebnis",
   "codingWorkbench.commitResult.head": "Erstellter Commit",
   "codingWorkbench.commitResult.findings": "Git-Prüfungen",
@@ -1189,7 +1189,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Legt einen neuen Aufgaben-Workspace auf eigenem Branch an; dieser Lauf bleibt hier.",
   "codingWorkbench.approval.native.help.jira": "Nimmt genau diese Änderung in Jira vor, einmalig.",
   "codingWorkbench.approval.native.help.schedule":
-    "Ändert, wann Keiko diese Aufgabe selbst fortsetzt, im Modus, den Sie dafür gewählt haben.",
+    "Ändert, wann Keiko diese Aufgabe selbst fortsetzt, im Modus, den du dafür gewählt hast.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
     "Weder Befehl noch Pfad noch Adresse wurde genannt.",
@@ -1217,13 +1217,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.label.native-read": "Natives Lesen",
   "codingWorkbench.approval.native.label.native-schedule": "Nativer Zeitplan",
   "codingWorkbench.approval.evidenceRequired":
-    "Die Genehmigung bleibt gesperrt, bis geladen ist, was diese Anfrage berühren würde. Wiederholen Sie diesen Abruf oder lehnen Sie die Anfrage ab.",
+    "Die Genehmigung bleibt gesperrt, bis geladen ist, was diese Anfrage berühren würde. Wiederhole diesen Abruf oder lehne die Anfrage ab.",
   "codingWorkbench.approval.approve": "Einmal genehmigen",
   "codingWorkbench.approval.deny": "Ablehnen",
   "codingWorkbench.changesetReview.eyebrow": "Änderungsprüfung",
   "codingWorkbench.changesetReview.title": "Vorgeschlagene Dateiänderung prüfen",
   "codingWorkbench.changesetReview.help":
-    "Der Task ist pausiert, damit Sie diese genaue Änderung vor dem Schreiben bestätigen können.",
+    "Der Task ist pausiert, damit du diese genaue Änderung vor dem Schreiben bestätigen kannst.",
   "codingWorkbench.changesetReview.empty": "Es wurde keine überprüfbare Änderung erzeugt.",
   "codingWorkbench.changesetReview.approve": "Änderung übernehmen",
   "codingWorkbench.changesetReview.deny": "Änderung ablehnen",
@@ -1600,7 +1600,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.trust.runWaitingNotice":
     "Dieser Run ist pausiert: Er muss die Paket-Skripte dieses Task-Workspace ausführen, um seine Arbeit zu verifizieren, und nur du kannst sie für genau dieses Manifest zulassen. Der Run läuft von selbst weiter, sobald du entschieden hast.",
   "codingWorkbench.trust.driftNotice":
-    "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
+    "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Ob du sie zulässt, entscheidest du für genau dieses Manifest.",
   "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
   "codingWorkbench.trust.allowing": "Wird zugelassen…",
   "codingWorkbench.revert.region": "Letzter Durchgang",
@@ -1640,6 +1640,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.inbox.cancel.item": "Nachricht abbrechen: {text}",
   "codingWorkbench.inbox.busy": "Wird angewendet…",
   "codingWorkbench.inbox.error":
-    "Die wartenden Nachrichten konnten nicht gelesen werden. Sie können die laufende Aufgabe trotzdem noch erreichen.",
+    "Die wartenden Nachrichten konnten nicht gelesen werden. Möglicherweise erreichen sie die laufende Aufgabe trotzdem noch.",
   "codingWorkbench.inbox.retry": "Erneut versuchen",
 } satisfies CodingWorkbenchMessageCatalog;

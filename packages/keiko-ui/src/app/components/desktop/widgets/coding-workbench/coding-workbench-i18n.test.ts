@@ -39,6 +39,17 @@ describe("Coding Workbench translations", () => {
     }
   });
 
+  // The German Workbench addresses the person informally, like "Deine Administration" above. A
+  // formal "Sie" or "Ihr…" inside a sentence mixes both forms; a sentence-initial "Sie" is the third
+  // person (a message, the runtime) and stays.
+  it("addresses the person informally in every German sentence", () => {
+    const formal = /[^.!?—\s]\s+(?:Sie|Ihnen|Ihre?[mnrs]?)\b|^(?:Ihnen|Ihre?[mnrs]?)\b/u;
+    const mixed = Object.entries(DE_CODING_WORKBENCH_MESSAGES)
+      .filter(([, sentence]) => formal.test(sentence))
+      .map(([key]) => key);
+    expect(mixed).toEqual([]);
+  });
+
   // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
   // runtime that is not release-qualified.
   it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {
