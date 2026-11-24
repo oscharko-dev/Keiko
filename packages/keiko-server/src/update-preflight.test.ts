@@ -298,9 +298,9 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.2.5",
-      tag: "v2.2.5",
-      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+      version: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
+      tag: OPENCODE_RUNTIME_VERSION_PINS[0]?.tag ?? "",
+      commit: OPENCODE_RUNTIME_VERSION_PINS[0]?.commit ?? "",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -1107,7 +1107,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.2.5",
+      upstreamVersion: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),

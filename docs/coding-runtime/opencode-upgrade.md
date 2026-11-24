@@ -110,6 +110,10 @@ only after repeating the effect inventory on the new version: one program per ef
 move and rename, worktree create and remove, MCP resources and tools including a Jira write, `fetch`)
 in Ask for approval and Full access, each leaving its `coding-runtime.native-policy.decided` line.
 Any effect that reaches no decision leaves the flag off and the card stays.
+Since 2.4.1 (#4546) the inventory is a permanent real-binary test
+(`opencodeNativeQualification.real.test.ts`, "decides every nested effect of a Code Mode program");
+add a row for every new state-changing Code Mode tool the new version offers before setting the
+flag.
 
 ## 4. Rollback and persisted state
 
@@ -146,8 +150,10 @@ the previous runtime packages republished), and nothing needs migrating:
 
 - The service inventory diff, for example 2.1.4 to 2.2.5: 149 to 169 operations with every admitted
   endpoint kept, 16 configuration settings added, and five built-in plugins added and three removed.
+  From 2.2.5 to 2.4.1: 169 to 178 operations (the schedule operations replaced by automations),
+  29 more configuration settings and eight more built-in plugins (net).
 - The real-binary suites above, on the new pin.
-- The parity matrix rows (T01–T22, S01–S19, C01–C08), each re-verified, or marked with what was not
+- The parity matrix rows (T01–T22, S01–S19, C01–C09), each re-verified, or marked with what was not
   re-run.
 - The performance evidence measured on the declared reference environment.
 

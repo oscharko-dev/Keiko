@@ -1419,7 +1419,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   **History (#4359, 2026-11-14):** the retired OpenCode 2.1.4 did not decide a nested `fetch`
   (it produced no `webfetch` decision line; only the kernel egress rule stopped it below Full access
   and Full access reached the open internet), so the program card had to stay while that runtime was
-  approved. OpenCode 2.2.5, the one runtime Keiko approves, decides it (the next bullet).
+  approved. OpenCode 2.2.5 decided it, and so does 2.4.1, the one runtime Keiko approves (the next
+  bullet).
 - **The Code Mode program passes without a card on a runtime that decides every nested effect
   (#4359, owner decision of 2026-11-14 with its three conditions).** The program asserts no
   permission and can only call its nested tools, so the card for the program itself reviewed
@@ -1437,7 +1438,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   character review bounds no longer refuse a long program. A runtime whose pin does not say so
   (absent, false, an unknown version) keeps the card exactly as before and refuses a program that
   offers no text to review: the decision fails closed. Hard denials are unchanged
-  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first).
+  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first), and again on 2.4.1 (2026-11-24, #4546) by the permanent real-binary test in `opencodeNativeQualification.real.test.ts`.
   `fetch` is refused rather than asked below Full access because the run has no route outside the
   machine in those modes: the capability-availability rule of this section's web paragraph and
   ADR-0138 D4 (parity Q5), not a defect. A Jira write is exactly one card: the `mcp` ask is the plain
@@ -3013,6 +3014,38 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
       after it, as its own wake run. A passed repeating slot fires once, late. A wake carries no Jira
       Pod or MCP selection of the run that created the schedule, and it keeps the delivery authority
       of the task it continues.
+
+- **OpenCode 2.4.1 (2026-11-24, #4546).** The pin moves from 2.2.5 to 2.4.1, the newest 2.4.x;
+  the real-binary suites re-proved every paragraph above on it. What changed:
+  - *Automations replace schedules.* 2.3.1 replaced the producer's `schedule` table, `sch_` ids and
+    the `schedule:leader` lease with `automation`, `aut_` ids and `automation:leader`. Keiko's
+    scheduled continuations keep their design on the new rows: Keiko's unexpiring lease is written to
+    `automation:leader`; the Code Mode tools `automation.create/list/pause/resume/delete` are the
+    policy action `native-schedule` (`opencode_schedule`); only a time-based prompt automation to the
+    task's own session is admitted. A shell action, a Code Mode program action, an MCP event trigger
+    and a prompt with its own recipient are refused at creation (the generated hook names them
+    `refused:action`, `refused:trigger`, `refused:target`), because each would run without a person
+    or reach another session. Outside the native profile the producer's own `automations` switch is
+    `false`: measured on 2.4.1, its API then answers 403 and creates nothing, while without the
+    switch an automation fired about a second after creation. The automation plugin is therefore
+    withheld on the direct profile and admitted on the native profile only.
+  - *Retained 2.2.5 schedules.* A session retained under 2.2.5 is refused at checkout as
+    `version-changed` (unchanged); the Workbench lists its schedules as removed by the runtime
+    update, without their prompt, and offers no control for them. The retention ledger still parses
+    a 2.2.5 `sch_` entry so an old manifest does not become unreadable.
+  - *New built-in plugins are withheld* until an owner exists for them: fork notice, home memory,
+    machine, session interrupt, session search, video generation and MCP events. New
+    `experimental` switches stay off (`compaction.background` is `false`, so compaction stays a
+    turn of the run), and a run's MCP server never joins the runtime's shared connection
+    pool (`pool: false`).
+  - *Code Mode namespace.* 2.4.x renames `opencode.session_move` to `opencode.session.move` and adds
+    `opencode.session.rename`; the hook ids are unchanged. The nested-effect measurement of the
+    previous bullets was repeated on 2.4.1 in Ask for approval and Full access and is now a permanent
+    real-binary test: the same effects reach the same decisions, `automation.create` reaches
+    `opencode_schedule`, and `automation.list` decides nothing. The 2.4.1 pin carries
+    `decidesNestedEffects`.
+  - *Shell result text.* The shell output now ends with `Exit code: <n>` (2.2.5:
+    `Exited with code <n>`); Keiko reads the status from the part's metadata, never from this text.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

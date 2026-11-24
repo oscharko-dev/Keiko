@@ -11,7 +11,8 @@
       "tag": "v2.4.1",
       "commit": "6f0514052a3c859894ad01bb14cc14dda1e44b96",
       "rawSchemaSha256": "e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b",
-      "protocolSurfaceSha256": "8ef9a9e17e672e8744b260c41c0d96f781503b61370bfc7995305ea7b4fd5de9"
+      "protocolSurfaceSha256": "8ef9a9e17e672e8744b260c41c0d96f781503b61370bfc7995305ea7b4fd5de9",
+      "decidesNestedEffects": true
     }
   ]
 }

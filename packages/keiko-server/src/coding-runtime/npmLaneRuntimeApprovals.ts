@@ -84,11 +84,11 @@ const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.
 
 const SHARED = {
   ...HELPER,
-  upstreamVersion: "2.2.5",
+  upstreamVersion: "2.4.1",
   adapterName: "keiko-coding-sidecar",
   adapterVersion: "2",
   licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
-  protocolSchemaSha256: "92cc33ef9a107c8af6295e6fcbdf6d339d4374955910924456bd91a76844a5db",
+  protocolSchemaSha256: "e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b",
 } as const;
 
 export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
@@ -98,22 +98,22 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     ...SHARED,
     ...HELPER_MACOS_ARM64,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
-    executableTreeSha256: "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
-    sbomSha256: "ad9c8c0e1ae594a9cf84133c48fa131b05ec429b14fe6187a06a0127018cb2cf",
+    executableTreeSha256: "dd29f79df0af9b1ce293465f2ff1e2dfb4e740872509d75b23c4948dd4d72131",
+    sbomSha256: "900f6be50d4f1a9b4a7292d48bcce37dbda9314265dc78d997f9cda10df73e25",
   }),
   "macos-x64": Object.freeze({
     ...SHARED,
     ...HELPER_MACOS_X64,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
-    executableTreeSha256: "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
-    sbomSha256: "1213a19896a2ce21f96a3510dee01bfce87ac93964430e5a2188654294794e1b",
+    executableTreeSha256: "4c93d7ebdb8deee2805770c2682eb938fb1ab91c710d77c5b2bf703ebe1ad836",
+    sbomSha256: "1f4174f86c396d95c2461f10a8dd871b5e8fbeacdfc269b76067982103cee497",
   }),
   "windows-x64": Object.freeze({
     ...SHARED,
     ...HELPER_WINDOWS_X64,
     packageName: "@oscharko-dev/keiko-coding-runtime-win32-x64",
-    executableTreeSha256: "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
-    sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
+    executableTreeSha256: "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
+    sbomSha256: "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0",
     runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
   }),
 });
@@ -136,12 +136,17 @@ export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = 
 });
 
 /**
- * The executable-tree digests of the retired 1.1.4 runtime packages (OpenCode 2.1.4). They approve
- * nothing: Keiko runs exactly one OpenCode, the current pin, so these packages are refused. The
- * digests only let discovery tell an installation that still holds one of them ("update Keiko")
- * from a payload that was tampered with (#4359).
+ * The executable-tree digests of retired runtime packages: 1.1.4 (OpenCode 2.1.4) and the packages
+ * that carry OpenCode 2.2.5 (darwin 1.1.5, win32 1.1.7). They approve nothing: Keiko runs exactly
+ * one OpenCode, the current pin, so these packages are refused. The digests only let discovery tell
+ * an installation that still holds one of them ("update Keiko") from a payload that was tampered
+ * with (#4359, #4546).
  */
 export const NPM_LANE_RETIRED_EXECUTABLE_TREES: ReadonlySet<string> = new Set([
   "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
   "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
+  // OpenCode 2.2.5: macos-arm64, macos-x64, windows-x64.
+  "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
+  "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
+  "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
 ]);

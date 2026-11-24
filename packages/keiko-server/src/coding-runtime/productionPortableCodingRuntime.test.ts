@@ -1190,9 +1190,9 @@ function sidecarFixture(lane: FixtureLane = "production"): {
         owner: "anomalyco",
         repository: "opencode",
         name: "opencode",
-        version: "2.2.5",
-        tag: "v2.2.5",
-        commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+        version: OPENCODE_RUNTIME_VERSION_PINS[0]?.version ?? "",
+        tag: OPENCODE_RUNTIME_VERSION_PINS[0]?.tag ?? "",
+        commit: OPENCODE_RUNTIME_VERSION_PINS[0]?.commit ?? "",
       },
       adapterCompatibility: {
         adapterName: "keiko-coding-sidecar",

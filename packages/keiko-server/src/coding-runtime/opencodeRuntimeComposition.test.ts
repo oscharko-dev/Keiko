@@ -4493,6 +4493,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
           admitted
             ? {
                 type: "remote",
+                // A run never shares its MCP connection with another project (#4546).
+                pool: false,
                 url: "https://issues.example.test/mcp",
                 oauth: { auth_server_metadata_url: METADATA_URL },
               }
@@ -12474,7 +12476,7 @@ describe("the program card follows the verified runtime's pin (#4359)", () => {
   }
 
   it.each(["governed-assist", "supervised-coding"] as const)(
-    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    "lets a program of a run on a pin that decides nested effects pass without a card in %s",
     async (mode) => {
       await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
     },
