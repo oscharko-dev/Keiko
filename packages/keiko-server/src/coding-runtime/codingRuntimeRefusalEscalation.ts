@@ -86,6 +86,9 @@ export const EDIT_REFUSAL_REASON_CODES = [
   "DUPLICATE_ACTION",
   "MUTATION_IN_FLIGHT",
   "EDIT_PREPARE_FAILED",
+  // #4546: the native runtime refused to edit a file that is not UTF-8 text; a retry of the same
+  // edit meets the same bytes.
+  "FILE_NOT_UTF8",
   "ci-observation-required",
   "UNCLASSIFIED",
 ] as const;
@@ -130,6 +133,7 @@ const EDIT_REFUSAL_KINDS: Readonly<Record<EditRefusalReasonCode, EditRefusalKind
   TIMED_OUT: UNREPAIRABLE("timeout"),
   CANCELLED: UNREPAIRABLE("cancelled"),
   EDIT_MUTATION_FAILED: UNREPAIRABLE("internal"),
+  FILE_NOT_UTF8: UNREPAIRABLE("validation-failed"),
   RESPONSE_TOO_LARGE: UNREPAIRABLE("unavailable"),
   TRANSPORT_FAILURE: UNREPAIRABLE("unavailable"),
   REDIRECT_BLOCKED: UNREPAIRABLE("unavailable"),

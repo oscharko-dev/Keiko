@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ffa7b318a6e51660ea19405aa65c6ffbba77fc4b36c42cad41f82737fa7196d7",
+    "catalogDigest": "004425e2f2052aba3c8e2c3ff6d62b1b00b289d05fc196a55fff2706a1267c0d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -17046,6 +17046,7 @@
               "DUPLICATE_ACTION",
               "MUTATION_IN_FLIGHT",
               "EDIT_PREPARE_FAILED",
+              "FILE_NOT_UTF8",
               "ci-observation-required",
               "UNCLASSIFIED"
             ]
@@ -17128,9 +17129,9 @@
         "failureClasses": ["coding-runtime-run-settlement"],
         "proofIds": ["coding-runtime.run.refusal-escalated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:349",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:353",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:422"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:426"
         ]
       },
       {
@@ -17309,6 +17310,7 @@
               "DUPLICATE_ACTION",
               "MUTATION_IN_FLIGHT",
               "EDIT_PREPARE_FAILED",
+              "FILE_NOT_UTF8",
               "ci-observation-required",
               "UNCLASSIFIED"
             ]
@@ -125829,7 +125831,7 @@
     {
       "op": "coding-runtime.run.refusal-escalated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:352",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.ts:356",
       "package": "keiko-server"
     },
     {
