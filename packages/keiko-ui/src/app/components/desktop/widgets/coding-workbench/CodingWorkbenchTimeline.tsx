@@ -998,11 +998,11 @@ function KeikoNote({
 }): ReactNode {
   return (
     <article className={styles.timelineBody} data-message-role="user" data-message-origin="keiko">
-      <details className={styles.keikoNote}>
+      <details className={styles.cmpKeikoNote}>
         <summary className={styles.cmpActivitySummary}>
           <span>{t("codingWorkbench.activity.role.keiko")}</span>
         </summary>
-        <p className={styles.keikoNoteText}>
+        <p className={styles.cmpKeikoNoteText}>
           {message.segments.map((segment) => segment.text).join("")}
           {truncationFor(message, t) ?? null}
         </p>
@@ -1488,7 +1488,7 @@ function RunFailureReport({
   if (onRunCheck !== undefined && eventOffersRunCheck(event, true)) {
     return (
       <p className={styles.timelineDetail} data-run-check="">
-        <button type="button" className={styles.runCheckAction} onClick={onRunCheck}>
+        <button type="button" className={styles.cmpRunCheckAction} onClick={onRunCheck}>
           {t("codingWorkbench.event.runCheck.action")}
         </button>
       </p>

@@ -1371,11 +1371,11 @@
   background: transparent;
 }
 
-.keikoNote {
+.cmpKeikoNote {
   color: var(--text-secondary);
 }
 
-.keikoNoteText {
+.cmpKeikoNoteText {
   margin: var(--space-1) 0 var(--space-2);
   font-size: var(--text-body-sm);
   line-height: 1.6;
@@ -1383,7 +1383,7 @@
   overflow-wrap: anywhere;
 }
 
-.runCheckAction {
+.cmpRunCheckAction {
   display: inline-flex;
   align-items: center;
   min-height: 2rem;
@@ -1397,11 +1397,11 @@
   cursor: pointer;
 }
 
-.runCheckAction:hover {
+.cmpRunCheckAction:hover {
   background: var(--surface-secondary);
 }
 
-.runCheckAction:focus-visible {
+.cmpRunCheckAction:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
