@@ -73,6 +73,38 @@ function reportRegistrationFailed(correlationId: string, error: unknown): void {
   );
 }
 
+/** Registers `path` the way "Open local repository" does, with its body-free evidence. */
+function registerHandedOffPath(
+  client: GitClientSeam,
+  path: string,
+  settle: (outcome: RegistrationOutcome) => void,
+): void {
+  const correlationId = newClientCorrelationId();
+  reportRegistrationStarted(correlationId);
+  void client.registerRepository({ path }, correlationId).then(
+    (response): void => {
+      reportRegistrationSucceeded(correlationId, response);
+      settle({ kind: "added", project: response.project });
+    },
+    (error: unknown): void => {
+      reportRegistrationFailed(correlationId, error);
+      settle({ kind: "failed", error });
+    },
+  );
+}
+
+/**
+ * A ref holding `value` as of the latest commit. It is updated in a layout effect, so an async
+ * outcome that lands before that commit's passive effects already sees the committed value.
+ */
+export function useCommittedValueRef<T>(value: T): { readonly current: T } {
+  const ref = useRef(value);
+  useLayoutEffect((): void => {
+    ref.current = value;
+  }, [value]);
+  return ref;
+}
+
 /** Returns `connect(path)`, which registers the handed-off path once per pending hand-off. */
 export function useHandedOffRepositoryConnection(
   input: HandedOffRepositoryConnectionInput,
@@ -80,12 +112,9 @@ export function useHandedOffRepositoryConnection(
   const { handOffPath, client, actionSequence } = input;
   const { onStarted, onAdded, onFailed, onSettled, onSuperseded } = input;
   const claimedPathsRef = useRef<Set<string>>(new Set());
-  // The hand-off pending when an outcome arrives, which may be newer than the one it served. It is
-  // updated in the commit that carries a newer hand-off, so an outcome landing before that commit's
-  // passive effects already sees it.
-  const pendingHandOffRef = useRef(handOffPath);
+  // The hand-off pending when an outcome arrives, which may be newer than the one it served.
+  const pendingHandOffRef = useCommittedValueRef(handOffPath);
   useLayoutEffect((): void => {
-    pendingHandOffRef.current = handOffPath;
     if (handOffPath === null) claimedPathsRef.current.clear();
   }, [handOffPath]);
   return useCallback(
@@ -107,19 +136,18 @@ export function useHandedOffRepositoryConnection(
         else onFailed(outcome.error);
       };
       onStarted();
-      const correlationId = newClientCorrelationId();
-      reportRegistrationStarted(correlationId);
-      void client.registerRepository({ path }, correlationId).then(
-        (response): void => {
-          reportRegistrationSucceeded(correlationId, response);
-          settle({ kind: "added", project: response.project });
-        },
-        (error: unknown): void => {
-          reportRegistrationFailed(correlationId, error);
-          settle({ kind: "failed", error });
-        },
-      );
+      registerHandedOffPath(client, path, settle);
     },
-    [actionSequence, client, handOffPath, onAdded, onFailed, onSettled, onStarted, onSuperseded],
+    [
+      actionSequence,
+      client,
+      handOffPath,
+      onAdded,
+      onFailed,
+      onSettled,
+      onStarted,
+      onSuperseded,
+      pendingHandOffRef,
+    ],
   );
 }

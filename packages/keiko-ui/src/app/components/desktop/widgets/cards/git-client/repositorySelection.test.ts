@@ -3,6 +3,7 @@ import type { ProjectWithAvailability } from "@/lib/types";
 import {
   decideRepositorySelection,
   handedOffRepositoryPath,
+  supersededByNewerHandOff,
   type RepositorySelectionInput,
 } from "./repositorySelection";
 
@@ -76,4 +77,16 @@ describe("handedOffRepositoryPath", () => {
       );
     },
   );
+});
+
+describe("supersededByNewerHandOff", () => {
+  it.each([
+    ["no hand-off is pending", null, null, false],
+    ["a hand-off arrived for another folder", null, "/repos/b", true],
+    ["the pending hand-off changed to another folder", "/repos/b", "/repos/c", true],
+    ["the hand-off pending at the start is unchanged", "/repos/b", "/repos/b", false],
+    ["the hand-off names the switched folder", null, "/repos/a", false],
+  ])("is %s -> %s", (_case, handOffAtStart, pendingHandOff, expected) => {
+    expect(supersededByNewerHandOff(handOffAtStart, pendingHandOff, "/repos/a")).toBe(expected);
+  });
 });

@@ -1418,6 +1418,53 @@ describe("GitClientWindow — repository list", () => {
     ]);
   });
 
+  // CodeRabbit on #4553: a repository switch that completes after a newer Files hand-off neither
+  // selects nor persists its own repository, so the handed-off folder is the one shown.
+  it("keeps a newer hand-off when an earlier repository switch completes", async () => {
+    const user = userEvent.setup();
+    const gamma = makeRepo("/repos/gamma", "gamma");
+    let resolveSwitch: (value: { readonly project: ProjectWithAvailability }) => void = () =>
+      undefined;
+    const updateCfg = vi.fn();
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B, gamma] })),
+      reconnectRepository: vi.fn(async (path: string) => {
+        if (path !== gamma.path) return makeProjectResponse(REPO_A);
+        return await new Promise<{ readonly project: ProjectWithAvailability }>((resolve) => {
+          resolveSwitch = resolve;
+        });
+      }),
+    });
+    const view = render(
+      <GitClientWindow projectId={REPO_A.path} client={client} updateCfg={updateCfg} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+    await user.click(await screen.findByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: new RegExp(gamma.path) }));
+    await waitFor(() => expect(client.reconnectRepository).toHaveBeenCalledWith(gamma.path));
+
+    view.rerender(
+      <GitClientWindow
+        projectId={REPO_B.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+    await act(async () => {
+      resolveSwitch(makeProjectResponse(gamma));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: gamma.path });
+    expect(vi.mocked(client.getStatus).mock.calls.map((call) => call[0])).not.toContain(gamma.path);
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+  });
+
   // CodeRabbit on #4553: a repository refused earlier must not block a later hand-off.
   it("connects a handed-off repository after an earlier repository was refused", async () => {
     const legacy = makeRepo("/repos/legacy", "legacy", { available: false });

@@ -57,6 +57,21 @@ export function handedOffRepositoryPath(state: HandOffState): string | null {
   return state.handOffPending && !state.lockedToActiveRoot ? state.configuredPath : null;
 }
 
+/**
+ * A repository switch that completes after a Files hand-off arrived or changed, naming another
+ * folder, is superseded by it: the hand-off proceeds and the switch neither selects nor persists
+ * its repository. A switch the hand-off itself started (same folder) is never superseded.
+ */
+export function supersededByNewerHandOff(
+  handOffAtStart: string | null,
+  pendingHandOff: string | null,
+  switchPath: string,
+): boolean {
+  return (
+    pendingHandOff !== null && pendingHandOff !== handOffAtStart && pendingHandOff !== switchPath
+  );
+}
+
 function waitsForRepositoryState(
   input: RepositorySelectionInput,
   handOffPath: string | null,

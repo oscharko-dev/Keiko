@@ -56,9 +56,13 @@ import {
   configuredRepositoryPath,
   decideRepositorySelection,
   handedOffRepositoryPath,
+  supersededByNewerHandOff,
   type RepositoryRefusalReason,
 } from "./repositorySelection";
-import { useHandedOffRepositoryConnection } from "./useHandedOffRepositoryConnection";
+import {
+  useCommittedValueRef,
+  useHandedOffRepositoryConnection,
+} from "./useHandedOffRepositoryConnection";
 import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
@@ -1342,6 +1346,13 @@ export function GitClientWindow({
   const [reposFailure, setReposFailure] = useState<RepositoryFailure | null>(null);
   const reposError = repositoryFailureMessage(reposFailure);
   const [reposListFailed, setReposListFailed] = useState(false);
+  const configuredPath = configuredRepositoryPath(projectId);
+  const handOffPath = handedOffRepositoryPath({
+    handOffPending: connectHandedOffRepository,
+    lockedToActiveRoot,
+    configuredPath,
+  });
+  const pendingHandOffRef = useCommittedValueRef(handOffPath);
   // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
   // the current project projection proves that it still has live workspace-manifest membership.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -1726,11 +1737,17 @@ export function GitClientWindow({
     (path: string): void => {
       const requestSequence = repositoryConnectSeqRef.current + 1;
       repositoryConnectSeqRef.current = requestSequence;
+      const handOffAtStart = pendingHandOffRef.current;
       setReposLoading(true);
       setReposFailure(null);
       void client.reconnectRepository(path).then(
         (response): void => {
           if (requestSequence !== repositoryConnectSeqRef.current) return;
+          if (supersededByNewerHandOff(handOffAtStart, pendingHandOffRef.current, path)) {
+            // The newer hand-off proceeds once the list is read again (#4103 F2).
+            loadRepositories();
+            return;
+          }
           if (applyConnectedRepository(response.project, path)) loadRepositories();
         },
         (error: unknown): void => {
@@ -1747,7 +1764,7 @@ export function GitClientWindow({
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, optionalT],
+    [applyConnectedRepository, client, loadRepositories, optionalT, pendingHandOffRef],
   );
 
   const retryRepositoryError = useCallback((): void => {
@@ -1793,13 +1810,8 @@ export function GitClientWindow({
   const settleHandedOffConnection = useCallback((): void => {
     updateCfg?.({ connectRepository: undefined });
   }, [updateCfg]);
-  const configuredPath = configuredRepositoryPath(projectId);
   const connectHandedOffFolder = useHandedOffRepositoryConnection({
-    handOffPath: handedOffRepositoryPath({
-      handOffPending: connectHandedOffRepository,
-      lockedToActiveRoot,
-      configuredPath,
-    }),
+    handOffPath,
     client,
     actionSequence: repositoryConnectSeqRef,
     onStarted: startHandedOffConnection,
