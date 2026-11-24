@@ -2713,7 +2713,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     `projectNativeParentHistory`, #4546). A step that ended normally is never silence: the runtime
     may stop listing a child a moment before it appends the idle message. The owed children are
     taken from the messages being projected, so the one sync that reads a launch and the idle
-    message together can release. Any other
+    message together can release. A shell command of the current prompt that runs in the
+    background (2.3.1 moves one still running at its timeout there; the call completes with a shell
+    id and no exit status) is owed the same way until the synthetic message naming its shell id
+    arrives, so the gap between the job's end and the runtime's wake turn needs no clock either
+    (`backgroundJobHoldCount`, #4546). As `opencode run` does, only the current prompt's commands
+    are owed: a user message clears them. Such a check has no exit status, so it never counts as
+    verification, not even after it reports a zero. Any other
     child that never reports is bounded by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
     interrupts the primary, then every owned child still running, and the primary again when it
     came back to read a report, stops every background job of the run with `shell.remove`

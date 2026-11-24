@@ -497,6 +497,18 @@ executable on macOS arm64 (#4546). The upgrade changes these rows:
   message and no report. Keiko therefore releases the hold once every owed child is silent: it no
   longer runs, and its newest message is an assistant step that ended in an error
   (`finish: "error"`, `silentReleaseCount`). A step that ended normally never counts as silence.
+- **T13: a command still running at its timeout moves to the background** instead of being
+  killed. The call completes at once with the command's shell id and no exit status, and a
+  `<background-result kind="shell">` synthetic message reports how it ended and runs the session
+  again. Keiko holds the idle message until every command of the current prompt reported
+  (`backgroundJobHoldCount`) and never reads such a check as verification (real binary, #4546).
+- **A shell command the scanner cannot analyse** now asks instead of failing: for the whole
+  command and for every directory (`external_directory` on `*`), since it may reach any. Keiko's
+  mode-independent floor denies every external directory, so such a command is refused before it
+  runs in every mode (real binary, #4546).
+- **Here-documents.** zsh writes one to a temporary file named after `TMPPREFIX` (default
+  `/tmp/zsh`), which the native profile refuses, so `cat > file <<EOF` failed in every mode. Every
+  profile sets `TMPPREFIX` inside the run's own temporary directory (real binary, #4546).
 - **C02: a built-in `automation` command** joins `init` and `review`. Its name is reserved for
   repository commands and named in the prompt-input log.
 - **T21: Code Mode surface.** The catalog in the system prompt is partial; a program finds the rest

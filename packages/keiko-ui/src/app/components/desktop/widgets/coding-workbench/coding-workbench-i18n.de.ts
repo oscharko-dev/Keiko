@@ -1095,6 +1095,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Eine Git-Prüfung hat diesen Commit verhindert. Prüfe die folgenden Befunde.",
   "codingWorkbench.commitResult.reason.execution-failed":
     "Git konnte diesen Commit nicht erstellen.",
+  "codingWorkbench.commitResult.reason.signing-failed":
+    "Git konnte diesen Commit nicht signieren. Prüfe deine Git-Signatureinrichtung und committe dann erneut.",
   "codingWorkbench.commitResult.reason.execution-uncertain":
     "Das Commit-Ergebnis ist unklar. Gleiche den Repository-Zustand vor einem weiteren Versuch ab.",
   "codingWorkbench.commitResult.reason.restart-reconciliation":
@@ -1426,6 +1428,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
   "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
   "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
+  "codingWorkbench.activity.editRefusalNotUtf8":
+    "Die Datei blieb unverändert, weil sie nicht als UTF-8-Text gespeichert ist.",
   "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
   "codingWorkbench.activity.serviceDuration": "Dauer: {duration}",
   "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",

@@ -1257,16 +1257,24 @@ function ToolOutcome({
       </p>
     );
   }
+  const sentence = toolOutcomeSentence(tool, t);
+  return sentence === undefined ? null : <p className={styles.cmpToolOutcome}>{sentence}</p>;
+}
+
+function toolOutcomeSentence(
+  tool: CodingSafeActivityTool,
+  t: CodingWorkbenchTranslate,
+): string | undefined {
+  // The runtime left a file that is not UTF-8 text unchanged instead of corrupting it (#4546).
+  if (tool.presentation?.refusalReason === "FILE_NOT_UTF8") {
+    return t("codingWorkbench.activity.editRefusalNotUtf8");
+  }
   // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;
   if (gitOutcome !== undefined && gitOutcome !== "completed") {
-    return (
-      <p className={styles.cmpToolOutcome}>{t(`codingWorkbench.activity.git.${gitOutcome}`)}</p>
-    );
+    return t(`codingWorkbench.activity.git.${gitOutcome}`);
   }
-  return tool.state === "failed" ? (
-    <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
-  ) : null;
+  return tool.state === "failed" ? t("codingWorkbench.activity.toolError") : undefined;
 }
 
 function ToolPresentationDetails({
@@ -1294,7 +1302,7 @@ function ToolPresentationDetails({
       {facts.returnedPathCount === undefined ? null : (
         <p>{t("codingWorkbench.activity.returnedPaths", { count: facts.returnedPathCount })}</p>
       )}
-      {facts.refusalReason === undefined ? null : (
+      {facts.refusalReason === undefined || facts.refusalReason === "FILE_NOT_UTF8" ? null : (
         <p>{t("codingWorkbench.activity.editRefusal", { reason: facts.refusalReason })}</p>
       )}
       {facts.affectedRelativePath === undefined ? null : (

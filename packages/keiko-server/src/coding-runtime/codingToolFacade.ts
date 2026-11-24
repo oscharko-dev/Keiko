@@ -891,9 +891,16 @@ const PROTECTED_BRANCH_COMMIT_GUIDANCE =
 // on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
 const UNVERIFIED_COMMIT_GUIDANCE = `The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. ${SHELL_VERIFICATION_STATUS_RULE} Then propose the commit again.`;
 
+// Lab T17 on OpenCode 2.4.1 (#4546): Git could not sign the commit and the model repeated it until
+// the deadline. Nothing was committed and only the person can repair the signing setup.
+const SIGNING_FAILED_COMMIT_GUIDANCE =
+  "Git could not sign this commit, so nothing was committed. Keiko signs every commit with the person's own Git signing setup and never commits unsigned. Do not retry this commit and do not try to change the Git signing configuration. Tell the person that the change is staged and verified, and that committing it needs their Git signing setup (key, agent or signing program) to work.";
+
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
   if (result.status === "blocked" && result.blockReason === "protected-branch")
     return { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE };
+  if (result.status === "failed" && result.reason === "signing-failed")
+    return { guidance: SIGNING_FAILED_COMMIT_GUIDANCE };
   return result.status === "verification-failed" && result.reason === "verification-missing"
     ? { guidance: UNVERIFIED_COMMIT_GUIDANCE }
     : {};

@@ -84,13 +84,21 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     liveDeltaCount: OPTIONAL_COUNT_FIELD,
     liveDroppedCount: OPTIONAL_COUNT_FIELD,
     liveDivergedCount: OPTIONAL_COUNT_FIELD,
-    // The idle messages of this pass that did not end the run's work because a subagent launched in
-    // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
+    // The idle messages of this pass that did not end the run's work because a subagent or a shell
+    // command running in the background had not yet reported back (`BackgroundChildren`); a count,
+    // absent when none.
     heldIdleCount: OPTIONAL_COUNT_FIELD,
     // The idle messages of this pass that ended the run's work only because every child still owed
     // was silent: it no longer runs and its round ended without an idle message, so it never
     // reports (#4546, a dismissed question in 2.4.1). A count, absent when none.
     silentReleaseCount: OPTIONAL_COUNT_FIELD,
+    // The held idle messages of this pass that waited for a shell command of the current prompt still
+    // running in the background (it outlived its timeout, or the model started it so); the runtime
+    // reports how it ended and runs the session again (#4546). A count, absent when none.
+    backgroundJobHoldCount: OPTIONAL_COUNT_FIELD,
+    // The native edits of this pass the runtime refused because the file is not UTF-8 text; the
+    // file was left unchanged and its tool row says so (#4546). A count, absent when none.
+    editRefusalCount: OPTIONAL_COUNT_FIELD,
     // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
     // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
     // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
@@ -180,6 +188,8 @@ interface Candidate {
   readonly heldIdle?: true;
   // An idle message that ends the run's work only because the children it owed are silent.
   readonly silentRelease?: true;
+  // A held idle message that waits for a background shell command of the current prompt.
+  readonly backgroundJobHold?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -194,6 +204,7 @@ interface PendingProjection {
   readonly nativeRetrySignalCount: number;
   readonly heldIdleCount: number;
   readonly silentReleaseCount: number;
+  readonly backgroundJobHoldCount: number;
   /** The children launched and not reported by the end of the scanned messages. */
   readonly owedChildren: ReadonlySet<string>;
   /** The pass stopped at the event cap, so candidates it did not reach are still to be emitted. */
@@ -665,8 +676,22 @@ function toolState(
     tool: name,
     state: displayToolState(name, state),
     occurredAt: toolOccurredAt(part),
+    ...(nativeEditNotUtf8(name, state) ? { presentation: { refusalReason: "FILE_NOT_UTF8" } } : {}),
     ...exit,
   };
+}
+
+/**
+ * The pinned runtime refuses to edit a file that is not UTF-8 text rather than rewrite every other
+ * byte as U+FFFD, and leaves the file unchanged. Its error carries no closed type for that, so the
+ * projection matches this part of the message (pinned on the real binary) and never shows it.
+ */
+export const OPENCODE_NOT_UTF8_EDIT_REFUSAL = "file is not valid UTF-8";
+
+function nativeEditNotUtf8(name: string, state: Readonly<Record<string, unknown>>): boolean {
+  if (name !== "edit" || state.status !== "error") return false;
+  const message = record(state.error)?.message;
+  return typeof message === "string" && message.includes(OPENCODE_NOT_UTF8_EDIT_REFUSAL);
 }
 
 /** A finished shell call's exit status, the check it speaks for, and whether it chose its directory. */
@@ -1003,6 +1028,19 @@ function messageCandidates(
 interface BackgroundChildren {
   readonly launched: Set<string>;
   readonly reported: Set<string>;
+  /**
+   * The shell commands of the current prompt that run in the background and have not reported (#4546).
+   * Since 2.3.1 a command still running at its timeout moves to the background instead of being
+   * killed, and a model may start one there; the call completes at once with the command's shell id
+   * and no exit status, and the runtime appends a synthetic message naming the shell id when the
+   * command ends (completed, failed or cancelled) and runs the session again. As `opencode run` does
+   * (upstream parity scenario `packages/cli-rs/parity/scenarios/C.10/background.cli.ts`), the run
+   * waits only for commands its current prompt started: a user message clears the set, so a dev
+   * server of an earlier prompt never holds a later one. The session tree already holds the run while
+   * the runtime lists a running job; this closes the gap between the job's end and the wake turn
+   * without a clock. A subagent's own background command is reported to the child, not here.
+   */
+  readonly jobs: Set<string>;
   /** This pass's silent children (`OpenCodeV2HistoryWindow.silentChildren`); never carried over. */
   readonly silent?: ReadonlySet<string> | undefined;
 }
@@ -1021,6 +1059,29 @@ function backgroundChildId(value: unknown): string | undefined {
   return typeof value === "string" && BACKGROUND_CHILD_SESSION_ID.test(value) ? value : undefined;
 }
 
+const BACKGROUND_SHELL_ID = /^sh_[A-Za-z0-9_-]{1,251}$/u;
+
+function backgroundShellId(value: unknown): string | undefined {
+  return typeof value === "string" && BACKGROUND_SHELL_ID.test(value) ? value : undefined;
+}
+
+// A completed shell call whose command still runs in the background reports its shell id and no exit.
+function backgroundShellLaunch(part: unknown): string | undefined {
+  const tool = record(part);
+  if (tool?.type !== "tool" || tool.name !== "shell") return undefined;
+  const state = record(tool.state);
+  if (state?.status !== "completed") return undefined;
+  const metadata = record(state.metadata);
+  if (metadata?.status !== "running") return undefined;
+  return backgroundShellId(metadata.shellID);
+}
+
+function backgroundShellReport(message: Readonly<Record<string, unknown>>): string | undefined {
+  const metadata = record(message.metadata);
+  if (message.type !== "synthetic" || metadata?.source !== "shell") return undefined;
+  return backgroundShellId(metadata.shellID);
+}
+
 function backgroundReport(message: Readonly<Record<string, unknown>>): string | undefined {
   const metadata = record(message.metadata);
   if (message.type !== "synthetic" || metadata?.source !== "subagent") return undefined;
@@ -1031,10 +1092,15 @@ function observeBackgroundChildren(
   message: Readonly<Record<string, unknown>>,
   children: BackgroundChildren,
 ): void {
+  if (message.type === "user") children.jobs.clear();
   const reported = backgroundReport(message);
   if (reported !== undefined) children.reported.add(reported);
+  const ended = backgroundShellReport(message);
+  if (ended !== undefined) children.jobs.delete(ended);
   if (message.type !== "assistant" || !Array.isArray(message.content)) return;
   for (const part of message.content as readonly unknown[]) {
+    const job = backgroundShellLaunch(part);
+    if (job !== undefined) children.jobs.add(job);
     const launched = backgroundLaunch(part);
     if (launched === undefined) continue;
     children.launched.add(launched);
@@ -1053,8 +1119,11 @@ function idleCandidates(
   const key = `${id}:idle`;
   if (outcome !== "succeeded") return [candidate(key, "terminal-failure", outcome)];
   const unreported = [...children.launched].filter((child) => !children.reported.has(child));
-  if (unreported.length === 0) return [candidate(key, "terminal", outcome)];
+  if (unreported.length === 0 && children.jobs.size === 0)
+    return [candidate(key, "terminal", outcome)];
   const held = { ...candidate(key, "observation", outcome), heldIdle: true as const };
+  // A background command always reports how it ended, so only the run's Stop releases it earlier.
+  if (children.jobs.size > 0) return [{ ...held, backgroundJobHold: true }];
   if (!unreported.every((child) => children.silent?.has(child) === true)) return [held];
   return [held, { ...candidate(`${id}:released`, "terminal", outcome), silentRelease: true }];
 }
@@ -1144,6 +1213,7 @@ interface ScanState {
   readonly parentMessageId: string | undefined;
   readonly launched: ReadonlySet<string>;
   readonly reported: ReadonlySet<string>;
+  readonly jobs: ReadonlySet<string>;
 }
 
 /** Where the next sync reads from (#4104): the anchor message and what the scan held before it. */
@@ -1238,6 +1308,7 @@ function snapshotAnchor(
       parentMessageId: cursor.parentMessageId,
       launched: new Set(cursor.children.launched),
       reported: new Set(cursor.children.reported),
+      jobs: new Set(cursor.children.jobs),
     },
   };
 }
@@ -1253,6 +1324,7 @@ function allCandidates(
     children: {
       launched: new Set(window.start?.launched),
       reported: new Set(window.start?.reported),
+      jobs: new Set(window.start?.jobs),
       silent: context.silentChildren,
     },
     parentMessageId: window.start?.parentMessageId,
@@ -1328,7 +1400,11 @@ function makePending(
 
 type PassCounts = Pick<
   PendingProjection,
-  "emptyTextCount" | "nativeRetrySignalCount" | "heldIdleCount" | "silentReleaseCount"
+  | "emptyTextCount"
+  | "nativeRetrySignalCount"
+  | "heldIdleCount"
+  | "silentReleaseCount"
+  | "backgroundJobHoldCount"
 >;
 
 const NO_PASS_COUNTS: PassCounts = {
@@ -1336,6 +1412,7 @@ const NO_PASS_COUNTS: PassCounts = {
   nativeRetrySignalCount: 0,
   heldIdleCount: 0,
   silentReleaseCount: 0,
+  backgroundJobHoldCount: 0,
 };
 
 function countPassCandidate(
@@ -1346,6 +1423,17 @@ function countPassCandidate(
   counts.nativeRetrySignalCount += Number(item.nativeRetryState === true);
   counts.heldIdleCount += Number(item.heldIdle === true);
   counts.silentReleaseCount += Number(item.silentRelease === true);
+  counts.backgroundJobHoldCount += Number(item.backgroundJobHold === true);
+}
+
+function editRefusalFields(signals: ReadonlyMap<string, CodingSafeActivitySignal>): {
+  readonly editRefusalCount?: number;
+} {
+  let count = 0;
+  for (const signal of signals.values())
+    if (signal.kind === "tool" && signal.presentation?.refusalReason === "FILE_NOT_UTF8")
+      count += 1;
+  return count === 0 ? {} : { editRefusalCount: count };
 }
 
 function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
@@ -1433,6 +1521,10 @@ function recordHistoryProjection(
         ...(pending.silentReleaseCount === 0
           ? {}
           : { silentReleaseCount: pending.silentReleaseCount }),
+        ...(pending.backgroundJobHoldCount === 0
+          ? {}
+          : { backgroundJobHoldCount: pending.backgroundJobHoldCount }),
+        ...editRefusalFields(pending.signals),
         ...pending.sync,
       },
     ),
@@ -1557,7 +1649,11 @@ class HistoryProjection implements OpenCodeV2HistoryProjection {
     if (this.pending !== undefined && position === this.pendingStart)
       return this.pending.owedChildren;
     const start = this.anchoredBase(messages, window)?.scan;
-    const children = { launched: new Set(start?.launched), reported: new Set(start?.reported) };
+    const children = {
+      launched: new Set(start?.launched),
+      reported: new Set(start?.reported),
+      jobs: new Set(start?.jobs),
+    };
     for (const message of messages) observeBackgroundChildren(message, children);
     return owedOf(children);
   }

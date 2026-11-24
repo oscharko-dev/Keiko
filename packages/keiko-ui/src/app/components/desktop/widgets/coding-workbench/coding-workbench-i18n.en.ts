@@ -1060,6 +1060,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.commitResult.reason.preflight-block":
     "A Git check prevented this commit. Review the findings below.",
   "codingWorkbench.commitResult.reason.execution-failed": "Git could not create this commit.",
+  "codingWorkbench.commitResult.reason.signing-failed":
+    "Git could not sign this commit. Check your Git signing setup, then commit again.",
   "codingWorkbench.commitResult.reason.execution-uncertain":
     "The commit outcome is uncertain. Reconcile repository state before another attempt.",
   "codingWorkbench.commitResult.reason.restart-reconciliation":
@@ -1380,6 +1382,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
   "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
   "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
+  "codingWorkbench.activity.editRefusalNotUtf8":
+    "The file was left unchanged because it is not saved as UTF-8 text.",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
   "codingWorkbench.activity.serviceDuration": "Duration: {duration}",
   "codingWorkbench.activity.exitCode": "The command exited with code {code}.",

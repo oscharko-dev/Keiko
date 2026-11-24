@@ -379,6 +379,9 @@ function launchEnvironment(
     // says, and the native profile refuses a write there: every `git` of a shell then begins with
     // "couldn't create cache file" (#4521). Its own variable keeps the cache in the run's tmp.
     xcrun_db: join(input.stateRoot, "tmp", "xcrun_db"),
+    // zsh writes a here-document to a temporary file named after TMPPREFIX (default `/tmp/zsh`),
+    // not TMPDIR, so `cat > file <<EOF` failed under the native profile in every mode (#4546).
+    TMPPREFIX: join(input.stateRoot, "tmp", "zsh"),
     OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
     // Repository configuration is data until the operator admits its executable effects
     // (#3903). The pinned runtime offers no per-item admission: its project layer discovers

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "90eeba8d652315173aa602902fffbd355989ebf06944cb5e0c6cc505bb3964c5",
+    "catalogDigest": "ffa7b318a6e51660ea19405aa65c6ffbba77fc4b36c42cad41f82737fa7196d7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12164,6 +12164,16 @@
             "dataClass": "count",
             "required": false
           },
+          "backgroundJobHoldCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "editRefusalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "readMode": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -12193,7 +12203,7 @@
         "proofIds": ["coding-runtime.history-projection.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:56",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1417"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1505"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13960,8 +13970,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.native-question.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:122",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1390"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:130",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1478"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33698,6 +33708,7 @@
               "policy-block",
               "preflight-block",
               "execution-failed",
+              "signing-failed",
               "execution-uncertain",
               "restart-reconciliation",
               "completed"
@@ -33833,6 +33844,7 @@
               "policy-block",
               "preflight-block",
               "execution-failed",
+              "signing-failed",
               "execution-uncertain",
               "restart-reconciliation",
               "completed"
@@ -33889,8 +33901,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:116",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1243"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:117",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1259"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -85088,6 +85100,18 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "backgroundJobHoldCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "editRefusalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "emptyTextCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -125499,7 +125523,7 @@
     {
       "op": "coding-runtime.native-question.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:125",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:133",
       "package": "keiko-server"
     },
     {
@@ -127343,7 +127367,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:119",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:120",
       "package": "keiko-server"
     },
     {

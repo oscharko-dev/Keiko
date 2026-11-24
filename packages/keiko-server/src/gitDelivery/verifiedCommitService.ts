@@ -82,6 +82,7 @@ const VERIFIED_COMMIT_RESULT_REASONS = [
   "policy-block",
   "preflight-block",
   "execution-failed",
+  "signing-failed",
   "execution-uncertain",
   "restart-reconciliation",
   "completed",
@@ -428,7 +429,22 @@ function contextMatches(a: VerifiedCommitRunContext, b: VerifiedCommitRunContext
   ].every(Boolean);
 }
 
+// Git signs a commit before it moves HEAD, so a signing failure left nothing behind: the commit
+// failed for a cause only the person can repair. Reported as uncertain, the model repeated the
+// same commit until the run's deadline (#4546, lab T17).
+function signingFailed(result: GitMutationLifecycleResult): boolean {
+  return (
+    result.outcome.status === "recovery-required" &&
+    result.outcome.executionResult.errorCode === "signature-failed"
+  );
+}
+
+function kernelStatus(result: GitMutationLifecycleResult): VerifiedCommitStatus {
+  return signingFailed(result) ? "failed" : result.outcome.status;
+}
+
 function kernelReason(result: GitMutationLifecycleResult): VerifiedCommitReason {
+  if (signingFailed(result)) return "signing-failed";
   switch (result.outcome.status) {
     case "succeeded":
       return "completed";
@@ -1111,7 +1127,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       return this.record(
         context,
         binding,
-        result.outcome.status,
+        kernelStatus(result),
         kernelReason(result),
         headSha,
         kernelDetails(result),

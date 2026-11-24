@@ -63,6 +63,8 @@ export const CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES = [
   "EDIT_PREPARE_FAILED",
   "WORKSPACE_ACCESS_LOST",
   "EDIT_MUTATION_FAILED",
+  // The native runtime refused to edit a file that is not UTF-8 text and left its bytes unchanged.
+  "FILE_NOT_UTF8",
   "ci-observation-required",
 ] as const;
 export type CodingSafeActivityEditRefusalReason =

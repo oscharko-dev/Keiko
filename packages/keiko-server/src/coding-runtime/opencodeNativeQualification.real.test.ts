@@ -77,7 +77,10 @@ import {
   releaseSchedulerLease,
   SCHEDULER_HOLD_OWNER,
 } from "./opencodeScheduleLease.js";
-import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OPENCODE_NOT_UTF8_EDIT_REFUSAL,
+} from "./opencodeV2History.js";
 import {
   createOpenCodeNativeToolAdvertisement,
   hasExactOpenCodeVisibleToolContract,
@@ -1582,6 +1585,137 @@ describe("pinned native OpenCode hard links inside the workspace (PR #4064 revie
       );
     },
     120_000,
+  );
+});
+
+// A file saved in Windows-1252 ("Grüße, Maß" with 0xFC and 0xDF) is not UTF-8. Since 2.4.0 the edit
+// tool refuses it instead of writing U+FFFD over every umlaut; Keiko's coding alias is not offered
+// `patch` (T08). The refusal carries the words the history projection turns into its closed
+// `FILE_NOT_UTF8` reason (#4546).
+describe("pinned native OpenCode edit of a file that is not UTF-8 (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const LEGACY = Buffer.from([0x47, 0x72, 0xfc, 0xdf, 0x65, 0x2c, 0x20, 0x4d, 0x61, 0xdf, 0x0a]);
+
+  it.skipIf(skip)(
+    "refuses to edit a cp1252 file and leaves its bytes unchanged",
+    async () => {
+      await withRun(
+        {
+          files: { "src/a.ts": "export const a = 1;\n" },
+          mode: "autonomous-delivery",
+          prepare: (fixture) => {
+            writeFileSync(join(fixture.workspace, "legacy.txt"), LEGACY);
+          },
+        },
+        async (run) => {
+          const refused = await scriptedTurn(run, {
+            name: "edit",
+            arguments: { path: "legacy.txt", oldString: "Ma", newString: "Mo" },
+          });
+          expect(refused).toContain(OPENCODE_NOT_UTF8_EDIT_REFUSAL);
+          expect(readFileSync(join(run.fixture.workspace, "legacy.txt"))).toEqual(LEGACY);
+          // The runtime refuses before it asks for the edit permission: nothing was decided.
+          expect(run.facade.decisions).toEqual([]);
+        },
+      );
+    },
+    180_000,
+  );
+});
+
+// 2.3.1 moves a command still running at its timeout to the background; the runtime reports how it
+// ended and runs the session again. Keiko's run waits for that report, and the check never counts
+// as verification (#4546).
+describe("pinned native OpenCode command that outlives its timeout (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "holds the run until the moved command reported, and gives the check no exit status",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          const moved = await scriptedTurn(run, shell(idleCommand(3, marker), { timeout: 1_000 }));
+          expect(moved).toContain("moved to the background");
+          await expect
+            .poll(
+              async () =>
+                (await run.client.messages(run.sessionId)).some(
+                  (message) =>
+                    message.type === "synthetic" && object(message.metadata)?.source === "shell",
+                ),
+              { timeout: 30_000 },
+            )
+            .toBe(true);
+          await settledIdle(run);
+          const messages = await run.client.messages(run.sessionId);
+          const firstIdle = messages.findIndex((message) => message.type === "idle");
+          const projection = createOpenCodeV2HistoryProjection({
+            runId: RUN_ID,
+            activityLog: undefined,
+            toolProfile: "native",
+          });
+          // Up to the idle message before the report, the run's work has not ended.
+          const before = projection.project(
+            run.sessionId,
+            messages.slice(0, firstIdle + 1),
+            undefined,
+          );
+          expect(before.map((event) => event.kind)).not.toContain("terminal");
+          const all = createOpenCodeV2HistoryProjection({
+            runId: RUN_ID,
+            activityLog: undefined,
+            toolProfile: "native",
+          });
+          const events = all.project(run.sessionId, messages, undefined);
+          expect(events.at(-1)?.kind).toBe("terminal");
+          const tools = events
+            .flatMap((event) => all.takeSignal(event) ?? [])
+            .filter((signal) => signal.kind === "tool");
+          expect(tools).toHaveLength(1);
+          expect(tools[0]).not.toHaveProperty("exitCode");
+          expect(tools[0]).not.toHaveProperty("exitStatusCheck");
+          expect(liveCount(marker)).toBe(0);
+        });
+      });
+    },
+    180_000,
+  );
+});
+
+describe("pinned native OpenCode shell commands the scanner cannot read, and here-documents (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  // 2.4.1 asks for an unanalysable command instead of failing it: the whole command and every
+  // directory (`external_directory` on `*`), because it may reach any. Keiko's mode-independent
+  // floor denies every external directory, so such a command never runs, in any mode.
+  it.skipIf(skip).each(ALL_MODES)(
+    "refuses a command the scanner cannot analyse in %s, before it runs",
+    async (mode) => {
+      await withRun({ mode, approveAsks: true }, async (run) => {
+        // A trailing backslash is an unterminated escape the scanner cannot analyse.
+        const result = await scriptedTurn(run, shell("echo opaque > opaque.txt \\"));
+        expect(result).toContain("permission.rejected");
+        expect(result).toContain("external_directory");
+        expect(existsSync(join(run.fixture.workspace, "opaque.txt"))).toBe(false);
+        expect(run.facade.decisions).toEqual([]);
+      });
+    },
+    180_000,
+  );
+
+  // zsh writes a here-document to a temporary file under TMPPREFIX (default /tmp/zsh), which the
+  // native profile refuses; a model writing a file with `cat > file <<EOF` then failed in every
+  // mode. The run's own temporary directory takes it.
+  it.skipIf(skip)(
+    "writes a file through a here-document",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const result = await scriptedTurn(run, shell("cat > notes.txt <<'EOT'\nhello\nEOT"));
+        expect(result).not.toContain("here document");
+        expect(readFileSync(join(run.fixture.workspace, "notes.txt"), "utf8")).toBe("hello\n");
+      });
+    },
+    180_000,
   );
 });
 

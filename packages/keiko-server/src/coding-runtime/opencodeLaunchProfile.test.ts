@@ -334,6 +334,8 @@ describe("OpenCode launch profile", () => {
         expect(launched.env.OPENCODE_DISABLE_MODELS_FETCH, toolProfile).toBe("1");
         expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE, toolProfile).toBe("1");
         expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT, toolProfile).toBe("1");
+        // zsh here-documents go to TMPPREFIX, never the shared /tmp (#4546).
+        expect(launched.env.TMPPREFIX, toolProfile).toBe("/private/run/tmp/zsh");
       }
     });
 

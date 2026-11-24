@@ -11699,6 +11699,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      backgroundJobHoldCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      editRefusalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       readMode: {
         type: "string",
         dataClass: "closed-enum",
@@ -32366,6 +32376,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "policy-block",
           "preflight-block",
           "execution-failed",
+          "signing-failed",
           "execution-uncertain",
           "restart-reconciliation",
           "completed",
@@ -32501,6 +32512,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "policy-block",
           "preflight-block",
           "execution-failed",
+          "signing-failed",
           "execution-uncertain",
           "restart-reconciliation",
           "completed",

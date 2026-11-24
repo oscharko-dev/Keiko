@@ -263,6 +263,13 @@ function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
       occurredAt: AT,
       presentation: { exitCode: 1 },
     },
+    {
+      callId: "edit-legacy",
+      tool: "edit",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { refusalReason: "FILE_NOT_UTF8" as const },
+    },
   ];
   return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
 }
@@ -388,8 +395,14 @@ describe("CodingWorkbenchTimeline", () => {
     const failed = [
       ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
     ];
-    expect(failed).toHaveLength(1);
-    const [execute] = failed;
+    expect(failed).toHaveLength(2);
+    const [execute, legacy] = failed;
+    // #4546: an edit the runtime refused because the file is not UTF-8 says so in one sentence.
+    expect(legacy).toHaveTextContent(
+      "The file was left unchanged because it is not saved as UTF-8 text.",
+    );
+    expect(legacy).not.toHaveTextContent("reported an error");
+    expect(legacy).not.toHaveTextContent("FILE_NOT_UTF8");
     expect(execute?.open).toBe(true);
     expect(execute).toHaveTextContent("Failed");
     expect(execute).toHaveTextContent("The tool reported an error to the model.");

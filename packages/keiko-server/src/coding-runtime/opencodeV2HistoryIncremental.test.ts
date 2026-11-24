@@ -97,6 +97,8 @@ interface Progress {
   readonly reasoning: number;
   readonly tool: "none" | "running" | "completed";
   readonly launches?: string;
+  /** A shell command of this message that moved to the background (#4546). */
+  readonly job?: string;
 }
 
 const WORDS = ["", "alpha ", "alpha beta ", "alpha beta gamma ", "alpha beta gamma delta."];
@@ -131,7 +133,32 @@ function assistantMessage(progress: Progress): Message {
         metadata: { sessionID: progress.launches },
       },
     });
+  if (progress.job !== undefined)
+    content.push({
+      type: "tool",
+      id: `call_job_${progress.id}`,
+      name: "shell",
+      executed: false,
+      time: { created: 2, ran: 2, completed: 3 },
+      state: {
+        status: "completed",
+        input: { command: "npm test" },
+        content: [],
+        metadata: { status: "running", shellID: progress.job, truncated: false },
+      },
+    });
   return { id: progress.id, type: "assistant", time: { created: 2 }, content };
+}
+
+function jobReportMessage(shellID: string): Message {
+  return {
+    id: messageId("j"),
+    type: "synthetic",
+    time: { created: 6 },
+    metadata: { source: "shell", shellID, state: "completed", exit: 0 },
+    text: `<background kind="shell" id="${shellID}" state="completed">done</background>`,
+    description: "npm test",
+  };
 }
 
 function reportMessage(child: string): Message {
@@ -656,6 +683,7 @@ describe("OpenCode V2 incremental history equals a full projection (#4104)", () 
     private readonly incremental: IncrementalReader;
     private readonly reference = new FullReader(this.session);
     private children = 0;
+    private jobs = 0;
     // The tail the next fresh pass re-projects starts at the anchor the last fresh pass chose: the
     // margin before the end of its window, and never earlier than the window's own start. The
     // runtime edits only what that tail holds (the in-flight messages).
@@ -709,6 +737,14 @@ describe("OpenCode V2 incremental history equals a full projection (#4104)", () 
         this.report();
       },
       (): void => {
+        this.jobs += 1;
+        this.appendAssistant(undefined, `sh_job_${String(this.jobs)}`);
+      },
+      (): void => {
+        if (this.jobs > 0)
+          this.session.push(jobReportMessage(`sh_job_${String(1 + this.pick(this.jobs))}`));
+      },
+      (): void => {
         this.revert();
       },
       (): void => {
@@ -724,13 +760,14 @@ describe("OpenCode V2 incremental history equals a full projection (#4104)", () 
       return Math.floor(this.rng() * count);
     }
 
-    private appendAssistant(launches?: string): void {
+    private appendAssistant(launches?: string, job?: string): void {
       const progress: Progress = {
         id: messageId("a"),
         text: this.pick(2),
         reasoning: this.pick(3) === 0 ? 1 : 0,
         tool: this.pick(3) === 0 ? "running" : "none",
         ...(launches === undefined ? {} : { launches }),
+        ...(job === undefined ? {} : { job }),
       };
       this.assistants.set(progress.id, progress);
       this.session.push(assistantMessage(progress));
