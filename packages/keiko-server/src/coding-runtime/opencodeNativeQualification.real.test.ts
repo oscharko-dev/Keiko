@@ -4280,3 +4280,128 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     180_000,
   );
 });
+
+// ─── #4546 AC6: no plugin is installed or checked for updates during a run ──────────────────────
+
+describe("pinned native OpenCode fetches no plugin during a run (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  // A package nobody publishes, named mutably (`@latest`): the producer installs a package plugin
+  // it does not have from the registry and checks a mutable one for updates (`plugin/supervisor.ts`,
+  // `util/npm.ts` in 2.4.1). The registry is a loopback recorder that answers nothing found.
+  const CANARY_NAME = `keiko-canary-plugin-${randomUUID().slice(0, 8)}`;
+  const CANARY_CONFIG = JSON.stringify({ plugins: [`${CANARY_NAME}@latest`] });
+  const REGISTRY_QUIET_CHECKS = 30;
+
+  async function withRegistryRecorder(body: (registry: Stub) => Promise<void>): Promise<void> {
+    const registry = await startStub((_stub, _recorded, response) => {
+      response.writeHead(404, { "Content-Type": "application/json" }).end("{}");
+    });
+    try {
+      await body(registry);
+    } finally {
+      await closeStub(registry);
+    }
+  }
+
+  const registryEnv = (registry: Stub): Readonly<Record<string, string>> => {
+    const url = `http://127.0.0.1:${String(registry.port)}/`;
+    return { npm_config_registry: url, NPM_CONFIG_REGISTRY: url };
+  };
+
+  const packageSources = async (raw: (path: string) => Promise<unknown>): Promise<unknown[]> => {
+    const data: unknown = object(await raw("/api/plugin"))?.data;
+    if (!Array.isArray(data)) throw new Error("fixture-plugin-list-invalid");
+    const entries: readonly unknown[] = data;
+    return entries.filter((entry) => object(object(entry)?.source)?.type === "package");
+  };
+
+  it.skipIf(skip)(
+    "loads, installs and checks no package plugin a project or home configuration names, in Full access",
+    async () => {
+      await withRegistryRecorder(async (registry) => {
+        await withRun(
+          {
+            mode: "autonomous-delivery",
+            egress: openCodeNativeEgress("autonomous-delivery"),
+            env: registryEnv(registry),
+            files: {
+              [FIXTURE_FILE]: "native qualification fixture\n",
+              "opencode.json": CANARY_CONFIG,
+              ".opencode/opencode.json": CANARY_CONFIG,
+            },
+            prepare: (fixture) => {
+              const home = join(fixture.state, "home", ".config", "opencode");
+              mkdirSync(home, { recursive: true });
+              writeFileSync(join(home, "opencode.json"), CANARY_CONFIG);
+            },
+          },
+          async (run) => {
+            await scriptedTurn(run, read(FIXTURE_FILE));
+            await settledIdle(run);
+            // Re-checked for longer than the control needs to reach the registry: a lookup the
+            // producer starts in the background after the turn would still be seen.
+            for (let check = 0; check < REGISTRY_QUIET_CHECKS; check += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              if (registry.requests.length > 0)
+                throw new Error(`the runtime asked the registry (check ${String(check)})`);
+            }
+            expect(await packageSources(run.raw)).toEqual([]);
+            expect(registry.requests.map((request) => request.url)).toEqual([]);
+          },
+        );
+      });
+    },
+    120_000,
+  );
+
+  // The positive control: the same executable, launched on its own with the plugin in its
+  // configuration, lists the package plugin and asks the recorder for it.
+  it.skipIf(skip)(
+    "control: the pinned runtime on its own asks the registry for a configured package plugin",
+    async () => {
+      if (BINARY === undefined) throw new Error("fixture-binary-missing");
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plugin-canary-")));
+      const config = join(root, "config", "opencode");
+      const workspace = join(root, "workspace");
+      mkdirSync(config, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(join(config, "opencode.json"), CANARY_CONFIG);
+      const password = randomUUID();
+      await withRegistryRecorder(async (registry) => {
+        const child = spawn(realpathSync(BINARY), ["serve", "--port", "0"], {
+          cwd: workspace,
+          env: {
+            PATH: "/usr/bin:/bin",
+            HOME: join(root, "home"),
+            XDG_CONFIG_HOME: join(root, "config"),
+            TMPDIR: tmpdir(),
+            OPENCODE_SERVER_PASSWORD: password,
+            ...registryEnv(registry),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        try {
+          const endpoint = await childEndpoint(child);
+          const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+          const raw = async (path: string): Promise<unknown> => {
+            const location = `location%5Bdirectory%5D=${encodeURIComponent(workspace)}`;
+            const response = await fetch(`${endpoint}${path}?${location}`, {
+              headers: { Authorization: authorization },
+            });
+            return (await response.json()) as unknown;
+          };
+          await expect
+            .poll(async () => (await packageSources(raw)).length, { timeout: 30_000 })
+            .toBe(1);
+          await expect
+            .poll(() => registry.requests.map((request) => request.url), { timeout: 30_000 })
+            .toContain(`/${CANARY_NAME}`);
+        } finally {
+          await stopChild(child);
+          rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+        }
+      });
+    },
+    120_000,
+  );
+});

@@ -119,6 +119,8 @@ interface Recorded {
 
 interface Stub {
   replyText?: string | undefined;
+  /** Read calls still to issue in a row before the next plain answer (#4546 AC7). */
+  toolChain?: number | undefined;
   readonly server: Server;
   port: number;
   readonly requests: Recorded[];
@@ -206,7 +208,35 @@ function streamedText(response: ServerResponse, text: string): void {
   );
 }
 
-/** Answers every model request with a plain text turn that names how many it has seen. */
+function streamedReadCall(response: ServerResponse, id: string): void {
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  const call = {
+    index: 0,
+    id,
+    type: "function",
+    function: { name: "read", arguments: JSON.stringify({ path: "notes.txt" }) },
+  };
+  response.write(
+    frame({
+      id: "native-resume",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { tool_calls: [call] }, finish_reason: null }],
+    }),
+  );
+  response.end(
+    frame({
+      id: "native-resume",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }) + "data: [DONE]\n\n",
+  );
+}
+
+/**
+ * Answers every model request with a plain text turn that names how many it has seen, or, while a
+ * tool chain is pending, with the next read call.
+ */
 async function startGateway(): Promise<Stub> {
   return await startStub((self, recorded, response) => {
     if (recorded.url.startsWith("/facade/")) {
@@ -222,6 +252,11 @@ async function startGateway(): Promise<Stub> {
     if (lastUser === "FIXTURE-CANCELLED-TERMINAL-TURN") {
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.flushHeaders();
+      return;
+    }
+    if ((self.toolChain ?? 0) > 0) {
+      self.toolChain = (self.toolChain ?? 0) - 1;
+      streamedReadCall(response, `call_resume_${String(self.requests.length)}`);
       return;
     }
     streamedText(response, self.replyText ?? `Answer number ${String(self.requests.length)}.`);
@@ -900,6 +935,58 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
                 (content) => typeof content === "string" && content.startsWith("Answer number"),
               ),
             ).toHaveLength(2);
+          },
+        );
+      });
+    },
+    240_000,
+  );
+
+  // #4546 AC7: 2.4.x stores a message's parts as rows of their own. A retained session whose turn
+  // made many tool calls passes the audit, and the resumed runtime replays every call and result.
+  it.skipIf(skip)(
+    "resumes a retained session whose turn made many tool calls, with every call in the model request",
+    async () => {
+      await withWorld(async (world) => {
+        const TOOL_CALLS = 40;
+        let sessionId = "";
+        await withRuntime(world, "first-run", undefined, async ({ client, gateway }) => {
+          const created = await client.createSession(world.fixture.workspace);
+          sessionId = String(created.id);
+          gateway.toolChain = TOOL_CALLS;
+          await turn(client, sessionId, "TOOL-CHAIN-QUESTION");
+          expect(gateway.toolChain).toBe(0);
+        });
+        const retained = world.store.retain({
+          binding: binding(),
+          sessionId,
+          directory: world.fixture.workspace,
+          sourceDatabase: join(world.fixture.root, "first-run", "state", "opencode.db"),
+        });
+        if (!retained.ok) throw new Error(`fixture-retain-refused:${retained.reason}`);
+        expect(retained.messageCount).toBeGreaterThan(TOOL_CALLS);
+
+        await withRuntime(
+          world,
+          "second-run",
+          (database) => {
+            expect(checkoutInto(world, database)).toMatchObject({ ok: true, sessionId });
+          },
+          async ({ client, gateway }) => {
+            const bound = await bindContinuedSession(
+              client,
+              continuation(sessionId, { kind: "resume", taskId: TASK_ID }),
+              world.fixture.workspace,
+              undefined,
+            );
+            expect(bound).toMatchObject({ ok: true, sessionId });
+            await turn(client, sessionId, "AFTER-TOOL-CHAIN");
+            const messages = modelMessages(gateway.requests.at(-1));
+            expect(messages.filter((message) => message.role === "tool")).toHaveLength(TOOL_CALLS);
+            expect(userTexts(gateway.requests.at(-1))).toEqual([
+              "TOOL-CHAIN-QUESTION",
+              "AFTER-TOOL-CHAIN",
+            ]);
           },
         );
       });
