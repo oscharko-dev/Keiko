@@ -920,7 +920,9 @@ describe("ordinary Chat catalog read admission", () => {
       chatId: chat.id,
       authority: reference.envelopeDigest,
       authorityReference: reference,
-      authorityExpiresAt: "2026-07-09T13:00:00.000Z",
+      authorityExpiresAt: new Date(
+        Math.max(Date.parse("2026-07-09T13:00:00.000Z"), now + deadlineSpan),
+      ).toISOString(),
       deadlineAt: new Date(now + deadlineSpan).toISOString(),
       signal: new AbortController().signal,
     };
@@ -1186,14 +1188,14 @@ describe("ordinary Chat catalog read admission", () => {
 
   it("keeps the automatic read grant current for a running invocation past its first lifetime", async () => {
     registerCurrentAuthority({
-      expiresAt: new Date(start + 3_600_000).toISOString(),
+      expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
         maxPatchBytes: 0,
       },
     });
-    deadlineSpan = 3_000_000;
+    deadlineSpan = 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS;
     const f = await catalogFixture(5);
     const offered = f.binder.offer();
     expect(await dispatch(f, "issue", {}, "keiko.jira.projects", offered)).toMatchObject({
@@ -1222,14 +1224,14 @@ describe("ordinary Chat catalog read admission", () => {
     "does not renew the grant once the %s is no longer current",
     async (change) => {
       registerCurrentAuthority({
-        expiresAt: new Date(start + 3_600_000).toISOString(),
+        expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
         budget: {
           maxRuntimeMs: 7_200_000,
           maxToolCalls: 20,
           maxPatchBytes: 0,
         },
       });
-      deadlineSpan = 3_000_000;
+      deadlineSpan = 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS;
       const f = await catalogFixture(5);
       const offered = f.binder.offer();
       expect(await dispatch(f, "issue", {}, "keiko.jira.projects", offered)).toMatchObject({
@@ -1256,7 +1258,7 @@ describe("ordinary Chat catalog read admission", () => {
         maxPatchBytes: 0,
       },
     });
-    deadlineSpan = 3_000_000;
+    deadlineSpan = ATLASSIAN_ACTION_APPROVAL_TTL_MS;
     now = envelopeEnd - ATLASSIAN_ACTION_APPROVAL_TTL_MS - 100_000;
     const f = await catalogFixture(5);
     const offered = f.binder.offer();
@@ -1272,14 +1274,14 @@ describe("ordinary Chat catalog read admission", () => {
 
   it("slides the grant on each passing check, so model calls of nine minutes keep it current", async () => {
     registerCurrentAuthority({
-      expiresAt: new Date(start + 3_600_000).toISOString(),
+      expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
         maxPatchBytes: 0,
       },
     });
-    deadlineSpan = 3_000_000;
+    deadlineSpan = 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS;
     const f = await catalogFixture(5);
     const offered = f.binder.offer();
     const again = (suffix: string): ReturnType<typeof dispatch> =>
@@ -1300,14 +1302,14 @@ describe("ordinary Chat catalog read admission", () => {
 
   it("re-binds a previous turn's grant to the running turn's authority and keeps it current", async () => {
     const long = {
-      expiresAt: new Date(start + 3_600_000).toISOString(),
+      expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
         maxPatchBytes: 0 as const,
       },
     };
-    deadlineSpan = 3_000_000;
+    deadlineSpan = 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS;
     registerCurrentAuthority({ ...long, runId: "turn-a" });
     const authorityA = reference;
     const turnA = await catalogFixture(5);
@@ -1333,7 +1335,7 @@ describe("ordinary Chat catalog read admission", () => {
 
   it("does not renew a grant of another subject", async () => {
     registerCurrentAuthority({
-      expiresAt: new Date(start + 3_600_000).toISOString(),
+      expiresAt: new Date(start + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
@@ -1352,13 +1354,14 @@ describe("ordinary Chat catalog read admission", () => {
 
   it("does not keep the Jira grant alive for a Knowledge Pod read", async () => {
     registerCurrentAuthority({
-      expiresAt: new Date(start + 3_600_000).toISOString(),
+      expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
       budget: {
         maxRuntimeMs: 7_200_000,
         maxToolCalls: 20,
         maxPatchBytes: 0,
       },
     });
+    deadlineSpan = 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS;
     const f = await catalogFixture(5);
     expect(await dispatch(f, "jira")).toMatchObject({ result: { status: "completed" } });
     const before = grants.findGrantedChatReadGrant(grantSubject())?.expiresAt;
@@ -1466,7 +1469,9 @@ describe("ordinary Chat catalog read admission", () => {
   });
 
   it("leaves a pending grant to expire", () => {
-    registerCurrentAuthority({ expiresAt: new Date(start + 3_600_000).toISOString() });
+    registerCurrentAuthority({
+      expiresAt: new Date(start + 2 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+    });
     const pending = requestJiraChatReadGrant(
       { ...deps, atlassianActionApprovalRegistry: grants },
       chat.id,

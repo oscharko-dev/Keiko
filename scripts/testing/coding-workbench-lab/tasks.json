@@ -136,7 +136,7 @@
   },
   {
     "id": "T13",
-    "title": "Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)",
+    "title": "Per-turn cost of a 78 KiB AGENTS.md (above the 64 KiB loader cap)",
     "mode": "Ask for approval",
     "baseline": "head+md",
     "textStatus": "proposed",

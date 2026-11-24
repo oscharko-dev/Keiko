@@ -68,7 +68,11 @@ import {
   type GitDeliveryCommitDraftBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
-import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
+import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+  gatewayRouteDeadlineMs,
+} from "../gateway-route-deadline.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -968,14 +972,22 @@ describe("commit draft — explicit model-backed generation", () => {
   // the spy would record 30_000 and never the route deadline derived from the gateway's own retry
   // budget for the resolved model (`gatewayRouteDeadlineMs`, PR #3602 review: a fixed 300 s
   // backstop sat under the 600 s buffered attempt the gateway now allows).
-  // The draft only buffers: its backstop is the buffered budget (600 s floor for this fixture's
-  // `maxRetries: 0`, plus the route's grace), never the streamed read's, which would let a stalled
-  // model port that only the route's signal can stop hang for the 30-minute stream floor
-  // (PR #3602 review).
+  // The draft only buffers: its backstop is the buffered budget (the buffered floor for this
+  // fixture's `maxRetries: 0`, plus the route's grace), never the streamed read's, which grants the
+  // draft's output allowance on top and would let a stalled model port that only the route's signal
+  // can stop hang past the draft's own budget (PR #3602 review).
   it("derives the draft's route deadline from the buffered budget alone", () => {
-    expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBe(
+      GATEWAY_BUFFERED_BUDGET_FLOOR_MS + GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+    );
     expect(DRAFT_ROUTE_DEADLINE_MS).toBeLessThan(
-      gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", ["buffered", "streamed"]),
+      gatewayRouteDeadlineMs(
+        DRAFT_GATEWAY_CONFIG,
+        "draft-model",
+        ["buffered", "streamed"],
+        undefined,
+        COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+      ),
     );
   });
 
@@ -1026,7 +1038,9 @@ describe("commit draft — explicit model-backed generation", () => {
 
       expect(result.status).toBe(200);
       expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
-      expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBe(
+        GATEWAY_BUFFERED_BUDGET_FLOOR_MS + GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+      );
     } finally {
       timeoutSpy.mockRestore();
     }

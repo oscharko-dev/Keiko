@@ -811,7 +811,7 @@ the run's own cause names the outage.
 - `output-exhausted-repeated`: have the gateway declare a larger `max_output_tokens` for the model, or
   choose a model with a smaller reasoning share, then start the task again.
 - `provider-unavailable`: check the model gateway's and the model server's health, then start the
-  task again. Where peak overloads last longer than ten minutes, raise the gateway configuration's
+  task again. Where peak overloads last longer than thirty minutes, raise the gateway configuration's
   `codingOutageWindowMs` (see the LiteLLM production gateway entry).
 - `model-turn-failed`: follow the failed step's own sentence (provider configuration, the model's
   output budget, a rephrased task or another model), then start the task again.
@@ -1020,7 +1020,8 @@ settles `failed` (ADR-0137 D3):
   while preparing it (`EDIT_PREPARE_FAILED`) because the workspace or its guard no longer held, no
   editor context or mutation lease could be had, or the governed read of a file the edit names did not
   answer (a file that is not text or is too large, a denied path, an unavailable workspace).
-- `edit-retries-exhausted` — six refusals of any kind in the streak: edits that do not apply
+- `edit-retries-exhausted` — fifteen refusals of any kind in the streak (six until the 2026-11-24
+  owner decision): edits that do not apply
   (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
   precondition, an invalid changeset (`EDIT_PREPARE_FAILED` with the cause `changeset-invalid`), or a
   refusal without a closed code (`UNCLASSIFIED`), alone or mixed with the unrepairable ones above.

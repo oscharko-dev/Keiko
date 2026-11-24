@@ -12,6 +12,7 @@ import { Gateway, type GatewayCallRequest } from "./gateway.js";
 import {
   bufferedCallBudgetMs,
   codingWorkbenchProviderTimeoutMs,
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   GATEWAY_CODING_OUTAGE_WINDOW_MS,
   type GatewayRetryNotice,
   type GatewayRetryObserver,
@@ -475,13 +476,13 @@ describe("coding-workbench outage tolerance", () => {
     expect(exhausted[0]?.extra).toMatchObject({ reason: "budget", retryPolicy: "outage-window" });
   });
 
-  // A silent attempt ends at its own bound (here the 600 s whole-body floor) and is retried only
-  // while the window still has room: one silent attempt spends the default ten-minute window, a
-  // thirty-minute window holds three. The last one ends past the window, and its stop line must
-  // still be written: it once carried a negative `remainingMs` and was rejected as invalid.
+  // A silent attempt ends at its own bound (here the whole-body floor) and is retried only while
+  // the window still has room: one silent attempt spends the default thirty-minute window, a window of
+  // three such bounds holds three. The last one ends past the window, and its stop line must still
+  // be written: it once carried a negative `remainingMs` and was rejected as invalid.
   it.each([
     [GATEWAY_CODING_OUTAGE_WINDOW_MS, 1],
-    [1_800_000, 3],
+    [3 * GATEWAY_BUFFERED_BUDGET_FLOOR_MS, 3],
   ])(
     "retries a silent attempt only while a %i ms window has room for it",
     async (windowMs, attempts) => {
@@ -499,7 +500,7 @@ describe("coding-workbench outage tolerance", () => {
       ).rejects.toBeInstanceOf(TimeoutError);
 
       expect(calls).toBe(attempts);
-      expect(clock.elapsed()).toBeGreaterThanOrEqual(attempts * 600_000);
+      expect(clock.elapsed()).toBeGreaterThanOrEqual(attempts * GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
       const exhausted = linesOf(events, "gateway.retry.exhausted");
       expect(exhausted).toHaveLength(1);
       expect(exhausted[0]?.extra).toMatchObject({

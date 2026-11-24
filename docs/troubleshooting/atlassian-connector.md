@@ -397,7 +397,7 @@ A sync run reports `bounds-exceeded` (or its change summary shows individual ite
 
 **Root Cause**
 
-Every run is bounded by governed defaults (ADR-0128 D5): 2 000 items, 50 MB total content, 15
+Every run is bounded by governed defaults (ADR-0128 D5): 20 000 items, 256 MB total content, 120
 minutes wall-clock, and a per-item body cap. When a run reaches a budget it stops (or skips the
 oversized item and continues, for a single mid-fetch truncation), reporting `bounds-exceeded`. A
 write action whose request body exceeds the request-size cap is rejected as `bounds-exceeded`
@@ -409,7 +409,7 @@ locally, without issuing the call. These bounds are narrowable by scope but not 
    budget) versus per-item `bounds-exceeded` skips (individual oversized pages/issues) versus a
    write `bounds-exceeded` (an oversized request body).
 2. For a run-level bound, estimate the scope size — number of pages/issues and their total size —
-   against the 2 000-item / 50 MB / 15-minute budget.
+   against the 20 000-item / 256 MB / 120-minute budget.
 
 **Resolution**
 

@@ -11,6 +11,7 @@ import {
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
+import { JIRA_READ_DURATION_MS } from "./actionApprovalLimits.js";
 
 const OPEN_OBJECT = { type: "object", required: [], properties: {}, additionalProperties: true };
 const FIELD_ID = { ...text(64), pattern: JIRA_FIELD_ID_PATTERN };
@@ -83,7 +84,7 @@ export function jiraReportDeclaration(): ManagedMcpToolDeclaration {
         maxArgumentBytes: 65536,
         maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
         maxResultCount: 100,
-        maxDurationMs: 30000,
+        maxDurationMs: JIRA_READ_DURATION_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

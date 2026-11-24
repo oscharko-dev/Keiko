@@ -27,6 +27,7 @@ import {
   openEditorWorkspace,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // "ControlOrMeta", NOT `editorModifier`: `workspace.commands` is a PRODUCT shortcut (the
@@ -265,20 +266,12 @@ test("fixing and saving in Monaco before rerunning clears the problem", async ({
   await clickWindowChromeButton(problemsWindow, "Close Problems window");
   await expect(page.locator(`[data-testid="problems-row"]`)).toHaveCount(0);
 
-  const editorInput = pane.getByRole("textbox", { name: /^Editor:/u }).first();
-  await editorInput.focus();
-  // The fixture source is intentionally one line. Select that line through Monaco's keyboard
-  // surface and replace it, preserving the existing trailing newline. This is a real editor edit;
-  // the disk assertion below proves the Save affordance persisted it.
-  await page.keyboard.press("Home");
-  await page.keyboard.press("Shift+End");
-  // Delete the selection with a REAL key event before inserting. `insertText` bypasses key events,
-  // and whether it replaces an existing selection is engine-dependent: Chromium replaces, Firefox
-  // inserts at the caret and LEAVES the selected text in place — doubling the line instead of
-  // replacing it (the same corruption class support/editor-chord.ts's `replaceEditorBuffer` was
-  // written to catch). Backspace on a selection is unambiguous in both.
-  await page.keyboard.press("Backspace");
-  await page.keyboard.insertText(FIXED_SOURCE.trimEnd());
+  // A real editor edit through the shared Monaco replacement path: it focuses the editor's own
+  // input surface, selects the whole buffer with the editor's platform chord and pastes, then waits
+  // until the product publishes exactly this buffer. Home/Shift+End on the outer textbox never
+  // reached the model on macOS and only sometimes on Linux, leaving Save disabled; the disk assertion
+  // below still proves the Save affordance persisted it.
+  await replaceEditorBuffer(page, pane, FIXED_SOURCE, ws.root);
   await workspaceLocator.getByRole("button", { name: "Save", exact: true }).click();
   await expect(workspaceLocator.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");
   await expect.poll(() => readFileSync(join(ws.root, SOURCE), "utf8")).toBe(FIXED_SOURCE);

@@ -148,10 +148,11 @@ describe("NetworkPolicy — gateway shape is excluded from SandboxPolicy.network
 // budget by the whole wait and one grace, so the catalog can never cut the decision off.
 describe("the budget of a governed tool that waits for a human decision", () => {
   // Literal pins (PR #3452 review): an expectation derived from the formula would move with it.
+  // Owner decision 2026-11-24: a person may take up to 60 minutes to answer an approval.
   it("adds the whole human decision wait and a grace to the tool's own work budget", () => {
     expect(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs).toBe(30_000);
-    expect(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS).toBe(300_000);
+    expect(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS).toBe(3_600_000);
     expect(GOVERNED_TOOL_SETTLEMENT_GRACE_MS).toBe(15_000);
-    expect(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS).toBe(345_000);
+    expect(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS).toBe(3_645_000);
   });
 });

@@ -28,6 +28,7 @@ import {
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
+import { COMMAND_RUN_MAX_DURATION_MS } from "./command-wall-time.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -953,5 +954,26 @@ describe("TerminalExecutionManager — subscribe lifecycle", () => {
     });
     await manager.execute({ projectId: workspaceRoot, command: "ls", args: [] });
     expect(ok.length).toBeGreaterThan(0);
+  });
+});
+
+// Owner decision 2026-11-24: a terminal command may run for the command wall time (was 30 seconds).
+describe("TerminalExecutionManager — command wall time", () => {
+  it("arms the command's timer at the command wall time and honours a longer request up to it", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const manager = makeManager(makeSpawn({ stdout: "ok\n", exitCode: 0 }));
+    for (const timeoutMs of [undefined, 600_000, COMMAND_RUN_MAX_DURATION_MS * 2]) {
+      const result = await manager.execute({
+        projectId: workspaceRoot,
+        command: "ls",
+        args: [],
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      expect(result.timedOut).toBe(false);
+    }
+    const delays = timers.mock.calls.map((call) => call[1]);
+    expect(delays.filter((delay) => delay === COMMAND_RUN_MAX_DURATION_MS)).toHaveLength(2);
+    expect(delays).toContain(600_000);
+    expect(delays).not.toContain(COMMAND_RUN_MAX_DURATION_MS * 2);
   });
 });

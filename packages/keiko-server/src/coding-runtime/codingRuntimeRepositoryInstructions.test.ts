@@ -307,12 +307,16 @@ describe("coding runtime repository instructions loader", () => {
 
     const nonce = frameNonce(context);
     expect(context).toContain(`<repository-instructions ${nonce}>\n${expected}\n`);
-    expect(context).toContain("\nline 800\n[AGENTS.md truncated: the first 800 of 801 lines");
+    const bound = String(REPOSITORY_INSTRUCTIONS_MAX_LINES);
+    const total = String(REPOSITORY_INSTRUCTIONS_MAX_LINES + 1);
     expect(context).toContain(
-      "[AGENTS.md truncated: the first 800 of 801 lines are shown; read the file for the rest.]\n" +
+      `\nline ${bound}\n[AGENTS.md truncated: the first ${bound} of ${total} lines`,
+    );
+    expect(context).toContain(
+      `[AGENTS.md truncated: the first ${bound} of ${total} lines are shown; read the file for the rest.]\n` +
         `</repository-instructions ${nonce}>`,
     );
-    expect(context).not.toContain("line 801");
+    expect(context).not.toContain(`line ${total}`);
     const { persisted } = expectInstructionsLine(captured.records);
     expect(persisted).toMatchObject({
       state: "truncated",
@@ -327,11 +331,11 @@ describe("coding runtime repository instructions loader", () => {
     expect(persisted.contentSha256).not.toBe(sha256(expected));
   });
 
-  // A file above the former 64 KiB ceiling (70 KB, 1,200 lines) is bounded
-  // to the first-lines window with the marker, never refused by this loader: the first 800 lines
-  // are cut further to the byte bound at a line boundary, the totals and the whole-file digest
-  // describe the file. Lines are 60 bytes each, so 273 of them fit under 16,384 bytes.
-  it("bounds a 70 KB, 1,200-line file to the window and ends it with the marker line", async () => {
+  // A file above the 64 KiB bound (72 KB, 1,200 lines) is bounded to the first-lines window with
+  // the marker, never refused by this loader: it is cut to the byte bound at a line boundary, the
+  // totals and the whole-file digest describe the file. Lines are 60 bytes each, so 1,092 of them
+  // fit under 65,536 bytes (owner decision 2026-11-24).
+  it("bounds a 72 KB, 1,200-line file to the window and ends it with the marker line", async () => {
     const captured = captureActivityLog();
     const line = "instruction line ".padEnd(59, "x");
     const text = `${Array.from({ length: 1_200 }, () => line).join("\n")}\n`;
@@ -349,15 +353,15 @@ describe("coding runtime repository instructions loader", () => {
     const context = await port.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE });
 
     expect(context).toContain(
-      `${line}\n[AGENTS.md truncated: the first 273 of 1200 lines are shown; read the file for ` +
+      `${line}\n[AGENTS.md truncated: the first 1092 of 1200 lines are shown; read the file for ` +
         `the rest.]\n</repository-instructions ${frameNonce(context)}>`,
     );
     const { event, persisted } = expectInstructionsLine(captured.records);
     expect(event.level).toBeUndefined();
     expect(persisted).toMatchObject({
       state: "truncated",
-      byteCount: 59 + 60 * 272,
-      lineCount: 273,
+      byteCount: 59 + 60 * 1_091,
+      lineCount: 1_092,
       totalByteCount: 60 * 1_200,
       totalLineCount: 1_200,
       contentSha256: sha256(text),
@@ -368,7 +372,7 @@ describe("coding runtime repository instructions loader", () => {
   // What the one sanctioned read path can deliver today: the helper's wire protocol pins the
   // request cap to its 1 MiB content ceiling; a larger file comes back `too-large`. This pin
   // prevents a caller from overriding the server-owned resource bound. The loader separately
-  // bounds its initial context to 16 KiB and 800 lines.
+  // bounds its initial context to 64 KiB and 3,200 lines.
   it("pins the helper content ceiling the loader reads under: a wider request is not encodable", () => {
     expect(REPOSITORY_INSTRUCTIONS_MAX_BYTES).toBeLessThan(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
     expect(() =>
@@ -389,21 +393,23 @@ describe("coding runtime repository instructions loader", () => {
 
   it("truncates a file over the byte bound at a line boundary", () => {
     const line = "a".repeat(1_000);
-    const text = `${Array.from({ length: 40 }, () => line).join("\n")}\n`;
+    const text = `${Array.from({ length: 100 }, () => line).join("\n")}\n`;
 
     const bounded = boundRepositoryInstructions(text);
 
-    // 16 lines of 1,000 bytes plus 15 separators fit the 16 KiB bound; the 17th would exceed it.
-    expect(REPOSITORY_INSTRUCTIONS_MAX_BYTES).toBe(16_384);
+    // Owner decision 2026-11-24: 64 KiB and 3,200 lines. 65 lines of 1,000 bytes plus 64
+    // separators fit the bound; the 66th would exceed it.
+    expect(REPOSITORY_INSTRUCTIONS_MAX_BYTES).toBe(65_536);
+    expect(REPOSITORY_INSTRUCTIONS_MAX_LINES).toBe(3_200);
     expect(bounded.truncated).toBe(true);
-    expect(bounded.lineCount).toBe(16);
-    expect(bounded.byteCount).toBe(16 * 1_000 + 15);
+    expect(bounded.lineCount).toBe(65);
+    expect(bounded.byteCount).toBe(65 * 1_000 + 64);
     expect(bounded.byteCount).toBeLessThanOrEqual(REPOSITORY_INSTRUCTIONS_MAX_BYTES);
-    expect(bounded.totalLineCount).toBe(40);
+    expect(bounded.totalLineCount).toBe(100);
     expect(bounded.text.endsWith(line)).toBe(true);
     expect(bounded.contentSha256).toBe(sha256(text));
     expect(renderRepositoryInstructions(bounded)).toContain(
-      "[AGENTS.md truncated: the first 16 of 40 lines are shown; read the file for the rest.]",
+      "[AGENTS.md truncated: the first 65 of 100 lines are shown; read the file for the rest.]",
     );
   });
 
@@ -728,11 +734,11 @@ describe("native delivery through the runtime's own instruction plugin", () => {
     expect(existsSync(targetPath)).toBe(false);
   });
 
-  // The copy's bound used to be the initial-turn block's 16 KiB and 800 lines, so a standalone run
+  // The copy's bound used to be the initial-turn block's bound, so a standalone run
   // saw an AGENTS.md that a Keiko run did not (#3900 parity). The invariant that remains is that the
   // copy is bounded and says so: by the helper's ceiling, and by the run's prompt budget below.
-  it("copies the whole file a standalone run loads, past the block's 16 KiB and 800 lines", async () => {
-    const long = `${lines(2_000, "A line of the repository's working instructions,")}\n`;
+  it("copies the whole file a standalone run loads, past the block's 64 KiB and 3,200 lines", async () => {
+    const long = `${lines(5_000, "A line of the repository's working instructions,")}\n`;
     expect(Buffer.byteLength(long, "utf8")).toBeGreaterThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES * 4);
     const { port, records } = nativePort(sourceAnswering({ ok: true, text: long }).source);
     const targetPath = copyTarget();
@@ -740,13 +746,13 @@ describe("native delivery through the runtime's own instruction plugin", () => {
     await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
 
     const copy = readFileSync(targetPath, "utf8");
-    expect(copy).toContain("working instructions, 2000\n");
+    expect(copy).toContain("working instructions, 5000\n");
     expect(copy).not.toContain("truncated");
     const { persisted } = expectInstructionsLine(records);
     expect(persisted).toMatchObject({
       state: "attached",
       byteCount: Buffer.byteLength(long, "utf8"),
-      lineCount: 2_000,
+      lineCount: 5_000,
       limitByteCount: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
       estimatedTokens: estimateTokens(copy),
     });
@@ -1061,6 +1067,23 @@ describe("additional instruction sources in the native copy", () => {
       omittedSourceCount: 0,
     });
     expect(JSON.stringify(persisted)).not.toContain("STYLE-RULE");
+  });
+
+  // Owner decision 2026-11-24: an additional source is bounded like the root file (64 KiB), so the
+  // total allowance for additional sources must hold one at that bound instead of omitting it whole.
+  it("copies an additional source of the full per-source bound instead of omitting it", async () => {
+    const tree = homeTree();
+    const body = Array.from({ length: 60 }, (_, index) => String(index).padEnd(999, "g"));
+    writeFileSync(join(tree.config, "AGENTS.md"), `${body.join("\n")}\n`);
+    const { port, records } = discoveringPort(tree);
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toContain("59gggg");
+    expect(expectInstructionsLine(records).persisted).toMatchObject({
+      globalSourceCount: 1,
+      omittedSourceCount: 0,
+    });
   });
 
   it("copies the additional sources even when the workspace has no AGENTS.md", async () => {

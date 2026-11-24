@@ -179,6 +179,25 @@ describe("production runtime workspace authority", () => {
     expect(context.budget.maxPatchBytes).toBe(CODING_RUNTIME_PATCH_BUDGET_BYTES);
   });
 
+  // Owner decision 2026-11-24: Keiko runs on the customer's own models, so a run may work as long as
+  // the supported maximum allows, and the operator setting can only shorten it. The figures are
+  // policy this test owns.
+  it("mints every run with the longest supported duration by default", () => {
+    expect(MAX_RUNTIME_MAX_DURATION_MINUTES).toBe(480);
+    expect(DEFAULT_RUNTIME_MAX_DURATION_MINUTES).toBe(MAX_RUNTIME_MAX_DURATION_MINUTES);
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(fixture.input, fixture.request);
+    expect(context.budget.maxRuntimeMs).toBe(runtimeMaxDurationMs(480));
+  });
+
+  // Owner decision 2026-11-24: a long ordinary run makes several hundred to more than a thousand
+  // tool calls, so the count only stops a runaway loop and the duration ends ordinary work.
+  it("mints every run with a 10,000 tool-call budget", () => {
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(fixture.input, fixture.request);
+    expect(context.budget.maxToolCalls).toBe(10_000);
+  });
+
   it("validates the deployment maximum duration without an invalid-value fallback", () => {
     expect(configuredRuntimeMaxDurationMinutes(undefined)).toBe(
       DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -187,7 +206,6 @@ describe("production runtime workspace authority", () => {
     expect(configuredRuntimeMaxDurationMinutes(String(MAX_RUNTIME_MAX_DURATION_MINUTES))).toBe(
       MAX_RUNTIME_MAX_DURATION_MINUTES,
     );
-    expect(MAX_RUNTIME_MAX_DURATION_MINUTES).toBeGreaterThan(DEFAULT_RUNTIME_MAX_DURATION_MINUTES);
     for (const invalid of [
       "",
       "0",

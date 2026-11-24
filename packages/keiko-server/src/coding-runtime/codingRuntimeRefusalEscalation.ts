@@ -49,7 +49,9 @@ import {
 /** Unrepairable refusals since a run's last applied edit that settle it `edits-blocked` (ADR-0137 D3). */
 export const UNREPAIRABLE_EDIT_REFUSAL_BOUND = 3;
 /** Refusals of any kind since a run's last applied edit that settle it `edit-retries-exhausted`. */
-export const REPAIRABLE_EDIT_REFUSAL_BOUND = 6;
+// Owner decision 2026-11-24: Keiko runs on self-hosted models, so a long edit task may be refused
+// more often before it lands; only a runaway loop meets fifteen refusals without an applied edit.
+export const REPAIRABLE_EDIT_REFUSAL_BOUND = 15;
 
 /**
  * Every closed reason a governed edit refusal can reach the model with — the editor-agent conflict
@@ -246,7 +248,7 @@ type ReachedBound = Pick<
 >;
 
 // The bound a streak has met, the unrepairable one first: three refusals the environment dictated
-// name the operator's condition more precisely than six refusals of any kind do.
+// name the operator's condition more precisely than fifteen refusals of any kind do.
 function reachedBound(streak: RefusalStreak): ReachedBound | undefined {
   if (streak.unrepairable >= UNREPAIRABLE_EDIT_REFUSAL_BOUND) {
     return {
@@ -362,7 +364,7 @@ const CODING_RUNTIME_RUN_REFUSAL_ESCALATED_OPERATION = defineActivityLogOperatio
     },
     // The class of the bound that was met: `unrepairable` for `edits-blocked`, `repairable` for
     // `edit-retries-exhausted`. Not necessarily the class of `reasonCode`: a run that mixed refusals
-    // meets the higher bound on whichever refusal came sixth.
+    // meets the higher bound on whichever refusal came fifteenth.
     refusalClass: {
       type: "string",
       dataClass: "closed-enum",

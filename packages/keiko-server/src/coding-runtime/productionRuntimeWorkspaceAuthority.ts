@@ -50,9 +50,14 @@ import {
 // the envelope carries no cumulative prompt allowance, and the former
 // `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` setting is no longer read. Exhaustion of the duration
 // still fails the run's next delegation closed; nothing here bypasses that.
+// Owner decision 2026-11-24: Keiko runs on the customer's own models, so a new run gets the longest
+// supported duration and the setting can only shorten it. The duration ends ordinary work; the
+// tool-call count only stops a runaway loop, because a long ordinary run makes several hundred to
+// more than a thousand calls.
 const MINUTE_MS = 60_000;
-export const DEFAULT_RUNTIME_MAX_DURATION_MINUTES = 120;
 export const MAX_RUNTIME_MAX_DURATION_MINUTES = 480;
+export const DEFAULT_RUNTIME_MAX_DURATION_MINUTES = 480;
+const RUNTIME_MAX_TOOL_CALLS = 10_000;
 const POSITIVE_DECIMAL_INTEGER = /^[1-9]\d*$/u;
 
 function checkedRuntimeMaxDurationMinutes(value: number): number {
@@ -252,7 +257,7 @@ function contextFromActive(
     gates: ["human-approval"],
     budget: {
       maxRuntimeMs,
-      maxToolCalls: 256,
+      maxToolCalls: RUNTIME_MAX_TOOL_CALLS,
       // Owner decision 2026-10-28: 64 MiB per run, defined once next to the per-changeset cap.
       maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },

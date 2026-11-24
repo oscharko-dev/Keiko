@@ -11,8 +11,8 @@ import type { GatewayCallRequest } from "./gateway.js";
 import type { ModelGatewayLogSink } from "./observability.js";
 import type { ChatMessage, ModelProviderConfig, NormalizedResponse } from "./types.js";
 
-export const REASONING_HISTORY_MAX_BYTES = 32 * 1024 * 1024;
-export const REASONING_HISTORY_MAX_ENTRIES = 2_048;
+export const REASONING_HISTORY_MAX_BYTES = 128 * 1024 * 1024;
+export const REASONING_HISTORY_MAX_ENTRIES = 16_384;
 export const REASONING_HISTORY_TTL_MS = 30 * 60_000;
 
 const HISTORY_OPERATION = defineActivityLogOperation({

@@ -4,7 +4,7 @@
 // validated, and the one that gets past them stops at the missing launcher secret.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -177,9 +177,14 @@ describe("the read-only tools", () => {
   });
 
   it("list the task catalog with T13 without touching a repository or a server", () => {
+    // The row is read from the catalog the tool lists, so a retitled task needs no second edit here.
+    const tasks = JSON.parse(readFileSync(join(LAB, "tasks.json"), "utf8"));
+    const t13 = tasks.find((task) => task.id === "T13");
+    expect(t13).toMatchObject({ mode: "Ask for approval", baseline: "head+md" });
     const result = run("wb-run.mjs", ["--list-tasks"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/^T13 +Ask for approval +head\+md +Per-turn cost of a 30 KiB/mu);
+    const row = result.stdout.split("\n").find((line) => line.startsWith("T13 "));
+    expect(row?.split(/ {2,}/u)).toEqual(["T13", t13.mode, t13.baseline, t13.title]);
   });
 
   it("turn-profile.mjs reports a run with no events and refuses a run id that would match everything", () => {

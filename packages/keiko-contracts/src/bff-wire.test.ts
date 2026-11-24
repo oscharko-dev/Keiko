@@ -24,6 +24,7 @@ import {
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
   isChatToolBatchProgress,
+  isChatToolContextElision,
   isChatToolTurnEnd,
   chatTurnEndAnswerFingerprint,
   CHAT_TOOL_TURN_END_REASONS,
@@ -1802,5 +1803,32 @@ describe("the answer fingerprint of a turn ending (#4355)", () => {
     expect(chatTurnEndAnswerFingerprint(text)).toMatch(/^\d+:[0-9a-f]{8}$/u);
     for (const other of [`${text} `, text.replace("time", "tame"), "", "Here is the real answer."])
       expect(chatTurnEndAnswerFingerprint(other)).not.toBe(chatTurnEndAnswerFingerprint(text));
+  });
+});
+
+// Owner decision 2026-11-24: a turn whose older tool results reached the model only as a summary
+// says so. The stored record is one closed count, so a malformed one is dropped, never shown.
+describe("isChatToolContextElision", () => {
+  it("accepts exactly one positive safe-integer count", () => {
+    expect(isChatToolContextElision({ elidedResultCount: 1 })).toBe(true);
+    expect(isChatToolContextElision({ elidedResultCount: 4_096 })).toBe(true);
+  });
+
+  it("rejects an empty, malformed or widened record", () => {
+    for (const value of [
+      undefined,
+      null,
+      [],
+      "3",
+      {},
+      { elidedResultCount: 0 },
+      { elidedResultCount: -1 },
+      { elidedResultCount: 1.5 },
+      { elidedResultCount: Number.MAX_SAFE_INTEGER + 1 },
+      { elidedResultCount: "2" },
+      { elidedResultCount: 2, note: "older results" },
+    ]) {
+      expect(isChatToolContextElision(value)).toBe(false);
+    }
   });
 });

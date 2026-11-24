@@ -133,7 +133,7 @@ Read `coding-runtime.dev-lane.activated` first: `secureReadHelperSha256` and `se
 identify the admitted native helper without recording its path or source contents. The current
 helper reads whole files up to 1 MiB while `keiko_workspace_read` returns at most 64 KiB per model
 window; request fewer lines if the requested window itself is too large. The mapped profiles bound
-the initial root `AGENTS.md` block to 16 KiB and 800 lines; a native run's copy carries the whole
+the initial root `AGENTS.md` block to 64 KiB and 3,200 lines; a native run's copy carries the whole
 masked file within half the model's input window. Either reports `truncated` with whole-file
 counts/digest, the byte bound (`limitByteCount`) and the bytes left out (`omittedByteCount`).
 
@@ -262,7 +262,7 @@ the call's budget could not hold a repair. None of these lines carries the model
 - Where the provider declares no output limit and the model needs more than 16k, add the limit to the
   LiteLLM model info (`max_output_tokens`) so discovery carries it; the coding turn then reserves it.
 - Check the time arithmetic before raising allowances further: a whole-body (non-streaming) attempt is
-  bounded by the ten-minute buffered floor, so at 20 tokens per second about 12k tokens fit one
+  bounded by the thirty-minute buffered floor, so at 20 tokens per second about 36k tokens fit one
   attempt; a streamed read is bounded by the call budget instead. The reserve follows the transport,
   not the sidecar's own streaming switch. Only a model whose capability does not stream
   (`streaming: false`) meets the whole-body bound and keeps the shared 8k reserve rather than the
@@ -879,8 +879,8 @@ though the provider was still working. Separately, the first-run setup discovery
 15s timeout and dropped any candidate whose probe did not answer in time, with no way to tell "the
 gateway rejected this model" apart from "the gateway was just slow" in the result.
 
-Every interactive gateway surface now floors its effective wait: at least 5 minutes before treating
-silence as a failure on a stream, at least 30 minutes total for a streamed answer and 10 minutes
+Every interactive gateway surface now floors its effective wait: at least 15 minutes before treating
+silence as a failure on a stream, at least 30 minutes total for a streamed answer and 30 minutes
 for a buffered one, which cannot observe progress and therefore gets the whole budget per attempt
 (`GATEWAY_SILENCE_FLOOR_MS` / `GATEWAY_STREAM_BUDGET_FLOOR_MS` / `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`,
 `resilience.ts`) — a caller's own configuration may only raise these, never lower them. Readiness
@@ -948,7 +948,7 @@ attempts within about two seconds) and, once the circuit breaker opened, every f
 refused at once. The coding runtime then gave up after about ten of its own retries, so a three-minute
 overload failed the whole run although the gateway recovered.
 
-A coding turn now keeps retrying a transiently unavailable provider for the outage window (ten
+A coding turn now keeps retrying a transiently unavailable provider for the outage window (thirty
 minutes by default) with capped, jittered backoff and any announced `Retry-After`, and waits
 through an open breaker's cooldown instead of being refused. The coding sidecar route asks for this
 with an explicit outage policy on each of its model calls, buffered and streamed alike, so a turn
@@ -963,9 +963,9 @@ attempt count and its schema-repair corrections, then the turn fails with the in
 rejection as before.
 
 The window applies as configured: the turn's own budget is extended to the window plus one attempt,
-so `maxRetries: 0`, which LiteLLM routes commonly use, no longer caps it at ten minutes. Each
-attempt keeps its own bound. A silent attempt ends after at least five minutes without data when the
-answer is read over a stream, otherwise after at least ten minutes, and is retried only while the
+so `maxRetries: 0`, which LiteLLM routes commonly use, no longer caps it at one attempt. Each
+attempt keeps its own bound. A silent attempt ends after at least fifteen minutes without data when
+the answer is read over a stream, otherwise after at least thirty minutes, and is retried only while the
 window still has room: with the default window a silent streamed attempt is retried once and a
 silent whole-body attempt not at all.
 
@@ -1024,10 +1024,10 @@ defect, not at the window.
 **Resolution**
 
 - A run that recovered needs nothing; the gap in its timeline is the outage.
-- A turn that still failed after the window (ten minutes by default) points at a sustained outage:
+- A turn that still failed after the window (thirty minutes by default) points at a sustained outage:
   check the gateway's and model server's health and capacity before retrying the task.
 - The window is `codingOutageWindowMs` in the gateway configuration (milliseconds; default
-  `600000`, at most `3600000`). Raise it where peak-time overloads last longer or where a silent
+  `1800000`, at most `3600000`). Raise it where peak-time overloads last longer or where a silent
   attempt should be retried, or set `0` to restore the fail-fast attempt count for coding turns as
   well. Gateway Setup keeps the value, `0` included, when it rewrites the configuration.
 - A Workbench turn whose retries after a 429, a 5xx, a timeout or a refused connection carry

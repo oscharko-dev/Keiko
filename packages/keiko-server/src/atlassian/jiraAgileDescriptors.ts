@@ -17,7 +17,7 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS, JIRA_READ_DURATION_MS } from "./actionApprovalLimits.js";
 import { object, text } from "./jiraManagedSchemas.js";
 import { jiraSprintLifecycleSnapshotSchema } from "./jiraSprintLifecycleDescriptors.js";
 
@@ -434,7 +434,7 @@ function declaration(
         maxArgumentBytes: write ? 32768 : 8192,
         maxResultBytes: write ? WRITE_RESULT_BYTES : 262144,
         maxResultCount: write ? 1 : 100,
-        maxDurationMs: write ? 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS : 15000,
+        maxDurationMs: write ? 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS : JIRA_READ_DURATION_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

@@ -1872,6 +1872,7 @@
     "keiko-server/command-runner-errors",
     "keiko-server/command-runner-evidence",
     "keiko-server/command-runner-routes",
+    "keiko-server/command-wall-time",
     "keiko-server/content-redactor",
     "keiko-server/conversation-attachment-routes",
     "keiko-server/conversation-attachment-store",

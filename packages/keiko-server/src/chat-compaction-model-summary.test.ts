@@ -35,6 +35,8 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
+import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import { GATEWAY_ROUTE_DEADLINE_GRACE_MS } from "./gateway-route-deadline.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createInMemoryUiStore, type ChatMessage } from "./store/index.js";
@@ -504,9 +506,17 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(requireModelSummary(evidence, 2).status).toBe("valid");
   });
 
+  // A provider timeout under the gateway's whole-body floor gets the floor, one above it keeps its
+  // own value, and both carry the route grace; the timer ceiling caps an absurd value.
   it.each([
-    { providerTimeout: 30_000, expected: 601_000 },
-    { providerTimeout: 900_000, expected: 901_000 },
+    {
+      providerTimeout: 30_000,
+      expected: GATEWAY_BUFFERED_BUDGET_FLOOR_MS + GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+    },
+    {
+      providerTimeout: GATEWAY_BUFFERED_BUDGET_FLOOR_MS + 300_000,
+      expected: GATEWAY_BUFFERED_BUDGET_FLOOR_MS + 300_000 + GATEWAY_ROUTE_DEADLINE_GRACE_MS,
+    },
     { providerTimeout: 2_147_483_647, expected: 2_147_483_647 },
   ])(
     "aborts a stalled port at its bounded buffered backstop: $providerTimeout",

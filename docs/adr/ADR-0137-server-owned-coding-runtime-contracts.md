@@ -87,7 +87,7 @@ the global active pointer, so the read is bracketed by the run's own exact-works
 and after it (`exactWorkspaceRead`, shared with the auxiliary ports): a workspace switch while the
 run starts is recorded as `refused` with `workspace-unavailable` and never attaches another
 repository's file (#3873 review). On the mapped profiles the model receives the window that read
-would answer for the file's first 800 lines, cut at a line boundary to 16,384 bytes and to the
+would answer for the file's first 3,200 lines, cut at a line boundary to 65,536 bytes and to the
 bytes the turn still has under the sidecar prompt ceiling; a cut file ends with one explicit line
 naming the total line count. That block rides in the first message and is re-sent with every turn,
 so the context line records its estimated tokens, its per-turn cost against the run's prompt
@@ -114,7 +114,7 @@ bounded whole-file read admits ordinary large repository instructions and retain
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
 changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
-profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
+profiles remains capped at 64 KiB and 3,200 lines (16 KiB and 800 lines until the 2026-11-24 owner decision); the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
 whole-line prefix and reports `nextStartLine` like a window cut by `maxLines`, so "startLine 1,
 maxLines 5000" always answers; only a window whose first line alone exceeds the bound returns the
 existing `workspace-read-too-large` refusal (with model-facing guidance to search instead) and a
@@ -133,7 +133,7 @@ admitted. After a change the turn waits out the producer's watcher before its pr
 file the guided `init` command creates and a removal reach the next model call as the producer's
 own instruction update. The initial turn then attaches no block, so the text reaches the model
 once; the mapped profiles keep the first-message block. The copy carries the whole
-credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 16 KiB/800-line cut
+credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 64 KiB/3,200-line cut
 belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by a
 per-request copy budget, half the model's input window at three bytes per token
 (`repositoryInstructionsCopyBudget`, from the geometry the run launches with; about 168 KiB on a
@@ -158,8 +158,8 @@ through the secure native listing (bounded; `[...]` and `{...}` are refused, nev
 A project entry never names a file outside the workspace; a global entry may name the user's own
 file. A remote (`https://`) entry is pulled once per run, only for a run launched in Full access,
 through Keiko's egress with no redirect and no loopback or private target; below Full access it is
-refused. Every additional source passes the same credential projection and the 16 KiB/800-line bound
-under a line naming it (only the workspace root's file travels whole); together the additional sources stay within 48 KiB, and what does not fit is
+refused. Every additional source passes the same credential projection and the 64 KiB/3,200-line bound
+under a line naming it (only the workspace root's file travels whole); together the additional sources stay within three times that bound (192 KiB), so a source at the bound is never omitted whole, and what does not fit is
 omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
@@ -192,11 +192,13 @@ Minting requires a server-issued, action-bound, one-use human confirmation. The 
 itself is retained for the complete run so the existing registry remains the sole source of
 cumulative runtime/tool/patch budgets. One of those bounds is an operator setting, read once at
 composition and copied into every newly minted envelope: the envelope duration
-`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120; positive decimal integers from 1 to 480),
+`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 480, the maximum; positive decimal integers from 1 to 480),
 from which both `budget.maxRuntimeMs` and `expiresAt` derive. An invalid value fails the composition
 closed; the setting cannot alter an existing envelope or reset its usage, and a run that exhausts it
 still fails closed at its next delegation. The envelope carries no prompt-token bound (owner
-decision 2026-11-11, below). The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
+decision 2026-11-11, below). The cumulative tool-call allowance `budget.maxToolCalls` is not an
+operator setting either: every envelope is minted with 10,000 calls (owner decision 2026-11-24,
+below; previously 256), so the duration ends ordinary work and the count stops only a runaway loop. The cumulative patch allowance `budget.maxPatchBytes` is not an operator setting: every
 envelope is minted with `CODING_RUNTIME_PATCH_BUDGET_BYTES` (64 MiB, owner decision 2026-10-28;
 previously 256 KiB), eight changesets of the per-changeset cap of ADR-0125 D3, charged by the size of
 the diff each edit renders. Native context compaction changes subsequent request size, not
@@ -239,7 +241,7 @@ better guard against a model that loops unnoticed is tracked in #4346; the refus
 below already ends the known loop.
 A slow self-hosted model (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per
 turn) turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit, so the
-duration default is 120 minutes. The minted duration is reported body-free as `maxRuntimeMs` on
+duration default was raised to 120 minutes and, on 2026-11-24, to the 480-minute maximum. The minted duration is reported body-free as `maxRuntimeMs` on
 `coding-runtime.authority.minted`. Every other bound that must not be shorter than the run follows
 the configured duration: the safe-activity projection retains a run's feed for the duration plus a
 margin, and the OpenCode adapter bounds one submitted task's whole agent loop by the run's
@@ -251,13 +253,21 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
-**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the duration
+**Default envelope widened — owner decision (2026-10-07, PR #3876; the duration default is superseded below).** Raising the duration
 default widens the default Authority Envelope of every installation: four times the duration, and
 with `expiresAt` a minted run capability that lives up to 120 minutes instead of 30. The owner
 decided to ship 120 minutes for every installation, with `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`
 as the operator's opt-down, and a run still fails closed at that bound. (The same decision raised the
 prompt-token allowance tenfold; the allowance itself was removed on 2026-11-11, above.) Operators who
 need a per-provider cost bound configure a Model Gateway spend ceiling.
+
+**Longest duration and a loop-only tool-call bound — owner decision (2026-11-24).** Keiko runs on
+the customer's own models, so a bound that ends healthy work protects nothing. A long analysis on a
+self-hosted model reached the 256-call allowance and stopped unfinished; a long ordinary run makes
+several hundred to more than a thousand tool calls. The owner decided that every new run gets the
+longest supported duration (480 minutes, `DEFAULT_RUNTIME_MAX_DURATION_MINUTES` equals
+`MAX_RUNTIME_MAX_DURATION_MINUTES`; the setting remains the operator's opt-down) and a 10,000-call
+allowance that only a runaway loop reaches. Both bounds still fail the run's next delegation closed.
 
 The same aggregate answers a budget question without spending: `delegationFits` says whether one
 more delegation of a given usage would still fit the run's budget, for the same capability, run and
@@ -368,9 +378,10 @@ cannot change (below) — settle the run `failed` with `edits-blocked` once thre
 streak (`UNREPAIRABLE_EDIT_REFUSAL_BOUND`). Every refusal counts toward the second bound: an edit that
 does not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a
 missing precondition, an invalid changeset, or a refusal that carried no closed code keeps its
-guidance, and six refusals of any kind in the streak settle the run with `edit-retries-exhausted`
-(`REPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal that meets both bounds at once is named by the
-unrepairable one: three refusals the environment dictated say more than six of any kind.
+guidance, and fifteen refusals of any kind in the streak (six until the 2026-11-24 owner decision)
+settle the run with `edit-retries-exhausted` (`REPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal that meets
+both bounds at once is named by the unrepairable one: three refusals the environment dictated say
+more than fifteen of any kind.
 `EDIT_PREPARE_FAILED` is classified by its cause, not by its code alone: the edit port gives the
 facade the closed step that refused the edit before the editor route saw it and, for a failed
 governed read of a file the edit names, the closed read reason, and the facade reports both beside
@@ -1093,7 +1104,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   or `reasoning` for a provider that requires that spelling. No alias-name inference enables it.
   The gateway captures the successful complete response before display suppression; failed,
   cancelled and output-truncated attempts do not supply continuation. Its state is memory-only,
-  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads). A successful restore
+  bounded to 16,384 entries and 128 MiB (reasoning plus assistant payloads; 2,048 and 32 MiB until
+  the 2026-11-24 owner decision). A successful restore
   refreshes both expiry and eviction priority; idle entries expire
   after 30 minutes on the next lookup. Keys bind the trusted session/run, provider configuration,
   most recent human message and exact assistant payload. Conflicting successful reasoning for
@@ -1241,7 +1253,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 ## Amendment — the run status names a model gateway that is being retried (2026-10-07)
 
 Review of PR #3876 (F11/F21 of the live qualification, #3873): during a provider outage the coding
-sidecar gateway retries for its outage window (ADR-0003, default ten minutes), the turn waits
+sidecar gateway retries for its outage window (ADR-0003, then ten minutes by default, thirty since
+2026-11-24), the turn waits
 silently, and the run status read "Waiting for the model" for the whole window — the same words as a
 slow generation. A second thread of the same review found the same silence before a call's first
 attempt, where it is the circuit breaker or a provider cooldown, not a failed attempt, that holds

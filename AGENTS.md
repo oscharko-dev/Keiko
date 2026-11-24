@@ -107,6 +107,11 @@ before you change that area.
   `coding-repository` binding, and a Files title never names a different root than its tree shows.
 - **No prompt-token cap (2026-11-11):** never reintroduce a cumulative prompt-token allowance;
   cost control is the Model Gateway spend ceiling (ADR-0137, #4346).
+- **Work-ending limits (2026-11-24):** Keiko runs on the customer's own models, so a fixed bound
+  that ends healthy work is a defect. Coding runs get 480 minutes and 10,000 tool calls, Chat turns
+  the same; a bound stays only to protect memory, security, the model's context window or against a
+  runaway loop, and context trimming is shown, never silent. Never lower a raised default to ration
+  ordinary work.
 - **Knowledge Pods (2026-11-04):** local storage, no sharing roadmap or placeholders; the create
   dialog asks only for a name.
 - **Linux is a community tier (2026-11-12):** feature parity is promised for macOS and Windows

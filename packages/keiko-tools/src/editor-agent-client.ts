@@ -22,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
 import { parseEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
+import { DEFAULT_VERIFICATION_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 type EditorAgentConflictDetail = NonNullable<EditorAgentActionResult["conflict"]>;
 type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>[number];
@@ -56,16 +57,18 @@ const LANGUAGE_SERVER_WORST_CASE_MS = Math.max(
 );
 // A backstop for a server that never answers, not a bound on the analysis — the server bounds that —
 // so it takes the same 5-second margin over the server's worst case that #2298 established. Long, and
-// deliberately so: the verification budget (#2214) is 135 s for exactly this reason, and a caller
+// deliberately so: the verification budget (#2214) spans its run's ceiling for this reason, and a caller
 // that wants to give up sooner aborts through its own `signal`, which is honoured immediately.
 export const DEFAULT_EDITOR_AGENT_LANGUAGE_TIMEOUT_MS = LANGUAGE_SERVER_WORST_CASE_MS + 5_000;
 export const DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES = 256 * 1024;
 // Issue #2214 (AC7) — a verification run's own wall-time ceiling is DEFAULT_VERIFICATION_LIMITS.wallTimeMs
-// (120_000 ms). The synchronous, single-shot verification route holds its POST open until the run
-// resolves, so this call needs a timeout that spans that ceiling plus margin — NOT the shared 2-second
-// default, which would abort every real `npm test`/`npm run build`. Early cancellation still flows
-// through `request.signal`; this ceiling only bounds a run the caller does not cancel.
-export const DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS = 135_000;
+// (30 minutes since the 2026-11-24 owner decision). The synchronous, single-shot verification route
+// holds its POST open until the run resolves, so this call needs a timeout that spans that ceiling plus
+// a 15-second margin — NOT the shared 2-second default, which would abort every real `npm test`/`npm run
+// build`. Derived from the ceiling, so raising it can never leave this client cutting a run short.
+// Early cancellation still flows through `request.signal`; this only bounds a run nobody cancels.
+export const DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS =
+  DEFAULT_VERIFICATION_LIMITS.wallTimeMs + 15_000;
 
 export interface EditorAgentHttpTransportRequest {
   readonly method: "GET" | "POST";

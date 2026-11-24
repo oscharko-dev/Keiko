@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
+import { COMMAND_RUN_MAX_DURATION_MS } from "./command-wall-time.js";
 import {
   CommandDeniedError,
   DEFAULT_SANDBOX_POLICY,
@@ -1208,5 +1209,25 @@ describe("CommandRunnerManager — evidence", () => {
     await expect(
       manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
     ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
+  });
+});
+
+// Owner decision 2026-11-24: a task run may work for the command wall time (was 30 seconds).
+describe("CommandRunnerManager — command wall time", () => {
+  it("arms the run's timer at the command wall time and honours a longer request up to it", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const manager = makeManager(makeSpawn({ exitCode: 0 }));
+    for (const timeoutMs of [undefined, 600_000, COMMAND_RUN_MAX_DURATION_MS * 2]) {
+      const result = await manager.execute({
+        projectId: workspaceRoot,
+        taskId: "npm-script:test",
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      expect(result.failureReason).toBe("none");
+    }
+    const delays = timers.mock.calls.map((call) => call[1]);
+    expect(delays.filter((delay) => delay === COMMAND_RUN_MAX_DURATION_MS)).toHaveLength(2);
+    expect(delays).toContain(600_000);
+    expect(delays).not.toContain(COMMAND_RUN_MAX_DURATION_MS * 2);
   });
 });

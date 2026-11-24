@@ -243,12 +243,12 @@ in v1 (ADR-0128 D5, D7).
 Starting a sync creates a **sync job** you can poll and cancel. Each run is bounded by declared,
 non-wideneable defaults (ADR-0128 D5):
 
-| Bound           | Default    | Applies to                          |
-| --------------- | ---------- | ----------------------------------- |
-| Max items       | 2 000      | issues or pages per run             |
-| Max bytes       | 50 MB      | total normalized content per run    |
-| Max duration    | 15 minutes | wall-clock budget for one run       |
-| Max concurrency | 4          | concurrent paginated fetch requests |
+| Bound           | Default     | Applies to                          |
+| --------------- | ----------- | ----------------------------------- |
+| Max items       | 20 000      | issues or pages per run             |
+| Max bytes       | 256 MB      | total normalized content per run    |
+| Max duration    | 120 minutes | wall-clock budget for one run       |
+| Max concurrency | 4           | concurrent paginated fetch requests |
 
 Re-running a sync repeats the same bounded fetch over the same approved scope and applies changes
 incrementally. Change detection uses a per-item content fingerprint (a SHA-256 over the normalized
@@ -306,7 +306,7 @@ A built-in template, **"issues assigned to me"** (`assigned-to-me-open`), runs t
 issues assigned to the token identity, most recently updated first. You can also supply your own
 JQL.
 
-A live read is bounded: at most 100 results per call, a 15-second budget, and a fixed page ceiling.
+A live read is bounded: at most 100 results per call, a 60-second budget, and a fixed page ceiling.
 For the Cloud action surface, its disposition follows the read row of the mode matrix below: it is
 `review-required` in **Ask for approval** and **Supervised workspace** (the query is parked for
 approval, then executed on approve) and `allowed` in **Full access** when the Authority Envelope

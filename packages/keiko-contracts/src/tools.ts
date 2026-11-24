@@ -199,8 +199,8 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
 // server's approval challenge ceiling and the waits themselves, the catalog budget the tool is
 // settled at (its own work budget, this wait and the settlement grace), the sidecar tool bridge's
 // deadline and the generated plugin client's timeout, each outliving the one before it. A fixed
-// 30 s budget cut a waiting approval off long before its own five-minute ceiling (PR #3452, F44).
-export const GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS = 5 * 60 * 1_000;
+// 30 s budget cut a waiting approval off long before its own approval ceiling (PR #3452, F44).
+export const GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS = 60 * 60 * 1_000; // Owner decision 2026-11-24: 60 minutes.
 export const GOVERNED_TOOL_SETTLEMENT_GRACE_MS = 15_000;
 export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
   DEFAULT_SANDBOX_POLICY.defaultTimeoutMs +

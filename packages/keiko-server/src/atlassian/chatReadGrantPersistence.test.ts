@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { createNodeUiStore, type UiStore } from "../store/index.js";
 import { AtlassianActionApprovalRegistry } from "./actionApprovals.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import type { ChatReadGrantEntry, ChatReadGrantStore } from "./chatReadGrantState.js";
 
 const NOW = Date.parse("2026-10-27T12:00:00Z");
@@ -123,7 +124,10 @@ it("persists a granted read's restarted time, forward only and with its proof", 
   const registry = accepted(f);
   const later = NOW + 30_000;
   expect(registry.renewChatReadGrant(subject, NOW, NOW + 1_000)).toBeUndefined();
-  expect(registry.renewChatReadGrant(subject, NOW, NOW + 600_001)).toBeUndefined();
+  // A renewal may not outlive one approval lifetime from its request.
+  expect(
+    registry.renewChatReadGrant(subject, NOW, NOW + ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1),
+  ).toBeUndefined();
   const renewed = registry.renewChatReadGrant(subject, NOW, later + 60_000);
   expect(renewed).toMatchObject({
     state: "granted",

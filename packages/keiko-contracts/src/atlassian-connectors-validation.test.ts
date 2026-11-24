@@ -245,9 +245,10 @@ describe("validateAtlassianSyncBounds (narrow-only, ADR-0128 D5)", () => {
 
   it("rejects any widening beyond the D5 defaults", () => {
     for (const widened of [
-      bounds({ maxItems: 2_001 }),
-      bounds({ maxBytes: 50_000_001 }),
-      bounds({ maxDurationMs: 900_001 }),
+      // Owner decision 2026-11-24: the ceilings are 20,000 items, 256 MB and 120 minutes.
+      bounds({ maxItems: 20_001 }),
+      bounds({ maxBytes: 256_000_001 }),
+      bounds({ maxDurationMs: 7_200_001 }),
       bounds({ maxConcurrency: 5 }),
     ]) {
       expect(errorsOf(validateAtlassianSyncBounds(widened)).length).toBeGreaterThan(0);
@@ -359,9 +360,10 @@ describe("validateAtlassianSyncScope (hostile input)", () => {
     expectOk(validateAtlassianSyncScope(jiraScope({ jql: escaped })));
   });
 
+  // Owner decision 2026-11-24: the item ceiling is 20,000 (was 2,000).
   it("propagates widened bounds as scope errors", () => {
     const errors = errorsOf(
-      validateAtlassianSyncScope(jiraScope({ bounds: bounds({ maxItems: 5_000 }) })),
+      validateAtlassianSyncScope(jiraScope({ bounds: bounds({ maxItems: 20_001 }) })),
     );
     expect(errors.some((error) => error.startsWith("scope.bounds.maxItems"))).toBe(true);
   });

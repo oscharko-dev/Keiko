@@ -35,6 +35,7 @@ export function isolateCodingHistory(store: UiStore, history: CodingHistoryStore
       store.deleteChat(id);
     },
     updateChatToolTranscript: ordinaryTranscriptUpdater(store, requireOrdinary),
+    chatToolTranscriptSize: ordinaryTranscriptSize(store, requireOrdinary),
     createMessage: (message): ChatMessage => {
       requireOrdinary(message.chatId);
       return store.createMessage(message);
@@ -61,6 +62,17 @@ function ordinaryTranscriptUpdater(
     if (message === undefined) throw notFound("Message");
     requireOrdinary(message.chatId);
     store.updateChatToolTranscript(id, update, correlationId);
+  };
+}
+
+function ordinaryTranscriptSize(
+  store: UiStore,
+  requireOrdinary: (id: string) => void,
+): UiStore["chatToolTranscriptSize"] {
+  return (id): ReturnType<UiStore["chatToolTranscriptSize"]> => {
+    const size = store.chatToolTranscriptSize(id);
+    requireOrdinary(size.chatId);
+    return size;
   };
 }
 

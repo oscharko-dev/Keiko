@@ -84,9 +84,10 @@ defensively and passes explicit inactivity and total timeout bounds to the SDK. 
 additional fixed 30-second internal host ceiling or implicit SDK-default timeout. The external
 MCP client keeps its own adapter bounds: a 30-second inactivity budget that a server's progress
 notification resets, never beyond a 300-second hard cap (see the external client section below).
-External read descriptors declare 60 seconds, and write descriptors add the approval TTL; the
-catalog settlement ends the call at that declared duration, so progress cannot carry a catalog
-call past its descriptor, and the adapter cap is only the outer bound. Neither the declarations
+External read descriptors declare the adapter's 300-second cap plus the 15-second settlement grace
+(60 seconds until the 2026-11-24 owner decision), so the adapter's own typed timeout answers first,
+and write descriptors add the approval TTL; the catalog settlement ends the call at that declared
+duration, so progress cannot carry a catalog call past its descriptor. Neither the declarations
 nor progress can widen the adapter cap. Earlier caller cancellation and the enclosing task or authority deadline still end
 the invocation. Caller arguments and metadata cannot extend these bounds. Semantic Knowledge
 review reuses the gateway's normal buffered model-call bound; it adds no shorter inner

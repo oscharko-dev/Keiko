@@ -15,7 +15,7 @@ import {
   createToolDescriptor,
   createToolRef,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS, JIRA_READ_DURATION_MS } from "./actionApprovalLimits.js";
 import { object, text } from "./jiraManagedSchemas.js";
 
 const ID = {
@@ -273,7 +273,7 @@ function declaration(name: string, definition: Definition): ManagedMcpToolDeclar
         maxArgumentBytes: write ? 262144 : 8192,
         maxResultBytes: write ? 32768 : 262144,
         maxResultCount: definition.maxResultCount,
-        maxDurationMs: write ? 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS : 15000,
+        maxDurationMs: write ? 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS : JIRA_READ_DURATION_MS,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",
