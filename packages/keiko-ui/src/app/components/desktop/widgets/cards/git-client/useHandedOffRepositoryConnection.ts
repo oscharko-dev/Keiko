@@ -13,7 +13,7 @@
 // after a newer repository action of the window (the person picked another repository meanwhile)
 // only ends its hand-off and never moves the selection.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind, newClientCorrelationId, responseCorrelationIdOf } from "@/lib/http";
@@ -80,9 +80,11 @@ export function useHandedOffRepositoryConnection(
   const { handOffPath, client, actionSequence } = input;
   const { onStarted, onAdded, onFailed, onSettled, onSuperseded } = input;
   const claimedPathsRef = useRef<Set<string>>(new Set());
-  // The hand-off pending when an outcome arrives, which may be newer than the one it served.
+  // The hand-off pending when an outcome arrives, which may be newer than the one it served. It is
+  // updated in the commit that carries a newer hand-off, so an outcome landing before that commit's
+  // passive effects already sees it.
   const pendingHandOffRef = useRef(handOffPath);
-  useEffect((): void => {
+  useLayoutEffect((): void => {
     pendingHandOffRef.current = handOffPath;
     if (handOffPath === null) claimedPathsRef.current.clear();
   }, [handOffPath]);

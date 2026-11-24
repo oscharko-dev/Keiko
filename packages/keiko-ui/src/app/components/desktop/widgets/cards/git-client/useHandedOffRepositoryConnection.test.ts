@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { reportGitClientOperationDiagnostic } from "./git-client-operation-diagnostics";
@@ -60,6 +61,40 @@ function harness(overrides: Partial<HandedOffRepositoryConnectionInput> = {}): {
     ...overrides,
   };
   return { input, registration, registerRepository };
+}
+
+type Registration = Awaited<ReturnType<GitClientSeam["registerRepository"]>>;
+
+// A registration whose outcome the test delivers synchronously, at an exact point of a commit.
+function synchronousRegistration(): {
+  readonly result: ReturnType<GitClientSeam["registerRepository"]>;
+  readonly settle: (value: Registration) => void;
+} {
+  let onFulfilled: ((value: Registration) => void) | undefined;
+  const thenable = {
+    then(fulfilled: (value: Registration) => void): void {
+      onFulfilled = fulfilled;
+    },
+  };
+  return {
+    result: thenable as unknown as ReturnType<GitClientSeam["registerRepository"]>,
+    settle: (value): void => {
+      onFulfilled?.(value);
+    },
+  };
+}
+
+// Delivers the outcome in a layout effect of the commit that carries the newer hand-off, before
+// any passive effect of that commit ran.
+function useConnectionSettlingOnCommit(
+  input: HandedOffRepositoryConnectionInput,
+  settleOnNewerHandOff: () => void,
+): (path: string) => void {
+  const connect = useHandedOffRepositoryConnection(input);
+  useLayoutEffect((): void => {
+    if (input.handOffPath !== HANDED_OFF.path) settleOnNewerHandOff();
+  }, [input.handOffPath, settleOnNewerHandOff]);
+  return connect;
 }
 
 describe("useHandedOffRepositoryConnection (#4103 F2)", () => {
@@ -225,6 +260,36 @@ describe("useHandedOffRepositoryConnection (#4103 F2)", () => {
       expect(registerRepository).toHaveBeenCalledTimes(2);
     },
   );
+
+  // Independent audit of the CodeRabbit repair: an outcome that lands between the commit of a newer
+  // hand-off and that commit's passive effects must already see the newer hand-off.
+  it("treats a newer hand-off as pending from the commit that carries it", () => {
+    const registration = synchronousRegistration();
+    const { input } = harness();
+    const registerRepository = vi.fn<GitClientSeam["registerRepository"]>(
+      () => registration.result,
+    );
+    const settleOnNewerHandOff = (): void => {
+      registration.settle({ project: HANDED_OFF });
+    };
+    const { result, rerender } = renderHook(
+      (props: HandedOffRepositoryConnectionInput) =>
+        useConnectionSettlingOnCommit(props, settleOnNewerHandOff),
+      { initialProps: { ...input, client: { registerRepository } as unknown as GitClientSeam } },
+    );
+
+    act(() => {
+      result.current(HANDED_OFF.path);
+    });
+    rerender({
+      ...input,
+      client: { registerRepository } as unknown as GitClientSeam,
+      handOffPath: "/repos/newer",
+    });
+    expect(input.onSettled).not.toHaveBeenCalled();
+    expect(input.onAdded).not.toHaveBeenCalled();
+    expect(input.onSuperseded).toHaveBeenCalledOnce();
+  });
 
   it("leaves a newer repository action alone when a superseded registration settles", async () => {
     const { input, registration } = harness();
