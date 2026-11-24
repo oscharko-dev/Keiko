@@ -5044,9 +5044,11 @@ function gatewayOutcomeState(outcome: GatewayEvidenceOutcome): "running" | "canc
   return "failed";
 }
 
-// The provider answered: completely (`accepted`), or beyond the run's output budget (`output-limit`).
+// The provider answered completely (`accepted`). A call the gateway cut at its output bound
+// (`output-limit`) is a failed model call: the gateway publishes it as the run's last model-call
+// failure, so it never counts as an answer that supersedes an earlier failure.
 function gatewayOutcomeAnswered(outcome: GatewayEvidenceOutcome): boolean {
-  return outcome === "accepted" || outcome === "output-limit";
+  return outcome === "accepted";
 }
 
 function gatewayOutcomeFailureCode(

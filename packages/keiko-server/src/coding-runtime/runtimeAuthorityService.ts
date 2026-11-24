@@ -433,6 +433,7 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "prompt-allowance-exhausted",
         "envelope-duration-exhausted",
         "output-exhausted-repeated",
+        "output-limit-reached",
         "provider-unavailable",
         "model-turn-failed",
         "edits-blocked",
@@ -737,6 +738,10 @@ export class CodingRuntimeAuthorityService {
   // run is active at a time and only its latest model call can have ended its turn.
   private lastModelCallAdmission:
     { readonly runId: string; readonly refusal: ModelCallRefusal } | undefined;
+  // The run whose tool-call or patch budget refused a delegation (#4491): a single slot like the
+  // model-call admission above, kept after the refusal so the run's settlement can say that the
+  // budget, not the model, ended its verification. The budget never refills within a run.
+  private toolBudgetRefusedRunId: string | undefined;
   // The instant the most recently minted run's Authority Envelope runs out of time (F9, #3873): its
   // `expiresAt`, or its `maxRuntimeMs` after minting, whichever comes first.
   private mintedRuntimeDeadline:
@@ -1319,7 +1324,7 @@ export class CodingRuntimeAuthorityService {
     ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.resolveForDelegation(reference, {
+    const resolution = this.resolveForDelegation(reference, {
       liveFacts: input.liveFacts,
       delegationId: input.delegationId,
       idempotencyKey: input.idempotencyKey,
@@ -1328,6 +1333,23 @@ export class CodingRuntimeAuthorityService {
       deploymentCeiling: input.deploymentCeiling,
       nowIso: input.nowIso,
     });
+    this.recordBudgetRefusal(reference.runId, resolution);
+    return resolution;
+  }
+
+  // The delegation was refused for the run's own budget: remember it for the run's settlement.
+  private recordBudgetRefusal(runId: string, resolution: CodingRuntimeResolution): void {
+    if (!resolution.ok && resolution.reason === "authority-budget-exceeded")
+      this.toolBudgetRefusedRunId = runId;
+  }
+
+  /**
+   * #4491: whether the run's tool-call or patch budget refused a delegation. Read when a run settles
+   * without a passing check, so the Workbench says the budget was used up instead of leaving the
+   * model to be sent back to a check it can no longer start.
+   */
+  public toolBudgetExhausted(runId: string): boolean {
+    return this.toolBudgetRefusedRunId === runId;
   }
 
   /**

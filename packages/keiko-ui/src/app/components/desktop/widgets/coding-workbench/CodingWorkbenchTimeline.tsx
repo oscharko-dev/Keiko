@@ -2,8 +2,10 @@
 "use client";
 
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -33,13 +35,20 @@ import {
 } from "@/lib/coding-workbench-interaction";
 import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
+import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { SupportReportButton } from "../../SupportReportButton";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
-import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
+import {
+  eventDetail,
+  eventOffersErrorReport,
+  eventOffersRunCheck,
+  eventTitle,
+} from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
@@ -148,6 +157,8 @@ type TimelineItem =
       readonly order: number;
       readonly event: CodingWorkbenchRuntimeSseEvent;
       readonly turnFailureProgress: TurnFailureProgress;
+      /** A later check of the same verifier in the same run replaced this check's verdict. */
+      readonly superseded: boolean;
     };
 
 export interface CodingWorkbenchTimelineProps {
@@ -165,7 +176,17 @@ export interface CodingWorkbenchTimelineProps {
   readonly activity: UseCodingWorkbenchSafeActivityResult;
   readonly questions: UseCodingWorkbenchQuestionsResult;
   readonly focusRef?: RefObject<HTMLHeadingElement | null>;
+  /**
+   * Asks the task's model to run the project's check, as the person's own request. Present only
+   * while a new request can be sent; the card of a run whose changes were not checked offers it
+   * as "Run the check now" (#4491).
+   */
+  readonly onRunCheck?: (() => void) | undefined;
 }
+
+// The action reaches the failure card through a context: the card sits several rows below the
+// timeline, and none of those rows otherwise carries an action.
+const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 
 export function Timeline({
   active = false,
@@ -174,6 +195,7 @@ export function Timeline({
   activity,
   questions,
   focusRef,
+  onRunCheck,
 }: CodingWorkbenchTimelineProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
@@ -186,24 +208,26 @@ export function Timeline({
   if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
-    <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-      <TimelineHeading titleRef={titleRef} t={t} />
-      <ActivityStatus activity={activity} attention={attention} t={t} />
-      <RunDetailsToggle
-        visible={events.length > 0}
-        expanded={showEvents}
-        onToggle={() => setShowEvents(!showEvents)}
-        t={t}
-      />
-      <QuestionSummary questions={questions} />
-      <TimelineContent
-        items={items}
-        timeline={timeline}
-        questions={questions}
-        restoreFocusRef={titleRef}
-        t={t}
-      />
-    </section>
+    <RunCheckContext.Provider value={onRunCheck}>
+      <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+        <TimelineHeading titleRef={titleRef} t={t} />
+        <ActivityStatus activity={activity} attention={attention} t={t} />
+        <RunDetailsToggle
+          visible={events.length > 0}
+          expanded={showEvents}
+          onToggle={() => setShowEvents(!showEvents)}
+          t={t}
+        />
+        <QuestionSummary questions={questions} />
+        <TimelineContent
+          items={items}
+          timeline={timeline}
+          questions={questions}
+          restoreFocusRef={titleRef}
+          t={t}
+        />
+      </section>
+    </RunCheckContext.Provider>
   );
 }
 
@@ -216,7 +240,7 @@ function useShownItems(
     () =>
       groupCompletedTools(
         allItems.filter(
-          (item) => showEvents || item.kind !== "event" || eventTone(item.event) === "attention",
+          (item) => showEvents || item.kind !== "event" || itemTone(item) === "attention",
         ),
       ),
     [allItems, showEvents],
@@ -298,25 +322,39 @@ function timelineEventItems(
 ): Extract<TimelineItem, { kind: "event" }>[] {
   const newestByRun = new Map<string, CodingWorkbenchRuntimeSseEvent>();
   const lastFailureByRun = new Map<string, string>();
+  const lastCheckByVerifier = new Map<string, string>();
   for (const event of events) {
     newestByRun.set(event.runId, event);
     if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") {
       lastFailureByRun.set(event.runId, event.cursor);
     }
+    const verifier = verifierKey(event);
+    if (verifier !== undefined) lastCheckByVerifier.set(verifier, event.cursor);
   }
-  return events.map((event, index) => ({
-    kind: "event",
-    id: `event:${event.runId}:${event.cursor}`,
-    occurredAt: event.occurredAt,
-    order: index,
-    event,
-    turnFailureProgress: turnFailureProgress(
+  return events.map((event, index) => {
+    const verifier = verifierKey(event);
+    return {
+      kind: "event",
+      id: `event:${event.runId}:${event.cursor}`,
+      occurredAt: event.occurredAt,
+      order: index,
       event,
-      newestByRun.get(event.runId),
-      lastFailureByRun.get(event.runId),
-      activeRunId,
-    ),
-  }));
+      turnFailureProgress: turnFailureProgress(
+        event,
+        newestByRun.get(event.runId),
+        lastFailureByRun.get(event.runId),
+        activeRunId,
+      ),
+      superseded: verifier !== undefined && lastCheckByVerifier.get(verifier) !== event.cursor,
+    };
+  });
+}
+
+// A check is replaced by the next check of the same verifier in the same run: a failed test run
+// the model then repaired is history, not a verdict that still needs attention.
+function verifierKey(event: CodingWorkbenchRuntimeSseEvent): string | undefined {
+  if (event.kind !== "runtime-event" || event.verificationSummary === undefined) return undefined;
+  return `${event.runId}\u0000${event.verificationSummary.verifierId}`;
 }
 
 function turnFailureProgress(
@@ -927,20 +965,49 @@ function MessageRow({
       aria-setsize={total}
       data-timeline-kind="message"
     >
-      <article className={styles.timelineBody} data-message-role={item.message.role}>
-        {/* The agent's role is announced, not drawn above every step: repeated on each message
-            between tool rows it was the loudest text of the timeline (#3897 UI review). */}
-        <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
-          {t(`codingWorkbench.activity.role.${item.message.role}`)}
-        </p>
-        {item.message.reasoning === undefined ? null : (
-          <ModelReasoning reasoning={item.message.reasoning} t={t} />
-        )}
-        <div className={styles.messageText}>
-          <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
-        </div>
-      </article>
+      {item.message.origin === "keiko" ? (
+        <KeikoNote message={item.message} t={t} />
+      ) : (
+        <article className={styles.timelineBody} data-message-role={item.message.role}>
+          {/* The agent's role is announced, not drawn above every step: repeated on each message
+              between tool rows it was the loudest text of the timeline (#3897 UI review). */}
+          <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
+            {t(`codingWorkbench.activity.role.${item.message.role}`)}
+          </p>
+          {item.message.reasoning === undefined ? null : (
+            <ModelReasoning reasoning={item.message.reasoning} t={t} />
+          )}
+          <div className={styles.messageText}>
+            <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
+          </div>
+        </article>
+      )}
     </li>
+  );
+}
+
+// #4491: a turn Keiko dispatched itself (a continuation of the person's accepted request) is never
+// shown as the person's own message. It reads as a compact note labelled as Keiko's, collapsed until
+// the reader opens it, and it is told apart by the message's own origin, never by its text.
+function KeikoNote({
+  message,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <article className={styles.timelineBody} data-message-role="user" data-message-origin="keiko">
+      <details className={styles.cmpKeikoNote}>
+        <summary className={styles.cmpActivitySummary}>
+          <span>{t("codingWorkbench.activity.role.keiko")}</span>
+        </summary>
+        <p className={styles.cmpKeikoNoteText}>
+          {message.segments.map((segment) => segment.text).join("")}
+          {truncationFor(message, t) ?? null}
+        </p>
+      </details>
+    </article>
   );
 }
 
@@ -1377,7 +1444,7 @@ function EventRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
-  const tone = eventTone(item.event);
+  const tone = itemTone(item);
   const detail = timelineEventDetail(item, t);
   return (
     <li
@@ -1397,8 +1464,42 @@ function EventRow({
         </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
+        <RunFailureReport event={item.event} t={t} />
       </details>
     </li>
+  );
+}
+
+/**
+ * A run that settled `failed` offers the existing user-initiated error report. The server uses the
+ * run id as the run's Activity Log correlation id, so the report selects that run's lines; an id
+ * that is not a valid correlation id falls back to the most recent registered failure. A run whose
+ * changes were not checked offers "Run the check now" instead (#4491): nothing broke inside Keiko,
+ * and the button is the person's own request to run the check, so it is shown as their message.
+ */
+function RunFailureReport({
+  event,
+  t,
+}: {
+  readonly event: CodingWorkbenchRuntimeSseEvent;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const onRunCheck = useContext(RunCheckContext);
+  if (onRunCheck !== undefined && eventOffersRunCheck(event, true)) {
+    return (
+      <p className={styles.timelineDetail} data-run-check="">
+        <button type="button" className={styles.cmpRunCheckAction} onClick={onRunCheck}>
+          {t("codingWorkbench.event.runCheck.action")}
+        </button>
+      </p>
+    );
+  }
+  if (!eventOffersErrorReport(event)) return null;
+  const correlationId = isActivityLogCorrelationId(event.runId) ? event.runId : undefined;
+  return (
+    <p className={styles.timelineDetail} data-run-failure-report="">
+      <SupportReportButton correlationId={correlationId} errorKey={`coding-run-${event.runId}`} />
+    </p>
   );
 }
 
@@ -1509,6 +1610,13 @@ function VerificationDetail({
       </p>
     </div>
   );
+}
+
+// A replaced check stays in the run details, closed: only the latest verdict asks for attention.
+function itemTone(
+  item: Extract<TimelineItem, { kind: "event" }>,
+): "attention" | "routine" | "success" {
+  return item.superseded ? "routine" : eventTone(item.event);
 }
 
 function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {

@@ -1004,3 +1004,16 @@ describe("plan agent directory (#3897)", () => {
     expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(1);
   });
 });
+
+// #4491: the governed profile asks for verification up front and exempts documentation alone.
+describe("governed system prompt verification step", () => {
+  it("verifies code edits, exempts documentation-only changes and reports an environment blocker once", () => {
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("Verify after your code edits");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("documentation files alone");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("needs no verification");
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain(
+      "say so once with the exact cause and finish",
+    );
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("never retry it in a loop");
+  });
+});

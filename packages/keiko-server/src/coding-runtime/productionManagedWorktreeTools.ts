@@ -2734,6 +2734,7 @@ function publishVerification(
       passedCount: report.counts.passed,
       failedCount: failedCount(report),
       ...(report.counts.denied === 0 ? {} : { deniedCount: report.counts.denied }),
+      ...(notRunCount(report) === 0 ? {} : { notRunCount: notRunCount(report) }),
       skippedCount: report.counts.skipped,
       durationMs: report.durationMs,
     },
@@ -3041,6 +3042,12 @@ function verificationStatus(
   if (overallStatus === "passed") return "passed";
   if (overallStatus === "skipped") return "partial";
   return "failed";
+}
+
+// Steps that never ran to a verdict: only a failed or timed-out step is a check that ran and did
+// not pass (#4491).
+function notRunCount(report: VerificationReport): number {
+  return report.counts.denied + report.counts.cancelled + report.counts["resource-exceeded"];
 }
 
 function failedCount(report: VerificationReport): number {

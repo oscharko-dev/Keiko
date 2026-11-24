@@ -1,11 +1,12 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type {
   CodingHistoryTask,
   CodingTaskExportFormat,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { FOLDER_WORKSPACE_BRANCH } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { ApiError } from "@/lib/api";
+import { useLocale } from "@/lib/i18n";
 import {
   CODING_HISTORY_CHANGED,
   exportCodingTask,
@@ -255,7 +256,7 @@ function HistoryFilters({
   const t = useCodingWorkbenchTranslate();
   return (
     <>
-      <div className={styles.cmpTabs} aria-label={t("codingWorkbench.history.filter")}>
+      <fieldset className={styles.cmpTabs} aria-label={t("codingWorkbench.history.filter")}>
         {(["active", "completed"] as const).map((value) => (
           <button
             key={value}
@@ -267,9 +268,9 @@ function HistoryFilters({
             {history.tasks.filter((task) => task.status === value).length}
           </button>
         ))}
-      </div>
-      {history.error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
-      {history.loading ? <output>{t("codingWorkbench.history.loading")}</output> : null}
+      </fieldset>
+      {history.error ? <p role="alert">{t("codingWorkbench.history.listError")}</p> : null}
+      {history.loading ? <output>{t("codingWorkbench.history.listLoading")}</output> : null}
       <button
         className={`${styles.cmpSecondary} ${styles.cmpRefresh}`}
         type="button"
@@ -302,9 +303,7 @@ function HistoryItem({
         <span>
           {repositoryName(task.projectPath)} · {branch}
         </span>
-        <time dateTime={new Date(task.updatedAt).toISOString()}>
-          {new Date(task.updatedAt).toLocaleString()}
-        </time>
+        <UpdatedAt updatedAt={task.updatedAt} />
       </button>
       <div className={styles.cmpItemActions}>
         <RenameTask task={task} />
@@ -312,6 +311,25 @@ function HistoryItem({
       </div>
     </li>
   );
+}
+
+// One formatter per app locale, shared by every row (#4491 audit).
+const updatedAtFormats = new Map<string, Intl.DateTimeFormat>();
+
+function updatedAtFormat(locale: string): Intl.DateTimeFormat {
+  let format = updatedAtFormats.get(locale);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+    updatedAtFormats.set(locale, format);
+  }
+  return format;
+}
+
+function UpdatedAt({ updatedAt }: { readonly updatedAt: number }): ReactNode {
+  const locale = useLocale();
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return <time dateTime={date.toISOString()}>{updatedAtFormat(locale).format(date)}</time>;
 }
 
 const EXPORT_FORMATS = [
@@ -359,14 +377,31 @@ function ExportTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
   );
 }
 
+// The Rename button is replaced by the form while editing; focus returns to it afterwards.
+function useReturnFocus(
+  editing: boolean,
+): readonly [RefObject<HTMLButtonElement | null>, { current: boolean }] {
+  const button = useRef<HTMLButtonElement>(null);
+  const pending = useRef(false);
+  useEffect(() => {
+    if (!editing && pending.current) {
+      pending.current = false;
+      button.current?.focus();
+    }
+  }, [editing]);
+  return [button, pending];
+}
+
 function RenameTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [error, setError] = useState(false);
+  const [renameButton, returnFocus] = useReturnFocus(editing);
   const save = async (): Promise<void> => {
     try {
       await updateCodingTask(task.id, { title: title.trim() });
+      returnFocus.current = true;
       setEditing(false);
       setError(false);
     } catch (cause) {
@@ -382,12 +417,14 @@ function RenameTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
           onChange={setTitle}
           onSave={() => void save()}
           onCancel={() => {
+            returnFocus.current = true;
             setEditing(false);
             setError(false);
           }}
         />
       ) : (
         <button
+          ref={renameButton}
           className={styles.cmpSecondary}
           type="button"
           onClick={() => {
@@ -399,7 +436,7 @@ function RenameTask({ task }: { readonly task: CodingHistoryTask }): ReactNode {
           {t("codingWorkbench.history.rename")}
         </button>
       )}
-      {error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
+      {error ? <p role="alert">{t("codingWorkbench.history.renameError")}</p> : null}
     </>
   );
 }

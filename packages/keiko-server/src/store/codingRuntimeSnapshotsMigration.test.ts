@@ -22,15 +22,19 @@ const CAUSES = [
 ] as const;
 
 function v80Database(): DatabaseSync {
+  return databaseAtVersion(80);
+}
+
+function databaseAtVersion(version: number): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   db.exec("PRAGMA foreign_keys = ON");
   for (const migration of MIGRATIONS) {
-    if (migration.version > 80) break;
+    if (migration.version > version) break;
     db.exec(migration.sql);
     migration.apply?.(db);
   }
-  db.exec(`PRAGMA user_version = 80;
+  db.exec(`PRAGMA user_version = ${String(version)};
     INSERT INTO projects (path, name, created_at, last_opened_at) VALUES ('/fixture','Fixture',1,1);
     INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)
       VALUES ('chat-1','/fixture','Fixture','model',1,1);
@@ -78,7 +82,11 @@ describe("V81 supervisor-refusal causes", () => {
     const db = v80Database();
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").all();
     runMigrations(db);
-    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(before);
+    // The one column a later migration appended (v83 `verification_gap`, #4491) reads NULL for a
+    // row that predates it; every other value carries through unchanged.
+    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(
+      before.map((row) => ({ ...row, verification_gap: null })),
+    );
     expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
     expect(
       db
@@ -104,13 +112,23 @@ describe("V81 supervisor-refusal causes", () => {
   it("changes nothing of the table but the list of failure codes", () => {
     const db = v80Database();
     const shape = (): unknown => ({
-      columns: db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all(),
+      columns: db
+        .prepare("PRAGMA table_info(coding_runtime_snapshots)")
+        .all()
+        .filter((column) => column.name !== LATER_COLUMN),
       foreignKeys: db.prepare("PRAGMA foreign_key_list(coding_runtime_snapshots)").all(),
       definition: tableDefinition(db),
     });
     const before = shape();
     runMigrations(db);
+    // A column a later migration appended (v83, #4491) is the only addition the shape may show.
     expect(shape()).toEqual(before);
+    expect(
+      db
+        .prepare("PRAGMA table_info(coding_runtime_snapshots)")
+        .all()
+        .some((column) => column.name === LATER_COLUMN),
+    ).toBe(true);
   });
 
   // A store may carry an orphan from before a constraint was enforced. It is not the rebuild's
@@ -129,7 +147,28 @@ describe("V81 supervisor-refusal causes", () => {
   });
 });
 
+describe("V82 output-limit cause", () => {
+  it("denies the cause at v81 and admits it after v82, still refusing an invented one", () => {
+    const db = databaseAtVersion(81);
+    expect(() => {
+      settle(db, "output-limit-reached");
+    }).toThrow(/CHECK constraint failed/u);
+    runMigrations(db);
+    settle(db, "output-limit-reached");
+    settle(db, "output-exhausted-repeated");
+    expect(() => {
+      settle(db, "output-limit-invented");
+    }).toThrow(/CHECK constraint failed/u);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
 // The stored CREATE TABLE text with the one part V81 is allowed to change taken out.
+// The column v83 appended to the table; the V81 and V82 rebuilds are judged without it.
+const LATER_COLUMN = "verification_gap";
+
 function tableDefinition(db: DatabaseSync): string {
   const row = db
     .prepare(
@@ -139,5 +178,9 @@ function tableDefinition(db: DatabaseSync): string {
   return row.sql
     .replace(/failure_code IN \([^)]*\)/u, "failure_code IN (…)")
     .replace(/"?coding_runtime_snapshots(?:_v\d+)?"?/u, "coding_runtime_snapshots")
-    .replaceAll(/\s+/gu, " ");
+    .replaceAll(/\s+/gu, " ")
+    .replace(
+      /, verification_gap TEXT CHECK \(verification_gap IS NULL OR verification_gap IN \([^)]*\)\)/u,
+      "",
+    );
 }

@@ -163,3 +163,21 @@ describe("native OpenCode context interface", () => {
     expect(first.system[0]).not.toBe(next.system[0]);
   });
 });
+
+// #4491: verification is asked for up front, not nagged for at the end of a run, in every profile's
+// own instructions: code is checked before it is called complete, documentation alone needs no
+// check, and an environment that prevents a check is reported once, never retried in a loop.
+describe("up-front verification instructions", () => {
+  it.each([
+    ["the mapped addendum", OPENCODE_NATIVE_CONTEXT_ADDENDUM],
+    ["the native profile addendum", OPENCODE_NATIVE_PROFILE_CONTEXT_ADDENDUM],
+  ])(
+    "asks %s for documentation-only changes without a check and a once-only blocker report",
+    (_label, text) => {
+      expect(text).toContain("documentation files alone");
+      expect(text).toContain("reason outside the task");
+      expect(text).toContain("state the exact cause once and finish");
+      expect(text).toContain("never retry it in a loop");
+    },
+  );
+});

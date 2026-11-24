@@ -36,6 +36,12 @@ export interface CodingRuntimeTerminalFacts {
    * attributed to an unavailable provider.
    */
   readonly lastModelCallProviderUnavailable?: ((runId: string) => boolean) | undefined;
+  /**
+   * True when the gateway itself ended the run's most recent failed model call at its output bound
+   * (a cut reasoning or answer stream), which no repair preceded. Absent, an `output-exhausted` call
+   * is the provider's own exhaustion that survived the gateway's repair.
+   */
+  readonly lastModelCallGatewayCut?: ((runId: string) => boolean) | undefined;
 }
 
 export type CodingRuntimeTerminalFailureCode = Extract<
@@ -43,6 +49,7 @@ export type CodingRuntimeTerminalFailureCode = Extract<
   | "runtime-failed"
   | "envelope-duration-exhausted"
   | "output-exhausted-repeated"
+  | "output-limit-reached"
   | "provider-unavailable"
   | "model-turn-failed"
 >;
@@ -90,27 +97,29 @@ export function classifyTerminalFailure(
     return { failureCode: "runtime-failed", basis: "no-model-call-failure" };
   }
   return {
-    failureCode: modelCallFailureCode(
-      modelCallFailure,
-      facts.lastModelCallProviderUnavailable?.(runId) === true,
-    ),
+    failureCode: modelCallFailureCode(modelCallFailure, {
+      providerUnavailable: facts.lastModelCallProviderUnavailable?.(runId) === true,
+      gatewayCut: facts.lastModelCallGatewayCut?.(runId) === true,
+    }),
     basis: "model-call-failure",
     modelCallFailure,
   };
 }
 
-// `output-exhausted` ends a run only once it repeated: the gateway answers a first exhaustion with
-// one steered repair (F17) and the runtime retries a turn the gateway did not refuse, so the run's
-// last failed call exhausted the output budget again after that repair or those retries.
+// A provider's `output-exhausted` ends a run only once it repeated: the gateway answers a first
+// exhaustion with one steered repair (F17) and the runtime retries a turn the gateway did not
+// refuse, so the run's last failed call exhausted the output budget again after that repair or
+// those retries. A call the gateway cut itself at its output bound (`gatewayCut`) was ended
+// mid-stream or at its first answer, before any repair could run, so it is named without "again".
 function modelCallFailureCode(
   modelCallFailure: CodingWorkbenchTurnFailureCode,
-  providerUnavailable: boolean,
+  evidence: { readonly providerUnavailable: boolean; readonly gatewayCut: boolean },
 ): CodingRuntimeTerminalFailureCode {
   if (PROVIDER_UNAVAILABLE_FAILURES.has(modelCallFailure)) return "provider-unavailable";
-  if (modelCallFailure === "provider-failed" && providerUnavailable) return "provider-unavailable";
-  return modelCallFailure === "output-exhausted"
-    ? "output-exhausted-repeated"
-    : "model-turn-failed";
+  if (modelCallFailure === "provider-failed" && evidence.providerUnavailable)
+    return "provider-unavailable";
+  if (modelCallFailure !== "output-exhausted") return "model-turn-failed";
+  return evidence.gatewayCut ? "output-limit-reached" : "output-exhausted-repeated";
 }
 
 /**

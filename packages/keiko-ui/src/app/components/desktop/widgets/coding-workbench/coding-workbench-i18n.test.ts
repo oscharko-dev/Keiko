@@ -39,6 +39,29 @@ describe("Coding Workbench translations", () => {
     }
   });
 
+  // The German Workbench addresses the person informally, like "Deine Administration" above. A
+  // formal "Sie" or "Ihr…" inside a sentence mixes both forms; a sentence-initial "Sie" is the third
+  // person (a message, the runtime) and stays.
+  it("addresses the person informally in every German sentence", () => {
+    const formal = /[^.!?—\s]\s+(?:Sie|Ihnen|Ihre?[mnrs]?)\b|^(?:Ihnen|Ihre?[mnrs]?)\b/u;
+    // Controls: the pattern still flags a formal address and spares the third person.
+    for (const sentence of [
+      "Starten Sie Keiko neu.",
+      "Sie benötigt Ihre Eingabe.",
+      "bis Sie antworten",
+    ])
+      expect(formal.test(sentence), sentence).toBe(true);
+    for (const sentence of [
+      "Nachricht gesendet. Sie erreicht die Aufgabe.",
+      "Sie trägt keine Signatur.",
+    ])
+      expect(formal.test(sentence), sentence).toBe(false);
+    const mixed = Object.entries(DE_CODING_WORKBENCH_MESSAGES)
+      .filter(([, sentence]) => formal.test(sentence))
+      .map(([key]) => key);
+    expect(mixed).toEqual([]);
+  });
+
   // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
   // runtime that is not release-qualified.
   it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {
@@ -574,6 +597,19 @@ describe("Coding Workbench translations", () => {
       /internen Fehler/iu,
     );
   });
+
+  it.each([
+    "codingWorkbench.event.failure.runtime",
+    "codingWorkbench.event.failure.generic",
+  ] as const)(
+    "sends a failed run's reader to the error report, not the Activity Log, in %s",
+    (key) => {
+      expect(translateCodingWorkbench("en", key)).not.toMatch(/Activity Log/u);
+      expect(translateCodingWorkbench("en", key)).toMatch(/error report/iu);
+      expect(translateCodingWorkbench("de", key)).not.toMatch(/Activity Log|Aktivitätsprotokoll/u);
+      expect(translateCodingWorkbench("de", key)).toMatch(/Fehlerbericht/u);
+    },
+  );
 
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(

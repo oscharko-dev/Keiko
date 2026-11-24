@@ -589,7 +589,7 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     const facet = createCodingToolNativeSettlementFacet(undefined, {
       observeEditOutcome: (outcome): void => {
         edits.count += 1;
-        if (outcome.kind === "applied") ledger.edit(RUN_ID);
+        if (outcome.kind === "applied") ledger.edit(RUN_ID, outcome.changedPaths);
       },
       verification: {
         revision: () => ledger.verificationRevision(RUN_ID),
@@ -624,6 +624,38 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     facet.verificationAdmitted?.(call("call_test"), "test");
     facet.settled({ ...call("call_test"), ...passedCheck });
     expect(ledger.needsVerification(RUN_ID)).toBe(false);
+  });
+
+  // #4491: the files an admitted native edit named reach the ledger with its settlement, so an
+  // edit of documentation alone needs no check and an edit that named none is code.
+  it("hands the named files to the ledger and asks no check for documentation alone", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({
+      ...call("call_docs"),
+      tool: "write",
+      state: "succeeded",
+      changedPaths: ["README.md", "docs/guide.md"],
+    });
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+    expect(ledger.documentationOnly(RUN_ID)).toBe(true);
+    facet.settled({
+      ...call("call_code"),
+      tool: "edit",
+      state: "succeeded",
+      changedPaths: ["README.md", "src/main.ts"],
+    });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+  });
+
+  it("treats a native edit that named no file as code, and weighs a step's uncovered files", () => {
+    const unnamed = verifiedRun();
+    unnamed.facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    expect(unnamed.ledger.needsVerification(RUN_ID)).toBe(true);
+    const step = verifiedRun();
+    step.facet.unsettledEdit?.(["notes.md"]);
+    expect(step.ledger.needsVerification(RUN_ID)).toBe(false);
+    step.facet.unsettledEdit?.(undefined);
+    expect(step.ledger.needsVerification(RUN_ID)).toBe(true);
   });
 
   // #3901: the plan agent writes its notes with the edit tool into the run's private plan

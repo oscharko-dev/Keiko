@@ -135,6 +135,7 @@ const OAUTH_SERVER: McpServerDefinition = {
 };
 import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
+import type { NativeRepositoryRelayInput } from "./nativeRepositoryRelayBinding.js";
 import type { OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
@@ -727,6 +728,12 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly buildSettingsHome?: string;
+  /**
+   * Host environment beside the fixture's PATH and HOME that the launch inherits by name, as the
+   * native profile's allowlist does (an npm-started Keiko's registry, #4491).
+   */
+  readonly processEnv?: Readonly<Record<string, string>>;
+  readonly repositoryRelay?: NativeRepositoryRelayInput;
   readonly ripgrepVerified?: boolean;
   /** #4068: observes the run state directory protection instead of changing a real ACL. */
   readonly runStateAccess?:
@@ -1347,10 +1354,24 @@ function createRuntimeDatabase(runRoot: string): void {
 
 function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
   readonly buildSettingsHome?: string;
+  readonly repositoryRelay?: NativeRepositoryRelayInput;
 } {
-  return control?.buildSettingsHome === undefined
-    ? {}
-    : { buildSettingsHome: control.buildSettingsHome };
+  return {
+    ...(control?.buildSettingsHome === undefined
+      ? {}
+      : { buildSettingsHome: control.buildSettingsHome }),
+    ...(control?.repositoryRelay === undefined ? {} : { repositoryRelay: control.repositoryRelay }),
+  };
+}
+
+/** The fixture's host environment: PATH and HOME, plus the names a test hands down (#4491). */
+function fixtureProcessEnv(control: StartBridgeControl | undefined): Record<string, string> {
+  return { PATH: "/host/toolchain/bin", HOME: "/host/home", ...control?.processEnv };
+}
+
+/** A test's extra host names are inherited by name, as the native profile's allowlist does. */
+function fixtureInheritedEnvAllowlist(control: StartBridgeControl | undefined): string[] {
+  return Object.keys(control?.processEnv ?? {});
 }
 
 async function startBridgeFixture(
@@ -1607,7 +1628,7 @@ async function startBridgeFixture(
     ...buildSettingsHomeOption(control),
     // #3897: the host environment is offered to every profile; only the native profile's
     // allowlist copies anything from it, so a mapped launch must still carry no PATH.
-    processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
+    processEnv: fixtureProcessEnv(control),
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     contextGeometry: fixtureContextGeometry(control),
@@ -1675,7 +1696,7 @@ async function startBridgeFixture(
       gatewayUrl: fixtureGatewayUrl(control),
       modelProfileId: "coding-safe-openai-compatible",
       args: [],
-      inheritedEnvAllowlist: [],
+      inheritedEnvAllowlist: fixtureInheritedEnvAllowlist(control),
       shutdownTimeoutMs: fixtureShutdownTimeout(control),
       // Ordinary tests exercise live filesystem setup; deadline tests pass their own short bound.
       startTimeoutMs: control?.startTimeoutMs ?? 5_000,
@@ -2377,6 +2398,31 @@ describe("private OpenCode run control", () => {
     });
     try {
       expect(historyCalls).toEqual([{}, {}]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("signals a question re-list when the event stream reconnects, once per reopened stream", async () => {
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const questionObservations: string[] = [];
+    const fixture = await startBridgeFixture(facade, undefined, {
+      onSseStart: (controller): void => {
+        streams.push(controller);
+      },
+      questionObservations,
+    });
+    try {
+      // The first stream has no gap behind it, so it signals nothing on its own.
+      expect(questionObservations).toEqual([]);
+      streams[0]?.close();
+      await vi.waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
+      // A form created while nobody listened has no frame to follow: the reopened stream asks for a re-list.
+      await vi.waitFor(() => {
+        expect(questionObservations).toEqual(["stream-reopened-2"]);
+      });
     } finally {
       await fixture.stop();
     }
@@ -4773,6 +4819,51 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       await fixture.stop();
     }
   });
+
+  // #4491: npm exports a configured registry to every process it starts, so a Keiko started through
+  // npx or npm run hands the person's registry to the native run by name, and npm reads that before
+  // the run's user config. The launched runtime must name the relay instead, and a run that inherits
+  // no name gets none, so a project `.npmrc` keeps its precedence.
+  it.each([
+    { inherited: true, expected: "http://127.0.0.1:1983/api/coding-sidecar/repository/relay1/" },
+    { inherited: false, expected: undefined },
+  ])(
+    "launches a native run with the relay as npm's registry only in place of an inherited one: %j",
+    async ({ inherited, expected }) => {
+      const realHome = tempDir("keiko-build-settings-home-");
+      writeFileSync(
+        join(realHome, ".npmrc"),
+        "registry=https://npm.corp.example/group/\n//npm.corp.example/group/:_authToken=PLANTED-npm-token-0123456789abcdef\n",
+      );
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "supervised-coding",
+        readToolProfile: () => "native",
+        buildSettingsHome: realHome,
+        ...(inherited
+          ? { processEnv: { npm_config_registry: "https://npm.corp.example/group/" } }
+          : {}),
+        repositoryRelay: {
+          relay: {
+            bind: () => ({ relayId: "relay1", capability: "c".repeat(43) }),
+            authenticate: () => undefined,
+            wasRevoked: () => false,
+            releaseRun: () => undefined,
+            revoke: () => undefined,
+          },
+          origin: "http://127.0.0.1:1983",
+          env: {},
+        },
+      });
+      try {
+        expect(fixture.preparation.env.npm_config_registry).toBe(expected);
+        expect(fixture.preparation.env.NPM_CONFIG_REGISTRY).toBe(expected);
+        expect(JSON.stringify(fixture.preparation.env)).not.toContain("npm.corp.example");
+        expect(JSON.stringify(fixture.preparation.env)).not.toContain("PLANTED");
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
 
   // #4271: a native launch carries the user's mirror and registry as sanitized copies in its private
   // home, never a credential, and records the admission body-free. The mapped profiles carry none.

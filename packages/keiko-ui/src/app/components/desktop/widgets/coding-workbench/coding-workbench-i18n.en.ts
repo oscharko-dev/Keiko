@@ -31,6 +31,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.error":
     "The coding task could not be loaded or updated. Retry from Coding History.",
   "codingWorkbench.history.loading": "Loading task…",
+  "codingWorkbench.history.listError": "The task list could not be loaded. Try Refresh.",
+  "codingWorkbench.history.renameError": "The task could not be renamed. Try again.",
+  "codingWorkbench.history.listLoading": "Loading tasks…",
   "codingWorkbench.history.refresh": "Refresh",
   "codingWorkbench.history.empty": "No tasks match this view. Start a new task to get going.",
   "codingWorkbench.history.taskTitle": "Task title",
@@ -58,6 +61,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.importNoWorkspace":
     "Open a workspace first. The task is imported into the active workspace.",
   "codingWorkbench.history.importError": "The task could not be imported. Try again.",
+  "codingWorkbench.history.completedNotice":
+    "This task is completed. Your next message reopens it and continues this conversation.",
   "codingWorkbench.history.importedNotice":
     "“{title}” was imported from a file. Your next message continues it as a new task that keeps this conversation and does not change “{title}”.",
   "codingWorkbench.history.finish": "Complete task",
@@ -77,6 +82,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.truncated": "Only the most recent saved messages are shown.",
   "codingWorkbench.history.you": "You",
   "codingWorkbench.history.agent": "Coding agent",
+  "codingWorkbench.history.keiko": "Keiko",
   "codingWorkbench.journey.title": "Issue handoff",
   "codingWorkbench.journey.state.awaiting-ready-approval": "Ready-for-review approval required",
   "codingWorkbench.journey.state.keiko-technical-ready": "Keiko technical work ready",
@@ -750,6 +756,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncationMark": "Output truncated",
   "codingWorkbench.activity.role.user": "You",
   "codingWorkbench.activity.role.assistant": "Coding agent",
+  "codingWorkbench.activity.role.keiko": "Keiko",
   "codingWorkbench.activity.tool": "Tool activity: {tool}",
   "codingWorkbench.activity.toolCount": "{count} calls",
   "codingWorkbench.activity.toolState.pending": "Pending",
@@ -1221,7 +1228,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.readiness": "Readiness details",
   "codingWorkbench.runStatus.agent.plan": "Plan agent",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
-  "codingWorkbench.announcement.runChecking": "Run status checking.",
+  "codingWorkbench.announcement.runChecking": "Checking the run status.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
   "codingWorkbench.announcement.recoveryComplete": "Recovery acknowledgement complete.",
   "codingWorkbench.announcement.setupReady": "Authentication setup plan ready.",
@@ -1280,7 +1287,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.edit-retries-exhausted":
     "Keiko stopped the run because the model's edits were refused several times in a row, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
-    "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
+    "Keiko ended the run after the actions shown above because of an internal error. Start the task again. If the error recurs, create an error report below and pass it to your support.",
   "codingWorkbench.event.failure.invalid-intent":
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.workspace-unqualified":
@@ -1298,9 +1305,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko could not start the coding run on this Windows computer because Windows refused the start. Start the task again. If it happens again, ask your administrator.",
   "codingWorkbench.event.failure.generic":
-    "This step could not be completed. Check the Activity Log and try again.",
+    "This step could not be completed. Try again. If the error recurs, create an error report below and pass it to your support.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
     "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
+  "codingWorkbench.event.failure.output-limit-reached":
+    "The model used up the output allowance of one step, usually by thinking at length, before it answered or used a tool, so Keiko ended the run. Your changes so far stay in the task workspace. Start the task again or split it into smaller steps. If it happens again, choose another model or ask your administrator to raise the model's output limit.",
   "codingWorkbench.event.failure.output-exhausted-repeated":
     "The run ended because the model used its whole output budget again without calling a tool or answering, even after a repair attempt. The model usually spends that budget on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then start the task again; your changes so far stay in the task workspace.",
   "codingWorkbench.event.stopped":
@@ -1311,7 +1320,19 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The run ended because its last model step failed, for the reason shown on that step above. Address that reason, then start the task again; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.verification-not-evidenced":
     "The task is not verified: its checks failed, did not run, or preceded the final edit. Your changes remain in the task workspace. Inspect the latest verification result, resolve its cause, and rerun the relevant checks before completing the task.",
+  "codingWorkbench.event.failure.verificationGap.no-check-run":
+    "The changes to the project's code were not checked: no check ran after the last change, so nothing shows they work. Your changes stay in the task workspace. Ask Keiko to run the project's check and repair what it finds, or say in the box below which check to run.",
+  "codingWorkbench.event.failure.verificationGap.check-failed":
+    "A check failed after the last change and the run ended before it was repaired. Your changes stay in the task workspace. Ask Keiko to run it again and repair the cause, or describe the fix in the box below.",
+  "codingWorkbench.event.failure.verificationGap.check-not-started":
+    "The check could not start, so the changes were not checked. The step above names the reason, for example a refused permission or a tool this computer lacks. Your changes stay in the task workspace. Remove that reason, then ask Keiko to run the check again.",
+  "codingWorkbench.event.failure.verificationGap.budget-exhausted":
+    "The run used up its budget of tool calls or changed bytes before a check could run, so the changes were not checked. Your changes stay in the task workspace. Start a new run to check them with a fresh budget.",
+  "codingWorkbench.event.runCheck.action": "Run the check now",
+  "codingWorkbench.event.runCheck.request":
+    "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
   "codingWorkbench.event.runFailed": "Coding run failed",
+  "codingWorkbench.event.runUnverified": "Changes not checked",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

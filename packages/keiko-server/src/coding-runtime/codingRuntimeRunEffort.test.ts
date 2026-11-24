@@ -377,4 +377,66 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(elapsedMs("not-a-date", run.updatedAt)).toBe(0);
     expect(elapsedMs(run.updatedAt, run.createdAt)).toBe(0);
   });
+
+  // #4491: documentation alone needs no check; a path-less edit stays code.
+  it("demands no verification for an edit of documentation alone, and keeps earlier results", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a", ["README.md", "docs/guide.md"]);
+    expect(ledger.needsVerification("run-a")).toBe(false);
+    expect(ledger.documentationOnly("run-a")).toBe(true);
+    ledger.edit("run-a", ["src/a.ts"]);
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    expect(ledger.documentationOnly("run-a")).toBe(false);
+    ledger.verification("run-a", true, "t", ledger.verificationRevision("run-a"));
+    expect(ledger.needsVerification("run-a")).toBe(false);
+    ledger.edit("run-a", ["CHANGELOG.md"]);
+    expect(ledger.verificationRevision("run-a")).toBe(1);
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
+  it("treats an edit that names no path as code", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    ledger.begin("run-b");
+    ledger.edit("run-b", []);
+    expect(ledger.needsVerification("run-b")).toBe(true);
+  });
+
+  it("holds the failed check of the run's last code change until the next edit or a pass", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+    ledger.edit("run-a", ["src/a.ts"]);
+    const revision = ledger.verificationRevision("run-a");
+    ledger.verification("run-a", false, "t", revision, { check: "test", failedCount: 2 });
+    expect(ledger.failedCheck("run-a")).toEqual({ check: "test", failedCount: 2 });
+    ledger.verification("run-a", true, "t", revision);
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+    ledger.verification("run-a", false, "t", revision, { check: "test", failedCount: 1 });
+    ledger.edit("run-a", ["src/b.ts"]);
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+  });
+
+  it("ignores a failed result that belongs to an earlier edit revision", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a", ["src/a.ts"]);
+    const stale = ledger.verificationRevision("run-a");
+    ledger.edit("run-a", ["src/b.ts"]);
+    ledger.verification("run-a", false, "t", stale, { check: "lint", failedCount: 5 });
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+  });
+
+  it("names no failed check for a run whose check never ran or could not start", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a", ["src/a.ts"]);
+    ledger.verification("run-a", null, "t", ledger.verificationRevision("run-a"));
+    ledger.verificationBlocked("run-a", "VERIFICATION_RUNNER_UNAVAILABLE");
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+    expect(ledger.verificationBlockedReason("run-a")).toBe("VERIFICATION_RUNNER_UNAVAILABLE");
+  });
 });

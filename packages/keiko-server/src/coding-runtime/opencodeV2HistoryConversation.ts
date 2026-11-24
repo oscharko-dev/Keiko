@@ -23,6 +23,7 @@ export function conversationMessages(
         messageId: signal.messageId,
         role: signal.role,
         content: "",
+        ...(signal.origin === undefined ? {} : { origin: signal.origin }),
       });
     if (signal?.kind !== "text") continue;
     const message = messages.get(signal.messageId);
@@ -53,7 +54,10 @@ function sameMessage(
 ): boolean {
   if (left === undefined || right === undefined) return false;
   return (
-    left.messageId === right.messageId && left.role === right.role && left.content === right.content
+    left.messageId === right.messageId &&
+    left.role === right.role &&
+    left.content === right.content &&
+    left.origin === right.origin
   );
 }
 

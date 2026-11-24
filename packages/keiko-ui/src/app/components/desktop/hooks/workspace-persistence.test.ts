@@ -305,6 +305,20 @@ describe("workspace-persistence", () => {
   // #4271: the Workbench's repository, branch and location selection lived only in memory. After a
   // reload the window fell back to whichever of the shell's project and the active task binding
   // loaded first, and bound that root in place of the person's choice.
+  it("retains the run a Coding Workbench window left with New task (#4491)", () => {
+    const leftRunId = "run-151092160354828483334367423787048065939";
+    const [retained] = sanitizePersistedWindows([
+      win({ id: "coding-1", type: "coding", cfg: { leftRunId } }),
+    ]);
+    expect(retained?.cfg).toEqual({ leftRunId });
+    for (const value of [" run-1", "run 1", "x".repeat(2_049), 42]) {
+      const [dropped] = sanitizePersistedWindows([
+        win({ id: "coding-1", type: "coding", cfg: { leftRunId: value } }),
+      ]);
+      expect(dropped?.cfg).toEqual({});
+    }
+  });
+
   it("retains the Coding Workbench's repository, branch and location selection", () => {
     const selection = {
       repositoryPath: "/repos/selected",

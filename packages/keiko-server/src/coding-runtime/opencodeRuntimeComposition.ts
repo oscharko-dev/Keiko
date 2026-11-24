@@ -319,6 +319,12 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+/**
+ * The identity a reopened event stream signals a question re-list under. It names no question the
+ * model asked, so a consumer never counts it as a model request (#4491 audit).
+ */
+export const OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX = "stream-reopened-";
+
 const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -2214,6 +2220,9 @@ function admitNativeBuildSettings(
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
     repositoryRelay: input.repositoryRelay,
     inheritedNoProxy: request.env.NO_PROXY ?? request.env.no_proxy,
+    inheritedNpmRegistry:
+      request.env.npm_config_registry !== undefined ||
+      request.env.NPM_CONFIG_REGISTRY !== undefined,
     signal: request.signal,
     activityLog: input.activityLog,
   });
@@ -2811,6 +2820,7 @@ function nativeToolSettlementObserver(
       tool: signal.tool,
       state: signal.state,
       ...planNoteSettlement(run, signal.messageId, signal.callId),
+      ...editedPaths(run, signal.messageId, signal.callId),
       ...nativeExitEvidence(signal),
     });
   };
@@ -3012,6 +3022,12 @@ function readinessV2Ports(
       // the model never wrote in that order. Each such part shows what it has until the history
       // shows it complete (#3873 review, PR #3876).
       if (streamCount > 1) history.freezeLiveText();
+      // A form created while nobody listened has no frame left to follow: the reopened stream asks
+      // the consumer to re-list the questions once, under an identity of its own.
+      if (streamCount > 1)
+        input.onQuestionObserved?.(
+          `${OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX}${String(streamCount)}`,
+        );
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
       const sessionId = fixedSessionId;
@@ -4789,7 +4805,10 @@ function noteAdmittedEditEvidence(
     rememberPlanNoteEdit(run, openCodeNativeCallKey(request.source.messageID, request.source.id));
     return;
   }
-  if (context.sessionRelation === "child") context.deps.facade.nativeSettlement?.unsettledEdit?.();
+  if (context.sessionRelation === "child")
+    context.deps.facade.nativeSettlement?.unsettledEdit?.(
+      openCodeNativeEditFiles(request, run.workspaceRoot),
+    );
 }
 
 function rememberPlanNoteEdit(run: PreparedRun, key: string): void {
@@ -4797,6 +4816,16 @@ function rememberPlanNoteEdit(run: PreparedRun, key: string): void {
   const notes = run.planNoteEdits;
   notes.add(key);
   if (notes.size > PLAN_NOTE_EDITS_MAX) notes.delete(notes.values().next().value ?? "");
+}
+
+/** The files an admitted native edit named, kept for the documentation-only decision. */
+function editedPaths(
+  run: PreparedRun,
+  messageId: string,
+  callId: string,
+): { readonly changedPaths?: readonly string[] } {
+  const files = run.editTargetsByCall?.get(openCodeNativeCallKey(messageId, callId));
+  return files === undefined ? {} : { changedPaths: files };
 }
 
 /** A settled plan-note edit is no workspace edit; every other call keeps its tool's meaning. */
@@ -4857,7 +4886,8 @@ function observeNativeStepChanges(
     if (seen.has(change.messageId)) continue;
     rememberKey(seen, change.messageId);
     const weighed = weighStepChange(run, change);
-    if (weighed.outcome === "counted") settlement.unsettledEdit();
+    if (weighed.outcome === "counted")
+      settlement.unsettledEdit(change.truncated ? undefined : weighed.uncoveredFiles);
     recordNativeStepChanged(input.activityLog, run.runId, change, weighed);
   }
 }
@@ -4865,14 +4895,18 @@ function observeNativeStepChanges(
 function weighStepChange(
   run: PreparedRun,
   change: OpenCodeV2StepChange,
-): { readonly outcome: NativeStepOutcome; readonly uncoveredCount: number } {
+): {
+  readonly outcome: NativeStepOutcome;
+  readonly uncoveredCount: number;
+  readonly uncoveredFiles: readonly string[];
+} {
   const keys = change.callIds.map((callId) => openCodeNativeCallKey(change.messageId, callId));
   if (keys.length > 0 && keys.every((key) => run.verificationCalls?.has(key) === true))
-    return { outcome: "verification-only", uncoveredCount: 0 };
+    return { outcome: "verification-only", uncoveredCount: 0, uncoveredFiles: [] };
   const covered = new Set(keys.flatMap((key) => run.editTargetsByCall?.get(key) ?? []));
-  const uncoveredCount =
-    change.files.filter((file) => !covered.has(file)).length + (change.truncated ? 1 : 0);
-  return { outcome: uncoveredCount > 0 ? "counted" : "covered", uncoveredCount };
+  const uncoveredFiles = change.files.filter((file) => !covered.has(file));
+  const uncoveredCount = uncoveredFiles.length + (change.truncated ? 1 : 0);
+  return { outcome: uncoveredCount > 0 ? "counted" : "covered", uncoveredCount, uncoveredFiles };
 }
 
 const NATIVE_STEP_CHANGED_OPERATION = defineActivityLogOperation({

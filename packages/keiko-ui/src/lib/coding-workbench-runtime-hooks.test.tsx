@@ -992,7 +992,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
 
       expect(held[0]?.signal?.aborted).toBe(true);
       expect(refreshRun).toHaveBeenCalledOnce();
-      expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+      // A cancel is not a success: the Window keeps the person's draft on this outcome.
+      expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-cancelled" });
+      expect(dispatch).not.toHaveBeenCalledWith({ kind: "mutation-complete" });
       expect(dispatch).not.toHaveBeenCalledWith(
         expect.objectContaining({ kind: "mutation-failed" }),
       );

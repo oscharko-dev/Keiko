@@ -15,6 +15,7 @@ import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { saveTextDownload } from "./browser-download";
 
 const ROOT = "/api/coding-workbench/history";
+/** An update's event carries the server's task record, so an open session shows it at once. */
 export const CODING_HISTORY_CHANGED = "keiko:coding-history-changed";
 
 export async function fetchCodingHistory(): Promise<readonly CodingHistoryTask[]> {
@@ -46,7 +47,7 @@ export async function updateCodingTask(
     `${ROOT}/${encodeURIComponent(id)}`,
     { method: "PATCH", body: JSON.stringify(patch) },
   );
-  window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
+  window.dispatchEvent(new CustomEvent(CODING_HISTORY_CHANGED, { detail: result.task }));
   return result.task;
 }
 

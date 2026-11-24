@@ -612,7 +612,7 @@ function cancelPendingStart(
   const starts = [...pending].filter((entry) => entry.kind === "start");
   if (starts.length === 0) return;
   for (const entry of starts) entry.controller.abort(new CodingWorkbenchPreemptedError());
-  dispatch({ kind: "mutation-complete" });
+  dispatch({ kind: "mutation-cancelled" });
   reportCodingWorkbenchInteraction({ interaction: "start-cancelled" });
   void refreshRun();
   const reread = (): void => {

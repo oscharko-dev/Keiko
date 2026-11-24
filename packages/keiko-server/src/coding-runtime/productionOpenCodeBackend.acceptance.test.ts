@@ -78,7 +78,10 @@ import {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
-import { VERIFICATION_CONTINUATION_MAX } from "./codingRuntimeVerificationContinuation.js";
+import {
+  VERIFICATION_CONTINUATION_MAX,
+  type VerificationContinuationSkipReason,
+} from "./codingRuntimeVerificationContinuation.js";
 import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -230,7 +233,7 @@ interface AcceptanceObservation {
   readonly editLanded: boolean;
   readonly confinement: readonly ConfinementFacts[];
   readonly verificationSummaries: readonly string[];
-  /** The states of the run's verification continuations, in order. */
+  /** The states of the run's verification continuations, in order; a skip carries its reason. */
   readonly continuations: readonly string[];
   /** The `coding-runtime.native-build-settings.admitted` dispositions of the run, in order. */
   readonly buildSettings: readonly BuildSettingsFacts[];
@@ -406,7 +409,10 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     title: "never reports success when the run skips its check after the edit",
     acceptanceCase: unverified("supervised-coding", "fixed", "skip-check"),
     check: (observed): void => {
-      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: true });
+      expectNotVerified(observed, "supervised-coding", {
+        testsPassOutsideKeiko: true,
+        continuation: "no-failed-check",
+      });
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
     },
   },
@@ -415,7 +421,10 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     title: "never counts a check that passed before the final edit",
     acceptanceCase: unverified("autonomous-delivery", "fixed", "stale-check"),
     check: (observed): void => {
-      expectNotVerified(observed, "autonomous-delivery", { testsPassOutsideKeiko: true });
+      expectNotVerified(observed, "autonomous-delivery", {
+        testsPassOutsideKeiko: true,
+        continuation: "no-failed-check",
+      });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:passed"]);
     },
   },
@@ -426,7 +435,7 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     check: (observed): void => {
       expectNotVerified(observed, "governed-assist", {
         testsPassOutsideKeiko: true,
-        continued: false,
+        continuation: "blocked",
       });
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
       expect(observed.verificationBlockedReason).toBe("verification-command-denied");
@@ -695,7 +704,8 @@ function expectNotVerified(
   mode: AcceptanceMode,
   expected: {
     readonly testsPassOutsideKeiko: boolean;
-    readonly continued?: boolean;
+    /** `repair` (the default) when a check ran and failed after the edit; else why none was sent. */
+    readonly continuation?: "repair" | VerificationContinuationSkipReason;
     readonly projectCheckCount?: number;
   },
 ): void {
@@ -706,15 +716,26 @@ function expectNotVerified(
   expect(observed.editLanded, context).toBe(true);
   if (expected.testsPassOutsideKeiko) expect(observed.testerCheckExitCode, context).toBe(0);
   else expect(observed.testerCheckExitCode, context).toBeGreaterThan(0);
-  // Before it gives up, the product sends the model back to verify, up to its bound; a check the
-  // person denied blocks that continuation. Either way the run ends not evidenced.
+  // #4491: a check that ran after the edit and failed sends the model back to repair it, up to the
+  // bound, and the next end of the run is skipped as already continued. Without a failed check to
+  // repair (none ran after the edit, or one was blocked) no continuation runs, and the line names
+  // why. Either way the run ends not evidenced.
   expect(VERIFICATION_CONTINUATION_MAX).toBeGreaterThan(0);
-  const continued = expected.continued === false ? 0 : VERIFICATION_CONTINUATION_MAX;
-  expect(observed.continuations, context).toEqual([
-    ...Array.from({ length: continued }, () => "continued"),
-    "not-evidenced",
-  ]);
+  const continuation = expected.continuation ?? "repair";
+  expect(observed.continuations, context).toEqual(
+    continuation === "repair"
+      ? [
+          ...Array.from({ length: VERIFICATION_CONTINUATION_MAX }, () => "continued"),
+          "skipped:already-continued",
+          "not-evidenced",
+        ]
+      : [`skipped:${continuation}`, "not-evidenced"],
+  );
   expectEveryCase(observed, mode, expected.projectCheckCount);
+}
+
+function continuationWord(state: unknown, skipReason: unknown): string {
+  return state === "skipped" ? `skipped:${String(skipReason)}` : String(state);
 }
 
 /**
@@ -1431,7 +1452,7 @@ function settledFacts(
     ),
     continuations: log.events.flatMap((event) =>
       event.op === "coding-runtime.run.verification-continuation" && event.extra?.runId === runId
-        ? [String(event.extra.state)]
+        ? [continuationWord(event.extra.state, event.extra.skipReason)]
         : [],
     ),
     buildSettings: log.events.flatMap((event) =>

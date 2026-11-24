@@ -305,6 +305,28 @@ describe("CodingTaskTranscript", () => {
     expect(within(transcript).getAllByText("You")).toHaveLength(1);
   });
 
+  // #4491: a turn Keiko dispatched itself is a collapsed note labelled as Keiko's, never the person's
+  // message, and it offers no fork.
+  it("labels a Keiko continuation as Keiko's collapsed note, not as the user", () => {
+    const keiko: HistoryMessage = {
+      ...historyMessage("m-k", undefined, "Rerun the failed check."),
+      taskType: "keiko-continuation",
+    };
+    const { container } = render(
+      <CodingTaskTranscript
+        session={sessionWith([keiko, historyMessage("m-u", undefined, "Typed by a person")])}
+        shownRun={undefined}
+        onFork={vi.fn()}
+      />,
+    );
+    const transcript = screen.getByRole("region", { name: "Previous conversation" });
+    expect(within(transcript).getAllByText("You")).toHaveLength(1);
+    const note = container.querySelector("[data-origin='keiko']");
+    expect(note?.querySelector("summary")).toHaveTextContent("Keiko");
+    expect(note?.querySelector("details")).not.toHaveAttribute("open");
+    expect(note?.querySelector("button")).toBeNull();
+  });
+
   it("shows nothing of a run whose feed carries the whole conversation, other runs excepted", () => {
     const wholeRun: ShownRun = { runId: "run-7", overflowMessageIds: new Set() };
     render(<CodingTaskTranscript session={sessionWith(messages)} shownRun={wholeRun} />);
@@ -648,6 +670,26 @@ describe("forking from the task chrome", () => {
     const requested = { ...imported, fork: { taskId: "task-7", title: "t" } };
     rerender(<CodingTaskSessionBar session={requested} active={false} onHistory={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
+  });
+
+  // A completed task opened from Coding History is complete already; New task still leaves it.
+  it("offers no Complete task for a completed task on display", () => {
+    const open = sessionWith([]);
+    const detail = open.detail as NonNullable<CodingTaskSession["detail"]>;
+    const done = {
+      ...open,
+      detail: { ...detail, task: { ...detail.task, status: "completed" as const } },
+    };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={open} active={false} onHistory={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Complete task" })).toBeEnabled();
+
+    rerender(<CodingTaskSessionBar session={done} active={false} onHistory={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Complete task" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeEnabled();
   });
 
   it("offers a fork before each user message, and only to a caller that can fork", () => {

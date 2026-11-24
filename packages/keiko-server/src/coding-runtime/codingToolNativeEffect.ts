@@ -243,7 +243,7 @@ export function createCodingToolNativeSettlementFacet(
       // at its own revision before the run can succeed (#3901). The plan agent's private notes are
       // planning and need none.
       if (action === "edit" && input.state === "succeeded" && input.workspaceEdit !== false)
-        observers.observeEditOutcome?.({ kind: "applied" });
+        observers.observeEditOutcome?.({ kind: "applied", changedPaths: input.changedPaths });
       verification.settled(key, input, refusedByPolicy);
       return "counted";
     },
@@ -253,8 +253,8 @@ export function createCodingToolNativeSettlementFacet(
     verificationDenied: (): void => {
       observers.verification?.blocked?.("verification-command-denied");
     },
-    unsettledEdit: (): void => {
-      observers.observeEditOutcome?.({ kind: "applied" });
+    unsettledEdit: (changedPaths): void => {
+      observers.observeEditOutcome?.({ kind: "applied", changedPaths });
     },
   };
 }

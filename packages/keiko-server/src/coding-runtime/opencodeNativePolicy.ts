@@ -552,8 +552,20 @@ function npxCheck(
   return NPX_VERIFICATION_KINDS.get(subcommand ?? "");
 }
 
+// A test file Node runs on its own (`node test/sum.test.js`) runs its `node:test` tests and exits
+// non-zero when one fails, as `node --test` does for it. Only a workspace-relative operand right after
+// `node` whose file name marks a test counts (#4491): `node src/cli.js` runs a program, not a check.
+// The name is the only evidence, so a program named like a test (`load-test.js`) counts as well.
+const NODE_TEST_FILE_NAME = /(?:^|[._-])(?:test|spec)s?\.[cm]?[jt]s$/iu;
+
+function nodeTestFile(operand: string | undefined): boolean {
+  if (operand === undefined || !/^[^-/~]/u.test(operand) || /[$`\\]/u.test(operand)) return false;
+  const segments = operand.split("/");
+  return !segments.includes("..") && NODE_TEST_FILE_NAME.test(segments.at(-1) ?? "");
+}
+
 function nodeCheck(tokens: readonly string[]): VerificationKind | undefined {
-  return tokens[1] === "--test" ? "test" : undefined;
+  return tokens[1] === "--test" || nodeTestFile(tokens[1]) ? "test" : undefined;
 }
 
 function pytestCheck(): VerificationKind {

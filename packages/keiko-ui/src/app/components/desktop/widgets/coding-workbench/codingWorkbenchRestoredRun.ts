@@ -67,6 +67,9 @@ export function eventsWithRestoredSettlement(
       state: snapshot.state,
       revision: snapshot.revision,
       ...(snapshot.failureCode === undefined ? {} : { failureCode: snapshot.failureCode }),
+      ...(snapshot.verificationGap === undefined
+        ? {}
+        : { verificationGap: snapshot.verificationGap }),
     },
   ];
 }
