@@ -1,8 +1,8 @@
 diff --git a/AGENTS.md b/AGENTS.md
-index 5060ef5..af00e0c 100644
+index 5060ef5..23ed12e 100644
 --- a/AGENTS.md
 +++ b/AGENTS.md
-@@ -9,3 +9,486 @@
+@@ -9,3 +9,1246 @@
  - Every bug fix ships a regression test next to the code (`src/<module>.test.ts`).
  - Run `npm run check` (typecheck, lint, tests) before you finish; all three must pass. Fix lint
    findings in the code; never disable a rule, add an eslint-disable comment, or loosen the config.
@@ -489,3 +489,763 @@ index 5060ef5..af00e0c 100644
 +  expression was used instead of two simple statements.
 +- When you are unsure how a module is meant to behave, read its test file first: the tests are the
 +  most precise statement of the intended behavior in this repository.
++
++## 21. Decision log
++
++The entries below record why the code looks the way it does. They are numbered in the order
++they were taken and are never renumbered; a later entry that changes an earlier one says so.
++### 21.1 Rounding in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.2 Rounding in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.3 Rounding in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.4 Rounding in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.5 Rounding in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.6 Rounding in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.7 Empty input in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.8 Empty input in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.9 Empty input in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.10 Empty input in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.11 Empty input in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.12 Empty input in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.13 Malformed input in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.14 Malformed input in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.15 Malformed input in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.16 Malformed input in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.17 Malformed input in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.18 Malformed input in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.19 Ordering in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.20 Ordering in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.21 Ordering in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.22 Ordering in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.23 Ordering in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.24 Ordering in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.25 Time zones in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.26 Time zones in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.27 Time zones in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.28 Time zones in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.29 Time zones in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.30 Time zones in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.31 Naming in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.32 Naming in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.33 Naming in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.34 Naming in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.35 Naming in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.36 Naming in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.37 Errors in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.38 Errors in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.39 Errors in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.40 Errors in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.41 Errors in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.42 Errors in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.43 Tests in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.44 Tests in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.45 Tests in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.46 Tests in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.47 Tests in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.48 Tests in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.49 Rounding in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.50 Rounding in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.51 Rounding in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.52 Rounding in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.53 Rounding in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.54 Rounding in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.55 Empty input in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.56 Empty input in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.57 Empty input in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.58 Empty input in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.59 Empty input in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.60 Empty input in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.61 Malformed input in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.62 Malformed input in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.63 Malformed input in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.64 Malformed input in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.65 Malformed input in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.66 Malformed input in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` rejects a malformed line with its line number and the field that failed.
++- Consequence: an operator can fix the export without reading the code.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.67 Ordering in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.68 Ordering in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.69 Ordering in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.70 Ordering in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.71 Ordering in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.72 Ordering in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` keeps the input order of entries and sorts only in the report layer.
++- Consequence: a test can compare a parsed ledger with its source line by line.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.73 Time zones in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.74 Time zones in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.75 Time zones in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.76 Time zones in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.77 Time zones in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.78 Time zones in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` reads dates as calendar dates without a time zone.
++- Consequence: a booking near midnight never moves to another month.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.79 Naming in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.80 Naming in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.81 Naming in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.82 Naming in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.83 Naming in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.84 Naming in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` names exported functions after what they return, not how they compute it.
++- Consequence: a rename of the algorithm never ripples into the callers.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.85 Errors in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.86 Errors in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.87 Errors in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.88 Errors in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.89 Errors in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.90 Errors in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` throws one typed error class per module with a stable code.
++- Consequence: the CLI can map each code to a short message and an exit status.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.91 Tests in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.92 Tests in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.93 Tests in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.94 Tests in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.95 Tests in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.96 Tests in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` keeps one test file per module next to it and one behavior per test.
++- Consequence: a failing test names the behavior that broke.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.97 Rounding in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.98 Rounding in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.99 Rounding in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.100 Rounding in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.101 Rounding in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.102 Rounding in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` rounds half away from zero only at the boundary where text becomes cents.
++- Consequence: every later sum stays exact, and a reviewer can find the one place where rounding happens.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.
++
++### 21.103 Empty input in `src/money.ts`
++
++- Context: a change to parseAmount and formatAmount raised the question of how amounts in cents should behave here.
++- Decision: `src/money.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseAmount and formatAmount, and to any new function of `src/money.ts` that handles amounts in cents.
++
++### 21.104 Empty input in `src/ledger.ts`
++
++- Context: a change to add, balance and monthly totals raised the question of how the ledger's entries should behave here.
++- Decision: `src/ledger.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: add, balance and monthly totals, and to any new function of `src/ledger.ts` that handles the ledger's entries.
++
++### 21.105 Empty input in `src/csv.ts`
++
++- Context: a change to parseCsv raised the question of how the native CSV export should behave here.
++- Decision: `src/csv.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: parseCsv, and to any new function of `src/csv.ts` that handles the native CSV export.
++
++### 21.106 Empty input in `src/importers/bank-b.ts`
++
++- Context: a change to its date and amount parsing raised the question of how the Bank B export should behave here.
++- Decision: `src/importers/bank-b.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: its date and amount parsing, and to any new function of `src/importers/bank-b.ts` that handles the Bank B export.
++
++### 21.107 Empty input in `src/importers/index.ts`
++
++- Context: a change to importerFor raised the question of how the importer registry should behave here.
++- Decision: `src/importers/index.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: importerFor, and to any new function of `src/importers/index.ts` that handles the importer registry.
++
++### 21.108 Empty input in `src/report.ts`
++
++- Context: a change to the per-account, per-month and per-category summaries raised the question of how the reports should behave here.
++- Decision: `src/report.ts` treats an empty input as zero entries, never as an error.
++- Consequence: a month without activity reports zero instead of failing the whole report.
++- Applies to: the per-account, per-month and per-category summaries, and to any new function of `src/report.ts` that handles the reports.

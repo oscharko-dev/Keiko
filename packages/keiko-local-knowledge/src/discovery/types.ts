@@ -41,7 +41,8 @@ export interface DiscoveryOptions {
 
 export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
   maxDepth: 12,
-  maxFiles: 5_000,
+  // Owner decision 2026-11-24: 50,000 (was 5,000); the 100,000 ceiling below is unchanged.
+  maxFiles: 50_000,
 } as const;
 
 // Absolute runaway backstops for caller-supplied discovery bounds (2026-08 field review). The

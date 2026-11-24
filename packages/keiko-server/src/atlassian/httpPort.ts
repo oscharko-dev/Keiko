@@ -90,7 +90,8 @@ import { recordTargetAdmission } from "./targetAdmissionActivity.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
-const MAX_TIMEOUT_MS = 60_000;
+export const ATLASSIAN_HTTP_MAX_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = ATLASSIAN_HTTP_MAX_TIMEOUT_MS;
 
 // Issue #3246: on dev run 32563378802 the oversized-body test resolved 200 in one coverage
 // shard — the only way `assertValidRequestBody` below can let an oversized body through is the

@@ -87,7 +87,7 @@ the global active pointer, so the read is bracketed by the run's own exact-works
 and after it (`exactWorkspaceRead`, shared with the auxiliary ports): a workspace switch while the
 run starts is recorded as `refused` with `workspace-unavailable` and never attaches another
 repository's file (#3873 review). On the mapped profiles the model receives the window that read
-would answer for the file's first 800 lines, cut at a line boundary to 16,384 bytes and to the
+would answer for the file's first 3,200 lines, cut at a line boundary to 65,536 bytes and to the
 bytes the turn still has under the sidecar prompt ceiling; a cut file ends with one explicit line
 naming the total line count. That block rides in the first message and is re-sent with every turn,
 so the context line records its estimated tokens, its per-turn cost against the run's prompt
@@ -114,7 +114,7 @@ bounded whole-file read admits ordinary large repository instructions and retain
 digest for edit preconditions. The native helper allocates only the observed file size plus one
 growth-detection byte; it still checks final file and directory identity and rejects concurrent
 changes. Model-facing read windows remain capped at 64 KiB, and the initial-turn block of the mapped
-profiles remains capped at 16 KiB and 800 lines; the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
+profiles remains capped at 64 KiB and 3,200 lines (16 KiB and 800 lines until the 2026-11-24 owner decision); the native copy is not (below). A requested model window past that 64 KiB bound is cut to its largest
 whole-line prefix and reports `nextStartLine` like a window cut by `maxLines`, so "startLine 1,
 maxLines 5000" always answers; only a window whose first line alone exceeds the bound returns the
 existing `workspace-read-too-large` refusal (with model-facing guidance to search instead) and a
@@ -133,7 +133,7 @@ admitted. After a change the turn waits out the producer's watcher before its pr
 file the guided `init` command creates and a removal reach the next model call as the producer's
 own instruction update. The initial turn then attaches no block, so the text reaches the model
 once; the mapped profiles keep the first-message block. The copy carries the whole
-credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 16 KiB/800-line cut
+credential-masked file, as a standalone run loads its AGENTS.md (2026-10-29): the 64 KiB/3,200-line cut
 belongs to the first-message block alone. It is bounded by the helper's 1 MiB ceiling and by a
 per-request copy budget, half the model's input window at three bytes per token
 (`repositoryInstructionsCopyBudget`, from the geometry the run launches with; about 168 KiB on a
@@ -158,8 +158,8 @@ through the secure native listing (bounded; `[...]` and `{...}` are refused, nev
 A project entry never names a file outside the workspace; a global entry may name the user's own
 file. A remote (`https://`) entry is pulled once per run, only for a run launched in Full access,
 through Keiko's egress with no redirect and no loopback or private target; below Full access it is
-refused. Every additional source passes the same credential projection and the 16 KiB/800-line bound
-under a line naming it (only the workspace root's file travels whole); together the additional sources stay within 48 KiB, and what does not fit is
+refused. Every additional source passes the same credential projection and the 64 KiB/3,200-line bound
+under a line naming it (only the workspace root's file travels whole); together the additional sources stay within three times that bound (192 KiB), so a source at the bound is never omitted whole, and what does not fit is
 omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
@@ -378,9 +378,10 @@ cannot change (below) — settle the run `failed` with `edits-blocked` once thre
 streak (`UNREPAIRABLE_EDIT_REFUSAL_BOUND`). Every refusal counts toward the second bound: an edit that
 does not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a
 missing precondition, an invalid changeset, or a refusal that carried no closed code keeps its
-guidance, and six refusals of any kind in the streak settle the run with `edit-retries-exhausted`
-(`REPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal that meets both bounds at once is named by the
-unrepairable one: three refusals the environment dictated say more than six of any kind.
+guidance, and fifteen refusals of any kind in the streak (six until the 2026-11-24 owner decision)
+settle the run with `edit-retries-exhausted` (`REPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal that meets
+both bounds at once is named by the unrepairable one: three refusals the environment dictated say
+more than fifteen of any kind.
 `EDIT_PREPARE_FAILED` is classified by its cause, not by its code alone: the edit port gives the
 facade the closed step that refused the edit before the editor route saw it and, for a failed
 governed read of a file the edit names, the closed read reason, and the facade reports both beside
@@ -1103,7 +1104,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   or `reasoning` for a provider that requires that spelling. No alias-name inference enables it.
   The gateway captures the successful complete response before display suppression; failed,
   cancelled and output-truncated attempts do not supply continuation. Its state is memory-only,
-  bounded to 2,048 entries and 32 MiB (reasoning plus assistant payloads). A successful restore
+  bounded to 16,384 entries and 128 MiB (reasoning plus assistant payloads; 2,048 and 32 MiB until
+  the 2026-11-24 owner decision). A successful restore
   refreshes both expiry and eviction priority; idle entries expire
   after 30 minutes on the next lookup. Keys bind the trusted session/run, provider configuration,
   most recent human message and exact assistant payload. Conflicting successful reasoning for
@@ -1251,7 +1253,8 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 ## Amendment — the run status names a model gateway that is being retried (2026-10-07)
 
 Review of PR #3876 (F11/F21 of the live qualification, #3873): during a provider outage the coding
-sidecar gateway retries for its outage window (ADR-0003, default ten minutes), the turn waits
+sidecar gateway retries for its outage window (ADR-0003, then ten minutes by default, thirty since
+2026-11-24), the turn waits
 silently, and the run status read "Waiting for the model" for the whole window — the same words as a
 slow generation. A second thread of the same review found the same silence before a call's first
 attempt, where it is the circuit breaker or a provider cooldown, not a failed attempt, that holds

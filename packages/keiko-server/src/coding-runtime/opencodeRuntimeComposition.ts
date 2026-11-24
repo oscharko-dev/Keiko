@@ -286,6 +286,7 @@ import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import type { CodingRuntimeRepositoryInstructionsCopyRequest } from "./codingRuntimeRepositoryInstructions.js";
 import {
+  OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS,
   createGeneratedOpenCodeV2Plugins,
   createOpenCodeRuntimeAdapter,
   type OpenCodeGovernedSinkReceipt,
@@ -3875,8 +3876,8 @@ interface ToolBridgeAdmissionGate {
   readonly drain: (signal: AbortSignal) => Promise<boolean>;
 }
 
-const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
-const MAX_TOOL_BRIDGE_DEADLINE_MS = 60_000;
+const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS;
+const MAX_TOOL_BRIDGE_DEADLINE_MS = OPEN_CODE_TOOL_BRIDGE_DEADLINE_MS;
 /**
  * The deadline the tool bridge admits a request under. A tool the catalog settles beyond the
  * sandbox default (the verification tool at its derived work budget, the four proposal tools at the

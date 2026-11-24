@@ -4110,7 +4110,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["claim-notice", "turn-end"],
+        values: ["claim-notice", "turn-end", "context-elision"],
       },
     },
     causal: "correlation",
@@ -4159,6 +4159,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "human-input",
           "claim-notice",
           "turn-end",
+          "context-elision",
         ],
       },
       batchPhase: {
@@ -4213,6 +4214,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      elidedResultCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       draftReceiptCount: {
         type: "integer",

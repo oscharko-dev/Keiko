@@ -6907,6 +6907,78 @@ it("keeps connected Files sources visible without explanatory paragraphs", async
 
 // #4355 AC4: the server states a closed marker with the stored turn; the Chat words it from its
 // catalog under the answer, whatever language the person writes, and the answer stays untouched.
+// Owner decision 2026-11-24: older tool results that reached the model only as a summary are shown,
+// never silent. The note is worded from the catalog with the stored count, under the closing answer.
+describe("Keiko's note when older tool results reached the model only as a summary", () => {
+  const ANSWER = "Here is the analysis of all 300 requirements.";
+  function elidedTurn(count: number | undefined, answer: Partial<ChatMessage> = {}): ChatMessage[] {
+    return [
+      makeMessage({
+        id: "u-elided",
+        content: "Analyse the requirements",
+        toolTranscript: {
+          schemaVersion: 1,
+          exchanges: [],
+          ...(count === undefined ? {} : { contextElision: { elidedResultCount: count } }),
+        },
+      }),
+      makeMessage({ id: "a-elided", role: "assistant", content: ANSWER, timestamp: 2, ...answer }),
+    ];
+  }
+  async function renderElided(locale: "en" | "de", messages: ChatMessage[]): Promise<void> {
+    await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat(), messages })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+  }
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it.each(["en", "de"] as const)(
+    "states the count in %s after the unchanged answer",
+    async (locale) => {
+      await renderElided(locale, elidedTurn(12));
+      const catalog = (
+        locale === "en" ? OPTIONAL_WIDGET_EN_MESSAGES : OPTIONAL_WIDGET_DE_MESSAGES
+      ) as Readonly<Record<string, string>>;
+      const expected = `${catalog["chat.claimNotice.label"] ?? ""}: ${(catalog["chat.contextElision.note.other"] ?? "").replace("{count}", "12")}`;
+      const line = await screen.findByText(expected);
+      expect(line).toHaveAttribute("data-context-elision");
+      const answer = screen.getByText(ANSWER);
+      expect(answer.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(answer.textContent).toBe(ANSWER);
+    },
+  );
+
+  it("shows nothing when no result was summarized", async () => {
+    await renderElided("en", elidedTurn(undefined));
+    expect(screen.getByText(ANSWER)).toBeInTheDocument();
+    expect(document.querySelector("[data-context-elision]")).toBeNull();
+  });
+
+  it("does not put the note under a regenerated answer", async () => {
+    await renderElided(
+      "en",
+      elidedTurn(3, {
+        content: "Shorter answer.",
+        responseVersion: 2,
+        responseVersions: [
+          { version: 1, content: ANSWER, timestamp: 2 },
+          { version: 2, content: "Shorter answer.", timestamp: 3, supersedesVersion: 1 },
+        ],
+      }),
+    );
+    expect(screen.getByText("Shorter answer.")).toBeInTheDocument();
+    expect(document.querySelector("[data-context-elision]")).toBeNull();
+  });
+});
+
 describe("Keiko's note under an answer that claimed an effect its turn did not bear out", () => {
   const CATALOGS = {
     en: OPTIONAL_WIDGET_EN_MESSAGES as Readonly<Record<string, string>>,

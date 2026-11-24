@@ -332,9 +332,10 @@ and [Confluence Cloud current-user API](https://developer.atlassian.com/cloud/co
 
 **Bounded timeouts:** 30 000 ms per request for interactive write/read actions (issue and page
 CRUD, transitions, comments); 60 000 ms per paginated fetch for bulk sync requests (matching
-`FigmaHttpPort`'s existing `DEFAULT_TIMEOUT_MS`); 15 000 ms for the live JQL search action (#2248),
-matching the existing per-page timeout convention in
-`DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs`. Sync-run timeouts are additionally bounded
+`FigmaHttpPort`'s existing `DEFAULT_TIMEOUT_MS`); 60 000 ms for the live JQL search action (#2248;
+15 000 ms until the 2026-11-24 owner decision), the HTTP port's per-request ceiling. Chat's governed
+Jira reads and the report call get the same 60 000 ms (`JIRA_READ_DURATION_MS`, formerly 15 000 and
+30 000 ms). Sync-run timeouts are additionally bounded
 by the overall `maxDurationMs` run budget (D5).
 
 **Bounded read backoff for 429/5xx:** GET requests use exponential backoff starting at 500 ms, factor 2, capped at 8 000
@@ -1387,8 +1388,10 @@ written. A record settled as a local refusal before dispatch (`not-dispatched`, 
 reconciled existing item, or `rejected` before sending) uses the single-write bound up for no one.
 
 *Time-bounded runs.* A run is bounded by time, never by size: no new item is started after the run
-has been creating for 10 minutes or has taken 40 minutes in all (`JIRA_DRAFT_RUN_BUDGET`, inside the
-tool's 50-minute duration ceiling); reading ahead through items that already exist does not use
+has taken the whole time the tool's duration ceiling leaves after the person's approval wait
+(`JIRA_DRAFT_RUN_BUDGET`; the ceiling ends ten minutes before the Chat turn, so a few hundred
+requirements are created in one approved run — until the 2026-11-24 owner decision a run stopped
+after 10 minutes of creating or 40 minutes in all, inside a 50-minute ceiling); reading ahead through items that already exist does not use
 the creating allowance up. Items not started are reported honestly as `pending` (a dependent of a
 pending item is pending too), the result lists the keys created in this run exactly, and fixed
 guidance (`JIRA_DRAFT_PENDING_GUIDANCE`) tells the model to say so in plain language and offer to
@@ -2193,7 +2196,7 @@ result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `rep
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —
 the total moved, an issue repeated, or the page that starts at the last issue read did not begin with it (that start proves nothing was inserted or removed before the cursor) —, `memory-budget`, `issue-too-large`,
 `template-unreadable` — the compliance section was not evaluated). Each call
-reads for at most 15 s under its own report-page budget; the internal managed host honors the
+reads for at most 60 s under its own report-page budget (15 s until the 2026-11-24 owner decision); the internal managed host honors the
 validated tool duration within the native timer ceiling. There is no issue-count limit.
 Hierarchy discovery and the create-metadata rules are fetched before the first page; when either
 cannot be read the next call asks again and a second failure ends the report as `incomplete`
@@ -2627,11 +2630,19 @@ ships in v1 (D7).
 
 | Bound | Default | Applies to |
 | --- | --- | --- |
-| `maxItems` | 2 000 | issues or pages per sync run |
-| `maxBytes` | 50 000 000 (50 MB) | total normalized content per sync run |
-| `maxDurationMs` | 900 000 (15 min) | wall-clock budget for one sync run |
+| `maxItems` | 20 000 | issues or pages per sync run |
+| `maxBytes` | 256 000 000 (256 MB) | total normalized content per sync run |
+| `maxDurationMs` | 7 200 000 (120 min) | wall-clock budget for one sync run |
 | `maxConcurrency` | 4 | concurrent paginated fetch requests |
 | `maxResults` (live search only, #2248) | 100 | results per `search-issues-live` call |
+
+The 2026-11-24 owner decision raised the first three from 2 000 items, 50 MB and 15 minutes. The
+byte bound stays at 256 MB because a run gathers every fetched item in memory until it is applied
+as a whole, so it is also the run's memory ceiling. One pod runs one sync at a time
+(`SYNC_ALREADY_RUNNING`), but runs of different pods may overlap, so the process holds up to this
+ceiling per pod that is syncing. A process-wide bound across pods would queue a later run instead of
+refusing it; it needs the sync lane's own Activity Log operations first (the lane records only its
+failure diagnostic today) and is tracked as a follow-up.
 
 **Fingerprint-based change detection generalizes the Epic #1856 model** (it is not the literal
 HTML-manual table, because Atlassian items are keyed by a stable provider identifier — a Jira issue

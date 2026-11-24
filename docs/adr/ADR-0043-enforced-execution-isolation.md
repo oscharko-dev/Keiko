@@ -655,7 +655,7 @@ has not recorded a completed install for that tree, it runs
 the fixed base command `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error`
 with the server-owned target flags described below, through the same keiko-tools command boundary
 as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm install` and nothing else, no leading flags, `-c`/`--call` denied), under
-`DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
+`DEPENDENCY_INSTALL_LIMITS` (20 minutes wall time since the 2026-11-24 owner decision, 1 MiB output) and with **host network**. This is the
 one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
 it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
 lifecycle hooks only. The install runs no project lifecycle script and no dependency's

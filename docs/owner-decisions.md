@@ -55,14 +55,28 @@ Model Gateway spend ceiling. Per-request context-window fitting, output limits, 
 and patch budgets remain. Never reintroduce a token-count quota; a better guard against a model
 that loops unnoticed is tracked in #4346 (ADR-0137).
 
-## Coding run limits (2026-11-24)
+## Work-ending limits (2026-11-24)
 
-Keiko runs on the customer's own models, so a run limit that ends healthy work protects nothing.
-Every new Coding run gets the longest supported duration (480 minutes; the setting
-`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` can only shorten it) and a 10,000-call tool budget that
-only a runaway loop reaches, because a long ordinary run makes several hundred to more than a
-thousand tool calls. Never lower either default to ration ordinary work; the duration, the
-person's Stop and the hard denials remain the guards (ADR-0137).
+Keiko runs on the customer's own self-hosted models, so there is no per-call cost, and a fixed limit
+that ends healthy long work protects nothing. A long analysis stopped unfinished at a Coding run's
+256-call allowance; a review of the product then raised every bound that can end or cut short
+ordinary work:
+
+- A new Coding run gets the longest supported duration (480 minutes; the setting
+  `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` can only shorten it) and 10,000 tool calls, which only
+  a runaway loop reaches. A Chat tool turn gets the same 480 minutes and 10,000 calls, and admits a
+  call against the transcript's actual size, not the sum of every earlier call's worst case.
+- The model path waits as long as the run may live: a provider outage no longer ends a run after
+  about 20 minutes, a slow first byte gets 15 minutes, and a turn may write and reason more
+  (ADR-0137, the model gateway).
+- Verification steps, dependency installs, a person's approval, Jira and MCP reads, governed tool
+  round trips, repository instructions, Atlassian sync scopes and Knowledge discovery got bounds
+  sized for real work (the owning ADRs and code name each value).
+
+A bound stays where it protects memory, security, the model's context window (read windows, tool
+output, request size) or stops a runaway loop. Trimming a conversation to the model's context window
+is shown to the person, never silent. Never lower a raised default to ration ordinary work; the
+person's Stop and the hard denials remain the guards.
 
 ## Knowledge Pod scope (2026-11-04)
 

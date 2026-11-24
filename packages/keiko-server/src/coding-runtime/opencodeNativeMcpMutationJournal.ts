@@ -23,9 +23,8 @@ import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { codingJiraResultCapture, codingJiraReadResultCapture } from "./codingJiraResultCapture.js";
 import {
-  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
-  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
   chatToolExchangeReservation,
+  chatToolTranscriptAdmits,
 } from "../store/chatToolTranscript.js";
 import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 
@@ -346,13 +345,10 @@ class NativeMutationJournal implements NativeMcpMutationJournal {
       { id: invocationId, name: alias, arguments: args },
       descriptor,
     );
-    const reserved =
-      Math.max(CHAT_TOOL_TRANSCRIPT_BASE_BYTES, occupancy.bytes) +
-      held.reduce((sum, value) => sum + value.bytes, 0) +
-      bytes;
+    const heldBytes = held.reduce((sum, value) => sum + value.bytes, 0);
     if (
       occupancy.exchangeCount + held.length >= CHAT_TOOL_TURN_BUDGET.maxToolCalls ||
-      reserved > CHAT_TOOL_TRANSCRIPT_MAX_BYTES
+      !chatToolTranscriptAdmits(occupancy.bytes, heldBytes, bytes)
     )
       throw journalConflict();
     const reservation = { messageId, bytes };

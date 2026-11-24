@@ -6297,7 +6297,7 @@ describe("consecutive edit refusals (F5, #3873)", () => {
     expect(JSON.stringify(records)).not.toContain(start.taskIntent);
   });
 
-  it("bounds refusals the model can repair at the higher bound of six", async () => {
+  it("bounds refusals the model can repair at the higher bound of fifteen", async () => {
     const { f, records } = await runningRun();
 
     observe(f, INVALID, REPAIRABLE_EDIT_REFUSAL_BOUND - 1);
@@ -6379,10 +6379,12 @@ describe("consecutive edit refusals (F5, #3873)", () => {
     const { f, records } = await runningRun();
     const stale: CodingToolEditOutcome = { kind: "refused", reasonCode: "CONTENT_HASH_MISMATCH" };
 
-    for (let pair = 0; pair < REPAIRABLE_EDIT_REFUSAL_BOUND / 2; pair += 1) {
+    for (let pair = 0; pair < Math.floor(REPAIRABLE_EDIT_REFUSAL_BOUND / 2); pair += 1) {
       observe(f, INVALID, 1);
       observe(f, stale, 1);
     }
+    // The bound (15) is odd: the closing refusal is the one that meets it.
+    observe(f, INVALID, 1);
 
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
@@ -6393,7 +6395,7 @@ describe("consecutive edit refusals (F5, #3873)", () => {
     expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([
       expect.objectContaining({
         extra: expect.objectContaining({
-          reasonCode: "CONTENT_HASH_MISMATCH",
+          reasonCode: "INVALID_EDITS",
           refusalClass: "repairable",
           consecutiveCount: REPAIRABLE_EDIT_REFUSAL_BOUND,
           failureCode: "edit-retries-exhausted",
@@ -6406,7 +6408,7 @@ describe("consecutive edit refusals (F5, #3873)", () => {
       extra: {
         failureCode: "edit-retries-exhausted",
         failureBasis: "refusal-escalation",
-        refusalReasonCode: "CONTENT_HASH_MISMATCH",
+        refusalReasonCode: "INVALID_EDITS",
       },
     });
   });

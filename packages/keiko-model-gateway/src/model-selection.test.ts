@@ -783,7 +783,8 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       runMetadata: {
         maxPromptTokens: 128_000,
         maxOutputTokens: 4_096,
-        maxInputMessages: 512,
+        // Owner decision 2026-11-24: the 4 MiB request body stays the memory bound.
+        maxInputMessages: 5_000,
         maxRequestBytes: 4_194_304,
       },
     });
@@ -1065,9 +1066,12 @@ describe("resolveCodingSafeSidecarGatewayProfile — coding output allowance (#3
     return result.runMetadata.maxOutputTokens;
   }
 
-  it("reserves 16k for an undeclared output limit on a 128k window, up from the chat profile's 8k", () => {
-    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 0 })).toBe(16_384);
-    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 0 })).toBe(16_384);
+  // Owner decision 2026-11-24: the undeclared coding reserve is 32k, still capped at a quarter of the
+  // window.
+  it("reserves 32k for an undeclared output limit on a 128k window, up from the chat profile's 8k", () => {
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 0 })).toBe(32_768);
+    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 0 })).toBe(32_000);
+    expect(outputAllowance({ contextWindow: 262_144, maxOutputTokens: 0 })).toBe(32_768);
   });
 
   it("keeps the provider-declared output limit when the window can hold it", () => {

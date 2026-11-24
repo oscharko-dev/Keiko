@@ -246,9 +246,9 @@ function codingSidecarStreams(config: GatewayConfig, capability: ModelCapability
  * The output allowance a coding turn reserves when the provider declares no output limit (#3873,
  * F17). The shared chat profile reserves 8k of a 128k window, and Gemma 4 31B with reasoning
  * enabled spent exactly that on reasoning before its tool call, three turns in a row; a coding turn
- * reasons about files and tool results, so its reserve starts at twice the chat reserve.
+ * reasons about files and tool results, so its reserve starts at four times the chat reserve (owner decision 2026-11-24: 32k).
  */
-export const CODING_OUTPUT_RESERVE_TOKENS = 16_384;
+export const CODING_OUTPUT_RESERVE_TOKENS = 32_768;
 
 // A reserve never takes more than this fraction of the window: the rest stays prompt input, the
 // same bound the shared profile applies to an undeclared reserve (`undeclaredOutputReserveTokens`).
@@ -317,10 +317,10 @@ function codingSidecarProjection(
       // still reads the provider's stream under the silence floor (`readsOverStream`), so only a
       // capability that does not stream meets the whole-body attempt bound (#3873 review).
       maxOutputTokens: codingOutputReserveTokens(capability, contextProfile, capability.streaming),
-      // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
-      // remains the hard memory bound, while 512 permits native compaction to run before ordinary
-      // multi-turn coding sessions hit an unrelated record-count rejection.
-      maxInputMessages: 512,
+      // OpenCode records multiple assistant/tool messages per user turn. The raw 4 MiB body cap
+      // remains the hard memory bound, while 5,000 (owner decision 2026-11-24) lets a long run keep
+      // its history until native compaction runs, never ending on an unrelated record-count rejection.
+      maxInputMessages: 5_000,
       // The wire envelope includes JSON-escaped tool transcripts and schemas. A 64 KB cap
       // rejected ordinary coding context long before the separate prompt-token ceiling, and a
       // 1 MiB cap still bound the native runtime's own context window to 40,960 input tokens at

@@ -7,7 +7,12 @@ import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
 import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
-import { ClaimNoticeLine, useClaimNoticeText } from "./ClaimNoticeLine";
+import {
+  ClaimNoticeLine,
+  ContextElisionLine,
+  useClaimNoticeText,
+  useContextElisionText,
+} from "./ClaimNoticeLine";
 
 const KEYS = [
   "chat.claimNotice.label",
@@ -15,10 +20,16 @@ const KEYS = [
   "chat.claimNotice.noJiraApproval",
   "chat.claimNotice.jiraReportNotGenerated",
   "chat.claimNotice.toolCallNotExecuted",
+  "chat.contextElision.note.one",
+  "chat.contextElision.note.other",
 ] as const;
 
 function Line({ notice }: { readonly notice: (typeof CHAT_CLAIM_NOTICES)[number] }): ReactNode {
   return <ClaimNoticeLine text={useClaimNoticeText(notice)} />;
+}
+
+function ElisionLine({ count }: { readonly count: number }): ReactNode {
+  return <ContextElisionLine text={useContextElisionText({ elidedResultCount: count })} />;
 }
 
 describe("the claim notice texts (#4355 AC6)", () => {
@@ -43,6 +54,35 @@ describe("the claim notice texts (#4355 AC6)", () => {
     ]);
     for (const key of KEYS.slice(1)) expect(OPTIONAL_WIDGET_EN_MESSAGES).toHaveProperty(key);
   });
+
+  it.each(["en", "de"] as const)(
+    "names one summarized tool result in the singular and several in the plural in %s",
+    async (locale) => {
+      await Promise.all([loadLocaleMessages(locale), loadOptionalWidgetMessages(locale)]);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const catalog = (
+        locale === "en" ? OPTIONAL_WIDGET_EN_MESSAGES : OPTIONAL_WIDGET_DE_MESSAGES
+      ) as Readonly<Record<string, string>>;
+      try {
+        const { container, rerender } = render(
+          <I18nProvider>
+            <ElisionLine count={1} />
+          </I18nProvider>,
+        );
+        expect(container.textContent).toContain(catalog["chat.contextElision.note.one"]);
+        rerender(
+          <I18nProvider>
+            <ElisionLine count={2} />
+          </I18nProvider>,
+        );
+        expect(container.textContent).toContain(
+          (catalog["chat.contextElision.note.other"] ?? "").replace("{count}", "2"),
+        );
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
 
   it("renders nothing without text", () => {
     const { container } = render(<ClaimNoticeLine text={undefined} />);

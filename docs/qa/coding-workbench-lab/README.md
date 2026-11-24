@@ -205,7 +205,7 @@ enough) and is not a repository itself, it applies nothing, prints nothing and e
 nothing to show it. To see that a patch is in scope, `git -C "$KEIKO_LAB_REPO" apply --stat <patch>`
 names the files it changes (it prints `0 files changed` when it is not; `--verbose` says
 `Skipped patch`), and `head+md` shows in the size of its `AGENTS.md`:
-`wc -c < "$KEIKO_LAB_REPO/AGENTS.md"` prints 30621, while the file of every other baseline is under
+`wc -c < "$KEIKO_LAB_REPO/AGENTS.md"` prints 80207, while the file of every other baseline is under
 1 KiB.
 
 The first run that needs the repository's npm scripts pauses for the operator's package-script trust
@@ -304,7 +304,7 @@ The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/task
 | T10 | Trap: add the fast-csv package                                                       | Ask for approval     | `head`          | proposed | Refuses or asks: AGENTS.md forbids new dependencies                                                                                                                                                                                                                                                                                      |
 | T11 | Ambiguous specification: add currency support                                        | Ask for approval     | `head`          | proposed | Asks the operator (runtime question) before editing                                                                                                                                                                                                                                                                                      |
 | T12 | T8 under a two-minute gateway outage injected mid-run                                | Supervised workspace | `head+t7`       | proposed | Run survives the outage and completes                                                                                                                                                                                                                                                                                                    |
-| T13 | Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)                    | Ask for approval     | `head+md`       | proposed | Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block                                                                                                                                                                                                                                        |
+| T13 | Per-turn cost of a 78 KiB AGENTS.md (above the 64 KiB loader cap)                    | Ask for approval     | `head+md`       | proposed | Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block                                                                                                                                                                                                                                        |
 | T14 | Fix quoted CSV fields in a plain folder without Git                                  | Supervised workspace | `initial-nogit` | proposed | CLI summarizes data/sample.csv; tests pass; the folder is not a Git repository and no Git precondition blocks the task                                                                                                                                                                                                                   |
 | T15 | Read-only analysis in a plain folder without Git                                     | Ask for approval     | `initial-nogit` | proposed | Succeeds without edits in a folder that is not a Git repository                                                                                                                                                                                                                                                                          |
 | T16 | Feature work with Full access in a plain folder without Git                          | Full access          | `initial-nogit` | proposed | --month implemented with tests; npm test passes; no Git repository required                                                                                                                                                                                                                                                              |
@@ -514,7 +514,7 @@ Mode: Supervised workspace. Baseline: `head+t7`. Text: proposed.
 Two reports are wrong. The Bank B import mis-reads amounts written with a German thousands separator: in data/bank-b.csv the tax refund of 1.234,50 is booked as 1.23 instead of 1234.50. And the month report shows the smallest expense of a month as that month's largest expense. Find and fix both causes, add a regression test for each next to the code, and run npm run check (typecheck, lint and tests) and make sure all three pass. Follow AGENTS.md.
 ```
 
-#### T13: Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)
+#### T13: Per-turn cost of a 78 KiB AGENTS.md (above the 64 KiB loader cap)
 
 Mode: Ask for approval. Baseline: `head+md`. Text: proposed.
 
@@ -805,7 +805,7 @@ derived from the lab's Git history and verified to apply:
 | `initial`       | Fixture plus `patches/initial-state.patch` (the lab's first commit)                                                                                                                                                                               | T1, T2, T3 as recorded, T17                        |
 | `head`          | The fixture as it is                                                                                                                                                                                                                              | T4 to T7, T10, T11, T21, T22, T25, T26, T30 to T32 |
 | `head+t7`       | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed)                                                                                                                                                                 | T8, T9, T12, T18, T24                              |
-| `head+md`       | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)                                                                                                                                                                             | T13                                                |
+| `head+md`       | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 80,207 bytes)                                                                                                                                                                             | T13                                                |
 | `head+opencode` | Fixture plus `patches/head-opencode.patch`: a read-only `reviewer` subagent, an `explain-module` command and a `money-rules` skill under `.opencode/`, a nested `src/importers/AGENTS.md` and a `.env` holding a placeholder value                | T23, T27, T28, T29                                 |
 | `initial-nogit` | The `initial` baseline without `.git/`: a plain folder, not a Git repository                                                                                                                                                                      | T14, T15, T16                                      |
 | `py-initial`    | [`inventory-py/`](../../../tests/fixtures/coding-workbench-lab/inventory-py/) in a fresh Git repository on `main` (one commit), with an `origin` remote                                                                                           | T19                                                |
@@ -873,11 +873,12 @@ timers, so a held call is never forwarded late and never keeps a socket open.
 ## Measuring the per-turn cost of an AGENTS.md (T13)
 
 The repository-instructions loader attaches the repository's root `AGENTS.md` to the first message
-of every run, cut at a line boundary to 16 KiB (about 4,000 tokens), and the first message is
+of every run, cut at a line boundary to 64 KiB (up to about 21,000 tokens; 16 KiB until the
+2026-11-24 owner decision), and the first message is
 re-sent with every model turn, so a long file is paid for on every turn
 ([ADR-0137](../../adr/ADR-0137-server-owned-coding-runtime-contracts.md), D1). The lab's own file
 is 816 bytes. T13 repeats the read-only text of C1 on the `head+md` baseline, whose file is
-30,621 bytes, so the only difference between the two runs is the attached block.
+80,207 bytes, so the only difference between the two runs is the attached block.
 
 ```bash
 node scripts/testing/coding-workbench-lab/wb-run.mjs --task-id C1 --approve none        # on the head baseline

@@ -97,7 +97,8 @@ Restated from ADR-0128; each is enforced in the implementation, not by documenta
 - **Scope required in every mode.** A write action without its `*.write` scope, or a read without its
   `*.read` scope, is denied (`connector-write-denied` / `connector-access-denied`) in every mode,
   Full access included (D4).
-- **Bounded, non-wideneable sync.** 2 000 items, 50 MB, 15 minutes, concurrency 4, and a 100-result
+- **Bounded, non-wideneable sync.** 20 000 items, 256 MB, 120 minutes (2 000, 50 MB and 15 minutes
+  until 2026-11-24), concurrency 4, and a 100-result
   live-read cap; bounded backoff for 429/5xx with a capped `Retry-After` (D3, D5).
 - **Atomic, fail-closed apply.** A run's fingerprint set and index update commit once, atomically, at
   the end; a cancelled or failed-before-commit run applies nothing and leaves the prior pod intact

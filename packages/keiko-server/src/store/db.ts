@@ -1,4 +1,4 @@
-import { updateChatToolTranscript } from "./chatToolTranscript.js";
+import { chatToolTranscriptSize, updateChatToolTranscript } from "./chatToolTranscript.js";
 import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatContinuity.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
@@ -819,6 +819,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     updateChatToolTranscript: (id, update, correlationId): void => {
       updateChatToolTranscript(db, id, update, options.redactContentString, correlationId);
     },
+    chatToolTranscriptSize: (id) => chatToolTranscriptSize(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());

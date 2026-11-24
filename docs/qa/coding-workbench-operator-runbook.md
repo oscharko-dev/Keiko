@@ -124,7 +124,7 @@ ADR-0137 D3), so an operator can read a run's token use against its model turns 
 
 The output allowance of one model request (`maxOutputTokens` on
 `coding-sidecar.gateway.request-validated`, and OpenCode's `limit.output`) is not an operator
-setting; it is derived by this rule (#3873, F17): a coding turn reserves at least 16,384 output
+setting; it is derived by this rule (#3873, F17): a coding turn reserves at least 32,768 output
 tokens unless the provider-declared `max_output_tokens` (LiteLLM's `/model/info`, or the operator's
 model configuration) or the per-request prompt-admission arithmetic (the request's `maxPromptTokens` minus the
 estimated prompt minus the safety margin) is smaller, and never more than a quarter of the model's window.
@@ -148,7 +148,7 @@ switch while the run starts records `refused`, `workspace-unavailable`). The tex
 canonical model-safe projection of workspace text, so credentials in the file never reach the model
 (a file that projection cannot handle is `refused`, `redaction-unavailable`). It is then labelled as
 repository-authored and untrusted: it grants no authority (ADR-0137 D1). The mapped profiles bound
-it to the first 800 lines and 16,384 bytes, with one explicit truncation line when cut; a native run
+it to the first 3,200 lines and 65,536 bytes, with one explicit truncation line when cut; a native run
 carries the whole masked file, up to the helper's 1 MiB ceiling and half the model's input window.
 
 - **Native profile.** The copy is written to the run's private configuration as the pinned

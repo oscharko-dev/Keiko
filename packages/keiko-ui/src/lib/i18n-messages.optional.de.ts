@@ -3291,6 +3291,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "In diesem Durchgang wurde kein Jira-Bericht zum Herunterladen erzeugt. Codeblöcke lassen sich kopieren, sind aber keine Berichtsexporte.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
+  "chat.contextElision.note.one":
+    "Damit diese Unterhaltung ins Kontextfenster des Modells passt, hat Keiko dem Modell ein älteres Tool-Ergebnis nur noch als Kurzfassung geschickt. Vollständig steht es weiterhin beim Tool-Aufruf.",
+  "chat.contextElision.note.other":
+    "Damit diese Unterhaltung ins Kontextfenster des Modells passt, hat Keiko dem Modell {count} ältere Tool-Ergebnisse nur noch als Kurzfassung geschickt. Vollständig stehen sie weiterhin bei den Tool-Aufrufen.",
   "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
   "chat.turnEnd.reason.budgetExhausted":
     "In diesem Durchgang wurde das Limit für Aktionen erreicht.",

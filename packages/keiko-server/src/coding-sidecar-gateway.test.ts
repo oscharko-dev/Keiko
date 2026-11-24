@@ -10,6 +10,10 @@ import {
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
+import {
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +39,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   codingWorkbenchProviderTimeoutMs,
+  GATEWAY_CODING_OUTAGE_WINDOW_MS,
   providerRequestBudgetMs,
   streamOutputAllowanceMs,
   streamRequestBudgetMs,
@@ -182,6 +187,13 @@ function capability(overrides: Partial<ModelCapability> = {}): ModelCapability {
     knownLimitations: [],
     ...overrides,
   };
+}
+
+// The profile's input-message bound, read from the production projection rather than restated.
+function profileMaxInputMessages(): number {
+  const result = resolveCodingSafeSidecarGatewayProfile(configValue(provider(), capability()));
+  if (result.status !== "available") throw new Error("expected an available coding profile");
+  return result.runMetadata.maxInputMessages;
 }
 
 function configValue(
@@ -2828,15 +2840,17 @@ describe("coding-sidecar gateway", () => {
   // default window + 1 s grace, and 1,800 s + 1,800 s + 1 s for a 30-minute window.
   it("keeps the route deadline behind the outage window the coding turn rides out", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
-    expect(
-      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
-    ).toBe(2_401_000);
-    expect(
+    const deadlineFor = (codingOutageWindowMs?: number): number =>
       codingSidecarGatewayRequestDeadlineMs(
-        { ...configValue(slow, capability()), codingOutageWindowMs: 1_800_000 },
+        codingOutageWindowMs === undefined
+          ? configValue(slow, capability())
+          : { ...configValue(slow, capability()), codingOutageWindowMs },
         slow.modelId,
-      ),
-    ).toBe(3_601_000);
+      );
+    // Without a window the deadline sits behind the one attempt; each window extends it by itself.
+    const withoutWindow = deadlineFor(0);
+    expect(deadlineFor()).toBe(withoutWindow + GATEWAY_CODING_OUTAGE_WINDOW_MS);
+    expect(deadlineFor(3_600_000)).toBe(withoutWindow + 3_600_000);
   });
 
   // The sidecar reaches the gateway both ways (`chat()` buffered, `chatStream()` streamed), so the
@@ -2927,8 +2941,13 @@ describe("coding-sidecar gateway", () => {
         }),
         deps,
       );
-      // The hung attempt ends at the floored Workbench timeout, not at the configured 50 ms.
-      await vi.advanceTimersByTimeAsync(codingWorkbenchProviderTimeoutMs(50) + 50);
+      // The hung attempt ends at its floored whole-body bound, not at the configured 50 ms.
+      const attemptBoundMs = providerRequestBudgetMs({
+        timeoutMs: codingWorkbenchProviderTimeoutMs(50),
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      });
+      await vi.advanceTimersByTimeAsync(attemptBoundMs + 50);
       const result = await pending;
       assertRouteResult(result);
       expect(result.status).toBe(200);
@@ -3021,9 +3040,12 @@ describe("coding-sidecar gateway", () => {
     const sink = captureServerLog("info");
     const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
     const deadlineConfig = configValue(deadlineProvider, capability());
+    // The route arms its deadline behind the streamed read's output allowance for the turn's
+    // admitted output tokens (the capability's declared limit here), so the mock derives it alike.
     const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
       deadlineConfig,
       deadlineProvider.modelId,
+      capability().maxOutputTokens,
     );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
@@ -3618,9 +3640,12 @@ describe("coding-sidecar gateway", () => {
     const sink = captureServerLog("info");
     const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
     const deadlineConfig = configValue(deadlineProvider, capability());
+    // The route arms its deadline behind the streamed read's output allowance for the turn's
+    // admitted output tokens (the capability's declared limit here), so the mock derives it alike.
     const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
       deadlineConfig,
       deadlineProvider.modelId,
+      capability().maxOutputTokens,
     );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
@@ -4953,9 +4978,10 @@ describe("coding-sidecar gateway", () => {
       },
     );
 
+    const maxInputMessages = profileMaxInputMessages();
     const result = await handleCodingSidecarGatewayChatCompletions(
       routeContext({
-        messages: Array.from({ length: 513 }, (_, index) => ({
+        messages: Array.from({ length: maxInputMessages + 1 }, (_, index) => ({
           role: "user",
           content: `message-${String(index)}`,
         })),
@@ -4968,7 +4994,7 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "context_length_exceeded",
-          message: "Request body messages exceed profile maxInputMessages (512).",
+          message: `Request body messages exceed profile maxInputMessages (${String(maxInputMessages)}).`,
         },
       },
     });
@@ -6057,28 +6083,45 @@ describe("coding sidecar gateway turn failure projection", () => {
         return { result, line: turnFailedLine(sink.events) };
       }
 
-      it("refuses the runtime retry from the second consecutive window on", async () => {
+      // Owner decision 2026-11-24: a provider outage never ends a run by a window count; the run
+      // keeps waiting for as long as its own duration envelope allows.
+      it("keeps the runtime retry allowed through consecutive windows within the run envelope", async () => {
         const sink = captureServerLog("warn");
         const unavailable = new ProviderError("synthetic unavailable", 503);
-        const first = await failTurn(unavailable, sink);
-        expect(first.result).toMatchObject({ status: 503 });
-        expect(first.line?.extra).toMatchObject({
-          runtimeRetry: "allowed",
-          providerUnavailable: true,
-          unavailableWindowCount: 1,
-        });
-        const second = await failTurn(unavailable, sink);
-        expect(second.result).toMatchObject({ status: 400 });
-        expect(JSON.stringify(second.result)).toContain("stayed unavailable");
-        expect(second.line?.extra).toMatchObject({
-          runtimeRetry: "refused",
-          providerUnavailable: true,
-          unavailableWindowCount: 2,
-        });
-        expectActivityLogProof(
-          "coding-sidecar.gateway.turn-failed.emitted-line",
-          formatActivityLogProofLine(second.line ?? {}),
-        );
+        for (const count of [1, 2, 3, 4]) {
+          const turn = await failTurn(unavailable, sink);
+          expect(turn.result).toMatchObject({ status: 503 });
+          expect(turn.line?.extra).toMatchObject({
+            runtimeRetry: "allowed",
+            providerUnavailable: true,
+            unavailableWindowCount: count,
+          });
+        }
+      });
+
+      it("refuses the runtime retry once the outage outlasts the longest run duration", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const sink = captureServerLog("warn");
+          const unavailable = new ProviderError("synthetic unavailable", 503);
+          const first = await failTurn(unavailable, sink);
+          expect(first.line?.extra).toMatchObject({ runtimeRetry: "allowed" });
+          vi.setSystemTime(Date.now() + runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES) + 1);
+          const last = await failTurn(unavailable, sink);
+          expect(last.result).toMatchObject({ status: 400 });
+          expect(JSON.stringify(last.result)).toContain("stayed unavailable");
+          expect(last.line?.extra).toMatchObject({
+            runtimeRetry: "refused",
+            providerUnavailable: true,
+            unavailableWindowCount: 2,
+          });
+          expectActivityLogProof(
+            "coding-sidecar.gateway.turn-failed.emitted-line",
+            formatActivityLogProofLine(last.line ?? {}),
+          );
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("restarts the count after a failure that is not an unavailable window", async () => {
@@ -6668,7 +6711,7 @@ describe("coding sidecar gateway rejection activity log", () => {
           maxPromptTokens: 16,
           admissiblePromptTokens: admissible,
           inputMessageCount: 1,
-          maxInputMessages: 512,
+          maxInputMessages: profileMaxInputMessages(),
           completeness: "complete",
           loss: "none",
         },
@@ -6681,9 +6724,13 @@ describe("coding sidecar gateway rejection activity log", () => {
     const sink = captureServerLog("warn");
     const deps = depsValue(configValue(provider(), capability()));
 
+    const maxInputMessages = profileMaxInputMessages();
     const result = await handleCodingSidecarGatewayChatCompletions(
       routeContext({
-        messages: Array.from({ length: 513 }, () => ({ role: "user", content: "private" })),
+        messages: Array.from({ length: maxInputMessages + 1 }, () => ({
+          role: "user",
+          content: "private",
+        })),
       }),
       deps,
     );
@@ -6705,8 +6752,8 @@ describe("coding sidecar gateway rejection activity log", () => {
             maxPromptTokens: 128_000,
             maxOutputTokens: 4_096,
           }),
-          inputMessageCount: 513,
-          maxInputMessages: 512,
+          inputMessageCount: maxInputMessages + 1,
+          maxInputMessages,
           completeness: "complete",
           loss: "none",
         },
@@ -8357,8 +8404,9 @@ describe("admittedOutputTokens — coding turns reserve room for reasoning (#387
     return result.runMetadata;
   }
 
-  it("sends a coding turn 16,384 output tokens where the model declares no limit", () => {
-    expect(admittedOutputTokens(codingBounds(0), PROMPT)).toBe(16_384);
+  // Owner decision 2026-11-24: the coding reserve is 32,768 tokens (it was 16,384).
+  it("sends a coding turn 32,768 output tokens where the model declares no limit", () => {
+    expect(admittedOutputTokens(codingBounds(0), PROMPT)).toBe(32_768);
   });
 
   it("keeps the chat surface's own 8,192 reserve for the same window", () => {
@@ -8393,8 +8441,8 @@ describe("admittedOutputTokens — coding turns reserve room for reasoning (#387
   // #3873 review: with coding streaming switched off, a streaming-capable model is still read over
   // its own stream under the silence floor (`readsOverStream`), not under the whole-body bound, so
   // shrinking its reserve would only bring back F17's exhaustion.
-  it("keeps the 16,384 coding reserve when only the sidecar's streaming is switched off", () => {
-    expect(admittedOutputTokens(codingBounds(0, { codingStreaming: "off" }), PROMPT)).toBe(16_384);
+  it("keeps the 32,768 coding reserve when only the sidecar's streaming is switched off", () => {
+    expect(admittedOutputTokens(codingBounds(0, { codingStreaming: "off" }), PROMPT)).toBe(32_768);
   });
 
   // Accepted case (#3873 review): a DECLARED output limit is the operator's statement and is used as
@@ -12037,7 +12085,8 @@ describe("configured thinking continuation (#4059)", () => {
       const deps = thinkingDeps();
       const profile = resolveCodingSafeSidecarGatewayProfile(deps.config);
       if (profile.status !== "available") throw new Error("fixture profile missing");
-      const reasoning = "r".repeat(profile.runMetadata.maxOutputTokens * 4 + 1);
+      // Owner decision 2026-11-24: the reasoning allowance is eight bytes per output token.
+      const reasoning = "r".repeat(profile.runMetadata.maxOutputTokens * 8 + 1);
       vi.stubGlobal(
         "fetch",
         vi.fn(() =>
@@ -12077,6 +12126,60 @@ describe("configured thinking continuation (#4059)", () => {
           expect(response.body()).not.toContain('"finish_reason":"stop"');
           expect(response.body()).toContain('"finish_reason":"error"');
         } else expect(result.status).not.toBe(200);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  // Owner decision 2026-11-24: a reasoning of six bytes per allowed token (above the former four,
+  // below the eight-byte allowance) is a legitimate reasoning, never a refused answer.
+  it.each([false, true])(
+    "delivers a complete reasoning passage within eight bytes per allowed token (stream=%s)",
+    async (stream) => {
+      const deps = thinkingDeps();
+      const profile = resolveCodingSafeSidecarGatewayProfile(deps.config);
+      if (profile.status !== "available") throw new Error("fixture profile missing");
+      const reasoning = "r".repeat(profile.runMetadata.maxOutputTokens * 6);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            stream
+              ? providerSse([
+                  sseDelta({ role: "assistant", reasoning_content: reasoning }),
+                  sseDelta({ content: "Answer" }),
+                  sseFinish("stop"),
+                  "data: [DONE]\n\n",
+                ])
+              : new Response(
+                  JSON.stringify({
+                    choices: [
+                      {
+                        message: {
+                          role: "assistant",
+                          content: "Answer",
+                          reasoning_content: reasoning,
+                        },
+                        finish_reason: "stop",
+                      },
+                    ],
+                  }),
+                  { headers: { "content-type": "application/json" } },
+                ),
+          ),
+        ),
+      );
+      try {
+        const { result, response } = await sendThinking(
+          deps,
+          [{ role: "user", content: "Inspect" }],
+          stream,
+        );
+        if (typeof result === "symbol") {
+          expect(response.body()).toContain('"finish_reason":"stop"');
+          expect(response.body()).not.toContain('"finish_reason":"error"');
+        } else expect(result.status).toBe(200);
       } finally {
         deps.store.close();
       }
