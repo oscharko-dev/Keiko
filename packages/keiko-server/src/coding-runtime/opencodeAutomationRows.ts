@@ -13,6 +13,12 @@
 /** The id the runtime gives an automation (`aut_` and an ascending identifier). */
 export const AUTOMATION_ID_PATTERN = /^aut_[0-9A-Za-z]{1,64}$/u;
 
+/**
+ * The id OpenCode 2.2.5 gave a schedule. A consent ledger retained under that version still names
+ * them; Keiko reads such an id only to show its schedule as removed, never to change or wake it.
+ */
+export const RETIRED_SCHEDULE_ID_PATTERN = /^sch_[0-9A-Za-z]{1,64}$/u;
+
 /** The only triggers a scheduled wake uses; an `event` trigger is a watch on an MCP server. */
 export const ADMITTED_AUTOMATION_TRIGGERS: readonly string[] = Object.freeze([
   "at",

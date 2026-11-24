@@ -16,7 +16,7 @@ vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }))
 const DUE = "2026-11-07T09:30:00.000Z";
 
 function schedule(overrides: Partial<CodingWorkbenchSchedule> = {}): CodingWorkbenchSchedule {
-  return { id: "sch_one", status: "active", cadence: "in", runCount: 0, ...overrides };
+  return { id: "aut_one", status: "active", cadence: "in", runCount: 0, ...overrides };
 }
 
 function listed(schedules: readonly CodingWorkbenchSchedule[]): void {
@@ -53,10 +53,10 @@ describe("CodingWorkbenchSchedules", () => {
 
   it("shows name or unnamed label with the next time, and paused and done states", async () => {
     listed([
-      schedule({ id: "sch_a", name: "Nightly check", dueAt: DUE }),
-      schedule({ id: "sch_b", dueAt: DUE }),
-      schedule({ id: "sch_c", name: "Held", status: "paused" }),
-      schedule({ id: "sch_d", name: "Finished", status: "done" }),
+      schedule({ id: "aut_a", name: "Nightly check", dueAt: DUE }),
+      schedule({ id: "aut_b", dueAt: DUE }),
+      schedule({ id: "aut_c", name: "Held", status: "paused" }),
+      schedule({ id: "aut_d", name: "Finished", status: "done" }),
     ]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     const items = await screen.findAllByRole("listitem");
@@ -68,11 +68,21 @@ describe("CodingWorkbenchSchedules", () => {
     expect(items[3]).toHaveTextContent("Finished · done");
   });
 
+  // #4546: a schedule retained under the previous runtime never wakes the task again.
+  it("shows a schedule the runtime update removed, with nothing to change", async () => {
+    listed([schedule({ id: "sch_old", status: "removed", cadence: "other" })]);
+    render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+    const items = await screen.findAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Scheduled continuation · removed by the runtime update");
+    expect(within(items[0] as HTMLElement).queryAllByRole("button")).toEqual([]);
+  });
+
   it("falls back to the cadence text and shows each wait reason", async () => {
     listed([
-      schedule({ id: "sch_a", cadenceText: "30 minutes", wait: "run-active" }),
-      schedule({ id: "sch_b", name: "B", wait: "workspace-inactive" }),
-      schedule({ id: "sch_c", name: "C", wait: "retrying" }),
+      schedule({ id: "aut_a", cadenceText: "30 minutes", wait: "run-active" }),
+      schedule({ id: "aut_b", name: "B", wait: "workspace-inactive" }),
+      schedule({ id: "aut_c", name: "C", wait: "retrying" }),
     ]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     const items = await screen.findAllByRole("listitem");
@@ -83,8 +93,8 @@ describe("CodingWorkbenchSchedules", () => {
 
   it("offers Pause on an active row, Resume on a paused row, and Delete on both", async () => {
     listed([
-      schedule({ id: "sch_a", name: "Active one" }),
-      schedule({ id: "sch_b", name: "Paused one", status: "paused" }),
+      schedule({ id: "aut_a", name: "Active one" }),
+      schedule({ id: "aut_b", name: "Paused one", status: "paused" }),
     ]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     const [active, paused] = await screen.findAllByRole("listitem");
@@ -95,13 +105,13 @@ describe("CodingWorkbenchSchedules", () => {
   });
 
   it.each([
-    ["Pause", "Active one", "sch_a", "pause"],
-    ["Resume", "Paused one", "sch_b", "resume"],
-    ["Delete", "Active one", "sch_a", "delete"],
+    ["Pause", "Active one", "aut_a", "pause"],
+    ["Resume", "Paused one", "aut_b", "resume"],
+    ["Delete", "Active one", "aut_a", "delete"],
   ] as const)("%s calls the control API and then refreshes", async (label, name, id, action) => {
     listed([
-      schedule({ id: "sch_a", name: "Active one" }),
-      schedule({ id: "sch_b", name: "Paused one", status: "paused" }),
+      schedule({ id: "aut_a", name: "Active one" }),
+      schedule({ id: "aut_b", name: "Paused one", status: "paused" }),
     ]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     const items = await screen.findAllByRole("listitem");
@@ -155,7 +165,7 @@ describe("CodingWorkbenchSchedules", () => {
   });
 
   it("shows the error and reports a body-free diagnostic when a change fails", async () => {
-    listed([schedule({ id: "sch_secret", name: "Secret name" })]);
+    listed([schedule({ id: "aut_secret", name: "Secret name" })]);
     const failure = new ApiError("INTERNAL", "Secret prompt text", 500);
     failure.correlationId = "corr-123";
     vi.mocked(controlCodingSchedule).mockRejectedValue(failure);
@@ -167,7 +177,7 @@ describe("CodingWorkbenchSchedules", () => {
     const [message, context] = vi.mocked(reportClientDiagnostic).mock.calls[0] ?? [];
     expect(message).toContain("delete failed");
     expect(context).toEqual({ correlationId: "corr-123" });
-    for (const secret of ["Secret name", "Secret prompt", "sch_secret", "task-7"])
+    for (const secret of ["Secret name", "Secret prompt", "aut_secret", "task-7"])
       expect(message).not.toContain(secret);
   });
 
@@ -182,8 +192,8 @@ describe("CodingWorkbenchSchedules", () => {
 
   it("has no axe violations", async () => {
     listed([
-      schedule({ id: "sch_a", name: "Active one", dueAt: DUE }),
-      schedule({ id: "sch_b", name: "Paused one", status: "paused" }),
+      schedule({ id: "aut_a", name: "Active one", dueAt: DUE }),
+      schedule({ id: "aut_b", name: "Paused one", status: "paused" }),
     ]);
     const { container } = render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     await screen.findByRole("region", { name: "Scheduled continuations" });

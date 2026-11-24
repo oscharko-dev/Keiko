@@ -37,6 +37,7 @@ import {
 
 import {
   AUTOMATION_ID_PATTERN,
+  RETIRED_SCHEDULE_ID_PATTERN,
   RETAINED_SCHEDULE_ACTION_MAX_CHARS,
   RETAINED_SCHEDULE_MAX,
   RETAINED_SCHEDULE_NAME_MAX_CHARS,
@@ -975,6 +976,11 @@ function dropSchedulerLease(path: string): void {
   }
 }
 
+/** A ledger names the runtime's automations, or the schedules of an entry retained under 2.2.5. */
+function ledgerId(id: string): boolean {
+  return AUTOMATION_ID_PATTERN.test(id) || RETIRED_SCHEDULE_ID_PATTERN.test(id);
+}
+
 function validScheduleModes(value: unknown): boolean {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -982,7 +988,7 @@ function validScheduleModes(value: unknown): boolean {
   return (
     entries.length > 0 &&
     entries.length <= RETAINED_SCHEDULE_MAX &&
-    entries.every(([id, mode]) => AUTOMATION_ID_PATTERN.test(id) && isCodingWorkbenchMode(mode))
+    entries.every(([id, mode]) => ledgerId(id) && isCodingWorkbenchMode(mode))
   );
 }
 

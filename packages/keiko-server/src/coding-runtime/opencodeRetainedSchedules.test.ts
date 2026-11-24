@@ -394,6 +394,45 @@ describe("listing a task's retained schedules", () => {
     expect(retainedScheduleCount(f.store, TASK)).toBe(2);
   });
 
+  // #4546: an entry retained under OpenCode 2.2.5 is never opened by the runtime Keiko runs now, so
+  // its schedules can never wake the task; the Workbench shows each one the ledger names as removed.
+  it("lists the schedules of an entry retained under a previous runtime as removed, without their content", () => {
+    const f = fixture();
+    retain(f, f.source([schedule("aut_a")]), "supervised-coding");
+    const path = join(f.root, "retained", retainedSessionKey(TASK), "manifest.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...manifest(f),
+        runtimeVersion: "2.2.5",
+        scheduleModes: { sch_old: "supervised-coding", sch_older: "autonomous-delivery" },
+      }),
+    );
+
+    expect(listRetainedSchedules(f.store, TASK)?.schedules).toEqual([
+      {
+        id: "sch_old",
+        status: "removed",
+        cadence: "other",
+        runCount: 0,
+        failures: 0,
+        consentMode: "supervised-coding",
+      },
+      {
+        id: "sch_older",
+        status: "removed",
+        cadence: "other",
+        runCount: 0,
+        failures: 0,
+        consentMode: "autonomous-delivery",
+      },
+    ]);
+    expect(JSON.stringify(listRetainedSchedules(f.store, TASK))).not.toContain(PROMPT);
+    expect(controlRetainedSchedule(f.store, TASK, "sch_old", "delete", NOW)).toMatchObject({
+      ok: false,
+    });
+  });
+
   it("returns nothing for a task without an entry, and no schedule for one without a ledger", () => {
     const f = fixture();
     expect(listRetainedSchedules(f.store, TASK)).toBeUndefined();

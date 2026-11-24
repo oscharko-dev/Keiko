@@ -12,6 +12,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.schedules.next": "{label} · next {time}",
   "codingWorkbench.schedules.paused": "{label} · paused",
   "codingWorkbench.schedules.done": "{label} · done",
+  "codingWorkbench.schedules.removed": "{label} · removed by the runtime update",
   "codingWorkbench.schedules.wait.run-active": "{label} · due, waits for the current run",
   "codingWorkbench.schedules.wait.workspace-inactive":
     "{label} · due, waits for this task's workspace",

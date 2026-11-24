@@ -6,7 +6,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchSchedule,
   CodingWorkbenchScheduleAction,
-  CodingWorkbenchScheduleStatus,
+  CodingWorkbenchScheduleChangedStatus,
   CodingWorkbenchScheduleWait,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -356,7 +356,7 @@ export interface ScheduleControlRecord {
   readonly initiator: "human" | "missed-wakes";
   readonly taskId: string;
   readonly scheduleId?: string | undefined;
-  readonly status?: CodingWorkbenchScheduleStatus | "deleted" | undefined;
+  readonly status?: CodingWorkbenchScheduleChangedStatus | "deleted" | undefined;
   readonly reason?: ScheduleControlReason | undefined;
   readonly scheduleCount?: number | undefined;
   readonly error?: unknown;
@@ -468,7 +468,7 @@ export type ScheduleListResult =
   | { readonly ok: false; readonly reason: "not-found" | "unavailable" };
 
 export type ScheduleControlOutcome =
-  | { readonly ok: true; readonly status: CodingWorkbenchScheduleStatus | "deleted" }
+  | { readonly ok: true; readonly status: CodingWorkbenchScheduleChangedStatus | "deleted" }
   | { readonly ok: false; readonly reason: ScheduleControlReason };
 
 /** The narrower of two modes. */

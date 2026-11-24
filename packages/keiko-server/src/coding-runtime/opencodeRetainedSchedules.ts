@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+
 import type {
   EditEntryResult,
   RetainedSessionManifest,
@@ -22,7 +24,9 @@ import type {
  * expiry has passed is `done` instead.
  */
 
-export type RetainedScheduleStatus = "active" | "paused" | "done";
+export type RetainedScheduleStatus = RetainedScheduleRowStatus | "removed";
+/** A status the runtime's own row carries; `removed` is Keiko's, for a retired runtime's ledger. */
+export type RetainedScheduleRowStatus = "active" | "paused" | "done";
 export type RetainedScheduleCadence = "at" | "every" | "cron" | "other";
 export type RetainedScheduleAction = "pause" | "resume" | "delete";
 
@@ -136,7 +140,7 @@ function cadenceTextOf(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function statusOf(value: unknown): RetainedScheduleStatus | undefined {
+function statusOf(value: unknown): RetainedScheduleRowStatus | undefined {
   return value === "active" || value === "paused" || value === "done" ? value : undefined;
 }
 
@@ -207,6 +211,40 @@ function readSchedules(
 }
 
 /**
+ * An entry retained under another OpenCode version is refused at the task's next run
+ * (`version-changed`) and its database is never opened by the runtime Keiko runs now (#4546). Its
+ * schedules can therefore never wake the task: each one the consent ledger names is listed as
+ * removed, without its prompt, name or cadence, and no wake is ever due for it.
+ */
+function removedSchedules(manifest: RetainedSessionManifest): readonly RetainedSchedule[] {
+  const modes = manifest.scheduleModes ?? {};
+  return Object.keys(modes)
+    .sort(compareIds)
+    .map((id) => ({
+      id,
+      status: "removed",
+      cadence: "other",
+      runCount: 0,
+      failures: 0,
+      consentMode: consentOf(id, manifest),
+    }));
+}
+
+function compareIds(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+function schedulesOf(
+  database: DatabaseSync,
+  manifest: RetainedSessionManifest,
+): readonly RetainedSchedule[] {
+  if (manifest.scheduleModes === undefined) return [];
+  if (manifest.runtimeVersion !== OPENCODE_PINNED_VERSION) return removedSchedules(manifest);
+  return readSchedules(database, manifest);
+}
+
+/**
  * The task's retained schedules; `undefined` when the task has no whole entry. An entry whose
  * manifest names no schedule is not opened.
  */
@@ -218,7 +256,7 @@ export function listRetainedSchedules(
     taskId,
     sessionId: manifest.sessionId,
     retainedAtMs: manifest.retainedAtMs,
-    schedules: manifest.scheduleModes === undefined ? [] : readSchedules(database, manifest),
+    schedules: schedulesOf(database, manifest),
   }));
 }
 
@@ -235,7 +273,7 @@ export function retainedScheduleCount(
 }
 
 export type RetainedScheduleControlResult =
-  | { readonly ok: true; readonly status: RetainedScheduleStatus | "deleted" }
+  | { readonly ok: true; readonly status: RetainedScheduleRowStatus | "deleted" }
   | {
       readonly ok: false;
       readonly reason:
@@ -247,7 +285,7 @@ export type RetainedScheduleControlResult =
     };
 
 type EditOutcome =
-  | { readonly kind: "changed"; readonly status: RetainedScheduleStatus | "deleted" }
+  | { readonly kind: "changed"; readonly status: RetainedScheduleRowStatus | "deleted" }
   | { readonly kind: "not-found" }
   | { readonly kind: "not-applicable" };
 
@@ -288,7 +326,7 @@ function applyControl(
     return { kind: "changed", status: "paused" };
   }
   if (row.status !== "paused") return { kind: "not-applicable" };
-  const status: RetainedScheduleStatus = finished(row, nowMs) ? "done" : "active";
+  const status: RetainedScheduleRowStatus = finished(row, nowMs) ? "done" : "active";
   database
     .prepare(
       "UPDATE automation SET status = ?, failures = 0, retry_at = NULL, time_updated = ? WHERE id = ?",

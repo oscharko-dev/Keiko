@@ -9810,7 +9810,7 @@ describe("native session continuity requested by a start", () => {
       consentMode: "governed-assist" | "supervised-coding" | "autonomous-delivery",
     ) => ({
       taskId: "task-prior",
-      scheduleId: "sch_1",
+      scheduleId: "aut_1",
       intent: "  Check the build  ",
       consentMode,
     });

@@ -2372,7 +2372,7 @@ async function invokeRoute(
 }
 
 /** Route parameters every runtime route of the sweep finds: a run, a schedule and its action. */
-const SWEEP_PARAMS = { runId: "run-1", scheduleId: "sch_a", action: "pause" } as const;
+const SWEEP_PARAMS = { runId: "run-1", scheduleId: "aut_a", action: "pause" } as const;
 
 /** The smallest valid body: a schedule change names its task, every other mutation sends `{}`. */
 function sweepBody(route: RouteDefinition): string {
@@ -2704,7 +2704,7 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
     pattern.includes(":scheduleId"),
   );
   const listed = {
-    id: "sch_a",
+    id: "aut_a",
     status: "active" as const,
     cadence: "every" as const,
     runCount: 0,
@@ -2799,7 +2799,7 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
 
     await expect(list("?taskId=task-1", deps)).resolves.toMatchObject({ status: 403 });
     await expect(
-      control({ scheduleId: "sch_a", action: "pause" }, '{"taskId":"task-1"}', deps),
+      control({ scheduleId: "aut_a", action: "pause" }, '{"taskId":"task-1"}', deps),
     ).resolves.toMatchObject({ status: 403 });
     expect(invoked).toEqual([]);
   });
@@ -2819,7 +2819,7 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
     });
 
     await expect(
-      control({ scheduleId: "sch_a", action: "resume" }, '{"taskId":"task-1"}', deps, cookie),
+      control({ scheduleId: "aut_a", action: "resume" }, '{"taskId":"task-1"}', deps, cookie),
     ).resolves.toMatchObject({
       status,
       body: { error: { code: `CODING_SCHEDULE_${reason.replaceAll("-", "_").toUpperCase()}` } },
@@ -2837,23 +2837,23 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
     });
 
     await expect(
-      control({ scheduleId: "sch_a", action: "delete" }, '{"taskId":"task-1"}', deps, cookie),
+      control({ scheduleId: "aut_a", action: "delete" }, '{"taskId":"task-1"}', deps, cookie),
     ).resolves.toEqual({ status: 200, body: { status: "deleted" } });
-    expect(calls).toEqual([["task-1", "sch_a", "delete", "corr-sched-2"]]);
+    expect(calls).toEqual([["task-1", "aut_a", "delete", "corr-sched-2"]]);
   });
 
   it.each([
-    ["an unknown action", { scheduleId: "sch_a", action: "fire" }, '{"taskId":"task-1"}', 404],
+    ["an unknown action", { scheduleId: "aut_a", action: "fire" }, '{"taskId":"task-1"}', 404],
     [
       "an invalid schedule id",
-      { scheduleId: "sch_a-b", action: "pause" },
+      { scheduleId: "aut_a-b", action: "pause" },
       '{"taskId":"task-1"}',
       404,
     ],
-    ["a body without a task", { scheduleId: "sch_a", action: "pause" }, "{}", 400],
+    ["a body without a task", { scheduleId: "aut_a", action: "pause" }, "{}", 400],
     [
       "a body with another field",
-      { scheduleId: "sch_a", action: "pause" },
+      { scheduleId: "aut_a", action: "pause" },
       '{"taskId":"task-1","sessionId":"ses_1"}',
       400,
     ],
@@ -2876,7 +2876,7 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
 
     await expect(
       control(
-        { scheduleId: "sch_a", action: "pause" },
+        { scheduleId: "aut_a", action: "pause" },
         '{"taskId":"task-1"}',
         scheduleDeps(channel),
         cookie,

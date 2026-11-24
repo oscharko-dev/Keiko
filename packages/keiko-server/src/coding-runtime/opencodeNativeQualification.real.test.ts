@@ -2458,9 +2458,9 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
           '#!/bin/sh\nif [ "$FAIL" = 1 ]; then echo "1 failing"; exit 1; fi\necho "1 passing"\n',
           { mode: 0o755 },
         );
-        expect(await scriptedTurn(run, shell("FAIL=1 ./bin/npm test"))).toMatch(
-          /Exited with code 1$/u,
-        );
+        // 2.4.x ends the output with `Exit code: <n>` (2.2.5: `Exited with code <n>`); Keiko reads
+        // the status from the part's metadata, never from this text.
+        expect(await scriptedTurn(run, shell("FAIL=1 ./bin/npm test"))).toMatch(/Exit code: 1$/u);
         expect(await scriptedTurn(run, shell("./bin/npm test"))).toContain("1 passing");
         expect(openCodeNativeVerificationKind(["FAIL=1 ./bin/npm test"])).toBe("test");
         const projection = createOpenCodeV2HistoryProjection({
@@ -3447,7 +3447,7 @@ describe("pinned native OpenCode Code Mode session move and worktree creation (#
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const move = (input: Readonly<Record<string, unknown>>): ScriptedCall => ({
     name: "execute",
-    arguments: { code: `return await tools.opencode.session_move(${JSON.stringify(input)});` },
+    arguments: { code: `return await tools.opencode.session.move(${JSON.stringify(input)});` },
   });
   const files = { "src/a.ts": "export const a = 1;\n" };
 

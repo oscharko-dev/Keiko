@@ -51,7 +51,7 @@ const PLUGIN_BEGIN = "<!-- plugin-inventory:begin -->";
 const PLUGIN_END = "<!-- plugin-inventory:end -->";
 /** The epic #3897 child issues that can own an original surface. */
 const OWNER_ISSUES: ReadonlySet<number> = new Set([
-  3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908, 4271,
+  3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3906, 3907, 3908, 4271, 4546,
 ]);
 
 function readLocal(name: string): string {
@@ -97,8 +97,8 @@ describe(`OpenCode ${OPENCODE_PINNED_VERSION} producer inventory fixture`, () =>
   // Producer facts of the pinned version: an upgrade changes them together with the fixture.
   it("is the inventory of the pinned version and has not been truncated", () => {
     expect(CURRENT.version).toBe(OPENCODE_PINNED_VERSION);
-    expect(CURRENT.operations).toHaveLength(169);
-    expect(CLI_COMMANDS).toHaveLength(41);
+    expect(CURRENT.operations).toHaveLength(178);
+    expect(CLI_COMMANDS).toHaveLength(44);
   });
 
   it("lists every operation once, ordered by operationId", () => {
@@ -607,7 +607,7 @@ function configurationNames(kind: OpenCodeConfigurationDisposition["kind"]): rea
 
 describe(`OpenCode ${OPENCODE_PINNED_VERSION} configuration dispositions fail closed`, () => {
   it("hold the complete, ordered setting inventory of the pinned version", () => {
-    expect(CONFIGURATION_PATHS).toHaveLength(248);
+    expect(CONFIGURATION_PATHS).toHaveLength(277);
     expect(duplicates(CONFIGURATION_PATHS)).toEqual([]);
     expect(CONFIGURATION_PATHS).toEqual([...CONFIGURATION_PATHS].sort());
   });
@@ -843,7 +843,7 @@ function pluginNames(kind: OpenCodePluginDisposition["kind"]): readonly string[]
 
 describe(`OpenCode ${OPENCODE_PINNED_VERSION} plugin dispositions fail closed`, () => {
   it("hold every built-in plugin of the pinned version, ordered", () => {
-    expect(PLUGINS).toHaveLength(92);
+    expect(PLUGINS).toHaveLength(100);
     expect(duplicates(PLUGINS)).toEqual([]);
     expect(PLUGINS).toEqual([...PLUGINS].sort());
   });
