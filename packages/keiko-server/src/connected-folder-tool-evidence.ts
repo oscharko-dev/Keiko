@@ -13,11 +13,12 @@ import type { ConnectedFolderToolWindow } from "./connectedFolderTool.js";
 /** Why a file is in the pack when only the model's own tool read brought it there. */
 export const CONNECTED_FOLDER_TOOL_READ_SELECTION_REASON = "model-tool-read";
 
+/** The same lines with the same text: a sent excerpt the prompt fit clipped is not the same. */
 function sameLines(left: ContextExcerpt, right: ContextExcerpt): boolean {
   const a = left.atom.lineRange;
   const b = right.atom.lineRange;
   if (a === undefined || b === undefined) return false;
-  return a.startLine === b.startLine && a.endLine === b.endLine;
+  return a.startLine === b.startLine && a.endLine === b.endLine && left.content === right.content;
 }
 
 function toolReadFile(scopePath: string): ConnectedFileEntry {
@@ -31,8 +32,8 @@ function toolReadFile(scopePath: string): ConnectedFileEntry {
 
 /**
  * The sent pack with every line window the model received through the folder tool. A window whose
- * exact lines the pack already carries is not added twice. Budget, usage and omissions stay those
- * of the retrieval: the tool's own work is recorded per call on `folder.files.operation`.
+ * exact lines and text the pack already carries is not added twice. Budget, usage and omissions
+ * stay those of the retrieval: the tool's own work is recorded per call on `folder.files.operation`.
  */
 export function withConnectedFolderToolEvidence(
   pack: ConnectedContextPack,

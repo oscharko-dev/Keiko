@@ -146,6 +146,51 @@ describe("turn-scoped workspace index", () => {
     expect(await turn.flush(noFailure)).toEqual({ saved: 0, failed: 0 });
   });
 
+  it("persists a newer snapshot that arrives while the flush writes another key", async () => {
+    const recorder = counting();
+    await search(recorder, "Budget");
+    await search(recorder, "Wartung Sonntag");
+    const byKey = new Map<string, Recorded[]>();
+    for (const save of recorder.saves) {
+      const key = JSON.stringify(save.scopeKey);
+      byKey.set(key, [...(byKey.get(key) ?? []), save]);
+    }
+    const changed = [...byKey.values()].find(
+      (saves) =>
+        saves.length > 1 &&
+        JSON.stringify(saves[0]?.snapshot) !== JSON.stringify(saves.at(-1)?.snapshot),
+    );
+    const older = changed?.[0];
+    const newer = changed?.at(-1);
+    const other = recorder.saves.find(
+      (save) => JSON.stringify(save.scopeKey) !== JSON.stringify(older?.scopeKey),
+    );
+    if (older === undefined || newer === undefined || other === undefined)
+      throw new Error("the fixture searches saved no key twice with different snapshots");
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = counting({
+      loadSnapshot: () => Promise.resolve(undefined),
+      saveSnapshot: (scopeKey) =>
+        JSON.stringify(scopeKey) === JSON.stringify(other.scopeKey) ? gate : Promise.resolve(),
+    });
+    const turn = createTurnScopedWorkspaceIndex(base);
+    await turn.saveSnapshot(other.scopeKey, other.snapshot);
+    await turn.saveSnapshot(older.scopeKey, older.snapshot);
+    const flushing = turn.flush(noFailure);
+    // The flush waits on the other key's write while the turn saves a newer snapshot.
+    await turn.saveSnapshot(newer.scopeKey, newer.snapshot);
+    release();
+    await flushing;
+    await turn.flush(noFailure);
+    const persisted = base.saves.filter(
+      (save) => JSON.stringify(save.scopeKey) === JSON.stringify(newer.scopeKey),
+    );
+    expect(JSON.stringify(persisted.at(-1)?.snapshot)).toBe(JSON.stringify(newer.snapshot));
+  });
+
   it("leaves an index behind that a later request reuses, and only after a flush", async () => {
     const unflushed = createWorkspaceIndex(createInMemoryWorkspaceIndexStore());
     await search(createTurnScopedWorkspaceIndex(unflushed), "Budget");

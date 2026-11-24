@@ -23,11 +23,14 @@ export type ConnectedFolderTurnSelection =
   | "one-shot-scope-unavailable"
   | "one-shot-catalog-unavailable";
 
+export type ConnectedFolderToolOutcome = "succeeded" | "failed" | "cancelled" | "timed-out";
+
 /** Counts and closed values only: never a path, a query or file text. */
 export interface ConnectedFolderToolActivity {
   /** `unknown` is a call whose view the model did not name. */
   readonly view: ConnectedFolderToolView | "unknown";
-  readonly outcome: "succeeded" | "failed";
+  /** `cancelled` and `timed-out` are calls the turn's stop or deadline ended; they return nothing. */
+  readonly outcome: ConnectedFolderToolOutcome;
   readonly reason?: ConnectedFolderToolRefusal;
   readonly durationMs: number;
   /** UTF-8 bytes of paths and text the workspace returned, as charged to the turn's budget. */
@@ -66,7 +69,12 @@ const TOOL_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["succeeded", "failed"],
+      values: [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed-out",
+      ] satisfies readonly ConnectedFolderToolOutcome[],
     },
     reason: {
       type: "string",

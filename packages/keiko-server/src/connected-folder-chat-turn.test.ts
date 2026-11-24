@@ -408,6 +408,27 @@ describe("turn selection for a Chat with a connected folder", () => {
     expect(selections()).toEqual([]);
   });
 
+  it("starts no tool turn when the Chat's folder changes while the catalog loads", async () => {
+    const f = fixture();
+    const other = folder();
+    const catalog = f.deps.connectedFolderChatCatalog;
+    if (catalog === undefined) throw new Error("Expected the folder catalog.");
+    const load = catalog.get.bind(catalog);
+    vi.spyOn(catalog, "get").mockImplementation(async () => {
+      const managed = await load();
+      // The admitted folder is the old one; an authority minted now would cover the new one.
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: [
+          { kind: "workspace-root", root: other, relativePaths: [], connectedAtMs: 2 },
+        ],
+      });
+      return managed;
+    });
+    await expect(f.createTurn("folder-changed-while-loading")).resolves.toBeUndefined();
+    expect(f.admissions()).toBe(1);
+    expect(selections()).toMatchObject([{ selection: "one-shot-scope-unavailable" }]);
+  });
+
   it("keeps the one-shot path when the folder is no longer admitted", async () => {
     const f = fixture();
     rmSync(f.root, { recursive: true, force: true });

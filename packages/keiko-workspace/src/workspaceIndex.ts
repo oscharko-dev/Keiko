@@ -2400,10 +2400,14 @@ async function turnScopedFlush(
 ): Promise<TurnScopedWorkspaceIndexFlush> {
   let saved = 0;
   let failed = 0;
-  // A copy of the held entries: a save that arrives during the flush waits for the next one.
-  const pending = Array.from(state.held);
-  for (const [key, entry] of pending) {
+  // A copy of the held keys. Each write takes the key's newest snapshot when its turn comes, so a
+  // save that arrives while another key is written is not replaced by an older one; a save for a
+  // key already written waits for the next flush.
+  const pending = Array.from(state.held.keys());
+  for (const key of pending) {
     if (isActive?.() === false) break;
+    const entry = state.held.get(key);
+    if (entry === undefined) continue;
     state.held.delete(key);
     try {
       await state.base.saveSnapshot(entry.scopeKey, entry.snapshot, isActive); // NOSONAR typescript:S9382 -- one sealed write at a time: each is synced to disk, parallel writes would only queue there

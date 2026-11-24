@@ -23823,7 +23823,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["succeeded", "failed"],
+        values: ["succeeded", "failed", "cancelled", "timed-out"],
       },
       reason: {
         type: "string",

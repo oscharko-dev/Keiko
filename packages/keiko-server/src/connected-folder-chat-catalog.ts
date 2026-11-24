@@ -20,10 +20,14 @@ import type { CatalogLifecycleLogPort } from "./tool-catalog/catalogToolLifecycl
 const PROFILE = { id: "connected-folder-chat", version: 1 } as const;
 export type ConnectedFolderChatCatalogRuntime = LocalChatSourceCatalogRuntime;
 
-/** A result that names a continuation, or says more matches exist, carries less than exists. */
-function namesMore(data: CatalogJsonObject): boolean {
+/**
+ * A result that names a continuation, says more matches exist, or says an entry could not be
+ * listed carries less than exists.
+ */
+export function connectedFolderResultNamesMore(data: CatalogJsonObject): boolean {
   const { coverage } = data;
-  const cut = isJsonObject(coverage) && coverage.truncated === true;
+  const cut =
+    isJsonObject(coverage) && (coverage.truncated === true || coverage.coverageIncomplete === true);
   return cut || data.nextAfter !== undefined || data.nextStartLine !== undefined;
 }
 function isJsonObject(value: CatalogJsonValue | undefined): value is CatalogJsonObject {
@@ -36,7 +40,7 @@ function connectedFolderCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCa
     ...route,
     resultFor: (data, context): ReturnType<typeof route.resultFor> => {
       const result = route.resultFor(data, context);
-      return namesMore(data)
+      return connectedFolderResultNamesMore(data)
         ? { ...result, page: { truncated: true, reason: "result-cap", cursor: null } }
         : result;
     },

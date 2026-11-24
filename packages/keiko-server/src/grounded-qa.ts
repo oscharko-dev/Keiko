@@ -19,6 +19,7 @@ import {
   createChatToolTurn,
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
+import { connectedFolderConfigurationDigest } from "./connected-folder-chat-authority.js";
 import type { ConnectedFolderToolSource } from "./connected-folder-chat-turn.js";
 import { answerEvidencePacks } from "./connected-folder-tool-evidence.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
@@ -2898,6 +2899,33 @@ function singleFolderSelectedScope(
   return buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
 }
 
+/** The Chat's one folder as the request's retrieval canonicalised it, with its selection digest. */
+function admittedSoleFolder(
+  chat: Chat,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
+):
+  | {
+      readonly canonical: ReturnType<typeof canonicalizeGroundedFolderScopes>["canonical"];
+      readonly selected: SelectedScope;
+      readonly configurationDigest: string;
+    }
+  | undefined {
+  const { canonical, skipped } = canonicalizeGroundedFolderScopes(
+    chat,
+    deps,
+    buildConnectedScopes(chat),
+    request,
+    correlationId,
+  );
+  if (canonical.length !== 1 || skipped.length > 0) return undefined;
+  const selected = singleFolderSelectedScope(withCanonicalFolderScopes(chat, canonical), canonical);
+  const configurationDigest = connectedFolderConfigurationDigest(chat);
+  if (selected === undefined || configurationDigest === undefined) return undefined;
+  return { canonical, selected, configurationDigest };
+}
+
 /**
  * The connected-folder tool's source for a Chat with one folder: the root admission, the selected
  * scope and the search scope of the single retrieval this request also runs, so the tool can reach
@@ -2910,16 +2938,9 @@ export function admitConnectedFolderToolSource(
   request: IncomingMessage | undefined,
   correlationId: string | undefined,
 ): ConnectedFolderToolSource | undefined {
-  const { canonical, skipped } = canonicalizeGroundedFolderScopes(
-    chat,
-    deps,
-    buildConnectedScopes(chat),
-    request,
-    correlationId,
-  );
-  if (canonical.length !== 1 || skipped.length > 0) return undefined;
-  const selected = singleFolderSelectedScope(withCanonicalFolderScopes(chat, canonical), canonical);
-  if (selected === undefined) return undefined;
+  const admitted = admittedSoleFolder(chat, deps, request, correlationId);
+  if (admitted === undefined) return undefined;
+  const { canonical, selected, configurationDigest } = admitted;
   const fs = firstScopeWorkspaceFs(canonical) ?? nodeWorkspaceFs;
   const { contentRedaction, contentSecrets } = groundedExplorationPolicies(deps);
   try {
@@ -2933,7 +2954,7 @@ export function admitConnectedFolderToolSource(
     if (scope.relativePaths.length === 0 && fs.readDir(scope.workspace.root, 1).length === 0) {
       return undefined;
     }
-    return { scope, fs };
+    return { scope, fs, configurationDigest };
   } catch (error) {
     // The root was admitted a moment ago and is gone or denied now. The denial is already recorded
     // by the root resolver, and the retrieval of this request reports the same state as its answer.

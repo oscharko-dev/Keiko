@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertFrequencyFloor,
   checkProperty,
   propertySettings,
   type Generator,
@@ -160,9 +161,18 @@ describe("connected folder tool request boundary", () => {
         expect(Object.isFrozen(captured)).toBe(true);
       },
     });
-    // Vacuity: well-formed requests and every kind of damage must each occur often.
-    expect(accepted).toBeGreaterThan(runs / 4);
-    expect([...refused.keys()].sort()).toEqual(DAMAGES.map(([damage]) => damage).sort());
-    for (const count of refused.values()) expect(count).toBeGreaterThan(runs / 40);
+    // Vacuity, validated at 3,000 runs: well-formed requests and every kind of damage must each
+    // occur often. A replay with fewer runs is decided by the property's own assertions.
+    const floor = { runs, validatedRuns: 3_000 };
+    assertFrequencyFloor({
+      ...floor,
+      share: 1 / 4,
+      what: "a well-formed request",
+      count: accepted,
+    });
+    for (const [damage] of DAMAGES) {
+      const count = refused.get(damage) ?? 0;
+      assertFrequencyFloor({ ...floor, share: 1 / 40, what: `damage "${damage}"`, count });
+    }
   });
 });

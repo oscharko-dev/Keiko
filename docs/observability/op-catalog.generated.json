@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "91f0ceb1af06f15e7794f5f3306ee76efcc65b66f8ee61c021ac6f1fb9ac5af8",
+    "catalogDigest": "d1566b0c4f02b57a367861f1adbc8a3ef2d4d6584ab21ce970d9e517af1246f4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24834,7 +24834,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["succeeded", "failed"]
+            "values": ["succeeded", "failed", "cancelled", "timed-out"]
           },
           "reason": {
             "type": "string",
@@ -24904,8 +24904,8 @@
         "failureClasses": ["connected-folder-tool"],
         "proofIds": ["folder.files.operation.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/connected-folder-tool-activity.ts:49",
-        "emitterSites": ["packages/keiko-server/src/connected-folder-tool-activity.ts:149"]
+        "registrationSite": "packages/keiko-server/src/connected-folder-tool-activity.ts:52",
+        "emitterSites": ["packages/keiko-server/src/connected-folder-tool-activity.ts:157"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24943,8 +24943,8 @@
         "failureClasses": ["connected-folder-tool"],
         "proofIds": ["folder.files.turn-selected.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/connected-folder-tool-activity.ts:107",
-        "emitterSites": ["packages/keiko-server/src/connected-folder-tool-activity.ts:164"]
+        "registrationSite": "packages/keiko-server/src/connected-folder-tool-activity.ts:115",
+        "emitterSites": ["packages/keiko-server/src/connected-folder-tool-activity.ts:172"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -123985,14 +123985,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:336",
+      "site": "packages/keiko-server/src/grounded-qa.ts:337",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3457",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3478",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126553,27 +126553,27 @@
     {
       "op": "folder.files",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/connectedFolderTool.ts:392",
+      "site": "packages/keiko-server/src/connectedFolderTool.ts:398",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "folder.files.index-flush",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/connected-folder-chat-turn.ts:73",
+      "site": "packages/keiko-server/src/connected-folder-chat-turn.ts:78",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "folder.files.operation",
       "category": "search",
-      "site": "packages/keiko-server/src/connected-folder-tool-activity.ts:52",
+      "site": "packages/keiko-server/src/connected-folder-tool-activity.ts:55",
       "package": "keiko-server"
     },
     {
       "op": "folder.files.turn-selected",
       "category": "search",
-      "site": "packages/keiko-server/src/connected-folder-tool-activity.ts:110",
+      "site": "packages/keiko-server/src/connected-folder-tool-activity.ts:118",
       "package": "keiko-server"
     },
     {
@@ -127364,7 +127364,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3890",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3911",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

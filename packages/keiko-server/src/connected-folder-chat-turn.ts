@@ -11,6 +11,7 @@ import {
   type ConnectedFolderTurnReadout,
 } from "./chat-tool-turn.js";
 import {
+  connectedFolderConfigurationDigest,
   mintAcceptedConnectedFolderChatAuthority,
   reserveCurrentConnectedFolderChatAuthority,
   resolveCurrentConnectedFolderChatAuthority,
@@ -39,10 +40,14 @@ import {
 } from "./local-chat-source-turn.js";
 import type { ChatMessage } from "./store/index.js";
 
-/** The admitted folder of the turn: the search scope and the filesystem that admission granted. */
+/**
+ * The admitted folder of the turn: the search scope and the filesystem that admission granted, and
+ * the digest of the Chat selection it was admitted from, which the turn's authority must cover.
+ */
 export interface ConnectedFolderToolSource {
   readonly scope: SearchScope;
   readonly fs: WorkspaceFs;
+  readonly configurationDigest: string;
 }
 
 /**
@@ -186,6 +191,13 @@ export async function createConnectedFolderChatToolTurn(
     return undefined;
   }
   const managed = await catalog.get();
+  // The authority is minted from the Chat as it is now, after the await. A folder admitted from an
+  // earlier selection would be read under an authority for another one: no tool turn then.
+  const current = connectedFolderConfigurationDigest(deps.store.findChatById(message.chatId));
+  if (current !== source.configurationDigest) {
+    logConnectedFolderTurnSelection(correlation, "one-shot-scope-unavailable");
+    return undefined;
+  }
   const bound = mintAndBoundChatTurn<ConnectedFolderChatTurnOptions["authority"]>(
     deps,
     modelId,

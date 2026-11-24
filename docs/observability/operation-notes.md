@@ -966,7 +966,8 @@ A Chat connected to exactly one folder and to nothing else offers its model the 
 automatic first retrieval stays (owner proposal 2026-11-21, ADR-0181). `folder.files.turn-selected`
 records once per turn whether the tool turn ran (`tool-turn`) or the single retrieval was kept
 (`one-shot-model-not-tool-ready`, `one-shot-scope-unavailable`, `one-shot-catalog-unavailable`).
-`folder.files.operation` records each call under the request correlation: the `view`, `outcome`,
+`folder.files.operation` records each call under the request correlation: the `view`, `outcome`
+(`cancelled` or `timed-out` for a call the turn's stop or deadline ended, which returns nothing),
 the closed `reason` of a refusal, returned count, result and payload bytes, scanned files,
 unavailable hits, whether more exists, and the turn's cumulative calls, search time and result
 bytes. Never a path, a query or file text. Lines the tool returned are merged into the sent pack and

@@ -148,6 +148,20 @@ describe("evidence of a folder tool turn", () => {
     expect(merged.files.map((file) => file.excerpts.length)).toEqual([1, 1]);
   });
 
+  it("adds a full tool read whose lines the pack sent only clipped", () => {
+    const window = toolWindow("docs/a.md", 1, 10);
+    // The prompt fit cut the last line of the sent excerpt but kept its line range.
+    const clipped = { ...window.excerpt, content: window.excerpt.content.slice(0, 9) };
+    const merged = withConnectedFolderToolEvidence(
+      pack([{ scopePath: "docs/a.md", excerpts: [clipped] }]),
+      [window],
+    );
+    expect(merged.files[0]?.excerpts.map((entry) => entry.content)).toEqual([
+      clipped.content,
+      window.excerpt.content,
+    ]);
+  });
+
   it("leaves the retrieval's budget, usage and omissions as they were", () => {
     const merged = withConnectedFolderToolEvidence(sent, [toolWindow("docs/b.md", 1, 5)]);
     expect(merged.budget).toBe(sent.budget);

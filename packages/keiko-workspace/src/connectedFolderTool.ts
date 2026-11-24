@@ -422,6 +422,22 @@ async function searchView(
 
 // ─── read ────────────────────────────────────────────────────────────────────────
 
+/**
+ * Where the next read starts. A window cut to its byte bound returned only the lines its text ends
+ * with a newline for: the next read starts at the first line it did not return in full. A single
+ * line wider than the bound is returned in part, and the next read starts after it.
+ */
+function continuationLine(
+  excerpt: ConnectedFolderToolExcerpt,
+  requestedEndLine: number,
+): number | undefined {
+  if (excerpt.truncated) {
+    const completeLines = excerpt.text.split("\n").length - 1;
+    return excerpt.startLine + Math.max(1, completeLines);
+  }
+  return excerpt.endLine >= requestedEndLine ? excerpt.endLine + 1 : undefined;
+}
+
 async function readView(
   context: ToolContext,
   request: ConnectedFolderReadRequest,
@@ -439,12 +455,12 @@ async function readView(
     readDeps(context),
   );
   const excerpt = excerptOf(context, request.path, read, request.startLine, endLine);
-  const more = excerpt.truncated || excerpt.endLine >= endLine;
+  const nextStartLine = continuationLine(excerpt, endLine);
   return {
     ok: true,
     view: "read",
     excerpt,
-    ...(more ? { nextStartLine: excerpt.endLine + 1 } : {}),
+    ...(nextStartLine === undefined ? {} : { nextStartLine }),
     durationMs: elapsedMs(context),
     resultBytes: byteLength(excerpt.path) + byteLength(excerpt.text),
   };

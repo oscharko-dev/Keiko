@@ -223,6 +223,45 @@ describe("connected folder tool: read", () => {
     expect(read.nextStartLine).toBe(5);
   });
 
+  it("continues a byte-cut window at the first line it did not return in full", async () => {
+    const own = mkdtempSync(join(tmpdir(), "keiko-folder-tool-cut-"));
+    try {
+      const lines = Array.from(
+        { length: 100 },
+        (_, index) => `Zeile ${String(index + 1).padStart(3, "0")} ${"x".repeat(110)}`,
+      );
+      writeFileSync(join(own, "lang.txt"), `${lines.join("\n")}\n`);
+      writeFileSync(join(own, "breit.txt"), `${"y".repeat(20_000)}\nZweite Zeile\n`);
+      const ownScope: SearchScope = {
+        workspace: { ...detectWorkspaceAt(own), contentRedaction: "preserve" },
+        scopeId: "connected-folder-tool-cut",
+        relativePaths: [],
+      };
+      const read = async (path: string, startLine: number): Promise<Success<"read">> =>
+        succeeded(
+          await run({ view: "read", path, startLine, maxLines: 200 }, {}, ownScope),
+          "read",
+        );
+      const texts: string[] = [];
+      let next: number | undefined = 1;
+      for (let call = 0; next !== undefined && call < 10; call += 1) {
+        const window = await read("lang.txt", next);
+        texts.push(window.excerpt.text);
+        next = window.nextStartLine;
+      }
+      expect(texts.length).toBeGreaterThan(1);
+      // Following nextStartLine returns every line in full: none is skipped after a cut.
+      const returned = texts.flatMap((text) => text.split("\n"));
+      for (const line of lines) expect(returned).toContain(line);
+      // A single line wider than the window still makes progress.
+      const wide = await read("breit.txt", 1);
+      expect(wide.excerpt.truncated).toBe(true);
+      expect(wide.nextStartLine).toBe(2);
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
   it("stops at the end of the file without a next line", async () => {
     const read = succeeded(
       await run({ view: "read", path: "docs/guide.md", startLine: 1, maxLines: 200 }),

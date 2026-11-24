@@ -413,6 +413,25 @@ describe("folder.files: bounded results", () => {
     expect(oneMore).toBeGreaterThan(KNOWLEDGE_TOOL_PAYLOAD_BYTES_MAX);
   });
 
+  it("never tells the model a listing is complete when an entry could not be listed", () => {
+    const listing = (coverageIncomplete: boolean): CatalogJsonObject =>
+      boundedConnectedFolderResult({
+        ok: true,
+        view: "list",
+        directory: "",
+        entries: [{ relativePath: "docs", kind: "directory", sizeBytes: 0 }],
+        coverageIncomplete,
+        durationMs: 1,
+        resultBytes: 4,
+      }).data;
+    const incomplete = listing(true);
+    expect(incomplete.nextAfter).toBeUndefined();
+    expect(incomplete.coverage).toEqual({ coverageIncomplete: true });
+    expect(incomplete.nextStep).toContain("incomplete");
+    expect(incomplete.nextStep).not.toContain("These are all entries");
+    expect(listing(false).nextStep).toContain("These are all entries");
+  });
+
   it("drops trailing search hits that exceed the byte bound and says more exists", () => {
     const hits = Array.from({ length: CONNECTED_FOLDER_TOOL_LIMITS.searchHits }, (_, index) => ({
       path: `docs/${String(index)}.txt`,
@@ -546,6 +565,35 @@ describe("folder.files: authority, budget and faults", () => {
 });
 
 describe("folder.files: activity log", () => {
+  it("records one terminal line for a call the turn's stop or deadline ends", async () => {
+    const controller = new AbortController();
+    const stopping = new Proxy(nodeWorkspaceFs, {
+      get: (target, key): unknown => {
+        const value: unknown = Reflect.get(target, key);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]): unknown => {
+          // The person stops the turn while the workspace is being read.
+          controller.abort();
+          return Reflect.apply(value as (...a: unknown[]) => unknown, target, args);
+        };
+      },
+    });
+    const f = harness({ fs: stopping });
+    await expect(
+      f.call({ view: "read", path: "docs/guide.md" }, { signal: controller.signal }),
+    ).rejects.toThrow();
+    await expect(
+      harness().call({ view: "list" }, { deadlineAt: new Date(Date.now() - 60_000).toISOString() }),
+    ).rejects.toThrow();
+    expect(activity()).toMatchObject([
+      { view: "read", outcome: "cancelled", returnedCount: 0, payloadBytes: 0, truncated: false },
+      { view: "list", outcome: "timed-out", returnedCount: 0, payloadBytes: 0, truncated: false },
+    ]);
+    const events = sink.events.filter((event) => event.op === OP);
+    expect(events.every((event) => event.correlationId === CORRELATION)).toBe(true);
+    expect(events.map(formatActivityLogProofLine).join("\n")).not.toContain(SECRET_PHRASE);
+  });
+
   it("registers exactly the closed reasons the tool can return", () => {
     const registration = activityLogOperationSchema(OP);
     expect(registration?.fields.reason?.values).toEqual([

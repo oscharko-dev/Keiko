@@ -278,13 +278,9 @@ function listProjection(
 ): ConnectedFolderToolProjection {
   const kept = result.entries.slice(0, count);
   const nextAfter = count < result.entries.length ? kept.at(-1)?.relativePath : result.nextAfter;
-  const nextStep =
-    nextAfter === undefined
-      ? "These are all entries. List a subdirectory with directory, or read a file with view read."
-      : "More entries exist: call list again with after set to nextAfter. Or narrow with directory.";
   return {
     data: {
-      ...succeeded("list", nextStep),
+      ...succeeded("list", listNextStep(nextAfter !== undefined, result.coverageIncomplete)),
       directory: result.directory,
       items: kept.map((entry) => ({
         path: entry.relativePath,
@@ -301,6 +297,16 @@ function listProjection(
       truncated: nextAfter !== undefined,
     },
   };
+}
+
+/** A listing never claims to be complete when an entry of it could not be listed. */
+function listNextStep(continues: boolean, coverageIncomplete: boolean): string {
+  if (continues) {
+    return "More entries exist: call list again with after set to nextAfter. Or narrow with directory.";
+  }
+  return coverageIncomplete
+    ? "Some entries could not be listed, so this listing is incomplete. List a subdirectory with directory, or read a file with view read."
+    : "These are all entries. List a subdirectory with directory, or read a file with view read.";
 }
 
 function searchProjection(
@@ -476,18 +482,62 @@ function turnUsage(
   };
 }
 
-/** One call, one bounded result, one body-free activity line. Cancellation rejects. */
+/** How a call ended that rejected: the turn's stop, its deadline, or anything else. */
+function stoppedOutcome(
+  context: ConnectedFolderToolContext,
+): Pick<ConnectedFolderToolActivity, "outcome" | "reason"> {
+  if (context.signal.aborted) return { outcome: "cancelled" };
+  const deadline = deadlineAtMs(context);
+  if (deadline !== undefined && Date.now() >= deadline) return { outcome: "timed-out" };
+  return { outcome: "failed", reason: "failed" };
+}
+
+/** The terminal line of a call that rejected: it returned nothing to the model. */
+function logStoppedCall(
+  context: ConnectedFolderToolContext,
+  args: CatalogJsonObject,
+  startedAtMs: number,
+): void {
+  logConnectedFolderToolOperation(correlationIdOrUnknown(context.correlationId), {
+    view: viewOf(args) ?? "unknown",
+    ...stoppedOutcome(context),
+    durationMs: Date.now() - startedAtMs,
+    resultBytes: 0,
+    payloadBytes: 0,
+    returnedCount: 0,
+    truncated: false,
+    ...turnUsage(context.connectedFolder),
+  });
+}
+
+function projectionFor(
+  deps: ToolDeps,
+  args: CatalogJsonObject,
+  context: ConnectedFolderToolContext,
+): Promise<ConnectedFolderToolProjection> {
+  const session = context.connectedFolder;
+  if (session === undefined) return Promise.resolve(refusal("scope-denied"));
+  if (!admitted(context)) return Promise.resolve(refusal("authority-denied"));
+  return run(deps, session, args, context);
+}
+
+/**
+ * One call, one bounded result, one body-free activity line. Cancellation and the turn's deadline
+ * reject, after their own terminal line.
+ */
 async function execute(
   deps: ToolDeps,
   args: CatalogJsonObject,
   context: ConnectedFolderToolContext,
 ): Promise<ManagedMcpToolResult> {
   const startedAtMs = Date.now();
-  const session = context.connectedFolder;
   let projection: ConnectedFolderToolProjection;
-  if (session === undefined) projection = refusal("scope-denied");
-  else if (!admitted(context)) projection = refusal("authority-denied");
-  else projection = await run(deps, session, args, context);
+  try {
+    projection = await projectionFor(deps, args, context);
+  } catch (error) {
+    logStoppedCall(context, args, startedAtMs);
+    throw error;
+  }
   logCall(context, args, projection, startedAtMs);
   return {
     data: projection.data,

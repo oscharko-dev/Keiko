@@ -46,19 +46,23 @@ export function soleConnectedFolderScope(
 }
 
 /**
- * Bound to the Chat's current server-issued grounding scope identity, which covers the folder root,
- * its selected paths and every other source of the Chat: any change of it ends the authority.
+ * Digest of the Chat's current server-issued grounding scope identity, which covers the folder root,
+ * its selected paths and every other source of the Chat; undefined when the Chat has no sole folder.
  */
+export function connectedFolderConfigurationDigest(chat: Chat | undefined): string | undefined {
+  return chat === undefined || soleConnectedFolderScope(chat) === undefined
+    ? undefined
+    : sha256Hex(canonicalise({ groundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) }));
+}
+
+/** Bound to the Chat's grounding scope identity: any change of it ends the authority. */
 const CONNECTED_FOLDER_AUTHORITY = createLocalChatSourceAuthority<
   ConnectedFolderChatToolAuthoritySubject,
   "folder.read"
 >({
   kind: "connected-folder",
   scope: "folder.read",
-  configurationDigest: (chat) =>
-    soleConnectedFolderScope(chat) === undefined
-      ? undefined
-      : sha256Hex(canonicalise({ groundingScopeIdentity: deriveChatGroundingScopeIdentity(chat) })),
+  configurationDigest: connectedFolderConfigurationDigest,
   subject: (facts) => ({ kind: "connected-folder", ...facts }),
 });
 
