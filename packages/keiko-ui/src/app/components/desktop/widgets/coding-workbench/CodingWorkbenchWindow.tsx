@@ -1601,6 +1601,12 @@ export function sessionGrowthKey(
   return `${String(runtimeEventSignal)}:${feed?.updatedAt ?? ""}:${String(contentLength)}:${String(questionCount)}`;
 }
 
+// The task's stored conversation renders in the same stream: a task picked from Coding History or
+// restored after a reload arrives, and a stored conversation grows, without any live feed growth.
+function transcriptGrowthKey(detail: CodingTaskSession["detail"]): string {
+  return `${detail?.task.id ?? ""}:${String(detail?.messages.length ?? 0)}`;
+}
+
 function workbenchStartBlocker(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -1710,7 +1716,8 @@ function WorkbenchColumns({
   });
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
-  // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
+  // scrolled up into the history, and start following again for every new run (#3257 Wave 0) and
+  // every task shown, so a task opens at its newest message.
   const sessionStreamRef = useRef<HTMLDivElement>(null);
   const {
     onScroll: onStreamScroll,
@@ -1718,12 +1725,13 @@ function WorkbenchColumns({
     resume: followNewest,
   } = useFollowNewest(
     sessionStreamRef,
-    sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
+    `${sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length)}:${transcriptGrowthKey(history.detail)}`,
   );
   const runId = state.run.value?.runId;
+  const shownTaskId = history.detail?.task.id;
   useEffect(() => {
-    if (runId !== undefined) followNewest();
-  }, [followNewest, runId]);
+    if (runId !== undefined || shownTaskId !== undefined) followNewest();
+  }, [followNewest, runId, shownTaskId]);
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );

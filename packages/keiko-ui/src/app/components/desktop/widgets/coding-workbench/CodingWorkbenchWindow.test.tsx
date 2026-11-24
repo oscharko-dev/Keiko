@@ -797,6 +797,68 @@ describe("CodingWorkbenchWindow", () => {
       expect(transcript).not.toHaveTextContent("I read the parser");
     });
 
+    // Seen in a real-model walk on 2026-11-24: a task opened from Coding History rendered its stored
+    // conversation scrolled to the first message, so the newest answer, where the person continues,
+    // stayed out of view. The stored transcript never reached the stream's growth key.
+    it("shows a task picked from Coding History at its newest message", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const log = screen.getByRole("log");
+      const scrollTop = pinLogGeometry(log);
+      // The reader had scrolled up into the previous task's history.
+      scrollTop.value = 100;
+      fireEvent.scroll(log);
+
+      const shown = restoredSession();
+      taskSessionHookMock.mockReturnValue({
+        ...shown,
+        conversationId: "task-8",
+        detail: { ...shown.detail!, task: { ...shown.detail!.task, id: "task-8" } },
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(1720);
+    });
+
+    it("follows a stored conversation that grows while the reader is at its end", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const scrollTop = pinLogGeometry(screen.getByRole("log"));
+
+      taskSessionHookMock.mockReturnValue(restoredSession(grownRunMessages()));
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(1720);
+    });
+
+    it("does not yank a reader who scrolled up when the same task's conversation grows", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      runtimeHookMock.mockReturnValue({ state: restoredRun(), actions: actions() });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const log = screen.getByRole("log");
+      const scrollTop = pinLogGeometry(log);
+      scrollTop.value = 100;
+      fireEvent.scroll(log);
+
+      taskSessionHookMock.mockReturnValue(restoredSession(grownRunMessages()));
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(scrollTop.value).toBe(100);
+    });
+
+    function grownRunMessages(): readonly HistoryMessage[] {
+      return [
+        historyMessage("m-3", "run-7", "user", "Repair the parser"),
+        historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+        historyMessage("m-5", "run-7", "assistant", "The tests pass now."),
+      ];
+    }
+
     // #4491: a run whose changes were not checked names the gap and offers the check; the button
     // starts the check through the composer's own start path, as the person's own request.
     it("offers Run the check now on a not-verified run and starts the check as the person's request", () => {
@@ -4469,6 +4531,21 @@ describe("CodingWorkbenchWindow live stream follows the newest activity", () => 
     expect(scrollTop.value).toBe(100);
   });
 });
+
+// jsdom lays nothing out: pin the log region's geometry and record every scroll the view applies.
+function pinLogGeometry(log: HTMLElement): { value: number } {
+  const scrollTop = { value: 0 };
+  Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => 1720 });
+  Object.defineProperty(log, "clientHeight", { configurable: true, get: () => 292 });
+  Object.defineProperty(log, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop.value,
+    set: (next: number) => {
+      scrollTop.value = next;
+    },
+  });
+  return scrollTop;
+}
 
 function activityFeed(): AvailableCodingSafeActivityFeed {
   return {
