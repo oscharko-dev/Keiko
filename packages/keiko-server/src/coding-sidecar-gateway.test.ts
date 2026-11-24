@@ -3108,9 +3108,11 @@ describe("coding-sidecar gateway", () => {
     const sink = captureServerLog("info");
     const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
     const deadlineConfig = configValue(deadlineProvider, capability());
+    // Derived with the turn's admitted output tokens, exactly as the route arms its deadline.
     const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
       deadlineConfig,
       deadlineProvider.modelId,
+      capability().maxOutputTokens,
     );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
@@ -3716,9 +3718,11 @@ describe("coding-sidecar gateway", () => {
     const sink = captureServerLog("info");
     const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
     const deadlineConfig = configValue(deadlineProvider, capability());
+    // Derived with the turn's admitted output tokens, exactly as the route arms its deadline.
     const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
       deadlineConfig,
       deadlineProvider.modelId,
+      capability().maxOutputTokens,
     );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
