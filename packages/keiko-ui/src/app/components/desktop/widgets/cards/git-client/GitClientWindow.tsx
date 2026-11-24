@@ -52,6 +52,11 @@ import type {
 import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
+import {
+  configuredRepositoryPath,
+  decideRepositorySelection,
+  type RepositoryRefusalReason,
+} from "./repositorySelection";
 import { useHandedOffRepositoryConnection } from "./useHandedOffRepositoryConnection";
 import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
@@ -1250,11 +1255,6 @@ function BranchOutcomeBanner({
   );
 }
 
-/** The repository path the window was configured with, or null when it names none. */
-function configuredRepositoryPath(projectId: string | undefined): string | null {
-  return projectId !== undefined && projectId !== "" ? projectId : null;
-}
-
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
   return response?.available === true ? response.branches : EMPTY_BRANCHES;
 }
@@ -1707,57 +1707,72 @@ export function GitClientWindow({
   const settleHandedOffConnection = useCallback((): void => {
     updateCfg?.({ connectRepository: undefined });
   }, [updateCfg]);
-  const claimHandedOffRepository = useHandedOffRepositoryConnection({
+  const connectHandedOffFolder = useHandedOffRepositoryConnection({
     enabled: connectHandedOffRepository,
     lockedToActiveRoot,
-    configuredPath: configuredRepositoryPath(projectId),
     client,
+    actionSequence: repositoryConnectSeqRef,
     onStarted: startHandedOffConnection,
     onAdded: onRepositoryAdded,
     onFailed: failHandedOffConnection,
     onSettled: settleHandedOffConnection,
   });
 
-  useEffect(() => {
-    const configuredPath = configuredRepositoryPath(projectId);
-    // A root the desktop locked to the active task workspace is a managed worktree: the server
-    // registers it for trust, manifests and verification and keeps it out of the user-facing
-    // repository list on purpose, so the recents-membership check below could only ever declare it
-    // unavailable and strand the operator (#3390, rehearsal run-21). It is bound as-is.
-    if (lockedToActiveRoot && configuredPath !== null) {
-      if (selectedPath !== configuredPath) setSelectedPath(configuredPath);
-      setReposError(null);
-      return;
+  const refuseRepository = useCallback(
+    (reason: RepositoryRefusalReason, endsHandOff: boolean): void => {
+      setSelectedPath(null);
+      updateCfg?.(
+        endsHandOff ? { projectPath: "", connectRepository: undefined } : { projectPath: "" },
+      );
+      setReposError(
+        optionalT(
+          reason === "unavailable"
+            ? "gitClientWindow.repository.unavailable"
+            : "gitClientWindow.repository.workspaceUnavailable",
+        ),
+      );
+    },
+    [optionalT, updateCfg],
+  );
+
+  useEffect((): void => {
+    const decision = decideRepositorySelection({
+      lockedToActiveRoot,
+      configuredPath: configuredRepositoryPath(projectId),
+      handOffPending: connectHandedOffRepository,
+      selectedPath,
+      reposLoading,
+      reposError,
+      repositories,
+    });
+    switch (decision.kind) {
+      case "wait":
+        return;
+      case "bind-locked":
+        if (selectedPath !== decision.path) setSelectedPath(decision.path);
+        setReposError(null);
+        return;
+      case "select":
+        if (selectedPath !== decision.path) setSelectedPath(decision.path);
+        if (decision.endsHandOff) settleHandedOffConnection();
+        return;
+      case "connect-hand-off":
+        connectHandedOffFolder(decision.path);
+        return;
+      case "refuse":
+        refuseRepository(decision.reason, decision.endsHandOff);
     }
-    if (reposLoading || reposError !== null) return;
-    const requestedPath = selectedPath ?? configuredPath;
-    if (requestedPath === null) return;
-    const selected = repositories.find((repository) => repository.path === requestedPath);
-    if (selected?.available === true && selected.workspaceAvailable === true) {
-      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
-      return;
-    }
-    // A handed-off folder that was never connected is connected, not discarded (#4103 F2).
-    if (selected === undefined && claimHandedOffRepository(requestedPath)) return;
-    setSelectedPath(null);
-    updateCfg?.({ projectPath: "" });
-    setReposError(
-      optionalT(
-        selected?.available !== true
-          ? "gitClientWindow.repository.unavailable"
-          : "gitClientWindow.repository.workspaceUnavailable",
-      ),
-    );
   }, [
-    claimHandedOffRepository,
+    connectHandedOffFolder,
+    connectHandedOffRepository,
     lockedToActiveRoot,
-    optionalT,
     projectId,
+    refuseRepository,
     repositories,
     reposError,
     reposLoading,
     selectedPath,
-    updateCfg,
+    settleHandedOffConnection,
   ]);
 
   const active = activeGitClientState({

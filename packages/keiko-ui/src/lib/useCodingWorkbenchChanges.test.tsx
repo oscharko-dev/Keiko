@@ -18,7 +18,10 @@ import {
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 
-import { WORKSPACE_FILE_MUTATED_EVENT } from "@/app/components/desktop/widgets/cards/workspace-file-events";
+import {
+  WORKSPACE_FILE_MUTATED_EVENT,
+  workspaceFileMutationRoots,
+} from "@/app/components/desktop/widgets/cards/workspace-file-events";
 
 vi.mock("./coding-app-session-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./coding-app-session-client")>()),
@@ -597,6 +600,28 @@ describe("useCodingWorkbenchChanges agent change broadcast (#4103 F3)", () => {
       );
       await flush();
       expect(mutations.events).toHaveLength(1);
+    } finally {
+      mutations.stop();
+    }
+  });
+
+  // A run rooted in a sub-folder reports the repository that contains it; a Git window bound to that
+  // repository matches roots exactly, so the event names both.
+  it("names the canonical repository root the read resolved for a sub-folder run", async () => {
+    const mutations = listenForAgentMutations();
+    try {
+      const canonicalRoot = "/managed/repository";
+      const stub = client({
+        getStatus: vi.fn(async () => ({ ...statusFixture(), repositoryRoot: canonicalRoot })),
+      });
+      renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: stub }));
+      await flush();
+      expect(mutations.events.map((event) => event.detail)).toEqual([
+        { root: ROOT, provenance: "agent", repositoryRoot: canonicalRoot },
+      ]);
+      expect(mutations.events.map((event) => workspaceFileMutationRoots(event))).toEqual([
+        [ROOT, canonicalRoot],
+      ]);
     } finally {
       mutations.stop();
     }

@@ -1151,7 +1151,88 @@ describe("GitClientWindow — repository list", () => {
       "This local repository is unavailable.",
     );
     expect(client.registerRepository).not.toHaveBeenCalled();
-    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    // The refusal ends the hand-off, so a restored window never retries it on its own. Strict
+    // equality: the cleared flag must be written, not merely absent.
+    expect(updateCfg.mock.calls.at(-1)?.[0]).toStrictEqual({
+      projectPath: "",
+      connectRepository: undefined,
+    });
+  });
+
+  it("ends the hand-off of a folder that is already a connected repository", async () => {
+    const updateCfg = vi.fn();
+    const client = makeClient();
+    render(
+      <GitClientWindow
+        projectId={REPO_B.path}
+        connectHandedOffRepository
+        client={client}
+        updateCfg={updateCfg}
+      />,
+    );
+
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path);
+    expect(updateCfg).toHaveBeenCalledWith({ connectRepository: undefined });
+    expect(client.registerRepository).not.toHaveBeenCalled();
+  });
+
+  // The Git window is a singleton: a second Files hand-off merges into the open window. The
+  // hand-off names the folder to show and wins over the current selection.
+  it("switches an open window to each further handed-off folder", async () => {
+    const handedOff = makeRepo("/repos/handed-off", "handed-off");
+    let registered = false;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({
+        projects: registered ? [REPO_A, REPO_B, handedOff] : [REPO_A, REPO_B],
+      })),
+      registerRepository: vi.fn(async () => {
+        registered = true;
+        return makeProjectResponse(handedOff);
+      }),
+      reconnectRepository: vi.fn(async (path: string) =>
+        makeProjectResponse(path === handedOff.path ? handedOff : REPO_B),
+      ),
+    });
+    const view = render(
+      <GitClientWindow projectId={REPO_A.path} connectHandedOffRepository client={client} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+
+    view.rerender(
+      <GitClientWindow projectId={REPO_B.path} connectHandedOffRepository client={client} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
+    );
+    expect(client.registerRepository).not.toHaveBeenCalled();
+
+    view.rerender(
+      <GitClientWindow projectId={handedOff.path} connectHandedOffRepository client={client} />,
+    );
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(handedOff.path),
+    );
+    expect(client.registerRepository).toHaveBeenCalledExactlyOnceWith(
+      { path: handedOff.path },
+      expect.any(String),
+    );
+  });
+
+  it("keeps the selected repository on a configuration change that is not a hand-off", async () => {
+    const client = makeClient();
+    const view = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() =>
+      expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_A.path),
+    );
+
+    view.rerender(<GitClientWindow projectId={REPO_B.path} client={client} />);
+    await act(async () => await Promise.resolve());
+    expect(vi.mocked(client.getStatus).mock.calls.map((call) => call[0])).not.toContain(
+      REPO_B.path,
+    );
   });
 
   it("offers Connect repository and Clone from URL actions in the connect panel", async () => {

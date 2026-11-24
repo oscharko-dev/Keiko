@@ -606,8 +606,13 @@ describe("static serving", () => {
     expect(res.headers.get("content-type")).toContain("text/javascript");
   });
 
-  it("falls back to index.html for an unknown client route (SPA)", async () => {
-    const res = await fetchRaw("/some/client/route");
+  it.each([
+    ["an unknown client route (SPA)", "/some/client/route"],
+    // #4103 F1: only the build namespace itself answers a miss with 404.
+    ["a client route that only starts like a build path", "/_nextish/route"],
+    ["a path that cannot be decoded", "/%E0%A4%A"],
+  ])("falls back to index.html for %s", async (_case, path) => {
+    const res = await fetchRaw(path);
     expect(res.status).toBe(200);
     expect(res.text).toContain("home");
   });
@@ -621,21 +626,20 @@ describe("static serving", () => {
 
   // #4103 F1: a tab still running an older build asks for a chunk the new build does not ship. The
   // HTML shell under 200 made the browser raise ChunkLoadError on HTML instead of seeing a miss.
-  it.each(["/_next/static/chunks/0-retired-build.js", "/_next/static/css/retired.css", "/_next/x"])(
-    "answers a missing build asset %s with 404 JSON, never the HTML shell",
-    async (path) => {
-      const res = await fetchRaw(path);
-      expect(res.status).toBe(404);
-      expect(res.headers.get("content-type")).toContain("application/json");
-      expect(res.text).not.toContain("home");
-      expect(JSON.parse(res.text)).toMatchObject({ error: { code: "NOT_FOUND" } });
-    },
-  );
-
-  it("still falls back to the HTML shell for a client route that only starts like a build path", async () => {
-    const res = await fetchRaw("/_nextish/route");
-    expect(res.status).toBe(200);
-    expect(res.text).toContain("home");
+  it.each([
+    "/_next/static/chunks/0-retired-build.js",
+    "/_next/static/css/retired.css",
+    "/_next/x",
+    // Encoded spellings decode to the same namespace the static lookup resolves.
+    "/%5Fnext/static/chunks/0-retired-build.js",
+    "/_next%2Fstatic%2Fchunks%2Fretired.js",
+    "/static/..%2F_next/retired.js",
+  ])("answers a missing build asset %s with 404 JSON, never the HTML shell", async (path) => {
+    const res = await fetchRaw(path);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.text).not.toContain("home");
+    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "NOT_FOUND" } });
   });
 
   it("does not serve files outside the static root", async () => {
