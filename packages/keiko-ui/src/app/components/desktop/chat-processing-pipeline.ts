@@ -7,6 +7,7 @@ import {
 import type { WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraToolLabel, jiraToolState } from "./jira-tool-presentation";
 import { batchStepCount } from "./jira-tool-progress";
+import { connectedFolderStepLabel } from "./connected-folder-tool-presentation";
 
 export type ChatProcessingState =
   | "done"
@@ -148,6 +149,8 @@ function exchangeLabel(exchange: ChatToolExchange): WidgetMessageKey {
   if (exchange.call.name === "knowledge_documents")
     return DOCUMENT_VIEWS.get(viewKey) ?? "chat.processing.documents";
   if (exchange.call.name === "knowledge_review") return "chat.processing.review";
+  const folder = connectedFolderStepLabel(exchange);
+  if (folder !== undefined) return folder;
   if (exchange.call.name === CHAT_TOOL_BATCH_TOOL_NAME) return "chat.processing.draftBatch";
   return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : jiraToolLabel(exchange);
 }

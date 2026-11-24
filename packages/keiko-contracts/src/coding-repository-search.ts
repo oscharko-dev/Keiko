@@ -1,3 +1,9 @@
+import {
+  hasAsciiControlCharacter as hasControlCharacter,
+  hasExactOwnKeys as exactKeys,
+  isBoundedPositiveInteger as boundedInteger,
+  isOwnDataRecord as ownDataRecord,
+} from "./contract-validation-primitives.js";
 import { isValidScopePath, type ContextCoverageTruncationReason } from "./connected-context.js";
 import { regexSafetyIssue } from "./workspace-search.js";
 import {
@@ -150,36 +156,6 @@ export type CodingRepositoryResult =
     })
   | (CodingRepositorySuccess & { readonly kind: "read"; readonly excerpt: CodingRepositoryHit })
   | { readonly ok: false; readonly reason: CodingRepositoryFailureReason };
-
-function ownDataRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return (
-    (prototype === null || prototype === Object.prototype) &&
-    Object.getOwnPropertySymbols(value).length === 0 &&
-    Object.values(Object.getOwnPropertyDescriptors(value)).every(
-      (entry) => "value" in entry && entry.enumerable === true,
-    )
-  );
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return (
-    Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-function boundedInteger(value: unknown, maximum: number): value is number {
-  return Number.isSafeInteger(value) && typeof value === "number" && value > 0 && value <= maximum;
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return true;
-  }
-  return false;
-}
 
 export function isValidCodingRepositoryGlob(value: unknown): value is string {
   return (

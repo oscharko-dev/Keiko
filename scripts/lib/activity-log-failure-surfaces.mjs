@@ -98,6 +98,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   },
   { owner: "keiko-server", emitterPrefix: "client-jira-fields-log", surface: "client-diagnostics" },
   { owner: "keiko-server", emitterPrefix: "client-jira-result-log", surface: "client-diagnostics" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "connected-folder-tool-activity",
+    surface: "memory-knowledge",
+  },
   { owner: "keiko-server", emitterPrefix: "coding-app-session", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-context", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-runtime", surface: "tools-workflows" },

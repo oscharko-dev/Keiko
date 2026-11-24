@@ -37,6 +37,7 @@ import { chatProcessingSteps } from "./chat-processing-pipeline";
 import type { JiraDraftProblemCode } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useJiraResultEvidence } from "./jira-result-evidence";
 import { knowledgeToolFailureView } from "./knowledge-tool-failure";
+import { connectedFolderToolOutcomeView } from "./connected-folder-tool-presentation";
 import {
   jiraToolOutcomeView,
   knowledgeToolOutcomeView,
@@ -601,10 +602,15 @@ function JiraToolContents({
     </>
   );
 }
-/** A known Jira alias or a versioned Knowledge receipt has a readable view; anything else has none. */
+/**
+ * A known Jira alias, a versioned Knowledge receipt or a look-up of the canonical connected-folder
+ * tool has a readable view; anything else has none.
+ */
 function readableResult(exchange: ChatToolExchange): boolean {
   return (
-    isKnownJiraToolAlias(exchange.call.name) || knowledgeToolOutcomeView(exchange) !== undefined
+    isKnownJiraToolAlias(exchange.call.name) ||
+    knowledgeToolOutcomeView(exchange) !== undefined ||
+    connectedFolderToolOutcomeView(exchange) !== undefined
   );
 }
 /** States the progress beside the cards already shows; a card that says only this says nothing. */
