@@ -853,6 +853,24 @@ Chat could not be opened and records `client.binding.project-open-exhausted` at 
 failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
 text or paths.
 
+## Editor debugging start
+
+`dap.debug-session.startup-attempt-failed` records, at warn, each failed attempt of a debug
+session start (#4103): the attempt number, the step that was running (`capsule-launch`,
+`capsule-attach`, `endpoint-connect`, `initialize`, `initialized-event`, `configure`,
+`configuration-done`, `launch-response`, `mark-running`), the closed `DebugProcessErrorCode` as
+`failureCode` (or `unclassified`), whether another attempt follows (`retry`) and the attempt's
+`durationMs`, under the start request's correlation id. A start ended `STARTUP_THROTTLED` names
+the two attempts the throttle stopped, so the bound that fired is visible. The registry still
+allows two attempts per session in a rolling 60 s window.
+
+`dap.debug-session.start-refused` records, at warn, the closed `reason` a start route answered
+with instead of an opaque 500: `STARTUP_THROTTLED` (503), `CAPACITY` (429), a previous session
+still ending, a session gone while starting or an invalid target (409), an unavailable adapter or a
+shutting-down service (503), and any other closed adapter failure (502). The response carries the
+same code and the request's correlation id; an unclassified error still reaches the top-level
+catch with its frames. Closed values, one count and one duration only.
+
 ## Gateway readiness, model activation and the tool-calling check
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,

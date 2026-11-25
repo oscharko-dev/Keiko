@@ -4540,6 +4540,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "debug-session-start",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["dap.debug-session.startup-attempt-failed"],
+      end: [],
+      failure: ["dap.debug-session.start-refused"],
+      loss: [],
+    },
+    requiredCausalOperations: [
+      "dap.debug-session.start-refused",
+      "dap.debug-session.startup-attempt-failed",
+    ],
+    requiredLossOperations: [],
+    requiredProofOperations: [
+      "dap.debug-session.start-refused",
+      "dap.debug-session.startup-attempt-failed",
+    ],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["dap.debug-session.startup-attempt-failed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "discovery-scope",
     requiredProductSurfaces: ["keiko-local-knowledge"],
     requiredLifecycleOperations: {

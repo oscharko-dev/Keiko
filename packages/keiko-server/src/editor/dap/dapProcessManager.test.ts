@@ -10,6 +10,7 @@ import {
   createDapProcessManager,
   DapProcessManagerError,
   type DapProcessManager,
+  type DapProcessManagerDeps,
   type DapProcessStartInput,
   type DapSessionConfigurationPort,
   type DebugCapsuleLauncher,
@@ -27,6 +28,7 @@ import {
 } from "./providers/dapAdapterProviders.js";
 import { createNodeDebugAdapterSpec } from "./providers/nodeDebugAdapter.js";
 import { dirname } from "node:path";
+import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const plan = Object.freeze({
   schemaVersion: "1",
@@ -279,6 +281,7 @@ interface SetupOptions {
   readonly appendEvidence?: ((evidence: DebugLifecycleEvidence) => Promise<void>) | undefined;
   readonly revalidateTarget?: ((envelope: DebugSpawnEnvelope) => boolean) | undefined;
   readonly events?: DapEventBridge | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 interface SetupResult {
   readonly records: DebugLifecycleEvidence[];
@@ -377,6 +380,12 @@ function testAdapterSpec(
   };
 }
 
+function optionalManagerDeps(
+  options: SetupOptions | undefined,
+): Pick<DapProcessManagerDeps, "events" | "activityLog"> {
+  return { events: options?.events, activityLog: options?.activityLog };
+}
+
 function setup(options?: SetupOptions): SetupResult {
   const records: DebugLifecycleEvidence[] = [];
   const outputLimits: { kind: "output-limit"; sessionId: string; acceptedBytes: number }[] = [];
@@ -405,7 +414,7 @@ function setup(options?: SetupOptions): SetupResult {
     launchCapsule: launch,
     connectEndpoint: connect,
     revalidateTarget,
-    events: options?.events,
+    ...optionalManagerDeps(options),
   });
   return {
     records,
@@ -674,6 +683,96 @@ describe("dapProcessManager canonical orchestration", () => {
 
     expect(transport.commands).toStrictEqual(["initialize", "launch", "initialize"]);
     vi.useRealTimers();
+  });
+
+  // #4103: a start that ended STARTUP_THROTTLED on a loaded CI runner left no evidence of which step
+  // of its two attempts failed. Each failed attempt now names its step and closed code, body-free.
+  it("records the step and closed code of every failed startup attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = endpoint();
+      transport.emitInitialized = false;
+      const events: ServerLogEvent[] = [];
+      const current = setup({ endpoint: transport, activityLog: { write: (e) => events.push(e) } });
+      const starting = current.manager.start({ ...startInput, correlationId: "debug-start-1" });
+      const rejection = expect(starting).rejects.toMatchObject({ code: "STARTUP_THROTTLED" });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      await rejection;
+
+      const attempts = events.filter((e) => e.op === "dap.debug-session.startup-attempt-failed");
+      expect(attempts).toStrictEqual([
+        expect.objectContaining({
+          level: "warn",
+          correlationId: "debug-start-1",
+          errorKind: "timeout",
+          extra: expect.objectContaining({
+            attempt: 1,
+            phase: "initialized-event",
+            failureCode: "REQUEST_TIMEOUT",
+            retry: true,
+          }) as unknown,
+        }),
+        expect.objectContaining({
+          correlationId: "debug-start-1",
+          extra: expect.objectContaining({ attempt: 2, failureCode: "REQUEST_TIMEOUT" }) as unknown,
+        }),
+      ]);
+      expect(attempts.every((e) => typeof e.durationMs === "number" && e.durationMs >= 0)).toBe(
+        true,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a refused capsule attach as its own step without a retry", async () => {
+    const events: ServerLogEvent[] = [];
+    const current = setup({ activityLog: { write: (e) => events.push(e) } });
+    vi.spyOn(current.registry, "attachCapsule").mockResolvedValueOnce(false);
+
+    await expect(current.manager.start(startInput)).rejects.toMatchObject({
+      code: "SESSION_NOT_FOUND",
+    });
+
+    expect(events).toStrictEqual([
+      expect.objectContaining({
+        op: "dap.debug-session.startup-attempt-failed",
+        correlationId: expect.any(String) as unknown,
+        extra: expect.objectContaining({
+          attempt: 1,
+          phase: "capsule-attach",
+          failureCode: "SESSION_NOT_FOUND",
+          retry: false,
+        }) as unknown,
+      }),
+    ]);
+  });
+
+  it("still records a failed attempt whose release itself fails", async () => {
+    const events: ServerLogEvent[] = [];
+    const current = setup({
+      activityLog: { write: (e) => events.push(e) },
+      connectEndpoint: () =>
+        Promise.reject(Object.assign(new Error("endpoint closed"), { code: "UNEXPECTED_EOF" })),
+    });
+    const releaseFailure = new Error("release failed");
+    vi.spyOn(current.registry, "completeLaunchFailure").mockRejectedValueOnce(releaseFailure);
+
+    await expect(current.manager.start(startInput)).rejects.toBe(releaseFailure);
+
+    expect(events).toStrictEqual([
+      expect.objectContaining({
+        op: "dap.debug-session.startup-attempt-failed",
+        errorKind: "unavailable",
+        extra: expect.objectContaining({
+          attempt: 1,
+          phase: "endpoint-connect",
+          failureCode: "UNEXPECTED_EOF",
+          retry: false,
+        }) as unknown,
+      }),
+    ]);
   });
 
   it("does not treat another DAP event as initialized", async () => {

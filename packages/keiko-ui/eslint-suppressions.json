@@ -1009,7 +1009,7 @@
   },
   "src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": {
     "max-lines-per-function": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": {

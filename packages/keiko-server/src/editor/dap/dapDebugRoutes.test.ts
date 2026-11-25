@@ -36,6 +36,15 @@ import {
 import { createDapEventBridge } from "./dapEventBridge.js";
 import type { DapProcessManager, DapProcessStartInput } from "./dapProcessManager.js";
 import { DapProtocolError } from "./dapProtocolClient.js";
+import { DapProcessManagerError } from "./dapProcessManager.js";
+import { DapAdapterPreflightError } from "./dapNodeAdapter.js";
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import { createDebugReferenceStore } from "./dapReferenceStore.js";
 import type { DebugSessionBinding, DebugSessionProjection } from "./debugSessionRegistry.js";
 import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
@@ -48,6 +57,7 @@ const ACTIVATION_REVISION = 7;
 
 class FakeDebugManager implements DapProcessManager {
   public readonly starts: DapProcessStartInput[] = [];
+  public startError: Error | undefined;
   public readonly requests: {
     readonly sessionId: string;
     readonly command: string;
@@ -71,6 +81,7 @@ class FakeDebugManager implements DapProcessManager {
 
   public async start(input: DapProcessStartInput): Promise<void> {
     this.starts.push(input);
+    if (this.startError !== undefined) throw this.startError;
     this.bindings.set(input.identity.sessionId, {
       workspaceId: input.identity.workspaceId,
       workspacePartitionKey: input.identity.workspacePartitionKey,
@@ -895,6 +906,119 @@ describe("governed DAP debug routes", () => {
     expect(rejected.reason).toBe("cap_exceeded");
     expect(rejected.snapshot.revision).toBe(state.revision);
     expect(rejected.snapshot.breakpoints).toHaveLength(200);
+  });
+
+  // #4103: the registry's STARTUP_THROTTLED refusal reached the top-level catch and answered an
+  // opaque 500 INTERNAL. A closed DAP failure is now its typed refusal with its own log line.
+  function registryRefusal(code: string): Error {
+    const error = new Error(code);
+    error.name = "DebugRegistryError";
+    Object.defineProperty(error, "code", { value: code, enumerable: true });
+    return error;
+  }
+
+  async function startFile(cookie: string): Promise<Response> {
+    return debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+  }
+
+  it("answers a throttled start with its typed refusal and records the closed reason", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    manager.startError = registryRefusal("STARTUP_THROTTLED");
+    try {
+      const response = await startFile(cookie);
+      const body = (await response.json()) as {
+        readonly error: { readonly code: string; readonly correlationId?: string };
+      };
+
+      expect(response.status).toBe(503);
+      expect(body.error.code).toBe("STARTUP_THROTTLED");
+      expect(typeof body.error.correlationId).toBe("string");
+      expect(manager.starts.at(-1)?.correlationId).toBe(body.error.correlationId);
+      const refused = sink.events.find((e) => e.op === "dap.debug-session.start-refused");
+      expect(refused).toMatchObject({
+        level: "warn",
+        status: 503,
+        errorKind: "rate-limited",
+        correlationId: body.error.correlationId,
+        extra: { reason: "STARTUP_THROTTLED" },
+      });
+      if (refused === undefined) throw new Error("expected a start-refused line");
+      expect(
+        expectActivityLogProof(
+          "dap.debug-session.start-refused.line",
+          formatActivityLogProofLine(refused),
+        ),
+      ).toMatchObject({ reason: "STARTUP_THROTTLED" });
+      expect(sink.events.some((e) => e.op === "server.request" && e.status === 500)).toBe(false);
+    } finally {
+      manager.startError = undefined;
+      resetServerLogger();
+    }
+  });
+
+  it.each([
+    { error: (): Error => registryRefusal("CAPACITY"), status: 429, code: "CAPACITY" },
+    {
+      error: (): Error => registryRefusal("SESSION_TERMINATING"),
+      status: 409,
+      code: "SESSION_TERMINATING",
+    },
+    {
+      error: (): Error => new DapProcessManagerError("INVALID_CAPSULE_PLAN"),
+      status: 409,
+      code: "INVALID_CAPSULE_PLAN",
+    },
+    {
+      error: (): Error => new DapProcessManagerError("CLIENT_DISPOSED"),
+      status: 503,
+      code: "CLIENT_DISPOSED",
+    },
+    {
+      error: (): Error => new DapAdapterPreflightError(),
+      status: 503,
+      code: "EXECUTABLE_NOT_FOUND",
+    },
+    {
+      error: (): Error => new DapProtocolError("REQUEST_TIMEOUT"),
+      status: 502,
+      code: "REQUEST_TIMEOUT",
+    },
+  ])("answers a start that failed with $code as $status", async ({ error, status, code }) => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    manager.startError = error();
+    try {
+      const response = await startFile(cookie);
+      const body = (await response.json()) as { readonly error: { readonly code: string } };
+
+      expect(response.status).toBe(status);
+      expect(body.error.code).toBe(code);
+    } finally {
+      manager.startError = undefined;
+    }
+  });
+
+  it("keeps an unclassified start failure an internal error", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    manager.startError = Object.assign(new Error("boom"), { code: "NOT_A_DAP_CODE" });
+    try {
+      const response = await startFile(cookie);
+      const body = (await response.json()) as { readonly error: { readonly code: string } };
+
+      expect(response.status).toBe(500);
+      expect(body.error.code).toBe("INTERNAL");
+    } finally {
+      manager.startError = undefined;
+    }
   });
 
   it("reconciles adapter breakpoint acknowledgement before reporting an armed state", async () => {

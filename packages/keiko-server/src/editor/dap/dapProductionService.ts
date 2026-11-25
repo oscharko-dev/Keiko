@@ -222,6 +222,7 @@ function composeDapProductionService(
     connectEndpoint: (plan) => factories.connectEndpoint(plan, endpoint),
     revalidateTarget,
     events: eventBridge,
+    activityLog: processServerLogSink(),
   });
   const dispose = createDapServiceDisposer(manager, eventBridge, deps);
   return Object.freeze({ manager, registry, lifecycleLedger, eventBridge, dispose });

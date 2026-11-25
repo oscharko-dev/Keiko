@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 417,
-  "completeClassCount": 417,
+  "supportedClassCount": 418,
+  "completeClassCount": 418,
   "completeness": "complete",
   "classes": [
     {
@@ -24075,6 +24075,102 @@
             "causeChain": false
           },
           "proofIds": ["dap.debug-runtime.selected.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "debug-session-start",
+      "requirementContract": "debug-session-start",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["failure", "state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["dap.debug-session.startup-attempt-failed"],
+        "end": [],
+        "failure": ["dap.debug-session.start-refused"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "dap.debug-session.start-refused",
+          "mode": "correlation"
+        },
+        {
+          "op": "dap.debug-session.startup-attempt-failed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["dap.debug-session.startup-attempt-failed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "dap.debug-session.start-refused",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["dap.debug-session.start-refused.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "dap.debug-session.startup-attempt-failed",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "attempt",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failureCode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "retry",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["dap.debug-session.startup-attempt-failed.line"],
           "replayReferences": [],
           "missingObligations": []
         }

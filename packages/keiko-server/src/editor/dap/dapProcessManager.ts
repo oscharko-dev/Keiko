@@ -34,6 +34,8 @@ import {
   type DebugSpawnEnvelope,
 } from "./debugCapsulePlan.js";
 import type { DapAdapterProviderCatalog } from "./providers/dapAdapterProviders.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { recordStartupAttemptFailed, type DebugStartupProgress } from "./dapStartupActivity.js";
 import type {
   DebugPauseContext,
   DebugProtocolPort,
@@ -58,9 +60,13 @@ export interface DapProcessManagerDeps {
   readonly connectEndpoint: (plan: Layer2DebugCapsulePlan) => Promise<DapPrivateEndpointConnection>;
   readonly revalidateTarget: (envelope: DebugSpawnEnvelope) => boolean;
   readonly events?: DapEventBridge | undefined;
+  /** Receives one body-free line per failed startup attempt (#4103). */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 export interface DapProcessStartInput {
   readonly identity: DebugProvisionalReservationInput;
+  /** The correlation id of the request that started the session, joining its attempt lines. */
+  readonly correlationId?: string | undefined;
   readonly adapterRuntime: string;
   readonly adapterProviderId: string;
   readonly planCandidate: unknown;
@@ -234,10 +240,17 @@ async function runStartupAttempt(
   plan: Layer2DebugCapsulePlan,
 ): Promise<void> {
   const attempt = await deps.registry.beginStartupAttempt(input.identity.sessionId);
+  const progress: DebugStartupProgress = { phase: "capsule-launch" };
+  const startedAt = performance.now();
   try {
-    await launchAttempt(deps, input, plan, attempt);
+    await launchAttempt(deps, input, plan, attempt, progress);
   } catch (error: unknown) {
-    const retry = await releaseFailedAttempt(deps, input, attempt.attemptId);
+    const retry = await releaseAndRecordFailedAttempt(deps, input, {
+      attempt: attempt.attemptId,
+      phase: progress.phase,
+      error,
+      durationMs: performance.now() - startedAt,
+    });
     if (error instanceof DapProcessManagerError) {
       await deps.registry.teardown(input.identity.sessionId, "startupFailed");
       throw error;
@@ -333,8 +346,10 @@ async function launchAttempt(
   input: DapProcessStartInput,
   plan: Layer2DebugCapsulePlan,
   attempt: { readonly attemptId: number; readonly signal: AbortSignal },
+  progress: DebugStartupProgress,
 ): Promise<void> {
   const handle = await deps.launchCapsule(plan.spawnEnvelope, attempt.signal);
+  progress.phase = "capsule-attach";
   const attached = await deps.registry.attachCapsule(
     input.identity.sessionId,
     attempt.attemptId,
@@ -342,22 +357,45 @@ async function launchAttempt(
     { backend: plan.backend, runtimeIdentityDigest: plan.runtimeIdentityDigest },
   );
   if (!attached) throw new DapProcessManagerError("SESSION_NOT_FOUND");
-  await initializeAttempt(
-    deps,
-    input.identity.sessionId,
-    attempt.attemptId,
-    plan,
-    handle,
-    input.configure,
-  );
+  progress.phase = "endpoint-connect";
+  await initializeAttempt(deps, input.identity.sessionId, attempt.attemptId, plan, handle, {
+    configure: input.configure,
+    progress,
+  });
 }
 
-async function releaseFailedAttempt(
+interface FailedStartupAttempt {
+  readonly attempt: number;
+  readonly phase: DebugStartupProgress["phase"];
+  readonly error: unknown;
+  readonly durationMs: number;
+}
+
+/**
+ * Releases a failed attempt and reports whether the start may retry. The attempt line is written in
+ * `finally`, so a release that itself throws still leaves the failed step on the log (with no
+ * retry) while its own error propagates.
+ */
+async function releaseAndRecordFailedAttempt(
   deps: DapProcessManagerDeps,
   input: DapProcessStartInput,
-  attemptId: number,
+  failure: FailedStartupAttempt,
 ): Promise<boolean> {
-  return deps.registry.completeLaunchFailure(input.identity.sessionId, attemptId);
+  let retry = false;
+  try {
+    const released = await deps.registry.completeLaunchFailure(
+      input.identity.sessionId,
+      failure.attempt,
+    );
+    retry = released && !(failure.error instanceof DapProcessManagerError);
+    return retry;
+  } finally {
+    recordStartupAttemptFailed(deps.activityLog, {
+      ...failure,
+      correlationId: input.correlationId,
+      retry,
+    });
+  }
 }
 
 function planBinding(input: DapProcessStartInput): DebugCapsulePlanBinding {
@@ -374,10 +412,15 @@ async function initializeAttempt(
   attemptId: number,
   plan: Layer2DebugCapsulePlan,
   handle: QualifiedDebugCapsuleHandle,
-  configure: DapProcessStartInput["configure"],
+  session: {
+    readonly configure: DapProcessStartInput["configure"];
+    readonly progress: DebugStartupProgress;
+  },
 ): Promise<void> {
+  const { configure, progress } = session;
   const client = await attachAttemptResources(deps, sessionId, attemptId, plan, handle);
   deps.registry.markInitializing(sessionId, attemptId);
+  progress.phase = "initialize";
   const initializeBody = await client.controlRequest<unknown>(
     "initialize",
     { clientID: "keiko", adapterID: "node", linesStartAt1: true, columnsStartAt1: true },
@@ -388,7 +431,8 @@ async function initializeAttempt(
     supportsSetVariable: capabilities.supportsSetVariable,
   });
   assertTargetCurrent(deps, plan.spawnEnvelope);
-  await launchConfiguredSession(client, plan, configure, capabilities);
+  await launchConfiguredSession(client, plan, { configure, capabilities, progress });
+  progress.phase = "mark-running";
   await deps.registry.markRunning(sessionId, attemptId);
 }
 
@@ -436,16 +480,22 @@ async function handleCapsuleExit(
 async function launchConfiguredSession(
   client: DapProtocolClient,
   plan: Layer2DebugCapsulePlan,
-  configure: DapProcessStartInput["configure"],
-  capabilities: InitializeCapabilities,
+  session: {
+    readonly configure: DapProcessStartInput["configure"];
+    readonly capabilities: InitializeCapabilities;
+    readonly progress: DebugStartupProgress;
+  },
 ): Promise<void> {
+  const { configure, capabilities, progress } = session;
   const initialized = waitForInitialized(client);
   const launched = client.controlRequest(
     plan.launchRequest.command,
     plan.launchRequest.arguments,
     10_000,
   );
+  progress.phase = "initialized-event";
   await initialized;
+  progress.phase = "configure";
   if (configure !== undefined) {
     await configure({
       request: <T>(command: string, args: unknown): Promise<T> =>
@@ -454,9 +504,11 @@ async function launchConfiguredSession(
         client.request<T>(command, args, { lane: "inspection", deadlineMs: 3_000 }),
     });
   }
+  progress.phase = "configuration-done";
   if (capabilities.supportsConfigurationDoneRequest) {
     await client.controlRequest("configurationDone", {}, 2_000);
   }
+  progress.phase = "launch-response";
   await launched;
 }
 

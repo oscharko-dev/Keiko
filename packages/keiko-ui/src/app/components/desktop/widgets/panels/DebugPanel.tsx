@@ -22,6 +22,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { resolveDebugLaunchTarget } from "../cards/debugLaunchTarget";
+import { debugStartFailure, type DebugStartFailure } from "../cards/debugRequestError";
 import type { DebugConsoleEntry } from "../cards/debugSessionStore";
 import { useDebugSession } from "../cards/useDebugSession";
 import {
@@ -529,6 +530,16 @@ function CallStack(props: {
   );
 }
 
+const START_FAILURE_MESSAGES: Readonly<
+  Record<DebugStartFailure, Parameters<DebuggingTranslate>[0]>
+> = {
+  adapter: "startFailedAdapter",
+  busy: "startFailedBusy",
+  capacity: "startFailedCapacity",
+  target: "startFailedTarget",
+  unavailable: "startFailedUnavailable",
+};
+
 export function DebugPanel({
   root,
   workspaceId,
@@ -548,6 +559,8 @@ export function DebugPanel({
     new Map(),
   );
   const [actionError, setActionError] = useState(false);
+  const [startFailure, setStartFailure] = useState<DebugStartFailure | null>(null);
+  const startGeneration = useRef(0);
   const session = snapshot.session;
   const selectedFrame =
     snapshot.stack?.frames.find((frame) => frame.frameRef === selectedFrameRef) ??
@@ -582,7 +595,23 @@ export function DebugPanel({
 
   const perform = (operation: Promise<unknown>, onSuccess?: () => void): void => {
     setActionError(false);
+    setStartFailure(null);
     void operation.then(onSuccess).catch(() => setActionError(true));
+  };
+  // #4103: a refused start names its closed reason, so the panel explains what to do next instead
+  // of the generic failure sentence. A start that failed for another reason keeps that sentence.
+  // Start stays enabled until a session exists, so starts can overlap: only the latest one may
+  // report, and an earlier start that is refused late never overwrites what the latest one shows.
+  const performStart = (operation: Promise<unknown>): void => {
+    const generation = ++startGeneration.current;
+    setActionError(false);
+    setStartFailure(null);
+    void operation.catch((error: unknown) => {
+      if (startGeneration.current !== generation) return;
+      const failure = debugStartFailure(error);
+      if (failure === undefined) setActionError(true);
+      else setStartFailure(failure);
+    });
   };
 
   // A frame already open in the active editor only needs to be revealed (scrolled/highlighted) via
@@ -647,7 +676,7 @@ export function DebugPanel({
       activationRevision === undefined
     )
       return;
-    perform(
+    performStart(
       resolveDebugLaunchTarget(root, activeFile).then((target) =>
         actions.start(target, activationRevision),
       ),
@@ -690,6 +719,7 @@ export function DebugPanel({
          * and reachable on the accessibility tree; it is simply not proactively announced twice.
          */}
         {actionError ? <p>{t("actionFailed")}</p> : null}
+        {startFailure === null ? null : <p>{t(START_FAILURE_MESSAGES[startFailure])}</p>}
         {session === null ? (
           <button
             type="button"
