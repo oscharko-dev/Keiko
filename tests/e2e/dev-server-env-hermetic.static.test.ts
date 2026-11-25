@@ -83,6 +83,19 @@ describe("the smoke dev server's outbound traffic", () => {
 const E2E_ROOT = dirname(fileURLToPath(import.meta.url));
 const HERMETIC_ENV_SPREADS = ["...HERMETIC_OUTBOUND_ENV", "...devServerEnv(", "...server.env"];
 
+// A live qualification (`npm run …:live`) reaches a real gateway and is never hermetic.
+function liveConfigs(): ReadonlySet<string> {
+  const manifest = JSON.parse(readFileSync(join(E2E_ROOT, "..", "..", "package.json"), "utf8")) as {
+    readonly scripts: Readonly<Record<string, string>>;
+  };
+  return new Set(
+    Object.entries(manifest.scripts)
+      .filter(([name]) => name.endsWith(":live"))
+      .flatMap(([, command]) => [...command.matchAll(/--config (tests\/e2e\/\S+)/gu)])
+      .map((match) => join(E2E_ROOT, "..", "..", match[1] ?? "")),
+  );
+}
+
 function playwrightConfigs(): readonly string[] {
   const configDir = join(E2E_ROOT, "config");
   const nested = readdirSync(configDir)
@@ -123,15 +136,23 @@ function hermeticEnvBlocks(source: string): number {
   return source.split(/\benv:\s*\{/u).length - 1 - nonHermeticEnvBlocks(source);
 }
 
-// Each server a config starts (a `command:`) needs its own hermetic env block: importing the
-// settings, or giving only one of several servers the env, leaves the rest on process.env. A
-// derived config starts no command of its own and inherits the base config's servers' env.
-function isHermeticConfig(source: string): boolean {
-  const servers = source.match(/\bcommand:/gu)?.length ?? 0;
+// Comments must not count: a commented-out env block would otherwise cover a server without one.
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/(^|[^:])\/\/.*$/gmu, "$1");
+}
+
+// Each server a config starts (a `command:`) needs its own hermetic env block, between its command
+// and the next server's: importing the settings, or a second env block on one server, leaves the
+// others on process.env. Every config writes the env after the command. A derived config starts
+// no command of its own and inherits the base config's servers' env.
+function isHermeticConfig(raw: string): boolean {
+  const source = withoutComments(raw);
   if (nonHermeticEnvBlocks(source) > 0) return false;
-  if (servers === 0)
+  const servers = source.split(/\bcommand:/u).slice(1);
+  if (servers.length === 0) {
     return source.includes("baseConfig.webServer") && hermeticEnvBlocks(source) > 0;
-  return hermeticEnvBlocks(source) >= servers;
+  }
+  return servers.every((server) => hermeticEnvBlocks(server) > 0);
 }
 
 describe("every Playwright web server's outbound traffic", () => {
@@ -145,7 +166,11 @@ describe("every Playwright web server's outbound traffic", () => {
   });
 
   it("is hermetic in every config that starts a web server", () => {
-    const configs = playwrightConfigs();
+    const live = liveConfigs();
+    expect([...live].map((path) => relative(E2E_ROOT, path).split("\\").join("/"))).toStrictEqual([
+      "config/playwright.coding-issue-journey.config.ts",
+    ]);
+    const configs = playwrightConfigs().filter((path) => !live.has(path));
     expect(configs.length).toBeGreaterThan(40);
     const offenders = configs
       .filter((path) => {
@@ -188,6 +213,15 @@ describe("every Playwright web server's outbound traffic", () => {
       ),
     ).toBe(true);
     expect(isHermeticConfig("webServer: { command: 'a', env: { ...devServerEnv(1) } }")).toBe(true);
+    const doubledOnOne =
+      "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV }, x: { env: { ...HERMETIC_OUTBOUND_ENV } } }, " +
+      "{ command: 'b' }]";
+    expect(isHermeticConfig(doubledOnOne)).toBe(false);
+    expect(
+      isHermeticConfig(
+        "webServer: { command: 'a' }\n// env: { ...HERMETIC_OUTBOUND_ENV }\n/* env: { ...HERMETIC_OUTBOUND_ENV } */",
+      ),
+    ).toBe(false);
     expect(isHermeticHarness("buildUiHandlerDeps({ ...options })")).toBe(true);
     expect(isHermeticHarness("const env = scripted(); buildUiHandlerDeps({ env, store })")).toBe(
       false,
