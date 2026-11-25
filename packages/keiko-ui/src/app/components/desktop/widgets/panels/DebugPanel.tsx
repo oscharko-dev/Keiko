@@ -560,6 +560,7 @@ export function DebugPanel({
   );
   const [actionError, setActionError] = useState(false);
   const [startFailure, setStartFailure] = useState<DebugStartFailure | null>(null);
+  const startGeneration = useRef(0);
   const session = snapshot.session;
   const selectedFrame =
     snapshot.stack?.frames.find((frame) => frame.frameRef === selectedFrameRef) ??
@@ -599,10 +600,14 @@ export function DebugPanel({
   };
   // #4103: a refused start names its closed reason, so the panel explains what to do next instead
   // of the generic failure sentence. A start that failed for another reason keeps that sentence.
+  // Start stays enabled until a session exists, so starts can overlap: only the latest one may
+  // report, and an earlier start that is refused late never overwrites what the latest one shows.
   const performStart = (operation: Promise<unknown>): void => {
+    const generation = ++startGeneration.current;
     setActionError(false);
     setStartFailure(null);
     void operation.catch((error: unknown) => {
+      if (startGeneration.current !== generation) return;
       const failure = debugStartFailure(error);
       if (failure === undefined) setActionError(true);
       else setStartFailure(failure);

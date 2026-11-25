@@ -330,6 +330,46 @@ describe("DebugPanel", () => {
     expect(screen.queryByText(/the debug action failed/i)).not.toBeInTheDocument();
   });
 
+  it("lets only the latest of two overlapping starts explain its refusal", async () => {
+    const user = userEvent.setup();
+    const refusals: Array<(error: unknown) => void> = [];
+    vi.mocked(actions.start).mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          refusals.push(reject);
+        }),
+    );
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: null },
+      actions,
+    });
+    render(
+      <DebugPanel
+        root="/repo"
+        activeFile="src/program.ts"
+        workspaceId="canonical-workspace-id"
+        activationRevision={7}
+        debugEnabled
+      />,
+    );
+    const startButton = screen.getByRole("button", { name: /start debugging current file/i });
+    await user.click(startButton);
+    await waitFor(() => expect(refusals).toHaveLength(1));
+    await user.click(startButton);
+    await waitFor(() => expect(refusals).toHaveLength(2));
+
+    // The latest start is refused first; the earlier start's refusal settles after it and must not
+    // replace the latest start's explanation.
+    refusals[1]?.(new DebugRequestError(409, "SESSION_TERMINATING"));
+    refusals[0]?.(new DebugRequestError(429, "CAPACITY"));
+
+    expect(
+      await screen.findByText("The previous debug session is still ending. Try again in a moment."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/too many debug sessions/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/the debug action failed/i)).not.toBeInTheDocument();
+  });
+
   it("keeps the generic failure sentence for a start that failed without a known reason", async () => {
     const user = userEvent.setup();
     vi.mocked(actions.start).mockRejectedValueOnce(new Error("network"));
