@@ -1333,8 +1333,12 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     therefore gives each granted directory a `subst` drive letter in the user's logon session
     (`subst.exe` from System32, letters from `Z:` down, a refused letter skipped), and
     keiko-tools names the image, the working directory, the arguments and every variable through
-    those letters; the grants keep the real paths, where the access entries live. The walk then
-    starts at the granted directory itself. The letters are removed when the step ends; a step
+    those letters; the grants keep the real paths, where the access entries live. A `.cmd`
+    launcher's command line reaches cmd.exe caret-escaped, so a granted directory that ends an
+    argument is followed by `^"` rather than `"`; it is named through its letter all the same
+    (#4492: Maven's `-Dmaven.repo.local.tail` kept the real profile path, and the resolver's
+    `toRealPath` walk ended in a `NullPointerException`). The walk then starts at the granted
+    directory itself. The letters are removed when the step ends; a step
     without free letters is refused as isolation unavailable, and
     `editor.verification.windows-step-drives` records the counts. Measured the same day: Node.js
     `require` and `realpath`, `npm -v`, `java -version`, `javac --release 21` and an offline

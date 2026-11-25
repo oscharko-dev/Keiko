@@ -169,6 +169,17 @@ function rootAt(value: string, index: number, root: string): boolean {
   return true;
 }
 
+// The character that follows a path at `index` as the program reads it. A command line for a
+// `.cmd` script reaches cmd.exe caret-escaped (windows-shell.ts): an odd run of carets escapes the
+// character after it (`^"`, or `^^^"` for an npm shim), an even run is a literal caret and so part
+// of the name, and a caret that escapes nothing ends no path (#4492).
+function nextCharacter(value: string, index: number): string {
+  let end = index;
+  while (value.charAt(end) === "^") end++;
+  const escaped = value.charAt(end);
+  return (end - index) % 2 === 1 && escaped !== "" ? escaped : value.charAt(index);
+}
+
 // The drive and how much of the value it replaces at `index`, or undefined for no granted root.
 function driveAt(
   value: string,
@@ -178,7 +189,7 @@ function driveAt(
   if (index > 0 && NAME_CHARACTER.test(value.charAt(index - 1))) return undefined;
   for (const { root, drive } of drives) {
     if (!rootAt(value, index, root)) continue;
-    const next = value.charAt(index + root.length);
+    const next = nextCharacter(value, index + root.length);
     if (next === "" || PATH_ENDINGS.has(next)) {
       // `"X:\"` would read back as an escaped quote; `X:\.` names the same directory.
       return {

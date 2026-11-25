@@ -15,6 +15,7 @@ import {
   type RunCommandDeps,
   type SpawnOptions,
 } from "./exec.js";
+import { buildWindowsShellInvocation } from "./windows-shell.js";
 import {
   quoteWindowsArgument,
   throughWindowsStepDrives,
@@ -48,6 +49,13 @@ function refused(code: number): Buffer {
 }
 
 const LAUNCHED = response(1, Buffer.alloc(8));
+
+const TRUSTED_WINDOWS = {
+  env: { SystemRoot: String.raw`C:\Windows` },
+  platform: "win32" as const,
+  existsAsFile: (): boolean => true,
+  systemDirectoryIdentity: (): boolean => true,
+};
 
 describe("quoteWindowsArgument", () => {
   it("quotes as the Microsoft C runtime reads it back", () => {
@@ -360,6 +368,39 @@ describe("throughWindowsStepDrives", () => {
     expect(throughWindowsStepDrives(String.raw`-IC:\work\repo\a`, DRIVES)).toBe(
       String.raw`-IC:\work\repo\a`,
     );
+  });
+
+  // #4492: a Maven step runs `mvn.cmd`, whose arguments reach cmd.exe caret-escaped. The repository
+  // tail ends its argument, so the escaped closing quote (`^"`) followed the root and the real
+  // profile path reached Java, whose `toRealPath` cannot walk `C:\Users` inside the AppContainer.
+  it("names a root before a caret-escaped ending in a cmd.exe command line through its letter", () => {
+    const repository = String.raw`C:\Users\dev\.m2\repository`;
+    const drives = [{ root: repository, drive: "L:" }];
+    const wrapped = (command: string): string => {
+      const invocation = buildWindowsShellInvocation(
+        command,
+        ["-o", `-Dmaven.repo.local.tail=${repository}`, `-Dlist=${repository},x`],
+        TRUSTED_WINDOWS,
+      );
+      return throughWindowsStepDrives(invocation.args.at(-1) ?? "", drives);
+    };
+    const line = wrapped(String.raw`C:\maven\bin\mvn.cmd`);
+    expect(line).not.toContain(repository);
+    expect(line).toContain(String.raw`^"-Dmaven.repo.local.tail=L:\.^"`);
+    expect(line).toContain(String.raw`-Dlist=L:\^,x`);
+    const shim = wrapped(String.raw`C:\proj\node_modules\.bin\tool.cmd`);
+    expect(shim).not.toContain(repository);
+    expect(shim).toContain(String.raw`-Dmaven.repo.local.tail=L:\.^^^"`);
+  });
+
+  it("keeps a root followed by a literal caret, a dangling caret or an escaped name character", () => {
+    for (const value of [
+      String.raw`C:\work\repo^^x`,
+      String.raw`C:\work\repo^`,
+      String.raw`C:\work\repo^(x`,
+    ]) {
+      expect(throughWindowsStepDrives(value, DRIVES)).toBe(value);
+    }
   });
 
   it("keeps a quoted root's closing quote: the root before a quote ends in a dot", () => {
