@@ -265,7 +265,9 @@ closed detail `tree-too-large`), as are case or normalization collisions; a pull
 branch names are display data only (Keiko fetches by number and reviews SHAs). The worktree
 is removed when the run settles or is abandoned. Private review refs
 (`refs/keiko-review/<installation>/<n>/<headSha>`, namespaced per installation) remain only to serve the reviewed diff and are swept when the
-pull request closes, when no run references them, or after 30 days. ADR-0086 and ADR-0098 are
+pull request closes, when no run references them, or after 30 days. A ref that a running review
+still pins (its target is resolved and its worktree not yet removed) is never swept, whatever its
+pull request's state or its age (`reviewRefExpired`, `review/target/refRetention.ts`). ADR-0086 and ADR-0098 are
 amended by Issue #4133.
 
 ### D4 — Structured findings only
@@ -343,7 +345,9 @@ the same two functions. The counter-check (`review/counter-check/`) uses its own
 `review-counter-check@1` (ADR-0175 D2): `keiko_counter_check_read`, `keiko_counter_check_discover`,
 `keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`;
 the literal is one `-e<literal>` token, so an option-shaped literal such as `-cp` is searched,
-never refused as an option, R4130-026) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
+never refused as an option, R4130-026; the search reads `.gitattributes` from the empty tree of the
+head's object format, so a pull request whose `.gitattributes` marks every file `binary` cannot make
+`git grep -I` skip the whole tree) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
 commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
 Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
 task: location, category, condition, mechanism, consequence and evidence locations, and the review
@@ -493,7 +497,9 @@ As implemented (#4136): one pure function, `settleReviewRun` (`review/service/se
 the facts a run collected onto this table; an interruption wins over a cancellation, a cancellation
 over everything else, a preparation failure skips the run, and of several incomplete reasons the
 most consequential names it (`model-failed`, `budget-exhausted`, `deadline-exceeded`,
-`files-unprocessed`). The building blocks' closed refusals map as follows (`mapping.ts`): a target
+`files-unprocessed`). The rule fails closed on missing facts: a run with no recorded Reviewer
+outcome is `incomplete/model-failed`, and one with no recorded coverage is
+`incomplete/files-unprocessed`; an unrecorded fact is never evidence of a clean review. The building blocks' closed refusals map as follows (`mapping.ts`): a target
 that moved or no longer resolves (`target-changed`, `not-found`, `ref-invalid`) is
 `skipped/target-changed`, a target Keiko cannot fetch (no provider access, no GitHub remote, rate
 limit, failed fetch) or diff (`no-merge-base`, `shallow-history`) and every worktree refusal but cancellation `skipped/worktree-failed`; the
@@ -786,7 +792,9 @@ eligible; the gateway keeps no separate busy flag today, so no `busy` hint is sh
 allowlist state, every configured chat model with its capability summary, the pair status);
 `GET`/`PUT /api/git-review/settings?repositoryId=…` read and write the settings document, whose
 `rulesFilePath` (default `.keiko/review-rules.md`, portable, repository-relative, no `.`/`..`
-segment) child 5's rules reader reads through its settings port; while locked, the operator preset
+segment, and not a path the sensitive-path deny list refuses, the same denial the Reviewer's and the
+Counter-checker's reads apply; the default under `.keiko/` is Keiko's own path and stays admitted.
+A denied path is refused as `rules-path-invalid` when it is saved and again at the run's start) child 5's rules reader reads through its settings port; while locked, the operator preset
 wins. Checking a pair without saving is the run start's `dryRun`. The operator's `enabled` switch
 (default `false` until Issue #4142) guards the whole `/api/git-review/*` route group: every route
 except `model-policy` answers 404 `REVIEW_DISABLED`, and `model-policy` answers `enabled: false`.
