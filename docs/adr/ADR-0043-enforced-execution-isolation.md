@@ -88,6 +88,11 @@ step's environment travels in its launch frame only; a refusal reaches the Activ
 closed code; a search-path entry that reaches a granted folder through a junction is named by that
 folder's drive letter.
 
+1.16 — #4492 amends D20 (2026-11-25): a Maven project (a root `pom.xml` and no root
+`package.json`) runs its tests on the step backend as `mvn -B -o test`, offline, into a repository
+of its own inside the execution root, with the person's `%USERPROFILE%\.m2\repository` chained
+read-only behind it; every other backend keeps the project's closed "no script" skip.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1350,7 +1355,32 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     silent failures.
   - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
     Windows Coding run and hands each step a private copy written from those bytes;
-    `editor.verification.windows-step-supervisor` records whether it is available.
+    `editor.verification.windows-step-supervisor` records whether it is available and whether a
+    Maven step may read the person's repository (never its path).
+  - **Maven projects (#4492).** Without a container runtime a Maven project had no verification
+    step, so its tests never ran. On the step backend the verifier now plans one step for the
+    `test` kind: `mvn -B -o -Dmaven.repo.local=.keiko-maven-repository
+    -Dmaven.repo.local.tail=<repository> -Dmaven.repo.local.tail.ignoreAvailability=true test`.
+    The run resolves into a repository of its own in the execution root and reads the person's
+    `%USERPROFILE%\.m2\repository` read-only behind it, as a Coding run below Full access does
+    (ADR-0184); Maven before 3.9 ignores the tail, and its offline build then fails on the missing
+    artifacts. The supervisor grants that folder only to a step whose executable is an installed
+    Maven launcher outside the execution root, and only when it is a real folder reached through
+    no link: a profile behind a junction, a mapped drive or a `subst` letter gets no grant, and the
+    step runs without the tail. `.m2` itself is never granted, so the person's `settings.xml` and
+    its credentials stay out of the tree, and the step's home lies inside the execution root, so
+    Maven reads no user settings. The step's environment adds `JAVA_HOME`, `MAVEN_HOME` and
+    `M2_HOME`. The orchestrator admits a Maven step only in exactly the planned shape (the planned
+    arguments, or a planned skip without arguments); the command rule, which admits `mvn` with
+    `-B -o` first and the `test` phase only and refuses `-s`, `-gs`, `-t`, `-f` and `--define`, is
+    defense in depth behind it. The step runs the project's own build, including its `.mvn`
+    configuration and extensions, so it asks for the same script trust as an npm script and is
+    contained by the same grants. The other kinds are skipped with a closed reason: Maven has no
+    `typecheck`, `lint` or `build` the verifier could tell apart from the test phase. A person
+    whose settings move the local repository elsewhere gets an offline build that misses those
+    artifacts. Measured 2026-11-25 on the ARM64 VM as a standard user: the tail run ends
+    `BUILD SUCCESS` with Surefire's test run; without the tail the same build fails on the missing
+    resources plugin.
 - **Session, profiles and exit (#4495).**
   - **Interactive desktop.** An AppContainer process needs the interactive window station: started
     from an SSH or service session, its root ends with `STATUS_DLL_INIT_FAILED` before it runs a

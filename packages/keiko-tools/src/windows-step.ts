@@ -96,6 +96,24 @@ export function windowsStepGrants(
   return grants;
 }
 
+const MAVEN_LAUNCHERS = new Set(["mvn.cmd", "mvn.bat", "mvn"]);
+
+/**
+ * The supervisor's read roots, and the person's Maven repository for Maven's installed launcher
+ * only: a launcher inside the execution root is the workspace's own file, not Maven.
+ */
+export function windowsStepReadRoots(
+  executable: string,
+  executionRoot: string,
+  supervisor: WindowsStepSupervisor,
+): readonly string[] {
+  const { mavenRepository, readRoots } = supervisor;
+  if (mavenRepository === undefined) return readRoots;
+  if (!MAVEN_LAUNCHERS.has(win32.basename(executable).toLowerCase())) return readRoots;
+  if (contains(executionRoot, executable)) return readRoots;
+  return [...readRoots, mavenRepository];
+}
+
 export function windowsStepLaunch(
   invocation: {
     readonly command: string;
@@ -113,7 +131,13 @@ export function windowsStepLaunch(
     args: invocation.windowsVerbatimArguments
       ? invocation.args
       : invocation.args.map(quoteWindowsArgument),
-    grants: windowsStepGrants(executionRoot, executable, supervisor.readRoots, command, profile),
+    grants: windowsStepGrants(
+      executionRoot,
+      executable,
+      windowsStepReadRoots(executable, executionRoot, supervisor),
+      command,
+      profile,
+    ),
     recoveryHandle: randomBytes(16).toString("hex"),
   };
 }

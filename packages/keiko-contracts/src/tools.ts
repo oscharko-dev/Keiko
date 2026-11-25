@@ -403,6 +403,11 @@ export interface WindowsStepSupervisor {
   readonly acquire: (grantedRoots: readonly string[]) => WindowsStepSupervisorCopy;
   /** Absolute read-only directories a step's toolchains need besides its executable's own. */
   readonly readRoots: readonly string[];
+  /**
+   * The person's Maven repository, granted read-only to a step whose executable is Maven's
+   * launcher and to no other step (#4492); absent when there is none.
+   */
+  readonly mavenRepository?: string | undefined;
 }
 
 export interface SandboxAttestation {

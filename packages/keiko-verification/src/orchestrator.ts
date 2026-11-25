@@ -45,6 +45,7 @@ import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { detectPackageManager } from "./package-dir.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
+import { isPlannedMavenStep, MAVEN_EXECUTABLE, MAVEN_STEP_ENVIRONMENT } from "./maven.js";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX, NATIVE_SHELL_SKIP_PREFIX } from "./plan.js";
 import type {
   VerificationKind,
@@ -154,6 +155,25 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     requiredLeadingFlags: Object.freeze(["--test"]),
     denyFlags: Object.freeze(["-e", "--eval", "-p", "--print", "-r", "--require", "--import"]),
   },
+  // A Maven project's own tests on the Windows step backend (#4492): batch mode and offline first,
+  // the test phase only, and never settings, toolchains or a build file other than the project's.
+  // Defense in depth: the orchestrator admits only the exact planned arguments (isPlannedMavenStep).
+  {
+    executable: MAVEN_EXECUTABLE,
+    allowedSubcommands: Object.freeze(["test"]),
+    requiredLeadingFlags: Object.freeze(["-B", "-o"]),
+    denyFlags: Object.freeze([
+      "-s",
+      "--settings",
+      "-gs",
+      "--global-settings",
+      "-t",
+      "--toolchains",
+      "-f",
+      "--file",
+      "--define",
+    ]),
+  },
   ...DEFAULT_COMMAND_RULES,
 ]);
 
@@ -174,9 +194,14 @@ const ALL_STATUSES: readonly VerificationStatus[] = [
 // an enforced "none" run, runCommand wraps the spawn through keiko-sandbox and records the attestation,
 // which `buildAppliedLimits` reports honestly. Repository execution always requests the existing
 // execution-root filesystem boundary, independently of any network compatibility setting.
-function policyForStep(limits: VerificationResourceLimits, network: NetworkPolicy): SandboxPolicy {
+function policyForStep(step: VerificationStep, network: NetworkPolicy): SandboxPolicy {
+  const { limits } = step;
   return {
     ...DEFAULT_SANDBOX_POLICY,
+    // Maven's launcher finds Java and itself through these; the step grants read their folders.
+    ...(step.command === MAVEN_EXECUTABLE
+      ? { envAllowlist: [...DEFAULT_SANDBOX_POLICY.envAllowlist, ...MAVEN_STEP_ENVIRONMENT] }
+      : {}),
     maxOutputBytes: limits.maxOutputBytes,
     defaultTimeoutMs: limits.wallTimeMs,
     network,
@@ -387,6 +412,7 @@ function isValidVerificationStep(step: VerificationStep): boolean {
   if (isGeneratedSkipShape(step)) {
     return true;
   }
+  if (step.command === MAVEN_EXECUTABLE) return isPlannedMavenStep(step);
   return step.kind === "targeted-test" ? isValidTargetedStep(step) : isValidScriptStep(step);
 }
 
@@ -499,7 +525,7 @@ function buildRunDeps(
 ): RunCommandDeps {
   return {
     workspace: deps.stepWorkspace?.() ?? deps.workspace,
-    policy: policyForStep(step.limits, network),
+    policy: policyForStep(step, network),
     commandRules: VERIFICATION_COMMAND_RULES,
     spawn,
     processEnv: deps.processEnv ?? process.env,

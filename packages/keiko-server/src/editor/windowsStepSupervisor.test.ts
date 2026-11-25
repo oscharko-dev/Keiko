@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +20,12 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
-import { resolveWindowsStepSupervisor, windowsStepReadRoots } from "./windowsStepSupervisor.js";
+import {
+  isRealDirectory,
+  resolveWindowsStepSupervisor,
+  windowsMavenRepository,
+  windowsStepReadRoots,
+} from "./windowsStepSupervisor.js";
 
 const roots: string[] = [];
 
@@ -95,6 +108,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       { root: String.raw`C:\Program Files\Java\jdk-21`, drive: "Y:" },
     ]);
     expect(supervisor?.readRoots).toEqual([]);
+    expect(supervisor?.mavenRepository).toBeUndefined();
     const outcomes = persistedOutcomes(stateRoot);
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]).toMatchObject({
@@ -102,6 +116,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       correlationId: "step-supervisor-proof",
       outcome: "available",
       readRootCount: 0,
+      mavenRepository: false,
     });
     copy?.release();
     expect(defined.size).toBe(0);
@@ -242,5 +257,69 @@ describe("windowsStepReadRoots", () => {
       process.platform === "win32" ? [jdk, maven] : [],
     );
     expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" })).toEqual([]);
+  });
+});
+
+describe("windowsMavenRepository (#4492)", () => {
+  const profile = String.raw`C:\Users\dev`;
+  const repository = String.raw`C:\Users\dev\.m2\repository`;
+
+  it("names the person's repository folder, never .m2 with its settings", () => {
+    const asked: string[] = [];
+    const found = windowsMavenRepository({ USERPROFILE: profile }, (path) => {
+      asked.push(path);
+      return true;
+    });
+    expect(found).toBe(repository);
+    expect(asked).toEqual([repository]);
+  });
+
+  it("names nothing without a real folder or an absolute profile", () => {
+    expect(windowsMavenRepository({ USERPROFILE: profile }, () => false)).toBeUndefined();
+    expect(windowsMavenRepository({}, () => true)).toBeUndefined();
+    expect(windowsMavenRepository({ USERPROFILE: "relative\\dev" }, () => true)).toBeUndefined();
+    expect(windowsMavenRepository({ USERPROFILE: "/home/dev" }, () => true)).toBeUndefined();
+  });
+
+  it("takes a real folder only: no file, no link, no folder behind a linked parent", () => {
+    const home = temporary("keiko-step-m2-");
+    const real = join(home, "real", "repository");
+    mkdirSync(real, { recursive: true });
+    const file = join(home, "file");
+    writeFileSync(file, "");
+    const linked = join(home, "linked");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    symlinkSync(real, linked, linkType);
+    symlinkSync(join(home, "real"), join(home, "parent"), linkType);
+    expect(isRealDirectory(real)).toBe(true);
+    expect(isRealDirectory(file)).toBe(false);
+    expect(isRealDirectory(linked)).toBe(false);
+    expect(isRealDirectory(join(home, "parent", "repository"))).toBe(false);
+    expect(isRealDirectory(join(home, "missing"))).toBe(false);
+  });
+
+  it("is granted by the resolved supervisor and recorded as present", () => {
+    const stateRoot = temporary("keiko-step-supervisor-log-");
+    const install = temporary("keiko-step-supervisor-install-");
+    const helperPath = join(install, "keiko-runtime-supervisor.exe");
+    const bytes = Buffer.from("verified supervisor bytes");
+    writeFileSync(helperPath, bytes);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const supervisor = resolveWindowsStepSupervisor({
+      platform: "win32",
+      env: { USERPROFILE: profile },
+      activityLog: createActivityLogSink(stateRoot),
+      correlationId: "step-supervisor-maven",
+      runtime: () => releasedRuntime(helperPath, sha256),
+      mavenRepository: () => repository,
+    });
+    expect(supervisor?.mavenRepository).toBe(repository);
+    const outcomes = persistedOutcomes(stateRoot);
+    expect(outcomes[0]).toMatchObject({
+      correlationId: "step-supervisor-maven",
+      outcome: "available",
+      mavenRepository: true,
+    });
+    expect(JSON.stringify(outcomes)).not.toContain(".m2");
   });
 });

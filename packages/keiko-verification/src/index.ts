@@ -43,6 +43,8 @@ export {
   ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
 } from "./plan.js";
 export type { PlanOptions } from "./plan.js";
+export { isMavenProject, mavenTestArguments, planMavenSteps } from "./maven.js";
+export type { MavenStepHost } from "./maven.js";
 
 export { detectPackageManager, resolveVerificationPackage } from "./package-dir.js";
 export type {

@@ -4,7 +4,7 @@
 // backend is absent and a step is refused as isolation unavailable, exactly as before.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import {
   activityLogEvent,
@@ -53,6 +53,8 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
+    // #4492: whether a Maven step may read the person's repository; never its path.
+    mavenRepository: { type: "boolean", dataClass: "closed-enum", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -107,6 +109,31 @@ export function windowsStepReadRoots(env: NodeJS.ProcessEnv): readonly string[] 
   return Object.freeze([...new Set(roots)]);
 }
 
+/**
+ * Whether a path is a real directory: not a file, not a link or junction, and reached through no
+ * linked parent, so the grant names the folder it reads.
+ */
+export function isRealDirectory(path: string): boolean {
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  if (entry === undefined || !entry.isDirectory() || entry.isSymbolicLink()) return false;
+  return realpathSync.native(path).toLowerCase() === path.toLowerCase();
+}
+
+/**
+ * The person's Maven repository (`%USERPROFILE%\.m2\repository`), which a Maven step reads
+ * read-only and offline (#4492, ADR-0184); `.m2` itself, with its settings and their credentials,
+ * is never granted.
+ */
+export function windowsMavenRepository(
+  env: NodeJS.ProcessEnv,
+  isDirectory: (path: string) => boolean = isRealDirectory,
+): string | undefined {
+  const profile = env.USERPROFILE;
+  if (profile === undefined || !DRIVE_PATH.test(profile)) return undefined;
+  const repository = win32.join(profile, ".m2", "repository");
+  return isDirectory(repository) ? repository : undefined;
+}
+
 function discoveredRuntime(env: NodeJS.ProcessEnv): ResolvedPortableOpenCodeRuntime | undefined {
   const portable = discoverQualifiedPortableOpenCode({ env });
   if (portable !== undefined) return portable;
@@ -121,6 +148,8 @@ export interface WindowsStepSupervisorInput {
   readonly correlationId?: string | undefined;
   /** Injectable for tests; defaults to the installed or development runtime. */
   readonly runtime?: (() => ResolvedPortableOpenCodeRuntime | undefined) | undefined;
+  /** Injectable for tests; defaults to the person's `.m2\repository` when it is a real folder. */
+  readonly mavenRepository?: ((env: NodeJS.ProcessEnv) => string | undefined) | undefined;
   /** Injectable for tests; defaults to `subst.exe` in this logon session. */
   readonly driveHost?: WindowsDriveHost | undefined;
 }
@@ -235,11 +264,16 @@ export function resolveWindowsStepSupervisor(
     input.runtime === undefined ? discoveredRuntime(env) : input.runtime(),
   );
   const readRoots = windowsStepReadRoots(env);
+  const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);
   input.activityLog.write(
     activityLogEvent(
       WINDOWS_STEP_SUPERVISOR_OPERATION,
       { correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { outcome: binary.outcome, readRootCount: readRoots.length },
+      {
+        outcome: binary.outcome,
+        readRootCount: readRoots.length,
+        mavenRepository: mavenRepository !== undefined,
+      },
     ),
   );
   if (binary.outcome !== "available") return undefined;
@@ -248,5 +282,9 @@ export function resolveWindowsStepSupervisor(
     activityLog: input.activityLog,
     correlationId: input.correlationId,
   };
-  return { acquire: verifiedCopies(binary.helperPath, binary.pin, drives), readRoots };
+  return {
+    acquire: verifiedCopies(binary.helperPath, binary.pin, drives),
+    readRoots,
+    mavenRepository,
+  };
 }

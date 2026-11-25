@@ -47550,6 +47550,12 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "mavenRepository",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",

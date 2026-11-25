@@ -20961,7 +20961,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["vitest", "jest", "mocha", "node-test", "unknown"],
+        values: ["vitest", "jest", "mocha", "node-test", "maven", "unknown"],
       },
       stepCount: {
         type: "integer",
@@ -21423,6 +21423,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       readRootCount: {
         type: "integer",
         dataClass: "count",
+        required: true,
+      },
+      mavenRepository: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: true,
       },
     },

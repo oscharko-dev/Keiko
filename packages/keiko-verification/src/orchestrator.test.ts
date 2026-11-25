@@ -2,6 +2,7 @@ import { realpathSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { describe, expect, it } from "vitest";
+import { planMavenSteps } from "./maven.js";
 import { runVerification, type VerificationDeps } from "./orchestrator.js";
 import type { VerificationPlan, VerificationStep } from "./types.js";
 import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
@@ -252,6 +253,47 @@ describe("runVerification — repository filesystem containment", () => {
         resolveExecutable: (command) => `/abs/${command}`,
       }),
     );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+});
+
+// #4492: a planned Maven step reaches its spawn; before, the shape check denied every one.
+describe("runVerification — a Maven project (#4492)", () => {
+  const cache = String.raw`C:\Users\dev\.m2\repository`;
+
+  it("runs the planned mvn test with Java's and Maven's homes, and skips the other kinds", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "BUILD SUCCESS\n", exitCode: 0 });
+    const steps = planMavenSteps(["typecheck", "test"], DEFAULT_VERIFICATION_LIMITS, {
+      cacheRepository: cache,
+    });
+    const report = await runVerification(
+      planOf(steps, ws.info.root),
+      depsWith(ws, rec.fn, {
+        processEnv: { PATH: "/bin", JAVA_HOME: "/jdk", MAVEN_OPTS: "-Dx=1", SECRET: "s" },
+      }),
+    );
+    expect(report.results.map((result) => [result.kind, result.status])).toEqual([
+      ["typecheck", "skipped"],
+      ["test", "passed"],
+    ]);
+    const [call] = rec.calls();
+    // The step runs wrapped by this host's backend; the planned invocation ends its arguments.
+    expect(call?.args.slice(-6)).toEqual(steps[1]?.args);
+    expect(call?.options.env).toMatchObject({ JAVA_HOME: "/jdk" });
+    expect(call?.options.env).not.toHaveProperty("MAVEN_OPTS");
+    expect(call?.options.env).not.toHaveProperty("SECRET");
+  });
+
+  it("denies a forged Maven step before it spawns", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const [planned] = planMavenSteps(["test"], DEFAULT_VERIFICATION_LIMITS, {});
+    if (planned === undefined) throw new Error("no planned step");
+    const forged = { ...planned, args: ["-B", "-o", "-sC:\\x.xml", "test"] };
+    const report = await runVerification(planOf([forged], ws.info.root), depsWith(ws, rec.fn));
     expect(report.results[0]?.status).toBe("denied");
     expect(rec.calls()).toHaveLength(0);
   });

@@ -20,6 +20,7 @@ import {
   throughWindowsStepDrives,
   windowsStepFrames,
   windowsStepGrants,
+  windowsStepReadRoots,
   WindowsStepResponses,
   type WindowsStepLaunch,
 } from "./windows-step.js";
@@ -264,6 +265,50 @@ const DRIVE_ENV = {
   JAVA_HOME: String.raw`C:\Program Files\Java\jdk-21`,
   PATH: String.raw`c:\program files\java\JDK-21\bin;C:\Windows\System32`,
 };
+
+describe("windowsStepReadRoots (#4492)", () => {
+  const ROOT = String.raw`C:\work\repo`;
+  const repository = String.raw`C:\Users\dev\.m2\repository`;
+  const supervisor = (mavenRepository?: string): WindowsStepSupervisor => ({
+    acquire: (): never => {
+      throw new Error("not acquired here");
+    },
+    readRoots: [String.raw`C:\jdk`],
+    mavenRepository,
+  });
+
+  it("adds the person's Maven repository for Maven's launcher only", () => {
+    for (const launcher of ["mvn.cmd", "MVN.CMD", "mvn.bat", "mvn"]) {
+      expect(
+        windowsStepReadRoots(`C:\\maven\\bin\\${launcher}`, ROOT, supervisor(repository)),
+      ).toEqual([String.raw`C:\jdk`, repository]);
+    }
+    for (const other of [String.raw`C:\node\node.exe`, String.raw`C:\maven\bin\mvnDebug.cmd`]) {
+      expect(windowsStepReadRoots(other, ROOT, supervisor(repository))).toEqual([
+        String.raw`C:\jdk`,
+      ]);
+    }
+  });
+
+  it("adds nothing for a launcher the workspace itself holds", () => {
+    expect(
+      windowsStepReadRoots(String.raw`C:\work\repo\bin\mvn.cmd`, ROOT, supervisor(repository)),
+    ).toEqual([String.raw`C:\jdk`]);
+  });
+
+  it("adds nothing when the person has no Maven repository", () => {
+    expect(windowsStepReadRoots(String.raw`C:\maven\bin\mvn.cmd`, ROOT, supervisor())).toEqual([
+      String.raw`C:\jdk`,
+    ]);
+  });
+
+  it("names the repository inside a Maven argument through its drive letter", () => {
+    const drives = [{ root: repository, drive: "L:" }];
+    expect(throughWindowsStepDrives(`-Dmaven.repo.local.tail=${repository}`, drives)).toBe(
+      "-Dmaven.repo.local.tail=L:\\",
+    );
+  });
+});
 
 describe("throughWindowsStepDrives", () => {
   it("replaces a granted root at a path boundary, the longest root first", () => {

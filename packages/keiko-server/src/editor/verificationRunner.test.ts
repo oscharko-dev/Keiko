@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type {
   EditorVerificationEvent,
   VerificationKind,
+  VerificationPlan,
   VerificationReport,
   VerificationResult,
   VerificationStatus,
@@ -22,7 +23,11 @@ import {
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
-import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  mavenTestArguments,
+  type VerificationStepOutput,
+} from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
   decideScriptTrust,
@@ -722,6 +727,94 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       manager.runToReport(input({ kinds: ["typecheck"] }), new AbortController().signal),
     ).rejects.toMatchObject({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 });
     expect(port.calls).toBe(0);
+  });
+
+  // #4492 finding 6: a Maven project on Windows without a container runtime had no step at all,
+  // so its tests never ran. On the Windows step backend it now runs `mvn test` offline.
+  describe("a Maven project (#4492)", () => {
+    const repository = String.raw`C:\Users\dev\.m2\repository`;
+    const windows = { probe: { available: true, backend: "windows-appcontainer" }, durationMs: 1 };
+
+    function mavenProject(): void {
+      rmSync(join(workspaceRoot, "package.json"));
+      writeFileSync(join(workspaceRoot, "pom.xml"), "<project/>\n", "utf8");
+    }
+
+    function planned(isolation: typeof windows): {
+      readonly manager: VerificationRunnerManager;
+      readonly plans: VerificationPlan[];
+      readonly events: ServerLogEvent[];
+    } {
+      const plans: VerificationPlan[] = [];
+      const events: ServerLogEvent[] = [];
+      const manager = makeManager({
+        activityLog: { write: (event): void => void events.push(event) },
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          plans.push(args.plan);
+          return Promise.resolve({ report: report(["test"]), probe: isolation.probe });
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+        probeIsolation: async () => Promise.resolve(isolation),
+        windowsMavenRepository: () => repository,
+      });
+      return { manager, plans, events };
+    }
+
+    it("runs mvn test offline over the person's repository on the Windows step backend", async () => {
+      mavenProject();
+      const { manager, plans, events } = planned(windows);
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(plans[0]?.steps).toEqual([
+        {
+          kind: "test",
+          command: "mvn",
+          scriptName: "test",
+          args: mavenTestArguments({ cacheRepository: repository }),
+          limits: DEFAULT_VERIFICATION_LIMITS,
+        },
+      ]);
+      expect(plans[0]).not.toHaveProperty("packageManager");
+      const lines = events.filter((event) => event.op === "editor.verification.execute");
+      expect(lines.map((event) => event.extra?.runnerId)).toEqual(["maven", "maven"]);
+      expect(JSON.stringify(lines)).not.toContain(".m2");
+    });
+
+    it("still asks for script trust before the project's own build runs", async () => {
+      mavenProject();
+      const manager = makeManager({
+        execute: fakePort(report(["test"])).port,
+        isWorkspaceTrustedForPackageScripts: () => false,
+        probeIsolation: async () => Promise.resolve(windows),
+        windowsMavenRepository: () => repository,
+      });
+
+      await expect(
+        manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal),
+      ).rejects.toMatchObject({ code: "WORKSPACE_TRUST_REQUIRED", status: 403 });
+    });
+
+    it("keeps the closed no-script skip on every other backend", async () => {
+      mavenProject();
+      const { manager, plans } = planned({
+        probe: { available: true, backend: "container-docker" },
+        durationMs: 1,
+      });
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(plans[0]?.steps.map((step) => step.command)).not.toContain("mvn");
+    });
+
+    it("leaves a project with a package.json to npm, pom.xml or not", async () => {
+      writeFileSync(join(workspaceRoot, "pom.xml"), "<project/>\n", "utf8");
+      const { manager, plans } = planned(windows);
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(plans[0]?.steps.map((step) => step.command)).not.toContain("mvn");
+    });
   });
 
   it("does NOT gate targeted-test on workspace trust (parity with post-apply)", async () => {
