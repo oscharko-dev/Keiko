@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-25T12:06:02.820Z",
+  "generatedAt": "2026-11-25T12:58:19.186Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -89,7 +89,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.module.css",
-      "sha256": "3984275d8213a9b079cd6147f3c6be998e14b0ca276d3548c90279acdc399439"
+      "sha256": "f006cca56743db6c5657098c63f6fc2c5c6d8671942f2b7ea5664eab222a8642"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",

@@ -15,9 +15,12 @@
     color: CanvasText;
   }
 
+  /* Canvas/CanvasText, not ButtonFace/ButtonText: only that pair is a guaranteed contrast pair in
+     every engine. WebKit resolves ButtonFace/ButtonText from the colour scheme, and in the dark
+     theme their contrast fell below 4.5:1. */
   .cmpNotice .cmpNoticeAction {
-    border-color: ButtonText;
-    background: ButtonFace;
-    color: ButtonText;
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
   }
 }
