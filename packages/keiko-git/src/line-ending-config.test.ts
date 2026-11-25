@@ -2,7 +2,7 @@
 // a hermetic end-to-end proof that a CRLF checkout committed through `core.autocrlf=true` in the
 // user's global scope reads clean through the real default local runner.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,5 +91,28 @@ describe("local status read with the user's core.autocrlf=true", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
+  });
+
+  // #4492 review: the line-ending query must spend the read's own deadline, never extend it.
+  it("answers a read whose deadline the line-ending query used up as timed out", async () => {
+    mkdirSync(join(root, "repo"));
+    git({ PATH: process.env.PATH ?? "", HOME: root }, "init", "-q");
+    // The clock moves only while the line-ending query runs (it alone reads the host env).
+    let now = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const runner = createLocalGitProcessRunner(() => {
+        now = 60_000;
+        return { PATH: process.env.PATH ?? "" };
+      });
+      const result = await runner(["-C", join(root, "repo"), "status", "--porcelain=v1", "-z"], {
+        cwd: root,
+        timeoutMs: 30_000,
+        maxBytes: 1024 * 1024,
+      });
+      expect(result).toMatchObject({ exitCode: null, timedOut: true, stdout: "" });
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

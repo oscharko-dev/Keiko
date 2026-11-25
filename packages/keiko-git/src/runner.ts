@@ -479,6 +479,18 @@ function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitPr
   };
 }
 
+function timedOutProcessResult(): GitProcessResult {
+  return {
+    exitCode: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    timedOut: true,
+    aborted: false,
+  };
+}
+
 function abortedProcessResult(): GitProcessResult {
   return {
     exitCode: null,
@@ -753,7 +765,8 @@ export function createLocalGitProcessRunner(
     const startedAt = Date.now();
     const lineEndings = await resolveLineEndingArgs(hostEnv, args, options);
     // The query spends the read's own deadline: the read never outlives what its caller allowed.
-    const timeoutMs = Math.max(1, options.timeoutMs - (Date.now() - startedAt));
+    const timeoutMs = options.timeoutMs - (Date.now() - startedAt);
+    if (timeoutMs <= 0) return timedOutProcessResult();
     return await runFilterNeutralized(
       withNestedRepositoriesIsolated(args),
       { ...options, timeoutMs },
