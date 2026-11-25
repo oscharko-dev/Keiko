@@ -62,7 +62,8 @@ package-graph allowlist) that owns the shared git core:
    Git exchanges credentials directly with the account's configured helper; Keiko receives no
    credential bytes. Discovery shares the operation's cancellation and deadline, fails closed on
    truncated or invalid configuration, and records only closed helper provenance on the existing
-   `git.process.failed`/`git.process.refused` activity lines. Local reads remain config-isolated.
+   `git.process.failed`/`git.process.refused` activity lines. Local reads remain config-isolated,
+   apart from the closed `core.autocrlf`/`core.eol` values ADR-0098 forwards.
    A failed, malformed or truncated listing returns a synthetic nonzero
    `credential-discovery-unavailable` refusal; its exit status and text never stand in for a
    remote command that did not run, and the synthetic refusal does not claim truncated remote
