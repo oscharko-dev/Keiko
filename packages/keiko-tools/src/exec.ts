@@ -1616,7 +1616,6 @@ const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
       "administrator installed outside Program Files",
   ],
   [12, "the user environment could not be closed to the step"],
-  [16, "the Windows capabilities for listing C:\\ and C:\\Users are unavailable"],
   [17, "the profile folders above the step's directories could not be prepared"],
 ]);
 

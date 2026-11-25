@@ -424,18 +424,6 @@ static int ancestor_rules(void) {
   return ok;
 }
 
-/* Both Windows capabilities derive, and clearing the grants releases them. */
-static int system_capability_rules(void) {
-  struct keiko_gateway_grants grants = {0};
-  int ok = keiko_gateway_system_capabilities(&grants) && grants.system_capability_count == 2 &&
-           IsValidSid(grants.system_capabilities[0].Sid) &&
-           IsValidSid(grants.system_capabilities[1].Sid) &&
-           !EqualSid(grants.system_capabilities[0].Sid, grants.system_capabilities[1].Sid) &&
-           grants.system_capabilities[0].Attributes == SE_GROUP_ENABLED;
-  keiko_gateway_grants_clear(&grants);
-  return ok && grants.system_capability_count == 0;
-}
-
 #define CONCURRENT_RUNS 8
 #define CONCURRENT_ROUNDS 4
 
@@ -590,7 +578,6 @@ int main(void) {
   if (!sweep_rules()) { puts("gateway-grants-sweep: failed"); return 1; }
   if (!concurrent_rules()) { puts("gateway-grants-concurrent: failed"); return 1; }
   if (!ancestor_rules()) { puts("gateway-grants-ancestors: failed"); return 1; }
-  if (!system_capability_rules()) { puts("gateway-grants-system-capabilities: failed"); return 1; }
   puts("gateway-grants-rules: passed");
   return 0;
 }

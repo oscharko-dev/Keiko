@@ -1,9 +1,9 @@
 // #4496 (ADR-0043 D21, step mode): end-to-end proof of a governed verification step on Windows. It
 // speaks keiko-tools' wire protocol (KRP1 launch and KGG1 grants on descriptor 3, KRS1 answers on
 // descriptor 4, KRC1 terminate) to the supervisor under test with `--step-supervised`, which needs no
-// installed service and no elevation. The step is Node.js in the run's AppContainer, started without
-// `--preserve-symlinks`: the system capabilities and the profile list entries let it resolve its
-// real path. The proof holds only when the step writes its execution root, cannot read a sibling
+// installed service and no elevation. The step is Node.js in the run's AppContainer, started with
+// `--preserve-symlinks`, as keiko-tools starts a step's Node.js: no capability Windows grants an
+// AppContainer lists `C:\`. The proof holds only when the step writes its execution root, cannot read a sibling
 // folder, reaches neither the internet nor the host's loopback, ends with its own exit code, and a
 // step that never ends is ended by KRC1 with 137.
 //
@@ -86,11 +86,24 @@ function answers(stream) {
   return received;
 }
 
+// The step's Node.js: a copy this user owns. A runtime an administrator installed outside
+// `Program Files` cannot take the tree's grant, and the supervisor refuses it with code 8 (G1).
+function stepNode(root) {
+  return join(dirname(root), "node", "node.exe");
+}
+
+function copyStepNode(root) {
+  mkdirSync(join(root, "node"), { recursive: true });
+  copyFileSync(process.execPath, join(root, "node", "node.exe"));
+}
+
 function stage(helper, root, hostPort, argument) {
   const execution = join(root, "execution");
   const outside = join(root, "outside");
   const supervisorDirectory = join(root, "supervisor");
-  for (const directory of [execution, outside, supervisorDirectory]) mkdirSync(directory);
+  for (const directory of [execution, outside, supervisorDirectory]) {
+    mkdirSync(directory, { recursive: true });
+  }
   const supervisor = join(supervisorDirectory, "keiko-runtime-supervisor.exe");
   copyFileSync(helper, supervisor);
   writeFileSync(join(execution, "step.js"), STEP_SOURCE);
@@ -103,12 +116,19 @@ function stage(helper, root, hostPort, argument) {
     ["TMP", execution],
   ].sort(([left], [right]) => left.localeCompare(right));
   // Step mode joins the arguments verbatim; these paths hold no quote or trailing backslash.
-  const args = [`"${join(execution, "step.js")}"`, ...(argument === undefined ? [] : [argument])];
+  // Without list rights on `C:\` and `C:\Users` (#4496: no grantable capability gives an
+  // AppContainer those), Node.js resolves its main module through the path it was given.
+  const args = [
+    "--preserve-symlinks",
+    "--preserve-symlinks-main",
+    `"${join(execution, "step.js")}"`,
+    ...(argument === undefined ? [] : [argument]),
+  ];
   const frames = Buffer.concat([
-    launchFrame(randomBytes(16).toString("hex"), process.execPath, execution, args, environment),
+    launchFrame(randomBytes(16).toString("hex"), stepNode(root), execution, args, environment),
     grantsFrame([
       { access: GRANT_MODIFY, path: execution },
-      { access: GRANT_READ, path: dirname(process.execPath) },
+      { access: GRANT_READ, path: dirname(stepNode(root)) },
     ]),
   ]);
   return { supervisor, frames, execution };
@@ -135,6 +155,19 @@ function run(supervisor, frames) {
   );
 }
 
+// Each answer as `kind` or `kind:code` for an error, for a failure message.
+function describe(received) {
+  return (
+    received
+      .map((answer) =>
+        answer.kind === RESPONSE_ERROR
+          ? `${String(answer.kind)}:${String(answer.payload.readUInt16LE(0))}`
+          : String(answer.kind),
+      )
+      .join(",") || "none"
+  );
+}
+
 function reapedExit(received) {
   const errors = received.filter((answer) => answer.kind === RESPONSE_ERROR);
   assert.deepEqual(
@@ -150,9 +183,13 @@ function reapedExit(received) {
 
 async function boundaries(helper, root, hostPort) {
   const { supervisor, frames, execution } = stage(helper, join(root, "a"), hostPort);
-  const { stdout, received } = await run(supervisor, frames);
+  const { code, stdout, received } = await run(supervisor, frames);
   const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith("STEP "));
-  assert.notEqual(line, undefined, `the step reported its probes: ${stdout.slice(0, 400)}`);
+  assert.notEqual(
+    line,
+    undefined,
+    `the step reported its probes (supervisor ${String(code)}, answers ${describe(received)}): ${stdout.slice(0, 400)}`,
+  );
   const answer = JSON.parse(line.slice(5));
   assert.equal(answer.write, "ok", "the step writes its execution root");
   assert.equal(existsSync(join(execution, "written.txt")), true);
@@ -173,6 +210,7 @@ async function main() {
   const host = await startHostListener();
   try {
     const hostPort = host.address().port;
+    copyStepNode(root);
     const answer = await boundaries(helper, root, hostPort);
     const ended = await endedByControl(helper, root, hostPort);
     assert.equal(ended, 137, "KRC1 ends the step's job with 137");

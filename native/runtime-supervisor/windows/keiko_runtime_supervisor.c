@@ -51,9 +51,8 @@ enum error_code {
   ERROR_RELAY_PROFILE = 14,
   /* #4068: the host side of the relay (its pipes or listener) could not be created. */
   ERROR_RELAY_START = 15,
-  /* #4496: the Windows capabilities that let a tree list C:\ and C:\Users could not be derived. */
-  ERROR_SYSTEM_CAPABILITIES = 16,
-  /* #4496: the profile folders above the grants could not be planned (no profile, too many). */
+  /* #4496: the profile folders above the grants could not be planned (no profile, too many). 16
+   * named the isolatedWin32 capabilities, which CreateProcessW refuses an AppContainer; unused. */
   ERROR_GRANTS_ANCESTORS = 17
 };
 
@@ -472,7 +471,7 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
   /* Retained through CreateProcessW, like the attribute list that points at it. */
-  SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1 + KEIKO_GATEWAY_SYSTEM_CAPABILITIES] = {0};
+  SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1] = {0};
   wchar_t *appdata = NULL;
   wchar_t self[MAX_PATH + 1];
   struct keiko_gateway_connection *gateway = confined ? confined->gateway : NULL;
@@ -488,10 +487,6 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
     for (DWORD i = 0; grants != NULL && i < grants->capability_count &&
                       i < KEIKO_GATEWAY_GRANTS_MAX; i++)
       held[capabilities.CapabilityCount++] = grants->capabilities[i];
-    /* #4496: list C:\ and C:\Users, which Node.js and Java walk to resolve a real path. */
-    for (DWORD i = 0; grants != NULL && i < grants->system_capability_count &&
-                      i < KEIKO_GATEWAY_SYSTEM_CAPABILITIES; i++)
-      held[capabilities.CapabilityCount++] = grants->system_capabilities[i];
     /* CreateProcessW refuses a capability array of length zero (ERROR_INVALID_PARAMETER). */
     capabilities.Capabilities = capabilities.CapabilityCount != 0 ? held : NULL;
     /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
@@ -851,10 +846,6 @@ int wmain(int argc, wchar_t **argv) {
    * the sweep, which also clears these folders of a crashed run's entries. */
   if (stepped && !plan_profile_ancestors(&grants)) {
     send_error(ERROR_GRANTS_ANCESTORS);
-    goto cleanup;
-  }
-  if (stepped && !keiko_gateway_system_capabilities(&grants)) {
-    send_error(ERROR_SYSTEM_CAPABILITIES);
     goto cleanup;
   }
   if (relayed) {

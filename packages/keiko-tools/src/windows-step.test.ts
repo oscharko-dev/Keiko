@@ -144,6 +144,21 @@ describe("windowsStepFrames", () => {
     expect(launchText).toContain("PATH");
     expect(launchText).not.toContain("ProgramFiles(x86)");
   });
+
+  it("lets Node.js resolve through the given path, before the run's own options", () => {
+    const launch: WindowsStepLaunch = {
+      image: String.raw`C:\tools\node.exe`,
+      args: [],
+      grants: [],
+      recoveryHandle: "0123456789abcdef0123456789abcdef",
+    };
+    const text = (env: Record<string, string>): string =>
+      windowsStepFrames(launch, String.raw`C:\work`, env).toString("utf8");
+    expect(text({})).toContain("--preserve-symlinks --preserve-symlinks-main");
+    expect(text({ NODE_OPTIONS: "--openssl-legacy-provider" })).toContain(
+      "--preserve-symlinks --preserve-symlinks-main --openssl-legacy-provider",
+    );
+  });
 });
 
 describe("WindowsStepResponses", () => {

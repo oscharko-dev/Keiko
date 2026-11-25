@@ -25,11 +25,10 @@ struct keiko_gateway_grant {
   int applied;
 };
 
-/* #4496 (ADR-0043 D21): Node.js and Java resolve real paths by listing every parent of a path. The
- * Windows capabilities below let a tree list `C:\` and `C:\Users`; the profile folders above a grant
- * take a non-inherited list entry for the tree's own SID, revoked with the tree's grants. */
+/* #4496 (ADR-0043 D21): the profile folders above a step's grants take a non-inherited list entry
+ * for the tree's own SID, revoked with the tree's grants. No capability Windows grants an ordinary
+ * AppContainer lists `C:\` or `C:\Users`: CreateProcessW refuses the isolatedWin32 ones (87). */
 #define KEIKO_GATEWAY_ANCESTORS_MAX 32
-#define KEIKO_GATEWAY_SYSTEM_CAPABILITIES 2
 /* List, traverse and read attributes on the folder itself; nothing below it is inherited. */
 #define KEIKO_GATEWAY_ANCESTOR_MASK \
   (FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
@@ -46,9 +45,6 @@ struct keiko_gateway_grants {
   DWORD capability_count;
   size_t ancestor_count;
   struct keiko_gateway_ancestor ancestors[KEIKO_GATEWAY_ANCESTORS_MAX];
-  /* isolatedWin32-volumeRootMinimal and isolatedWin32-profilesRootMinimal, when derived. */
-  SID_AND_ATTRIBUTES system_capabilities[KEIKO_GATEWAY_SYSTEM_CAPABILITIES];
-  DWORD system_capability_count;
 };
 
 /* Parses one complete frame; refuses any shape the host never sends. */
@@ -69,8 +65,6 @@ enum keiko_gateway_grants_result {
  * before the sweep, which also removes stale list entries from these folders. */
 int keiko_gateway_ancestors_plan(_Inout_ struct keiko_gateway_grants *grants,
                                  _In_z_ const wchar_t *profile);
-/* Derives the two Windows capabilities every confined tree holds. Refuses when either is missing. */
-int keiko_gateway_system_capabilities(_Inout_ struct keiko_gateway_grants *grants);
 /* Grants every entry, or names the step that refused one; a refusal leaves nothing of this tree
  * granted and refuses the launch. */
 int keiko_gateway_grants_apply(_Inout_ struct keiko_gateway_grants *grants, PSID tree);

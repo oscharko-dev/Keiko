@@ -2658,7 +2658,13 @@ Findings:
      (`ancestor-rights.ps1`, plan `ancestors.json`) and removed again with `-Mode restore`. With
      them, npm starts without `--preserve-symlinks`. With list rights on the profile folders above
      the workspace and the toolchains as well, Maven builds and tests a project offline.
-   - Expected, not measured: a tree whose token carries the two capabilities, and which holds
+   - Measured 2026-11-25 (#4496, same VM, standard user): `CreateProcessW` refuses an
+     AppContainer token that carries either capability with `ERROR_INVALID_PARAMETER` (87), also
+     with the all-application-packages opt-out; a capability Keiko names is accepted. So no
+     standard user can give a tree list rights on `C:\` or `C:\Users`. The step backend runs Node.js
+     with `--preserve-symlinks --preserve-symlinks-main` instead; Java stays refused by its real
+     path walk.
+   - Expected, not measured (superseded by the measurement above): a tree whose token carries the two capabilities, and which holds
      non-inherited list entries for its own SID on the profile folders above its grants, needs no
      administrator. The user owns those profile folders. The experiment gave the same rights to
      `ALL APPLICATION PACKAGES` as an administrator instead. The capability entries exist on this

@@ -118,6 +118,22 @@ export function windowsStepLaunch(
   };
 }
 
+// No capability Windows grants an ordinary AppContainer lists `C:\` or `C:\Users` (#4496: the
+// isolatedWin32 ones are refused by CreateProcessW), and Node.js resolves a module's real path by
+// listing every parent of it. A step's Node.js therefore resolves through the path it was given.
+const NODE_PATH_OPTIONS = "--preserve-symlinks --preserve-symlinks-main";
+
+function withPathPreservingNode(
+  env: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const own = env.NODE_OPTIONS;
+  return {
+    ...env,
+    NODE_OPTIONS:
+      own === undefined || own === "" ? NODE_PATH_OPTIONS : `${NODE_PATH_OPTIONS} ${own}`,
+  };
+}
+
 /**
  * The launch and the grants, in the order the supervisor reads them. A variable whose name the
  * supervisor's packet cannot carry (such as `ProgramFiles(x86)`) is left out of the step.
@@ -128,7 +144,7 @@ export function windowsStepFrames(
   env: Readonly<Record<string, string>>,
 ): Buffer {
   const carried = Object.fromEntries(
-    Object.entries(env).filter(([name]) => ENVIRONMENT_NAME.test(name)),
+    Object.entries(withPathPreservingNode(env)).filter(([name]) => ENVIRONMENT_NAME.test(name)),
   );
   return Buffer.concat([
     encodeLaunchPacket(

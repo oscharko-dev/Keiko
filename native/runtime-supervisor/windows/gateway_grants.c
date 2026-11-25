@@ -464,20 +464,6 @@ int keiko_gateway_ancestors_plan(_Inout_ struct keiko_gateway_grants *grants,
   return 1;
 }
 
-int keiko_gateway_system_capabilities(_Inout_ struct keiko_gateway_grants *grants) {
-  static const wchar_t *const names[KEIKO_GATEWAY_SYSTEM_CAPABILITIES] = {
-      L"isolatedWin32-volumeRootMinimal", L"isolatedWin32-profilesRootMinimal"};
-  for (DWORD index = grants->system_capability_count; index < KEIKO_GATEWAY_SYSTEM_CAPABILITIES;
-       index++) {
-    PSID sid = derive_capability(names[index]);
-    if (sid == NULL) return 0;
-    grants->system_capabilities[index].Sid = sid;
-    grants->system_capabilities[index].Attributes = SE_GROUP_ENABLED;
-    grants->system_capability_count = index + 1;
-  }
-  return 1;
-}
-
 /* An AppContainer package SID: S-1-15-2 and seven sub-authorities. The well-known package groups
  * (S-1-15-2-1, S-1-15-2-2) and capability SIDs (S-1-15-3) never match. */
 static int package_sid(PSID sid) {
@@ -613,9 +599,6 @@ void keiko_gateway_grants_clear(_Inout_ struct keiko_gateway_grants *grants) {
   for (size_t index = 0; index < grants->ancestor_count && index < KEIKO_GATEWAY_ANCESTORS_MAX;
        index++)
     free(grants->ancestors[index].path);
-  for (DWORD index = 0;
-       index < grants->system_capability_count && index < KEIKO_GATEWAY_SYSTEM_CAPABILITIES; index++)
-    LocalFree(grants->system_capabilities[index].Sid);
   memset(grants, 0, sizeof(*grants));
 }
 #pragma warning(pop)
