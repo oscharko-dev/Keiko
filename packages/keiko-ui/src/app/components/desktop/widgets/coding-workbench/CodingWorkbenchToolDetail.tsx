@@ -45,6 +45,12 @@ export function commandPreview(command: CodingSafeActivityToolText): string {
   return cut || command.truncated ? `${first.slice(0, COMMAND_PREVIEW_CHARS)}…` : first;
 }
 
+// The row's one-line preview already shows a short, single-line command whole; the opened row then
+// does not repeat it.
+function previewShowsWhole(command: CodingSafeActivityToolText): boolean {
+  return !command.truncated && commandPreview(command) === command.text;
+}
+
 export function ToolCommandPreview({
   command,
 }: {
@@ -150,7 +156,7 @@ export function ToolTextDetail({
   if (facts === undefined) return null;
   return (
     <>
-      {facts.command === undefined ? null : (
+      {facts.command === undefined || previewShowsWhole(facts.command) ? null : (
         <ToolTextBlock
           label={t("codingWorkbench.activity.command")}
           text={`$ ${facts.command.text}`}
@@ -232,7 +238,7 @@ function ToolOutputBlock({
   );
 }
 
-type ToolActivityKind = "read" | "search" | "edit" | "command" | "git" | "web" | "other";
+type ToolActivityKind = "read" | "search" | "edit" | "command" | "git" | "web" | "plan" | "other";
 
 const TOOL_ACTIVITY_KINDS: Readonly<Record<string, ToolActivityKind>> = {
   read: "read",
@@ -263,6 +269,8 @@ const TOOL_ACTIVITY_KINDS: Readonly<Record<string, ToolActivityKind>> = {
   keiko_ci_status: "git",
   webfetch: "web",
   keiko_research_fetch: "web",
+  todo: "plan",
+  todowrite: "plan",
 };
 
 const TOOL_ACTIVITY_ORDER: readonly ToolActivityKind[] = [
@@ -272,6 +280,7 @@ const TOOL_ACTIVITY_ORDER: readonly ToolActivityKind[] = [
   "command",
   "git",
   "web",
+  "plan",
   "other",
 ];
 

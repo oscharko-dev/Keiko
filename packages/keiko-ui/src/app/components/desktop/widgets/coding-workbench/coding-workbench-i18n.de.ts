@@ -678,6 +678,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.group.git.one": "1 Git-Schritt ausgeführt",
   "codingWorkbench.activity.group.web": "{count} Seiten abgerufen",
   "codingWorkbench.activity.group.web.one": "1 Seite abgerufen",
+  "codingWorkbench.activity.group.plan": "Aufgabenliste {count}-mal aktualisiert",
+  "codingWorkbench.activity.group.plan.one": "Aufgabenliste aktualisiert",
   "codingWorkbench.activity.group.other": "{count} weitere Schritte",
   "codingWorkbench.activity.group.other.one": "1 weiterer Schritt",
   "codingWorkbench.timeline.title": "Aktivität",
@@ -1518,7 +1520,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Argumente des Aufrufs waren nicht lesbar, das Werkzeug lief nicht.",
   "codingWorkbench.activity.failure.cancelled": "Dieser Schritt wurde abgebrochen.",
   "codingWorkbench.activity.failure.agentRetries":
-    "Der Agent sieht das und versucht einen anderen Weg.",
+    "Der Agent sieht dieses Ergebnis und kann darauf aufbauen.",
   "codingWorkbench.activity.refusalCause.approval-declined": "Du hast ihn abgelehnt.",
   "codingWorkbench.activity.refusalCause.approval-expired": "Niemand hat rechtzeitig entschieden.",
   "codingWorkbench.runStatus.failedCommands": "{count} Befehle fehlgeschlagen",

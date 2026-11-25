@@ -9,7 +9,7 @@ import type {
 import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import { Timeline } from "./CodingWorkbenchTimeline";
-import { commandPreview } from "./CodingWorkbenchToolDetail";
+import { commandPreview, toolGroupSummary } from "./CodingWorkbenchToolDetail";
 
 const AT = "2026-07-19T12:00:00.000Z";
 
@@ -92,6 +92,23 @@ afterEach(() => {
 });
 
 describe("a failed command's row", () => {
+  it("shows a short command once, in the row's preview, and a long one whole when opened", () => {
+    const container = renderTools([
+      FAILED_TEST_RUN,
+      shell("call-long", "failed", {
+        exitCode: 2,
+        failureOrigin: "command-failed",
+        command: { text: "npm run build &&\n  npm test", truncated: false },
+      }),
+    ]);
+    const short = row(container, 0);
+    expect(short.querySelector('[role="group"][aria-label="Command"]')).toBeNull();
+    const long = row(container, 1);
+    expect(long.querySelector('[role="group"][aria-label="Command"]')).toHaveTextContent(
+      "$ npm run build && npm test",
+    );
+  });
+
   it("opens to the origin, the exit code, the command and the ends of its output", async () => {
     const container = renderTools([FAILED_TEST_RUN]);
     const failed = row(container, 0);
@@ -100,7 +117,7 @@ describe("a failed command's row", () => {
     expect(failed).toHaveTextContent("Command failed");
     expect(failed).toHaveTextContent("Failed 3 times in this run");
     expect(failed).toHaveTextContent("The command did not finish successfully (exit code 1).");
-    expect(failed).toHaveTextContent("The agent sees this and will try another way.");
+    expect(failed).toHaveTextContent("The agent sees this result and can continue from it.");
     expect(failed).toHaveTextContent("Took 4.2 s");
     expect(failed).toHaveTextContent("$ npm test -- --runInBand");
     expect(failed).toHaveTextContent("> vitest run");
@@ -124,7 +141,7 @@ describe("a failed command's row", () => {
     expect(refused).toHaveTextContent("Blocked by Keiko");
     expect(refused).toHaveTextContent("Keiko did not allow this step. You declined it.");
     // A refusal is not something the agent retries around.
-    expect(refused).not.toHaveTextContent("will try another way");
+    expect(refused).not.toHaveTextContent("can continue from it");
   });
 
   it("shows the message a tool handed the agent and a timeout as its own origin", () => {
@@ -172,7 +189,7 @@ describe("a failed command's row", () => {
       "The call's arguments could not be read, so the tool did not run.",
     );
     expect(invalid).toHaveTextContent("Expected a JSON object");
-    expect(invalid).toHaveTextContent("The agent sees this and will try another way.");
+    expect(invalid).toHaveTextContent("The agent sees this result and can continue from it.");
   });
 
   it("keeps a stopped call closed and says it was stopped", () => {
@@ -252,5 +269,28 @@ describe("a command's preview", () => {
     expect(commandPreview({ text: "a".repeat(81), truncated: false })).toBe(`${"a".repeat(80)}…`);
     expect(commandPreview({ text: "set -e\nnpm test", truncated: false })).toBe("set -e…");
     expect(commandPreview({ text: "npm test", truncated: true })).toBe("npm test…");
+  });
+});
+
+describe("a group of finished steps", () => {
+  it("names task-list updates in their own verb instead of other steps", () => {
+    const t = (key: string, values?: { readonly count?: number }): string =>
+      values?.count === undefined ? key : `${key}:${String(values.count)}`;
+    const summary = toolGroupSummary(
+      [
+        { tool: shell("call-1", "succeeded", { exitCode: 0 }), count: 1 },
+        { tool: { ...shell("call-2", "succeeded", undefined), tool: "todowrite" }, count: 2 },
+        { tool: { ...shell("call-3", "succeeded", undefined), tool: "todo" }, count: 1 },
+        { tool: { ...shell("call-4", "succeeded", undefined), tool: "question" }, count: 1 },
+      ],
+      t,
+    );
+    expect(summary).toBe(
+      [
+        "codingWorkbench.activity.group.command.one",
+        "codingWorkbench.activity.group.plan:3",
+        "codingWorkbench.activity.group.other.one",
+      ].join(" · "),
+    );
   });
 });

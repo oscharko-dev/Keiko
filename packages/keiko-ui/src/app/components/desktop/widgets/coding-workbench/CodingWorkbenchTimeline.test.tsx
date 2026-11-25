@@ -396,7 +396,7 @@ describe("CodingWorkbenchTimeline", () => {
     expect(execute?.dataset.failureOrigin).toBe("tool-error");
     expect(execute).toHaveTextContent("Tool error");
     expect(execute).toHaveTextContent("The tool could not complete this step.");
-    expect(execute).toHaveTextContent("The agent sees this and will try another way.");
+    expect(execute).toHaveTextContent("The agent sees this result and can continue from it.");
     expect(execute).not.toHaveTextContent("reported an error");
     // A command that ran and returned non-zero is the command's failure, not a red "Failed": its row
     // names the origin and the exit code, and still opens to the reason (#4098 acceptance).

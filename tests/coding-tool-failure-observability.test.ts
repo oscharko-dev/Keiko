@@ -16,12 +16,14 @@ const PRIVATE_COMMAND = "npm test -- --grep TOOL_FAILURE_BODY_MUST_NOT_REACH_LOG
 const PRIVATE_OUTPUT = "FAIL TOOL_FAILURE_OUTPUT_MUST_NOT_REACH_LOG";
 const PRIVATE_ERROR = "TOOL_FAILURE_ERROR_MUST_NOT_REACH_LOG";
 
+type ToolSignal = Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>;
+
 function toolCall(
   callId: string,
   tool: string,
   state: "failed" | "denied" | "succeeded",
-  presentation: NonNullable<Extract<CodingSafeActivitySignal, { kind: "tool" }>["presentation"]>,
-): CodingSafeActivitySignal {
+  presentation: NonNullable<ToolSignal["presentation"]>,
+): ToolSignal {
   return {
     kind: "tool",
     messageId: "msg-answer",
@@ -33,7 +35,7 @@ function toolCall(
   };
 }
 
-const FAILED_TEST: CodingSafeActivitySignal = toolCall("call-private-1", "shell", "failed", {
+const FAILED_TEST: ToolSignal = toolCall("call-private-1", "shell", "failed", {
   exitCode: 1,
   failureOrigin: "command-failed",
   command: { text: PRIVATE_COMMAND, truncated: false },

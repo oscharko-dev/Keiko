@@ -101,7 +101,7 @@ type FeedTool = AvailableFeed["turns"][number]["tools"][number];
 function mapTools(feed: AvailableFeed, map: (tool: FeedTool) => FeedTool): AvailableFeed {
   return {
     ...feed,
-    turns: feed.turns.map((turn) => ({ ...turn, tools: turn.tools.map(map) })),
+    turns: feed.turns.map((turn) => ({ ...turn, tools: turn.tools.map((tool) => map(tool)) })),
   };
 }
 

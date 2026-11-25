@@ -1563,6 +1563,12 @@ details[open] > .cmpActivitySummary::after {
   min-width: 0;
 }
 
+/* A tool row's title takes the free width, so its duration, failure label and chevron share one
+   right-hand column whatever the row carries. */
+.cmpActivitySummary > .toolMeta {
+  flex: 1 1 auto;
+}
+
 .toolMeta .timelineTitle {
   overflow: hidden;
   color: var(--text-primary);
@@ -2095,14 +2101,14 @@ details[open] > .cmpActivitySummary::after {
   background: var(--surface-inset);
 }
 
-.answerLoading {
+.cmpAnswerLoading {
   display: block;
   margin-top: var(--space-1);
   color: var(--text-secondary);
   font-size: var(--text-caption);
 }
 
-.textRetry {
+.cmpTextRetry {
   padding: 0;
   border: 0;
   background: none;
@@ -2112,12 +2118,12 @@ details[open] > .cmpActivitySummary::after {
   cursor: pointer;
 }
 
-.textRetry:focus-visible {
+.cmpTextRetry:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-.messageActions {
+.cmpMessageActions {
   display: flex;
   justify-content: flex-end;
   margin-top: var(--space-1);

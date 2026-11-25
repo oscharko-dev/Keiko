@@ -1318,7 +1318,7 @@ function AssistantAnswer({
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
       {live || shown.source.trim().length === 0 ? null : (
-        <div className={styles.messageActions}>
+        <div className={styles.cmpMessageActions}>
           <WorkbenchAnswerCopyButton
             text={shown.source}
             partial={shown.state !== "whole"}
@@ -1346,12 +1346,12 @@ function TextTrailing({
   if (state === "cut") return <TruncationMark t={t} />;
   if (state === "loading")
     return (
-      <span className={styles.answerLoading}>{t("codingWorkbench.activity.answerLoading")}</span>
+      <span className={styles.cmpAnswerLoading}>{t("codingWorkbench.activity.answerLoading")}</span>
     );
   return (
     <span className={styles.truncationMark}>
       … {t("codingWorkbench.activity.textReadFailed")}{" "}
-      <button type="button" className={styles.textRetry} onClick={onRetry}>
+      <button type="button" className={styles.cmpTextRetry} onClick={onRetry}>
         {t("codingWorkbench.activity.textRetry")}
       </button>
     </span>

@@ -648,6 +648,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.group.git.one": "Ran 1 Git step",
   "codingWorkbench.activity.group.web": "Fetched {count} pages",
   "codingWorkbench.activity.group.web.one": "Fetched 1 page",
+  "codingWorkbench.activity.group.plan": "Updated the task list {count} times",
+  "codingWorkbench.activity.group.plan.one": "Updated the task list",
   "codingWorkbench.activity.group.other": "{count} other steps",
   "codingWorkbench.activity.group.other.one": "1 other step",
   "codingWorkbench.timeline.title": "Activity",
@@ -1463,7 +1465,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failure.invalid-arguments":
     "The call's arguments could not be read, so the tool did not run.",
   "codingWorkbench.activity.failure.cancelled": "This step was stopped.",
-  "codingWorkbench.activity.failure.agentRetries": "The agent sees this and will try another way.",
+  "codingWorkbench.activity.failure.agentRetries":
+    "The agent sees this result and can continue from it.",
   "codingWorkbench.activity.refusalCause.approval-declined": "You declined it.",
   "codingWorkbench.activity.refusalCause.approval-expired": "Nobody decided in time.",
   "codingWorkbench.runStatus.failedCommands": "{count} commands failed",

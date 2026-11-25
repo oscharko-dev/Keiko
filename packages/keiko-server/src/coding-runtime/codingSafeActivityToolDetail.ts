@@ -141,7 +141,10 @@ export function toolOutputPreview(raw: string): CodingSafeActivityToolOutput | u
 }
 
 function displayLines(text: string): readonly string[] {
-  const lines = text.replaceAll("\r\n", "\n").split("\n").map(finalConsoleState);
+  const lines = text
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .map((line) => finalConsoleState(line));
   while (lines.length > 0 && lines.at(-1)?.trim() === "") lines.pop();
   while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
   return lines;
