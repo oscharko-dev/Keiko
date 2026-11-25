@@ -110,6 +110,42 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
     });
   });
 
+  // #4492: a refused step names the supervisor's closed code, and whether the step had started.
+  it("records the supervisor's refusal code on the step's correlation", () => {
+    const stateRoot = temporary("keiko-step-supervisor-log-");
+    const install = temporary("keiko-step-supervisor-install-");
+    const helperPath = join(install, "keiko-runtime-supervisor.exe");
+    const bytes = Buffer.from("verified supervisor bytes");
+    writeFileSync(helperPath, bytes);
+    const supervisor = resolveWindowsStepSupervisor({
+      platform: "win32",
+      env: {},
+      activityLog: createActivityLogSink(stateRoot),
+      correlationId: "step-refused-proof",
+      runtime: () => releasedRuntime(helperPath, createHash("sha256").update(bytes).digest("hex")),
+      driveHost: { define: () => true, remove: () => true },
+    });
+    const copy = supervisor?.acquire([String.raw`C:\Users\dev\keiko-step-1`]);
+    copy?.refused(12, false);
+    copy?.refused(10, true);
+    copy?.release();
+    closeFileServerLogSinks();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateRoot),
+      "editor.verification.windows-step-refused",
+    ).map((line) =>
+      expectActivityLogProof("editor.verification.windows-step-refused.emitted-line", line),
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      op: "editor.verification.windows-step-refused",
+      correlationId: "step-refused-proof",
+      phase: "before-launch",
+      refusalCode: 12,
+    });
+    expect(lines[1]).toMatchObject({ phase: "after-launch", refusalCode: 10 });
+  });
+
   it("refuses a step that gets no drive letters as isolation unavailable", () => {
     const install = temporary("keiko-step-supervisor-install-");
     const helperPath = join(install, "keiko-runtime-supervisor.exe");

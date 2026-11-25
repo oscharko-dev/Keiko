@@ -168,6 +168,46 @@ describe("windowsStepFrames", () => {
     expect(text).not.toContain("C:\\work\\repo\\");
     expect(text).not.toContain("--preserve-symlinks");
   });
+
+  // #4492: Scoop puts `apps\nodejs-lts\current`, a junction, on PATH; the executable is granted by
+  // its real folder. Through the junction the step found npm but not the `node` its script runs.
+  it("names a PATH entry through a junction by its real folder's drive letter", () => {
+    const real = String.raw`C:\Users\dev\scoop\apps\nodejs-lts\26.13.1`;
+    const link = String.raw`C:\Users\dev\scoop\apps\nodejs-lts\current`;
+    const launch: WindowsStepLaunch = {
+      image: `${real}\\npm.cmd`,
+      args: ["test"],
+      grants: [],
+      recoveryHandle: "0123456789abcdef0123456789abcdef",
+    };
+    const asked: string[] = [];
+    // As the real resolver does: the junction prefix resolves, the rest of the entry follows it.
+    const realPath = (entry: string): string | undefined => {
+      asked.push(entry);
+      return entry.startsWith(link) ? `${real}${entry.slice(link.length)}` : undefined;
+    };
+    const text = windowsStepFrames(
+      launch,
+      String.raw`C:\work\repo`,
+      {
+        PATH: `${link}\\bin;${link};.;bin;\\\\server\\tools;C:\\Users\\dev\\scoop\\shims;C:\\Windows\\System32`,
+      },
+      [...DRIVES, { root: real, drive: "N:" }],
+      realPath,
+    ).toString("utf8");
+    expect(text).toContain(
+      String.raw`N:\bin;N:\;.;bin;\\server\tools;C:\Users\dev\scoop\shims;C:\Windows\System32`,
+    );
+    // A relative entry would resolve against Keiko's folder, not the step's, and a share can stall:
+    // only a drive-absolute entry is resolved.
+    expect(asked).toEqual([
+      `${link}\\bin`,
+      link,
+      String.raw`C:\Users\dev\scoop\shims`,
+      String.raw`C:\Windows\System32`,
+    ]);
+    expect(text).toContain(String.raw`N:\npm.cmd`);
+  });
 });
 
 const DRIVES = [
@@ -308,6 +348,7 @@ interface Harness {
   readonly child: SupervisedChild;
   readonly spawned: { command: string; args: readonly string[]; options: SpawnOptions }[];
   readonly released: () => number;
+  readonly refusals: readonly { readonly code: number; readonly launched: boolean }[];
   readonly acquired: readonly (readonly string[])[];
   readonly treeKills: () => number;
   readonly written: () => Buffer;
@@ -322,6 +363,7 @@ function harness(): Harness {
   let released = 0;
   let treeKills = 0;
   const acquired: (readonly string[])[] = [];
+  const refusals: { code: number; launched: boolean }[] = [];
   const supervisor: WindowsStepSupervisor = {
     acquire: (roots) => {
       acquired.push(roots);
@@ -330,6 +372,9 @@ function harness(): Harness {
         drives: roots.map((root, index) => ({ root, drive: `${"KLMN".charAt(index)}:` })),
         release: (): void => {
           released++;
+        },
+        refused: (code, launched): void => {
+          refusals.push({ code, launched });
         },
       };
     },
@@ -365,6 +410,7 @@ function harness(): Harness {
     child,
     spawned,
     released: () => released,
+    refusals,
     acquired,
     treeKills: () => treeKills,
     written: () => Buffer.concat(chunks),
@@ -407,6 +453,25 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     expect(h.released()).toBe(1);
   });
 
+  // #4492: the supervisor resolves the user's LocalAppData for its per-user lock; Windows expands
+  // that folder through the process's USERPROFILE, so the step's home there refused every step with
+  // refusal 12. The step's environment travels in the launch frame, never in the supervisor's own.
+  it("starts the supervisor with an empty environment and frames the step's home", async () => {
+    const h = harness();
+    const run = runCommand(input(new AbortController().signal), h.deps);
+    await settled();
+    expect(h.spawned[0]?.options.env).toEqual({});
+    const launch = h.written().subarray(0, h.written().indexOf("KGG1")).toString("utf8");
+    expect(launch).toContain("USERPROFILE");
+    expect(launch).toContain("TEMP");
+    expect(launch).toContain(".keiko-home-");
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+    expect(h.refusals).toEqual([]);
+  });
+
   it("refuses a step the supervisor refused, naming the closed reason", async () => {
     const h = harness();
     const run = runCommand(input(new AbortController().signal), h.deps);
@@ -416,6 +481,7 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     h.child.emit("close", 1, null);
     await expect(run).rejects.toThrow(/outside Program Files/u);
     await expect(run).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(h.refusals).toEqual([{ code: 8, launched: false }]);
     expect(h.released()).toBe(1);
   });
 
@@ -428,6 +494,7 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     h.child.emit("close", 1, null);
     await expect(run).rejects.toThrow(/failed after the step started \(10\)/u);
     await expect(run).rejects.not.toBeInstanceOf(CommandDeniedError);
+    expect(h.refusals).toEqual([{ code: 10, launched: true }]);
     expect(h.released()).toBe(1);
   });
 

@@ -561,6 +561,7 @@ describe("planIsolationProbe (#4496)", () => {
       path: String.raw`C:\Temp\keiko-runtime-supervisor.exe`,
       drives: [],
       release: () => 0,
+      refused: () => 0,
     }),
     readRoots: [],
   };

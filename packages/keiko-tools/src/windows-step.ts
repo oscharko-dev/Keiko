@@ -195,6 +195,37 @@ export function throughWindowsStepDrives(
   return result;
 }
 
+/** The real folder a search-path entry names (through a junction or link), or undefined. */
+export type WindowsStepRealPath = (entry: string) => string | undefined;
+
+// Only a drive-absolute entry is resolved: a relative one would resolve against Keiko's own folder,
+// not the step's, and a share (`\\server\share`) can stall the server while it answers (#4492).
+const DRIVE_ABSOLUTE = /^[A-Za-z]:[\\/]/u;
+
+/**
+ * A search path with each entry named through its drive letter. An entry no granted root names
+ * lexically is tried by its real folder: Scoop puts its `current` junction on PATH while the
+ * executable is granted by the folder it resolves to, and through the junction the step found npm
+ * but not the `node` its script runs (#4492).
+ */
+function throughSearchPath(
+  value: string,
+  drives: readonly WindowsStepDrive[],
+  realPath: WindowsStepRealPath,
+): string {
+  return value
+    .split(";")
+    .map((entry) => {
+      const named = throughWindowsStepDrives(entry, drives);
+      if (named !== entry || !DRIVE_ABSOLUTE.test(entry)) return named;
+      const real = realPath(entry);
+      if (real === undefined) return entry;
+      const throughReal = throughWindowsStepDrives(real, drives);
+      return throughReal === real ? entry : throughReal;
+    })
+    .join(";");
+}
+
 /**
  * The launch and the grants, in the order the supervisor reads them. The image, the working
  * directory, the arguments and every variable name a granted directory through its drive letter;
@@ -206,12 +237,16 @@ export function windowsStepFrames(
   cwd: string,
   env: Readonly<Record<string, string>>,
   drives: readonly WindowsStepDrive[],
+  realPath: WindowsStepRealPath = (): undefined => undefined,
 ): Buffer {
   const through = (value: string): string => throughWindowsStepDrives(value, drives);
   const carried = Object.fromEntries(
     Object.entries(env)
       .filter(([name]) => ENVIRONMENT_NAME.test(name))
-      .map(([name, value]) => [name, through(value)]),
+      .map(([name, value]) => [
+        name,
+        name.toUpperCase() === "PATH" ? throughSearchPath(value, drives, realPath) : through(value),
+      ]),
   );
   return Buffer.concat([
     encodeLaunchPacket(

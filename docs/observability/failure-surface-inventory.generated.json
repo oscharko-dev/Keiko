@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d67da9e8ce5b6bc9205a7037bf43804d33d2f747955f050a84bb37812824ac5b"
+    "catalogDigest": "817979136923346c67e34422361126a69666d774b7b3b3681a25494dbaca246c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 731,
-    "proofCount": 755,
-    "resolvedProofCount": 755,
+    "operationCount": 732,
+    "proofCount": 756,
+    "resolvedProofCount": 756,
     "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -704,6 +704,7 @@
         "editor.verification.execute",
         "editor.verification.windows-step-copy",
         "editor.verification.windows-step-drives",
+        "editor.verification.windows-step-refused",
         "editor.verification.windows-step-supervisor",
         "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
@@ -1271,10 +1272,7 @@
     "repository-fingerprint-diff": ["memory-knowledge.dependency-failure"],
     "rerank-degradation": ["memory-knowledge.dependency-failure"],
     "runtime-confinement": ["tools-workflows.dependency-failure"],
-    "runtime-confinement-unavailable": [
-      "editor-delivery.dependency-failure",
-      "tools-workflows.dependency-failure"
-    ],
+    "runtime-confinement-unavailable": ["editor-delivery.rejection", "tools-workflows.rejection"],
     "runtime-git-identity": ["editor-delivery.dependency-failure"],
     "runtime-shutdown": ["lifecycle-crash.crash"],
     "security-atomic-publish": ["runtime-packages.dependency-failure"],
@@ -2234,6 +2232,9 @@
     ],
     "editor.verification.windows-step-drives.emitted-line": [
       "packages/keiko-server/src/editor/windowsStepDrives.test.ts"
+    ],
+    "editor.verification.windows-step-refused.emitted-line": [
+      "packages/keiko-server/src/editor/windowsStepSupervisor.test.ts"
     ],
     "editor.verification.windows-step-supervisor.emitted-line": [
       "packages/keiko-server/src/editor/windowsStepSupervisor.test.ts"

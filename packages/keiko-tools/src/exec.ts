@@ -943,6 +943,7 @@ interface SpawnTarget {
         readonly launch: WindowsStepLaunch;
         readonly drives: readonly WindowsStepDrive[];
         readonly release: () => void;
+        readonly refused: (code: number, launched: boolean) => void;
       }
     | undefined;
 }
@@ -1160,7 +1161,12 @@ function windowsStepTarget(
     command: copy.path,
     args: decision.args,
     attestation: decision.attestation,
-    windowsStep: { launch, drives: copy.drives, release: onceOnly(copy.release) },
+    windowsStep: {
+      launch,
+      drives: copy.drives,
+      release: onceOnly(copy.release),
+      refused: copy.refused,
+    },
   };
 }
 
@@ -1272,6 +1278,7 @@ interface RunState {
 interface WindowsStepState {
   readonly responses: WindowsStepResponses;
   readonly release: () => void;
+  readonly refused: (code: number, launched: boolean) => void;
   control: NodeJS.WritableStream | undefined;
 }
 
@@ -1602,10 +1609,12 @@ function settledExitCode(ctx: ExecContext, code: number | null): number | null |
   // A step Keiko ended itself (an output flood) whose supervisor the grace escalation ended before
   // it reaped: the termination decides the result, as for any other ended command.
   if (ctx.state.terminalReason !== undefined) return code;
-  // An error after the launch is no refusal: the step ran, and its outcome is unknown.
+  // Every refusal leaves its closed code on the step's correlation, launched or not (#4492).
+  if (answer.kind === "refused") step.refused(answer.code, step.responses.launched());
   if (answer.kind === "refused" && !step.responses.launched()) {
     return new CommandDeniedError(windowsStepRefusal(answer.code), ctx.input.command);
   }
+  // An error after the launch is no refusal: the step ran, and its outcome is unknown.
   if (answer.kind === "refused") {
     return new Error(
       `the Windows step supervisor failed after the step started (${String(answer.code)})`,
@@ -1866,6 +1875,7 @@ function spawnChild(
       state.windowsStep = {
         responses: new WindowsStepResponses(),
         release: target.windowsStep.release,
+        refused: target.windowsStep.refused,
         control: undefined,
       };
     }
@@ -1874,10 +1884,19 @@ function spawnChild(
     const frames =
       target.windowsStep === undefined
         ? undefined
-        : windowsStepFrames(target.windowsStep.launch, cwd, env, target.windowsStep.drives);
+        : windowsStepFrames(
+            target.windowsStep.launch,
+            cwd,
+            env,
+            target.windowsStep.drives,
+            realSearchPathEntry,
+          );
+    // The step's environment travels in its launch frame. The supervisor itself starts empty, as
+    // every native helper does: Windows expands the user's LocalAppData, where its per-user lock
+    // lives, through the process's USERPROFILE, and the step's home there refused every step (#4492).
     const child = deps.spawn(target.command, target.args, {
       cwd,
-      env,
+      env: target.windowsStep === undefined ? env : {},
       shell: false,
       detached: POSIX,
       ...(target.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
@@ -1890,6 +1909,16 @@ function spawnChild(
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");
+  }
+}
+
+// A search-path entry's real folder, resolved as the executable's granted folder was; an entry
+// that is missing or unreadable has none and stays as written (#4492).
+function realSearchPathEntry(entry: string): string | undefined {
+  try {
+    return realpathSync(entry);
+  } catch {
+    return undefined;
   }
 }
 

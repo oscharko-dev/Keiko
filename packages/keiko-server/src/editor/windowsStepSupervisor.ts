@@ -63,6 +63,32 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #4492: the supervisor's closed refusal code. Without it a refused step was only "denied", and a
+// supervisor that could not take its per-user lock looked like a policy decision.
+const WINDOWS_STEP_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.windows-step-refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.windowsStepSupervisor.refused",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["before-launch", "after-launch"],
+    },
+    refusalCode: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["runtime-confinement-unavailable"],
+  proofIds: ["editor.verification.windows-step-refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
 /** The toolchain homes a step reads besides its executable's own folder: Java's and Maven's. */
 const READ_ROOT_VARIABLES = ["JAVA_HOME", "MAVEN_HOME", "M2_HOME"] as const;
 
@@ -182,6 +208,15 @@ function verifiedCopies(
       release: (): void => {
         unmapWindowsStepDrives(mapped, drives);
         discardCopy(copy, drives.correlationId);
+      },
+      refused: (code, launched): void => {
+        drives.activityLog.write(
+          activityLogEvent(
+            WINDOWS_STEP_REFUSED_OPERATION,
+            { correlationId: drives.correlationId ?? UNKNOWN_CORRELATION_ID },
+            { phase: launched ? "after-launch" : "before-launch", refusalCode: code },
+          ),
+        );
       },
     };
   };

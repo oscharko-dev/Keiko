@@ -383,6 +383,11 @@ export interface WindowsStepSupervisorCopy {
   readonly drives: readonly WindowsStepDrive[];
   /** Removes the copy and the drive letters; called once, after the step settled or failed. */
   readonly release: () => void;
+  /**
+   * Records the supervisor's refusal by its closed code, and whether the step had already started;
+   * called at most once, before the step settles (#4492).
+   */
+  readonly refused: (code: number, launched: boolean) => void;
 }
 
 /**

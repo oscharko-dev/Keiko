@@ -9733,6 +9733,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: [
         "editor.verification.windows-step-drives",
+        "editor.verification.windows-step-refused",
         "editor.verification.windows-step-supervisor",
         "runtime.confinement.unavailable",
       ],
@@ -9742,18 +9743,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     },
     requiredCausalOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],

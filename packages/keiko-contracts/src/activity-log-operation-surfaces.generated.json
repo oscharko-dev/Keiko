@@ -275,6 +275,7 @@
   "editor.verification.execute": "editor-delivery",
   "editor.verification.windows-step-copy": "editor-delivery",
   "editor.verification.windows-step-drives": "editor-delivery",
+  "editor.verification.windows-step-refused": "editor-delivery",
   "editor.verification.windows-step-supervisor": "editor-delivery",
   "editor.verification.workspace": "editor-delivery",
   "editor.workspace-watch.authority-revoked": "editor-delivery",
