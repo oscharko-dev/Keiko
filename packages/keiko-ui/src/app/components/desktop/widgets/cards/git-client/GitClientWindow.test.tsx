@@ -15,7 +15,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useCallback, useState, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   GitChangedFile,
   GitHistoryEntry,
@@ -589,6 +589,15 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
 }
 
 /**
+ * #4103: a refused repository stays the window's configured folder. Clearing it (in any form) re-keyed
+ * the desktop's window onto the globally selected repository and dropped the refusal notice.
+ */
+function expectConfiguredFolderKept(updateCfg: Mock): void {
+  const patches = updateCfg.mock.calls.map(([patch]) => patch as Record<string, unknown>);
+  expect(patches.filter((patch) => Object.hasOwn(patch, "projectPath"))).toStrictEqual([]);
+}
+
+/**
  * The desktop's Git window mount (`governedGit` in widgets/index.tsx): the window is keyed by its
  * resolved root, an empty `projectPath` falls back to the global selected repository, and
  * `updateCfg` is the window frame's stable merge patch (WindowFrame.tsx).
@@ -1077,8 +1086,7 @@ describe("GitClientWindow — repository list", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This repository is not currently connected to a workspace.",
     );
-    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
-    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
+    expectConfiguredFolderKept(updateCfg);
     expect(client.listBranches).not.toHaveBeenCalled();
     expect(client.getSummary).not.toHaveBeenCalled();
     expect(client.getRemotes).not.toHaveBeenCalled();
@@ -1098,8 +1106,7 @@ describe("GitClientWindow — repository list", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This local repository is unavailable.",
     );
-    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
-    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
+    expectConfiguredFolderKept(updateCfg);
     expect(client.getStatus).not.toHaveBeenCalled();
     // A configured path that was not handed off never registers itself (#4103 F2).
     expect(client.registerRepository).not.toHaveBeenCalled();
@@ -1708,6 +1715,31 @@ describe("GitClientWindow — repository list", () => {
     );
     expect(client.getStatus).not.toHaveBeenCalled();
     expect(client.registerRepository).not.toHaveBeenCalled();
+  });
+
+  it("leaves a refused restored repository for another one the person chooses", async () => {
+    const user = userEvent.setup();
+    const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, REPO_B, legacy] })),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: legacy.path }}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("This local repository is unavailable."),
+    );
+
+    await user.click(screen.getByRole("button", { name: /beta/ }));
+
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
+    expect(client.getStatus).not.toHaveBeenCalledWith(legacy.path);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("retries a refused restored repository and shows it once it is available again", async () => {
@@ -5313,8 +5345,7 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This local repository is unavailable. Choose another repository.",
     );
-    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
-    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
+    expectConfiguredFolderKept(updateCfg);
     expect(client.getStatus).not.toHaveBeenCalled();
   });
 });
