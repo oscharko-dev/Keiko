@@ -421,21 +421,26 @@ function useUnboundSelection(root: string | null): {
   readonly unbound: boolean;
   readonly recheck: () => Promise<void>;
 } {
-  const [unbound, setUnbound] = useState(false);
+  // The answer names the root it was read for, so a switch never carries another folder's state.
+  const [state, setState] = useState<{ readonly root: string; readonly unbound: boolean } | null>(
+    null,
+  );
   const selected = useRef(root);
+  const latestRead = useRef(0);
   useLayoutEffect(() => {
     selected.current = root;
   }, [root]);
   const recheck = useCallback(async (): Promise<void> => {
     const at = selected.current;
-    if (at === null) {
-      setUnbound(false);
-      return;
-    }
+    if (at === null) return;
+    latestRead.current += 1;
+    const read = latestRead.current;
     try {
       const { projects } = await fetchProjects();
+      // Only the newest read for the still-selected root may answer; an older one is stale.
+      if (read !== latestRead.current || selected.current !== at) return;
       const project = projects.find((entry) => entry.path === at);
-      if (selected.current === at) setUnbound(project !== undefined && !locallyAvailable(project));
+      setState({ root: at, unbound: project !== undefined && !locallyAvailable(project) });
     } catch (error) {
       reportClientDiagnostic("[keiko] coding workbench repository availability read failed", {
         kind: "other",
@@ -452,7 +457,7 @@ function useUnboundSelection(root: string | null): {
       window.removeEventListener("focus", onFocus);
     };
   }, [root, recheck]);
-  return { unbound, recheck };
+  return { unbound: state !== null && state.root === root && state.unbound, recheck };
 }
 
 function selectionReady(input: LocationInput): boolean {

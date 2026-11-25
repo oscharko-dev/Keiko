@@ -532,6 +532,46 @@ describe("a selection whose folder lost its workspace behind a still-held bindin
     expect(result.current.error).toBe(false);
   });
 
+  it("never carries one folder's lost workspace over to the next selected folder", async () => {
+    mocks.fetchProjects.mockResolvedValueOnce(project(false));
+    mocks.selectLocalCheckout.mockRejectedValue(new Error("refused"));
+    const { result, rerender } = renderHook((props) => useWorkbenchExecutionLocation(props), {
+      initialProps: input,
+    });
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    // The next folder's availability read is still in flight when it is selected.
+    mocks.fetchProjects.mockReturnValue(new Promise(() => undefined));
+    rerender({ ...input, root: "/other", activeInstance: { ...held, repositoryRoot: "/other" } });
+    expect(result.current.ready).toBe(true);
+    expect(mocks.selectLocalCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets only the newest availability read answer", async () => {
+    let answerOlder: ((value: { projects: unknown[] }) => void) | undefined;
+    mocks.fetchProjects
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          answerOlder = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(project(true));
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => {
+      expect(mocks.fetchProjects).toHaveBeenCalledTimes(2);
+    });
+    await act(async () => {
+      answerOlder?.(project(false));
+      await Promise.resolve();
+    });
+    expect(result.current.ready).toBe(true);
+    expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
+  });
+
   it("stays not ready with an error when the folder cannot be bound", async () => {
     mocks.fetchProjects.mockResolvedValue(project(false));
     mocks.selectLocalCheckout.mockRejectedValue(new Error("refused"));
