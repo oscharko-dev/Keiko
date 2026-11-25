@@ -24,6 +24,7 @@ import {
   parseUnifiedDiff,
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
+import { notifyWorkspaceFileMutated } from "@/app/components/desktop/widgets/cards/workspace-file-events";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { correlationIdOf } from "./client-error-summary";
 import { bffRequestErrorKind } from "./http";
@@ -52,6 +53,8 @@ export interface CodingWorkbenchChangesState {
   readonly files: readonly GitChangedFile[];
   readonly selectedPath: string | null;
   readonly head: string | null;
+  /** The canonical repository root the status read resolved, when it reported one. */
+  readonly repositoryRoot: string | null;
   readonly truncated: boolean;
   readonly diffStatus: CodingWorkbenchDiffStatus;
   readonly diff: DiffParseResult | null;
@@ -83,6 +86,7 @@ const EMPTY_STATE: CodingWorkbenchChangesState = {
   files: [],
   selectedPath: null,
   head: null,
+  repositoryRoot: null,
   truncated: false,
   diffStatus: "idle",
   diff: null,
@@ -123,6 +127,7 @@ function readyState(
     files: status.changes,
     selectedPath,
     head: headLabel(status, history),
+    repositoryRoot: status.repositoryRoot ?? null,
     truncated: status.truncated,
     diffStatus: diffStatusForMerge(current, selectedPath, sameSelection),
     diff: sameSelection ? current.diff : null,
@@ -366,6 +371,30 @@ function useChangeSignalRefresh(input: {
   }, [changeSignal, refresh, runId]);
 }
 
+// #4103 F3: a Coding run edits the working tree without an event the other windows hear, so a Git
+// window bound to the same repository kept showing the state from before the run. Every fresh read of
+// the run's changes (each lands a new `files` array; selecting a file or loading its diff keeps it)
+// tells the open windows the way an Editor save does, with `agent` provenance. It cannot compare
+// contents: a second edit to a file that was already changed leaves the set alike, so a later read is
+// announced even when the set did not move. A first read of a root without changes has nothing to tell.
+// The event also names the canonical repository root the read resolved, so a Git window bound to the
+// repository that contains a run's sub-folder root refreshes as well.
+function useAgentChangeBroadcast(root: string | null, state: CodingWorkbenchChangesState): void {
+  const announcedRootRef = useRef<string | null>(null);
+  const files = state.status === "ready" ? state.files : null;
+  const repositoryRoot = state.repositoryRoot;
+  useEffect(() => {
+    if (root === null || files === null) return;
+    const firstReadOfRoot = announcedRootRef.current !== root;
+    announcedRootRef.current = root;
+    if (firstReadOfRoot && files.length === 0) return;
+    notifyWorkspaceFileMutated(root, {
+      provenance: "agent",
+      ...(repositoryRoot === null ? {} : { repositoryRoot }),
+    });
+  }, [files, repositoryRoot, root]);
+}
+
 export function useCodingWorkbenchChanges(
   input: UseCodingWorkbenchChangesInput,
 ): UseCodingWorkbenchChangesResult {
@@ -386,5 +415,6 @@ export function useCodingWorkbenchChanges(
   useChangesSnapshot({ ...input, client, root, epoch, setState });
   useSelectedDiff({ client, root, epoch, diffEpoch, state, setState });
   useChangeSignalRefresh({ ...input, refresh: retry });
+  useAgentChangeBroadcast(root, state);
   return { ...state, retry, retryDiff, selectPath };
 }

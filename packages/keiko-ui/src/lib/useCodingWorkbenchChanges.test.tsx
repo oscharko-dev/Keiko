@@ -18,6 +18,11 @@ import {
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 
+import {
+  WORKSPACE_FILE_MUTATED_EVENT,
+  workspaceFileMutationRoots,
+} from "@/app/components/desktop/widgets/cards/workspace-file-events";
+
 vi.mock("./coding-app-session-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: () => Promise.resolve(true),
@@ -507,6 +512,146 @@ const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
   stripFragment: (): void => undefined,
   postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
 };
+
+// #4103 F3: the run's changes read tells the open windows (the Git window, Files) that the agent
+// moved the working tree, so they re-read instead of showing the state from before the run.
+describe("useCodingWorkbenchChanges agent change broadcast (#4103 F3)", () => {
+  function listenForAgentMutations(): {
+    readonly events: CustomEvent[];
+    readonly stop: () => void;
+  } {
+    const events: CustomEvent[] = [];
+    const listener = (event: Event): void => {
+      if (event instanceof CustomEvent) events.push(event);
+    };
+    window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, listener);
+    return {
+      events,
+      stop: (): void => window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, listener),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("announces every fresh read of the run's changes after the first, with agent provenance", async () => {
+    vi.useFakeTimers();
+    const mutations = listenForAgentMutations();
+    try {
+      const stub = client({ getStatus: vi.fn(async () => statusFixture([])) });
+      const view = renderHook(
+        (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+        { initialProps: { ...baseInput(), client: stub } },
+      );
+      await flush();
+      expect(view.result.current.status).toBe("ready");
+      expect(mutations.events).toHaveLength(0);
+
+      stub.getStatus.mockImplementation(async () => statusFixture([changedFile(), changedFile(1)]));
+      view.rerender({ ...baseInput({ changeSignal: "cursor-1" }), client: stub });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      await flush();
+      expect(view.result.current.files).toHaveLength(2);
+      expect(mutations.events.map((event) => event.detail)).toEqual([
+        { root: ROOT, provenance: "agent" },
+      ]);
+
+      // A second edit to a file that was already changed leaves the set alike; the fresh read is
+      // still announced, because the changes read cannot tell it from no edit at all.
+      view.rerender({ ...baseInput({ changeSignal: "cursor-2" }), client: stub });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      await flush();
+      expect(mutations.events).toHaveLength(2);
+
+      // Selecting another file reads its diff, not the changes, and announces nothing.
+      act(() => {
+        view.result.current.selectPath(changedFile(1).path);
+      });
+      await flush();
+      expect(view.result.current.selectedPath).toBe(changedFile(1).path);
+      expect(stub.getDiff).toHaveBeenLastCalledWith(ROOT, changedFile(1).path);
+      expect(mutations.events).toHaveLength(2);
+
+      // A revert back to a clean tree is a change, too.
+      stub.getStatus.mockImplementation(async () => statusFixture([]));
+      view.rerender({ ...baseInput({ changeSignal: "cursor-3" }), client: stub });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      await flush();
+      expect(mutations.events).toHaveLength(3);
+    } finally {
+      mutations.stop();
+    }
+  });
+
+  it("announces a run that already has changes on its first read, and stays quiet on a clean one", async () => {
+    const mutations = listenForAgentMutations();
+    try {
+      const dirty = client();
+      renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: dirty }));
+      await flush();
+      expect(mutations.events.map((event) => event.detail)).toEqual([
+        { root: ROOT, provenance: "agent" },
+      ]);
+      const clean = client({ getStatus: vi.fn(async () => statusFixture([])) });
+      renderHook(() =>
+        useCodingWorkbenchChanges({ ...baseInput({ runId: "run-clean" }), client: clean }),
+      );
+      await flush();
+      expect(mutations.events).toHaveLength(1);
+    } finally {
+      mutations.stop();
+    }
+  });
+
+  // A run rooted in a sub-folder reports the repository that contains it; a Git window bound to that
+  // repository matches roots exactly, so the event names both.
+  it("names the canonical repository root the read resolved for a sub-folder run", async () => {
+    const mutations = listenForAgentMutations();
+    try {
+      const canonicalRoot = "/managed/repository";
+      const stub = client({
+        getStatus: vi.fn(async () => ({ ...statusFixture(), repositoryRoot: canonicalRoot })),
+      });
+      renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: stub }));
+      await flush();
+      expect(mutations.events.map((event) => event.detail)).toEqual([
+        { root: ROOT, provenance: "agent", repositoryRoot: canonicalRoot },
+      ]);
+      expect(mutations.events.map((event) => workspaceFileMutationRoots(event))).toEqual([
+        [ROOT, canonicalRoot],
+      ]);
+    } finally {
+      mutations.stop();
+    }
+  });
+
+  it("never announces an unavailable or failed read", async () => {
+    const mutations = listenForAgentMutations();
+    try {
+      const unavailableRead = client({
+        getStatus: vi.fn(async () => statusFixture([changedFile()], false)),
+      });
+      const failedRead = client({
+        getStatus: vi.fn(async () => {
+          throw new Error("status read failed");
+        }),
+      });
+      renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: unavailableRead }));
+      renderHook(() =>
+        useCodingWorkbenchChanges({
+          ...baseInput({ runId: "run-failed" }),
+          client: failedRead,
+        }),
+      );
+      await flush();
+      expect(mutations.events).toHaveLength(0);
+    } finally {
+      mutations.stop();
+    }
+  });
+});
 
 describe("useCodingWorkbenchChanges after a re-pair without a page load (F65)", () => {
   it("reads the run's status, history and selected diff again", async () => {

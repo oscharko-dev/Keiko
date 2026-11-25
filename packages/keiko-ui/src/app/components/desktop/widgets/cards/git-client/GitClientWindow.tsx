@@ -52,6 +52,19 @@ import type {
 import type { WindowCfgValue } from "../../../windows/types";
 import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
+import {
+  configuredRepositoryPath,
+  decideRepositorySelection,
+  handedOffRepositoryPath,
+  supersededByNewerHandOff,
+  type RepositoryRefusalReason,
+} from "./repositorySelection";
+import {
+  useCommittedValueRef,
+  useHandedOffRepositoryConnection,
+  useMountedRef,
+} from "./useHandedOffRepositoryConnection";
+import { useRepositoryStatusRefresh } from "./useRepositoryStatusRefresh";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { hasRepositoryConflicts, MutationOutcome } from "./git-client-ui";
 import {
@@ -62,7 +75,7 @@ import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
 import { RepositoryToolbar } from "./RepositoryToolbar";
-import { ConnectPanel } from "./ConnectPanel";
+import { ConnectPanel, RepositoryErrorNotice } from "./ConnectPanel";
 import { ConnectToChatDialog } from "./ConnectToChatDialog";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
@@ -80,12 +93,7 @@ import {
   syncOutcomePresentation,
   type SyncOutcomeView,
 } from "./sync-outcome";
-import {
-  GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
-  gitRepositoryStateInvalidationRoots,
-  notifyGitRepositoryStateInvalidated,
-} from "../git-repository-state-events";
-import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../workspace-file-events";
+import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
 import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
 import {
@@ -174,6 +182,9 @@ export interface GitClientWindowProps {
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
   readonly initialRepositoryDialog?: "clone" | "open" | undefined;
+  /** `projectId` was handed off explicitly (the Files window's Git button): a folder that is not yet
+   * a connected repository is connected instead of discarded (#4103 F2). */
+  readonly connectHandedOffRepository?: boolean | undefined;
   readonly onRepositoryConnected?: (root: string) => void;
   readonly onOpenFiles?: (root: string) => void;
   readonly onOpenEditor?: (root: string) => void;
@@ -1250,6 +1261,87 @@ function BranchOutcomeBanner({
   );
 }
 
+/**
+ * A repository failure while a repository is shown: picking another repository from the toolbar
+ * that cannot connect, or a repository list that fails to reload. The connect panel shows the same
+ * failure when no repository is shown (#4103 F2). A window locked to the active task workspace
+ * never switches repository and never depends on the list, so it shows neither (#3390).
+ */
+function ConnectedRepositoryError({
+  lockedToActiveRoot,
+  selectedPath,
+  error,
+  onRetry,
+}: {
+  readonly lockedToActiveRoot: boolean;
+  readonly selectedPath: string | null;
+  readonly error: string | null;
+  readonly onRetry: () => void;
+}): ReactNode {
+  if (lockedToActiveRoot || selectedPath === null || error === null) return null;
+  return (
+    <div style={{ padding: "10px 18px" }}>
+      <RepositoryErrorNotice error={error} onRetry={onRetry} />
+    </div>
+  );
+}
+
+/** What Retry does about a repository failure. */
+type RepositoryRetry =
+  | { readonly kind: "reload-list" }
+  | { readonly kind: "switch"; readonly path: string }
+  | { readonly kind: "hand-off"; readonly path: string };
+
+/**
+ * The window's repository error with its retry target: a failed switch keeps the repository it
+ * tried, a failed or refused hand-off keeps the handed-off folder. Both live in one state, so the
+ * target can never outlive the error it caused.
+ */
+interface RepositoryFailure {
+  readonly message: string;
+  readonly retry: RepositoryRetry;
+}
+
+const RELOAD_LIST: RepositoryRetry = { kind: "reload-list" };
+
+function repositoryFailure(
+  message: string,
+  retry: RepositoryRetry = RELOAD_LIST,
+): RepositoryFailure {
+  return { message, retry };
+}
+
+interface RepositoryRetryActions {
+  readonly reconnect: (path: string) => void;
+  readonly handOffAgain: (path: string) => void;
+  readonly reloadList: () => void;
+}
+
+function repositoryFailureMessage(failure: RepositoryFailure | null): string | null {
+  return failure === null ? null : failure.message;
+}
+
+/**
+ * Retry after a repository failure: a failed switch connects its repository again, and a failed or
+ * refused hand-off runs that hand-off again on a freshly loaded repository list. Any other failure
+ * reloads the list. While the list itself has failed nothing can be decided, so Retry reloads it
+ * first, even after a later failed switch.
+ */
+function retryRepositoryFailure(
+  failure: RepositoryFailure | null,
+  listFailed: boolean,
+  actions: RepositoryRetryActions,
+): void {
+  const retry = failure === null ? RELOAD_LIST : failure.retry;
+  if (retry.kind === "switch" && !listFailed) {
+    actions.reconnect(retry.path);
+    return;
+  }
+  // The list starts loading first, so an armed hand-off is never decided on the list that refused it.
+  actions.reloadList();
+  if (retry.kind === "hand-off") actions.handOffAgain(retry.path);
+}
+
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
   return response?.available === true ? response.branches : EMPTY_BRANCHES;
 }
@@ -1260,6 +1352,7 @@ export function GitClientWindow({
   initialPath,
   initialCommit,
   initialRepositoryDialog,
+  connectHandedOffRepository = false,
   onRepositoryConnected,
   onOpenFiles,
   onOpenEditor,
@@ -1273,7 +1366,17 @@ export function GitClientWindow({
   const optionalT = useOptionalWidgetTranslate();
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
-  const [reposError, setReposError] = useState<string | null>(null);
+  const [reposFailure, setReposFailure] = useState<RepositoryFailure | null>(null);
+  const reposError = repositoryFailureMessage(reposFailure);
+  const [reposListFailed, setReposListFailed] = useState(false);
+  const configuredPath = configuredRepositoryPath(projectId);
+  const handOffPath = handedOffRepositoryPath({
+    handOffPending: connectHandedOffRepository,
+    lockedToActiveRoot,
+    configuredPath,
+  });
+  const pendingHandOffRef = useCommittedValueRef(handOffPath);
+  const mountedRef = useMountedRef();
   // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
   // the current project projection proves that it still has live workspace-manifest membership.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -1393,7 +1496,8 @@ export function GitClientWindow({
     reposRequestSequenceRef.current += 1;
     const requestSequence = reposRequestSequenceRef.current;
     setReposLoading(true);
-    setReposError(null);
+    setReposFailure(null);
+    setReposListFailed(false);
     void client.listRepositories().then(
       (res) => {
         if (reposRequestSequenceRef.current !== requestSequence) return;
@@ -1404,7 +1508,8 @@ export function GitClientWindow({
         if (reposRequestSequenceRef.current !== requestSequence) return;
         setRepositories([]);
         setReposLoading(false);
-        setReposError(formatGitError(err));
+        setReposListFailed(true);
+        setReposFailure(repositoryFailure(formatGitError(err)));
       },
     );
   }, [client]);
@@ -1591,46 +1696,10 @@ export function GitClientWindow({
     selectedPath,
   ]);
 
-  useEffect((): (() => void) => {
-    const onRepositoryStateInvalidated = (event: Event): void => {
-      const invalidatedRoots = gitRepositoryStateInvalidationRoots(event);
-      const repositoryRoot = mutationRepositoryRoot ?? null;
-      if (
-        !invalidatedRoots.some(
-          (root): boolean =>
-            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
-        )
-      ) {
-        return;
-      }
-      setStatusRevision((revision): number => revision + 1);
-    };
-    window.addEventListener(GIT_REPOSITORY_STATE_INVALIDATED_EVENT, onRepositoryStateInvalidated);
-    return (): void =>
-      window.removeEventListener(
-        GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
-        onRepositoryStateInvalidated,
-      );
-  }, [mutationRepositoryRoot, selectedPath]);
-
-  useEffect((): (() => void) => {
-    const onWorkspaceFileMutated = (event: Event): void => {
-      const mutationRoots = workspaceFileMutationRoots(event);
-      const repositoryRoot = mutationRepositoryRoot ?? null;
-      if (
-        !mutationRoots.some(
-          (root): boolean =>
-            root === selectedPath || (repositoryRoot !== null && root === repositoryRoot),
-        )
-      ) {
-        return;
-      }
-      setStatusRevision((revision): number => revision + 1);
-    };
-    window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-    return (): void =>
-      window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onWorkspaceFileMutated);
-  }, [mutationRepositoryRoot, selectedPath]);
+  const refreshStatus = useCallback((): void => {
+    setStatusRevision((revision): number => revision + 1);
+  }, []);
+  useRepositoryStatusRefresh(selectedPath, mutationRepositoryRoot, refreshStatus);
 
   // After a successful commit, refresh status and remount the composer to clear its fields.
   const commitOutcome = commit.flow.outcome;
@@ -1662,18 +1731,28 @@ export function GitClientWindow({
   );
 
   const applyConnectedRepository = useCallback(
-    (project: ProjectWithAvailability): boolean => {
+    (project: ProjectWithAvailability, switchPath: string): boolean => {
       if (project.available !== true) {
         setReposLoading(false);
-        setReposError(optionalT("gitClientWindow.repository.unavailable"));
+        setReposFailure(
+          repositoryFailure(optionalT("gitClientWindow.repository.unavailable"), {
+            kind: "switch",
+            path: switchPath,
+          }),
+        );
         return false;
       }
       if (project.workspaceAvailable !== true) {
         setReposLoading(false);
-        setReposError(optionalT("gitClientWindow.repository.workspaceUnavailable"));
+        setReposFailure(
+          repositoryFailure(optionalT("gitClientWindow.repository.workspaceUnavailable"), {
+            kind: "switch",
+            path: switchPath,
+          }),
+        );
         return false;
       }
-      setReposError(null);
+      setReposFailure(null);
       applyRepositorySelection(project.path);
       onRepositoryConnected?.(project.path);
       return true;
@@ -1685,26 +1764,53 @@ export function GitClientWindow({
     (path: string): void => {
       const requestSequence = repositoryConnectSeqRef.current + 1;
       repositoryConnectSeqRef.current = requestSequence;
+      const handOffAtStart = pendingHandOffRef.current;
+      // A replaced window (keyed remount) or a newer switch owns the outcome instead.
+      const isLive = (): boolean =>
+        mountedRef.current && requestSequence === repositoryConnectSeqRef.current;
       setReposLoading(true);
-      setReposError(null);
+      setReposFailure(null);
       void client.reconnectRepository(path).then(
         (response): void => {
-          if (requestSequence !== repositoryConnectSeqRef.current) return;
-          if (applyConnectedRepository(response.project)) loadRepositories();
+          if (!isLive()) return;
+          if (supersededByNewerHandOff(handOffAtStart, pendingHandOffRef.current, path)) {
+            // The newer hand-off proceeds once the list is read again (#4103 F2).
+            loadRepositories();
+            return;
+          }
+          if (applyConnectedRepository(response.project, path)) loadRepositories();
         },
         (error: unknown): void => {
-          if (requestSequence !== repositoryConnectSeqRef.current) return;
+          if (!isLive()) return;
           setReposLoading(false);
-          setReposError(
-            optionalT("gitClientWindow.repository.reconnectFailed", {
-              detail: formatGitError(error),
-            }),
+          setReposFailure(
+            repositoryFailure(
+              optionalT("gitClientWindow.repository.reconnectFailed", {
+                detail: formatGitError(error),
+              }),
+              { kind: "switch", path },
+            ),
           );
         },
       );
     },
-    [applyConnectedRepository, client, loadRepositories, optionalT],
+    [applyConnectedRepository, client, loadRepositories, mountedRef, optionalT, pendingHandOffRef],
   );
+
+  // Arms the hand-off of `path` again; the decision then connects, selects or refuses it as before.
+  const handOffAgain = useCallback(
+    (path: string): void => {
+      updateCfg?.({ projectPath: path, connectRepository: true });
+    },
+    [updateCfg],
+  );
+  const retryRepositoryError = useCallback((): void => {
+    retryRepositoryFailure(reposFailure, reposListFailed, {
+      reconnect: reconnectRepository,
+      handOffAgain,
+      reloadList: loadRepositories,
+    });
+  }, [handOffAgain, loadRepositories, reconnectRepository, reposFailure, reposListFailed]);
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
@@ -1721,43 +1827,105 @@ export function GitClientWindow({
     [loadRepositories, lockedToActiveRoot, reconnectRepository],
   );
 
-  useEffect(() => {
-    const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
-    // A root the desktop locked to the active task workspace is a managed worktree: the server
-    // registers it for trust, manifests and verification and keeps it out of the user-facing
-    // repository list on purpose, so the recents-membership check below could only ever declare it
-    // unavailable and strand the operator (#3390, rehearsal run-21). It is bound as-is.
-    if (lockedToActiveRoot && configuredPath !== null) {
-      if (selectedPath !== configuredPath) setSelectedPath(configuredPath);
-      setReposError(null);
-      return;
-    }
-    if (reposLoading || reposError !== null) return;
-    const requestedPath = selectedPath ?? configuredPath;
-    if (requestedPath === null) return;
-    const selected = repositories.find((repository) => repository.path === requestedPath);
-    if (selected?.available === true && selected.workspaceAvailable === true) {
-      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
-      return;
-    }
+  // The window follows the hand-off at once: while the handed-off folder connects it no longer shows
+  // the previous repository, so the connection's outcome is what the person sees (#4103 F2). A
+  // failed or refused hand-off keeps the handed-off folder configured: the desktop keys this window
+  // by its root, so clearing it would replace the window and drop the failure it shows.
+  const startHandedOffConnection = useCallback((): void => {
     setSelectedPath(null);
-    updateCfg?.({ projectPath: "" });
-    setReposError(
-      optionalT(
-        selected?.available !== true
-          ? "gitClientWindow.repository.unavailable"
-          : "gitClientWindow.repository.workspaceUnavailable",
-      ),
-    );
+    setReposLoading(true);
+    setReposFailure(null);
+  }, []);
+  const failHandedOffConnection = useCallback(
+    (error: unknown, path: string): void => {
+      setReposLoading(false);
+      setReposFailure(
+        repositoryFailure(
+          optionalT("gitClientWindow.repository.reconnectFailed", {
+            detail: formatGitError(error),
+          }),
+          { kind: "hand-off", path },
+        ),
+      );
+    },
+    [optionalT],
+  );
+  const settleHandedOffConnection = useCallback((): void => {
+    updateCfg?.({ connectRepository: undefined });
+  }, [updateCfg]);
+  const connectHandedOffFolder = useHandedOffRepositoryConnection({
+    handOffPath,
+    client,
+    actionSequence: repositoryConnectSeqRef,
+    onStarted: startHandedOffConnection,
+    onAdded: onRepositoryAdded,
+    onFailed: failHandedOffConnection,
+    onSettled: settleHandedOffConnection,
+    onSuperseded: loadRepositories,
+  });
+
+  const refuseRepository = useCallback(
+    (path: string, reason: RepositoryRefusalReason, endsHandOff: boolean): void => {
+      setSelectedPath(null);
+      updateCfg?.(endsHandOff ? { connectRepository: undefined } : { projectPath: "" });
+      setReposFailure(
+        repositoryFailure(
+          optionalT(
+            reason === "unavailable"
+              ? "gitClientWindow.repository.unavailable"
+              : "gitClientWindow.repository.workspaceUnavailable",
+          ),
+          endsHandOff ? { kind: "hand-off", path } : RELOAD_LIST,
+        ),
+      );
+    },
+    [optionalT, updateCfg],
+  );
+
+  useEffect((): void => {
+    const decision = decideRepositorySelection({
+      lockedToActiveRoot,
+      configuredPath,
+      handOffPending: connectHandedOffRepository,
+      selectedPath,
+      reposLoading,
+      reposListFailed,
+      reposError,
+      repositories,
+    });
+    switch (decision.kind) {
+      case "wait":
+        return;
+      case "bind-locked":
+        if (selectedPath !== decision.path) setSelectedPath(decision.path);
+        setReposFailure(null);
+        return;
+      case "select":
+        if (selectedPath !== decision.path) setSelectedPath(decision.path);
+        if (decision.endsHandOff) {
+          // An explicit hand-off supersedes an error about an earlier repository.
+          setReposFailure(null);
+          settleHandedOffConnection();
+        }
+        return;
+      case "connect-hand-off":
+        connectHandedOffFolder(decision.path);
+        return;
+      case "refuse":
+        refuseRepository(decision.path, decision.reason, decision.endsHandOff);
+    }
   }, [
+    configuredPath,
+    connectHandedOffFolder,
+    connectHandedOffRepository,
     lockedToActiveRoot,
-    optionalT,
-    projectId,
+    refuseRepository,
     repositories,
     reposError,
+    reposListFailed,
     reposLoading,
     selectedPath,
-    updateCfg,
+    settleHandedOffConnection,
   ]);
 
   const active = activeGitClientState({
@@ -2188,6 +2356,12 @@ export function GitClientWindow({
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
           under the same flow), so this banner is suppressed then to avoid showing the same
           rejection twice. */}
+      <ConnectedRepositoryError
+        lockedToActiveRoot={lockedToActiveRoot}
+        selectedPath={selectedPath}
+        error={reposError}
+        onRetry={retryRepositoryError}
+      />
       {showBranchOutcome ? (
         <BranchOutcomeBanner
           outcome={branchOutcome}
@@ -2204,7 +2378,7 @@ export function GitClientWindow({
             onSelect={reconnectRepository}
             onConnect={() => openRepositoryDialog("open")}
             onClone={() => openRepositoryDialog("clone")}
-            onRetry={loadRepositories}
+            onRetry={retryRepositoryError}
           />
         ) : (
           <>

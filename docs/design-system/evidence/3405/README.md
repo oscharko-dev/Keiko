@@ -912,3 +912,14 @@ passed in 1.7 minutes in the Linux x86-64 gates image on its own filesystem with
 `npm run check:editor-release-evidence` passed there. Only the three producer records were kept;
 the fourteen committed captures, updater assertions and harness inputs retain their existing
 values.
+
+## Chunk-load notice — 2026-11-24 (#4103)
+
+A window whose code a tab can no longer load after a Keiko update now shows its own notice with a
+**Reload Keiko** action, with English and German strings in both required catalogs, which changed
+their two digests. After merging `dev` with the connected-folder tool above, the producer was rerun
+on the merged sources on 2026-11-24 (UTC): all nine updater cases passed in 1.6 minutes in the
+Linux arm64 gates image with an init process, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
+`npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed there. Only
+the three producer records were kept; the fourteen committed captures, updater assertions and
+harness inputs retain their existing values.

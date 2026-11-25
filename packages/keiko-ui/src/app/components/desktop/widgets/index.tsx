@@ -722,6 +722,7 @@ registerWindowRender("governedGit", (cfg, ctx) => {
             initialPath={initialPath}
             initialCommit={initialCommit}
             initialRepositoryDialog={initialRepositoryDialog}
+            connectHandedOffRepository={bool(cfg, "connectRepository") === true}
             onRepositoryConnected={(root: string) => completeRepositoryConnection(cfg, ctx, root)}
             onOpenFiles={(root: string) => ctx.openWindow("files", codingRepositoryCfg(root))}
             onOpenEditor={(root: string) => ctx.openWindow("editor", codingRepositoryCfg(root))}

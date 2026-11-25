@@ -14,6 +14,7 @@ import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary"
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId, responseCorrelationIdOf } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
+import { notePageServerVersion } from "@/lib/server-version-reload";
 
 export const HEALTH_POLL_INTERVAL_MS = 60_000;
 
@@ -125,6 +126,8 @@ async function readBackendHealth(poll: HealthPoll, publish: PublishHealth): Prom
   try {
     const health = await fetchHealth(correlationId);
     if (poll.cancelled) return;
+    // The first version this page sees is the build it loaded; a re-pair compares against it.
+    notePageServerVersion(health.version);
     const report = observedHealthReport(poll, health, correlationId);
     publish((previous) =>
       previous.state === "loaded" && JSON.stringify(previous.health) === JSON.stringify(health)

@@ -115,6 +115,69 @@ describe("WindowBodyBoundary", () => {
     }
   });
 
+  // #4103 F1: a tab that outlived a server upgrade asks for a chunk the new build no longer ships.
+  // Re-rendering cannot recover it, so the boundary offers the reload and reports `unavailable`.
+  it("offers a page reload instead of Retry when the window's chunk cannot load", () => {
+    function MissingChunk(): React.JSX.Element {
+      const error = new Error("Loading chunk 812 failed.");
+      error.name = "ChunkLoadError";
+      throw error;
+    }
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const reload = vi.fn();
+    try {
+      withBoundaryNoise("Loading chunk 812 failed.", () =>
+        render(
+          <WindowBodyBoundary windowType="chat" reload={reload}>
+            <MissingChunk />
+          </WindowBodyBoundary>,
+        ),
+      );
+      expect(screen.getByRole("alert").getAttribute("data-window-body-crashed")).toBe("chunk-load");
+      expect(screen.getByText("Part of Keiko could not be loaded")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Reload Keiko" }));
+      expect(reload).toHaveBeenCalledOnce();
+      expect(diagnostic).toHaveBeenCalledWith(
+        "[keiko] window body crashed: chat: ChunkLoadError",
+        expect.objectContaining({
+          kind: "boundary",
+          renderFailure: "window-body",
+          errorKind: "unavailable",
+          errorEvidence: expect.objectContaining({ errorClass: "ChunkLoadError" }),
+        }),
+      );
+    } finally {
+      diagnostic.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("keeps an ordinary render defect on Retry and reports it as internal", () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      withBoundaryNoise("forced widget defect", () =>
+        render(
+          <WindowBodyBoundary windowType="agents">
+            <Bomb armed />
+          </WindowBodyBoundary>,
+        ),
+      );
+      expect(screen.getByRole("alert").getAttribute("data-window-body-crashed")).toBe("true");
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Reload Keiko" })).toBeNull();
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ errorKind: "internal" }),
+      );
+    } finally {
+      diagnostic.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it("renders healthy children untouched", () => {
     render(
       <WindowBodyBoundary windowType="agents">

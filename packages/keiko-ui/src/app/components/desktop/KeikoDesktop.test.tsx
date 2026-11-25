@@ -6,6 +6,7 @@ import {
   redeemCodingAppSessionPairingOnBoot,
   useCodingAppSessionRedemptions,
 } from "@/lib/coding-app-session-client";
+import { reloadIfServerVersionChanged } from "@/lib/server-version-reload";
 import { KeikoDesktop } from "./KeikoDesktop";
 
 const replace = vi.fn();
@@ -28,6 +29,10 @@ vi.mock("./AppShell", () => ({
 // Only the boot entry is mocked; `redeemCodingAppSessionPairingFragment` stays the real
 // implementation so the same-document arrival tests below exercise its actual address-bar and
 // network effects instead of a recorded mock call (#3390 review).
+vi.mock("@/lib/server-version-reload", () => ({
+  reloadIfServerVersionChanged: vi.fn(() => Promise.resolve(false)),
+}));
+
 vi.mock("@/lib/coding-app-session-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/coding-app-session-client")>();
   return {
@@ -121,6 +126,32 @@ describe("KeikoDesktop", () => {
     await waitFor(() => {
       expect(window.location.hash).toBe("");
     });
+  });
+
+  // #4103 F1: a re-pair after an upgrade arrives in a tab that still runs the previous build. Only a
+  // redeemed pairing asks whether the server version changed; the module owns that comparison.
+  it("asks for a version reload only after a same-document pairing was redeemed", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.mocked(reloadIfServerVersionChanged).mockClear();
+    try {
+      render(<KeikoDesktop />);
+      await waitFor(() => {
+        expect(redeemCodingAppSessionPairingOnBoot).toHaveBeenCalled();
+      });
+      navigateSameDocument("#main");
+      expect(reloadIfServerVersionChanged).not.toHaveBeenCalled();
+
+      navigateSameDocument(PAIRING_FRAGMENT);
+
+      await waitFor(() => {
+        expect(reloadIfServerVersionChanged).toHaveBeenCalledOnce();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("leaves hash changes without a pairing fragment alone", () => {
