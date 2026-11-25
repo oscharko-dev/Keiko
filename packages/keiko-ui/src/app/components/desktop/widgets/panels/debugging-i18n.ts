@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 
-const EN_MESSAGES = {
+const DEBUGGING_EN_MESSAGES = {
   title: "Governed debugging",
   description:
     "Enable Node.js and TypeScript debugging only when deployment policy and approved provisioning allow it.",
@@ -121,7 +121,7 @@ const EN_MESSAGES = {
   pausedValues: "Paused debug values",
 } as const;
 
-const DE_MESSAGES: Record<keyof typeof EN_MESSAGES, string> = {
+const DEBUGGING_DE_MESSAGES: Record<keyof typeof DEBUGGING_EN_MESSAGES, string> = {
   title: "Gesteuertes Debugging",
   description:
     "Aktiviere Node.js- und TypeScript-Debugging nur, wenn Deployment-Richtlinie und freigegebene Bereitstellung es zulassen.",
@@ -249,14 +249,17 @@ const DE_MESSAGES: Record<keyof typeof EN_MESSAGES, string> = {
   pausedValues: "Pausierte Debug-Werte",
 };
 
-type DebuggingMessages = Readonly<Record<keyof typeof EN_MESSAGES, string>>;
+type DebuggingMessages = Readonly<Record<keyof typeof DEBUGGING_EN_MESSAGES, string>>;
 
 const MESSAGES: Readonly<Record<Locale, DebuggingMessages>> = {
-  en: EN_MESSAGES,
-  de: DE_MESSAGES,
+  en: DEBUGGING_EN_MESSAGES,
+  de: DEBUGGING_DE_MESSAGES,
 };
 
-export type DebuggingTranslate = (key: keyof typeof EN_MESSAGES, values?: MessageValues) => string;
+export type DebuggingTranslate = (
+  key: keyof typeof DEBUGGING_EN_MESSAGES,
+  values?: MessageValues,
+) => string;
 
 function interpolate(template: string, values: MessageValues = {}): string {
   return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
