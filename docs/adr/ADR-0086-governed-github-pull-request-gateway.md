@@ -471,9 +471,9 @@ and refused an issue-free run with `issue-binding-required`; that was corrected 
   refusal blames a missing issue. `issue-binding-required` remains only for the CI observation
   above.
 
-### D14 — Two fixed, read-only GraphQL documents for the Pull requests area (#4133, ADR-0184 D3)
+### D14 — Two fixed, read-only GraphQL documents for the Pull requests area (#4133, ADR-0185 D3)
 
-Keiko for Quality (ADR-0184) needs the repository's open pull requests and one pull request's
+Keiko for Quality (ADR-0185) needs the repository's open pull requests and one pull request's
 detail (base and head SHAs, checks, approvals, mergeability) before any review can start. They are
 added as two more fixed builders on the same `gh api` transport and credential boundary, never as
 free-form `gh` usage:

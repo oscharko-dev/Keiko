@@ -1,4 +1,4 @@
-// Retention of the private review refs (ADR-0184 D3, ADR-0098, Issue #4133).
+// Retention of the private review refs (ADR-0185 D3, ADR-0098, Issue #4133).
 //
 // `refs/keiko-review/<n>/<headSha>` (and `.../base-<baseSha>`, `refs/keiko-review/local/<leaf>`)
 // keep the reviewed objects available after the worktree is gone. A ref is deleted when its pull

@@ -828,7 +828,7 @@ function liveFixture() {
   };
 }
 
-describe("review runtime purpose (ADR-0184 D2 layer 3, #4135)", () => {
+describe("review runtime purpose (ADR-0185 D2 layer 3, #4135)", () => {
   it("mints the review authority's grants whatever the request and the coding ceiling ask", () => {
     const fixture = liveFixture();
     const input: ProductionWorkspaceAuthorityInput = {

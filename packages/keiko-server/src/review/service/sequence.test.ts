@@ -1,4 +1,4 @@
-// The `counter-checking` phase's wall-time limit (ADR-0184 D5, Issue #4130), on the phase itself
+// The `counter-checking` phase's wall-time limit (ADR-0185 D5, Issue #4130), on the phase itself
 // with a clock the test advances: no counter-check starts after the limit, the limit holds once per
 // diff package part, a check in flight is not cut, and the candidates left over settle the run
 // `incomplete/deadline-exceeded`.

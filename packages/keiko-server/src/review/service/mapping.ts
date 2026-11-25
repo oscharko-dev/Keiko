@@ -1,5 +1,5 @@
 // How each refusal or outcome of a run's building blocks maps onto the child 1 reason table
-// (ADR-0184 D6, Issue #4136). Pure and exhaustive over each block's closed vocabulary.
+// (ADR-0185 D6, Issue #4136). Pure and exhaustive over each block's closed vocabulary.
 
 import type {
   ReviewIncompleteReason,
@@ -93,7 +93,7 @@ export function reviewerFailureReason(failureCode: string | undefined): ReviewIn
 
 type StartedReviewerRun = Extract<ReviewRuntimeRunResult, { readonly ok: true }>;
 
-/** How a Reviewer session met its read allowance (ADR-0184 D1, D6). */
+/** How a Reviewer session met its read allowance (ADR-0185 D1, D6). */
 export type ReviewerReadLimit = "none" | "reported" | "silent";
 
 /**

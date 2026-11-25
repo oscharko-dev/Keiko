@@ -61,7 +61,7 @@ describe("pair qualification scoring", () => {
     expect(seedCaseResult(CLEAN, seedRunResult(CLEAN, view("complete", [1])))).toBe("false-alarm");
   });
 
-  // R4130-012 (ADR-0184 D8): a Reviewer that started and then failed (`model-failed`) or ran out of
+  // R4130-012 (ADR-0185 D8): a Reviewer that started and then failed (`model-failed`) or ran out of
   // time (`deadline-exceeded`) without presenting anything reviewed nothing. Scoring that run read a
   // gateway failure as a measured "found nothing": a clean control that no model reviewed scored
   // `clean`, and a defect case scored `missed`, which recorded `seed-failed` for the pair. Such a

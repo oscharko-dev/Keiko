@@ -1,4 +1,4 @@
-// The review instance's own workspace view (ADR-0184 D1, Issue #4135).
+// The review instance's own workspace view (ADR-0185 D1, Issue #4135).
 //
 // The coding runtime composition binds a run to "the active workspace". The review instance has
 // its own lifecycle view that names exactly one workspace: the hardened, detached review worktree

@@ -1,4 +1,4 @@
-// Layer 4 of the Keiko for Quality read-only guarantee (ADR-0184 D2, Issue #4135).
+// Layer 4 of the Keiko for Quality read-only guarantee (ADR-0185 D2, Issue #4135).
 //
 // A run that carries review authority may only read and report. The tool facade and the catalog
 // bridge each consult this one predicate before anything else happens to a request, independently
@@ -104,7 +104,7 @@ export const REVIEW_RUN_READ_ACTIONS: ReadonlySet<CodingToolAction> = new Set<Co
 ]);
 
 /**
- * One Reviewer session's read allowance (ADR-0184 D1, Issue #4130). The session's task already
+ * One Reviewer session's read allowance (ADR-0185 D1, Issue #4130). The session's task already
  * carries every changed hunk; the read tools only fetch surrounding code. A session that keeps
  * reading resends its whole conversation with every call and runs out of time before it reports
  * (and, while a session had a prompt allowance, ran out of that), so the tool facade answers at

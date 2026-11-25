@@ -1,4 +1,4 @@
-// A hermetic stand-in for one composed review runtime instance (ADR-0184 D1, Issues #4135/#4136).
+// A hermetic stand-in for one composed review runtime instance (ADR-0185 D1, Issues #4135/#4136).
 // It drives the same ports the production composition exposes: the run-bound report port, the
 // orchestrator's start, snapshot and settlement facts, and the event hub. The production
 // composition itself is proven in composition.test.ts.

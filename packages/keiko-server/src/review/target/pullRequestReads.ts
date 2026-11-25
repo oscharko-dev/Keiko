@@ -1,4 +1,4 @@
-// The read-only pull request list and detail of the Pull requests area (ADR-0184, Issue #4133).
+// The read-only pull request list and detail of the Pull requests area (ADR-0185, Issue #4133).
 //
 // The repository must carry a GitHub `origin` (the same verified owner/repo every governed GitHub
 // read binds to); the reads go through the two fixed GraphQL documents of keiko-tools. Answers are

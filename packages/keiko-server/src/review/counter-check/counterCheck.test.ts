@@ -1,4 +1,4 @@
-// One counter-check per candidate (ADR-0184 D5, Issue #4136, AC3): a fresh session whose recorded
+// One counter-check per candidate (ADR-0185 D5, Issue #4136, AC3): a fresh session whose recorded
 // model input holds only the candidate task (no Reviewer reasoning, transcript, title, remedy or
 // other candidate), bound to the reviewed head commit, offered exactly its three read tools and its
 // verdict tool, and settled honestly when a bound ends it.

@@ -107,7 +107,7 @@ export function networkGitEnv(
   };
 }
 
-// Review env (ADR-0184 D3, Issue #4133): the review worktree materializes a hostile pull request
+// Review env (ADR-0185 D3, Issue #4133): the review worktree materializes a hostile pull request
 // head, so both review profiles add the Git LFS smudge skip on top of their base profile. With it,
 // an installed `git-lfs` that a configured `filter.lfs.*` driver would otherwise invoke leaves every
 // LFS pointer a pointer; the runner's filter neutralization removes the driver itself as well.

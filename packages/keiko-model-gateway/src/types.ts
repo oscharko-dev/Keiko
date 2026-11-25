@@ -248,7 +248,7 @@ export interface GroundedAnswersConfig {
 export type GatewayFeatureSwitch = "on" | "off";
 
 /**
- * #4137 (ADR-0184 D8): the operator's Keiko for Quality `review` section, parsed together with its
+ * #4137 (ADR-0185 D8): the operator's Keiko for Quality `review` section, parsed together with its
  * environment overrides. `section` is the file's block verbatim, so a configuration rewrite (gateway
  * setup) keeps even an invalid value instead of replacing it with a default that would no longer
  * fail closed. Present only when the file declares the section or an override is set.

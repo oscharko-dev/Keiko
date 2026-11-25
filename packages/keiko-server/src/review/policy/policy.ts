@@ -1,4 +1,4 @@
-// The review model policy as the server composes it (ADR-0184 D8, Issue #4137): the policy context
+// The review model policy as the server composes it (ADR-0185 D8, Issue #4137): the policy context
 // over the live gateway catalog, the admission child 6's model port runs at every run start and dry
 // run, the rules-path port child 5's rules reader reads, and the startup report of invalid
 // operator values. Each refusal is recorded once, with its closed reason, where it is decided.

@@ -1,4 +1,4 @@
-// The `settling` phase of a review run (ADR-0184 D4-D6, Issue #4136): compute the settlement and
+// The `settling` phase of a review run (ADR-0185 D4-D6, Issue #4136): compute the settlement and
 // the presentation with the pure rules, persist the record (findings and settlement in one
 // transaction), remove the review worktree while its private refs stay for the diff route, and
 // record `review.run.settled`. A record that cannot be written (a full disk) settles the run

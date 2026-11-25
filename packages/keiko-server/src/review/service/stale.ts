@@ -1,4 +1,4 @@
-// The display-only stale flag (ADR-0184 D6, Issue #4136): a pull request whose current head is no
+// The display-only stale flag (ADR-0185 D6, Issue #4136): a pull request whose current head is no
 // longer the reviewed head shows its review as stale. It never changes a settlement; decisions stay
 // bound to the reviewed head. The current head comes from the read-only pull request detail of
 // child 3, cached briefly per pull request so list reads do not fan out to the provider.

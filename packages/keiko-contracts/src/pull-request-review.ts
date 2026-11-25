@@ -1,4 +1,4 @@
-// Keiko for Quality review contracts (ADR-0184, Issue #4131).
+// Keiko for Quality review contracts (ADR-0185, Issue #4131).
 //
 // One shared definition of the review target, run, finding, counter-check verdict, settlement,
 // finding decision and model-role shapes. Runtime validation lives in
@@ -26,7 +26,7 @@ export const REVIEW_FAILURE_MODE_TEXT_MAX_CHARS = 600;
 export const REVIEW_DECISION_NOTE_MAX_CHARS = 2_000;
 export const REVIEW_EVIDENCE_MIN_ENTRIES = 1;
 export const REVIEW_EVIDENCE_MAX_ENTRIES = 6;
-/** Server presentation rule (ADR-0184 D4), not a schema limit on one report. */
+/** Server presentation rule (ADR-0185 D4), not a schema limit on one report. */
 export const REVIEW_PRESENTED_FINDINGS_MAX = 3;
 
 // ─── Review target ───────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ export const REVIEW_RUN_PHASES = [
 ] as const;
 export type ReviewRunPhase = (typeof REVIEW_RUN_PHASES)[number];
 
-/** The reason-to-settlement table of ADR-0184 D6. Every child uses this one table. */
+/** The reason-to-settlement table of ADR-0185 D6. Every child uses this one table. */
 export const REVIEW_SETTLEMENT_REASONS = {
   complete: [],
   incomplete: ["files-unprocessed", "budget-exhausted", "deadline-exceeded", "model-failed"],
@@ -183,9 +183,9 @@ export const COUNTER_CHECK_REASON_CODES = [
 ] as const;
 export type CounterCheckReasonCode = (typeof COUNTER_CHECK_REASON_CODES)[number];
 
-/** The Counter-checker's structured verdict on one candidate finding (ADR-0184 D5). */
+/** The Counter-checker's structured verdict on one candidate finding (ADR-0185 D5). */
 export interface CounterCheckVerdict {
-  /** Content-derived, line-independent SHA-256 hex digest (ADR-0184 D7). */
+  /** Content-derived, line-independent SHA-256 hex digest (ADR-0185 D7). */
   readonly findingFingerprint: string;
   readonly verdict: CounterCheckVerdictValue;
   /** The Counter-checker's own code evidence; a confirmation requires at least one entry. */
@@ -195,7 +195,7 @@ export interface CounterCheckVerdict {
 
 /** The server's record of one candidate finding. */
 export interface ReviewFindingRecord {
-  /** Content-derived, line-independent SHA-256 hex digest (ADR-0184 D7). */
+  /** Content-derived, line-independent SHA-256 hex digest (ADR-0185 D7). */
   readonly fingerprint: string;
   readonly report: ReviewFindingReport;
   /** Absent until the counter-check settled. */
@@ -223,7 +223,7 @@ export type FindingDismissalReason = (typeof FINDING_DISMISSAL_REASONS)[number];
 
 /**
  * A person's decision on one presented finding. The note is private content: it is never logged
- * and is exported only with an explicit content opt-in (ADR-0184 D7).
+ * and is exported only with an explicit content opt-in (ADR-0185 D7).
  */
 export type FindingDecision =
   | { readonly decision: "accepted"; readonly note?: string }
@@ -239,7 +239,7 @@ export type FindingDecision =
 export const REVIEW_MODEL_ROLES = ["reviewer", "counter-checker"] as const;
 export type ReviewModelRole = (typeof REVIEW_MODEL_ROLES)[number];
 
-/** Gateway model ids bound to the two review roles (ADR-0184 D8). */
+/** Gateway model ids bound to the two review roles (ADR-0185 D8). */
 export interface ReviewModelPolicy {
   readonly reviewerModelId: string;
   readonly counterCheckerModelId: string;
@@ -656,7 +656,7 @@ export interface ReviewDiffCoverageSummary {
   readonly repeatLimitedParts?: number | undefined;
 }
 
-/** What the package reviewed and what it did not, with closed reason codes (ADR-0184 D6). */
+/** What the package reviewed and what it did not, with closed reason codes (ADR-0185 D6). */
 export interface ReviewDiffCoverage {
   readonly included: readonly ReviewDiffIncludedFile[];
   readonly unprocessed: readonly ReviewDiffUnprocessedFile[];
@@ -705,13 +705,13 @@ export type ReviewDiffSettlementInput =
 // ─── Review runtime (Issue #4135) ────────────────────────────────────────────
 
 /**
- * What a coding-runtime instance serves (ADR-0173 `runtimePurpose`, ADR-0184 D1). The user's
+ * What a coding-runtime instance serves (ADR-0173 `runtimePurpose`, ADR-0185 D1). The user's
  * Coding Workbench instance is `coding`; the server-owned review instance is `review`.
  */
 export const CODING_RUNTIME_PURPOSES = ["coding", "review"] as const;
 export type CodingRuntimePurpose = (typeof CODING_RUNTIME_PURPOSES)[number];
 
-/** The only tools a review run's model can see and call (ADR-0184 D2), in registration order. */
+/** The only tools a review run's model can see and call (ADR-0185 D2), in registration order. */
 export const REVIEW_RUNTIME_TOOL_NAMES = [
   "keiko_workspace_discover",
   "keiko_workspace_read",
@@ -789,7 +789,7 @@ export type ReviewReportAcknowledgement =
     }
   | { readonly status: "limit-reached" };
 
-/** Why a review instance refused to start (ADR-0184 D2 startup self-check). */
+/** Why a review instance refused to start (ADR-0185 D2 startup self-check). */
 export const REVIEW_PROFILE_REFUSAL_REASONS = [
   "review-profile-invalid",
   "native-profile",
@@ -798,7 +798,7 @@ export const REVIEW_PROFILE_REFUSAL_REASONS = [
 export type ReviewProfileRefusalReason = (typeof REVIEW_PROFILE_REFUSAL_REASONS)[number];
 
 /**
- * The review-rules file read from the base commit (ADR-0184 D4). `absent` reviews without rules;
+ * The review-rules file read from the base commit (ADR-0185 D4). `absent` reviews without rules;
  * `too-large`, `not-utf8` and `path-invalid` (a configured path that cannot name a file in the tree)
  * settle the run `skipped/rules-file-invalid`.
  */
@@ -815,12 +815,12 @@ export const REVIEW_RULES_FILE_MAX_BYTES = 16 * 1024;
 export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
 
 /**
- * The Reviewer session's time limit: a default, never above the coding envelope's duration (ADR-0184
+ * The Reviewer session's time limit: a default, never above the coding envelope's duration (ADR-0185
  * D1). Keiko does not limit tokens (#4346), so a review run has no prompt-token allowance.
  */
 export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
 /**
- * The read, search and discover calls one Reviewer session gets answered (ADR-0184 D1, Issue
+ * The read, search and discover calls one Reviewer session gets answered (ADR-0185 D1, Issue
  * #4130). Every call resends the whole conversation, so a session that keeps reading takes its
  * time limit before it reports.
  *
@@ -836,7 +836,7 @@ export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
  */
 export const REVIEW_RUN_DEFAULT_MAX_READ_CALLS = 16;
 /**
- * The most parts one review's diff package is split into (ADR-0184 D1). Each part fits the
+ * The most parts one review's diff package is split into (ADR-0185 D1). Each part fits the
  * runtime's first-prompt bound and gets its own Reviewer session, which the limits above bound
  * one by one; whatever does not fit these parts is `unprocessed` (`budget`).
  */
@@ -952,7 +952,7 @@ export const REVIEW_RUN_HISTORY_MAX = 50;
 /** Context lines the diff route may show around each change (the hardened diff bound). */
 export const REVIEW_RUN_DIFF_CONTEXT_MAX = 64;
 
-/** Counter-check bounds per candidate finding (ADR-0184 D5); operators may configure them. */
+/** Counter-check bounds per candidate finding (ADR-0185 D5); operators may configure them. */
 export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_TOOL_CALLS = 32;
 /**
  * Read, list and search calls one counter-check may make before only its verdict tool answers
@@ -981,7 +981,7 @@ export const REVIEW_COUNTER_CHECK_DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 // 285 s. At 600 s (development iteration 7) 25 of 198 checks ended undecided on the limit. The 172
 // decided ones took 210 s at the median, 485 s at the ninth decile and 571 s at most, and 18 of
 // them finished in the last 120 s before the limit, so the limit cut the slow end of one spread.
-// The longer limit goes together with the phase's stop once the presentation is full (ADR-0184
+// The longer limit goes together with the phase's stop once the presentation is full (ADR-0185
 // D5), which removes more checks than the limit lengthens.
 export const REVIEW_COUNTER_CHECK_DEFAULT_WALL_TIME_MS = 900_000;
 /**
@@ -1206,7 +1206,7 @@ export interface ReviewRepositoryPreset {
 }
 
 /**
- * The operator's review configuration after parsing (ADR-0184 D8). `enabled` defaults to `false`
+ * The operator's review configuration after parsing (ADR-0185 D8). `enabled` defaults to `false`
  * until Issue #4142 releases the area. Every invalid value is listed in `issues` and the affected
  * value is absent; a non-empty `issues` list makes the whole policy refuse with
  * `invalid-operator-value`, and an invalid `enabled` or `lockModelPolicy` reads as its strict value

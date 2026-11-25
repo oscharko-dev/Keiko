@@ -2,7 +2,7 @@
 
 How Keiko measures the quality of a pull request review: what the instruments are, what every
 quantity means, the labeling rules, and the holdout discipline. Governing decision:
-[ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review-agent.md) D9. Introduced
+[ADR-0185](../adr/ADR-0185-keiko-for-quality-governed-pull-request-review-agent.md) D9. Introduced
 by Issue #4132 (Epic #4130). The recorded baseline is
 [review-agent-baseline-2026-10-30.md](review-agent-baseline-2026-10-30.md).
 
@@ -185,7 +185,7 @@ These quantities answer different questions and are always reported under their 
   R4130-006). For a replayed review it counts findings, and duplicate findings join the
   denominator, an implementation rule for R4130-014 rather than an owner decision:
   hits / (hits + false alarms + undecided + duplicates). A finding that lands on a
-  thread nobody answered or acted on counts against the agent. ADR-0184 D9's offline threshold of
+  thread nobody answered or acted on counts against the agent. ADR-0185 D9's offline threshold of
   at least 50 % applies to this rate on the holdout. For a producer's history the baseline reports
   the same quantity over threads, which have no duplicates.
 - **Findings per reviewed pull request.** Threads divided by the pull requests a producer
@@ -231,7 +231,7 @@ measurable thread. Otherwise it passes when all of these hold:
 The last bound exists because a review that did not complete often presents nothing, and the rate
 would then describe only the reviews that finished. The report always prints that share. The
 owner kept the 20 % bound on 2026-11-04, with the holdout's settlement counts known and its rate
-unknown (ADR-0184 D9).
+unknown (ADR-0185 D9).
 `rescoreReviewReplayRun` scores a stored run again from its finding locations and the dataset alone,
 so stored reviews can be re-scored under the current rules without a model call.
 

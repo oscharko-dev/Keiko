@@ -87,7 +87,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
     // approval.waiting and approval.decided lines (PR #3617 review).
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
-    // ADR-0184 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
+    // ADR-0185 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
     ...SIDECAR_RUNTIME_PURPOSE_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },

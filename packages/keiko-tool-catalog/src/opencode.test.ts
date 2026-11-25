@@ -613,7 +613,7 @@ it("compiles an inactive original-read lifetime without advertising another mode
     ).toBe(false);
 });
 
-describe("review profile (ADR-0184 D2, #4135)", () => {
+describe("review profile (ADR-0185 D2, #4135)", () => {
   it("registers exactly the three read tools and keiko_review_report, with no native extension", () => {
     const set = opencodeRegistrationSet("review");
     expect(set.profile).toEqual({ id: "opencode-review", version: 1 });

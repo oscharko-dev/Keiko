@@ -319,7 +319,7 @@ the governed policy packs, the mutation kernel, and `mutationEvidenceLedger.ts` 
 the extension grants no new authority and requires no schema-version bump.
 
 
-### D8 — Review worktrees and private review refs (#4133, ADR-0184 D3)
+### D8 — Review worktrees and private review refs (#4133, ADR-0185 D3)
 
 Keiko for Quality reviews the exact head of a pull request or a local range without touching the
 user's checkout. This adds two kinds of transient repository state, and nothing else:
@@ -386,7 +386,7 @@ selects nothing and is not counted, so a head cannot force a refusal by naming m
 `-c`/`--config-env` override. The user's branches, `HEAD`, index, working tree, stash and
 `FETCH_HEAD` are byte-identical before and after resolution, worktree creation and cleanup.
 
-- **The review diff package reads objects only (#4134, ADR-0184 D6).** The same local review runner,
+- **The review diff package reads objects only (#4134, ADR-0185 D6).** The same local review runner,
   with `--attr-source=<empty tree>` and `core.bigFileThreshold` at the blob limit, lists the change
   set with `diff-tree -r -M -l1000 --raw --numstat --no-abbrev --no-color <base> <head>` (quoted
   paths parsed to their exact bytes; the numstat path is never read), reads sizes with

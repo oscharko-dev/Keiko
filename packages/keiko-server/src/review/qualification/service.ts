@@ -1,4 +1,4 @@
-// The local pair qualification of Keiko for Quality (ADR-0184 D8/D9, Issue #4137).
+// The local pair qualification of Keiko for Quality (ADR-0185 D8/D9, Issue #4137).
 //
 // Runs Keiko's shipped synthetic seed corpus (Issue #4132) through the real review orchestrator
 // (Issue #4136) with one Reviewer/Counter-checker pair: each case is materialized as a fresh Git

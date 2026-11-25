@@ -159,7 +159,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitDelivery", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDiffView", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
-  // Issue #4133 (ADR-0184): pull request review targets and review worktrees of the Git window.
+  // Issue #4133 (ADR-0185): pull request review targets and review worktrees of the Git window.
   { owner: "keiko-server", emitterPrefix: "review", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   {

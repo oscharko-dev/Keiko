@@ -9,7 +9,7 @@ import {
   reviewCounterCheckRegistrationSet,
 } from "./review-counter-check.js";
 
-describe("review-counter-check registration set (ADR-0184 D5, #4136)", () => {
+describe("review-counter-check registration set (ADR-0185 D5, #4136)", () => {
   it("offers exactly the three read tools and the verdict tool, all workspace-read", () => {
     const catalog = createKeikoToolCatalog([reviewCounterCheckRegistrationSet()]);
     const tools = gatewayToolDefinitions(catalog, REVIEW_COUNTER_CHECK_PROFILE);

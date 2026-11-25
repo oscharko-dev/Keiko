@@ -2165,7 +2165,7 @@ async function materializePrepare(
 }
 
 /**
- * ADR-0184 D2: a review run's materialized configuration and plugin set are re-checked against the
+ * ADR-0185 D2: a review run's materialized configuration and plugin set are re-checked against the
  * review profile right before they are written, so no run of a review instance can launch with an
  * extra tool, permission or agent even if the startup self-check was passed earlier.
  */
@@ -3910,7 +3910,7 @@ interface ToolBridgeExecutionDeps {
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly nativeWebSearch?: NativeWebSearch | undefined;
   /**
-   * The composition's own purpose (ADR-0184 D2 layer 4): `review` for a runtime composed with the
+   * The composition's own purpose (ADR-0185 D2 layer 4): `review` for a runtime composed with the
    * review tool profile, whatever a run's minted context says. A review bridge refuses its native
    * transports; any other purpose leaves the bridge's dispatch unchanged.
    */
@@ -4377,7 +4377,7 @@ function parsedToolBody(
 }
 
 /**
- * ADR-0184 D2 layer 4 at the tool bridge itself: a review run reads through the governed facade
+ * ADR-0185 D2 layer 4 at the tool bridge itself: a review run reads through the governed facade
  * only, so a native read invocation, a V2 permission request, a native policy ask and a native web
  * search are refused before they are dispatched. A permission request is refused, never queued for
  * a human. The refusal line correlates with the run the body names only when that run is this

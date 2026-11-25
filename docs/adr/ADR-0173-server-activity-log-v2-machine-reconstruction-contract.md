@@ -2251,7 +2251,7 @@ requires recorded measurements that manifests are insufficient and an explicit r
 
 ### D17 — The `runtimePurpose` discriminator of coding-runtime lines (2026-10-30, #4135)
 
-The coding runtime composition now runs in two server-owned instances (ADR-0184 D1): the Coding
+The coding runtime composition now runs in two server-owned instances (ADR-0185 D1): the Coding
 Workbench's (`coding`) and the Keiko for Quality review instance (`review`). Support analysis must
 separate their lines without reading any body, so the run lifecycle and authority lines carry an
 optional closed field `runtimePurpose` (`coding` | `review`):

@@ -266,7 +266,7 @@ export interface ProductionOpenCodeActivationInput {
   /**
    * The path prefix the sidecar's gateway and tool calls reach the server under: the Coding
    * Workbench's `/api/coding-sidecar` (the default), or `/api/review-sidecar` for the Keiko for
-   * Quality review instance (ADR-0184 D1), whose routes serve the same handlers with its own
+   * Quality review instance (ADR-0185 D1), whose routes serve the same handlers with its own
    * runtime capabilities.
    */
   readonly sidecarRoutePrefix?: SidecarRoutePrefix | undefined;

@@ -77,7 +77,7 @@ const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.t
   },
 );
 
-// ADR-0184 D2: the review profile's own projection (the three reads and `keiko_review_report`).
+// ADR-0185 D2: the review profile's own projection (the three reads and `keiko_review_report`).
 const OPENCODE_REVIEW_CATALOG_ADVERTISEMENT = openCodeGatewayCatalogProjection("review");
 const OPENCODE_REVIEW_CATALOG_DESCRIPTORS = projectedDescriptors(
   OPENCODE_REVIEW_CATALOG_ADVERTISEMENT,
@@ -158,7 +158,7 @@ export interface CanonicalCatalogFacadeBridgeInput {
   /** Monotonic elapsed-time source; settlement must never re-enter the live authority context. */
   readonly elapsedNow?: (() => number) | undefined;
   /**
-   * ADR-0184 D2 layer 4: `review` marks a run that carries review authority. The bridge then refuses
+   * ADR-0185 D2 layer 4: `review` marks a run that carries review authority. The bridge then refuses
    * every action other than the three reads and `review-report` before any binding, independently of
    * the facade's own check and the authority port. Trusted constructor input, never request data.
    */
@@ -978,7 +978,7 @@ async function executeCanonical(
   return resultFor(outcome, executed);
 }
 
-// ADR-0184 D2 layer 4: refused before any context, descriptor or binding is consulted.
+// ADR-0185 D2 layer 4: refused before any context, descriptor or binding is consulted.
 function reviewRunRefused(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
   request: CodingToolActionRequest,

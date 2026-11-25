@@ -7518,7 +7518,7 @@ describe("handleGatewaySetup", () => {
     },
   );
 
-  // #4137 (ADR-0184 D8): the operator's review section survives a rebuild verbatim, invalid values
+  // #4137 (ADR-0185 D8): the operator's review section survives a rebuild verbatim, invalid values
   // included; a rebuild that dropped it would turn a fail-closed review policy into a default.
   it("keeps the operator review section verbatim through a preserve-mode rebuild", async () => {
     const uiDir = await tempDir("keiko-gw-ui-review-block-");

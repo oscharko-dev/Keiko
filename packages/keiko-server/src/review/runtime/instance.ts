@@ -1,4 +1,4 @@
-// The Keiko for Quality review runtime service (ADR-0184 D1/D2/D4, Issue #4135).
+// The Keiko for Quality review runtime service (ADR-0185 D1/D2/D4, Issue #4135).
 //
 // One review instance per repository, started on demand when a review starts and stopped after an
 // idle period (default five minutes). An instance left holding a recovery-required run is set aside

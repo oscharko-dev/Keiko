@@ -1,4 +1,4 @@
-// The presentation rule (ADR-0184 D4/D5, Issue #4136, AC2).
+// The presentation rule (ADR-0185 D4/D5, Issue #4136, AC2).
 
 import { describe, expect, it } from "vitest";
 import type {

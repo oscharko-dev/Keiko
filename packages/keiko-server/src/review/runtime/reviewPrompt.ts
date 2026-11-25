@@ -1,4 +1,4 @@
-// The Keiko for Quality Reviewer's server-owned prompt (ADR-0184 D1/D2/D4, Issue #4135).
+// The Keiko for Quality Reviewer's server-owned prompt (ADR-0185 D1/D2/D4, Issue #4135).
 //
 // The system prompt is forwarded to the review instance's one primary agent as
 // `agents.keiko-reviewer.system`; nothing from the repository can change it. Its structure and

@@ -1,6 +1,6 @@
 # Review agent offline gate, 2026-11-01
 
-The offline gate of Epic #4130 (Issue #4138, ADR-0184 D9) for the Keiko for Quality review agent.
+The offline gate of Epic #4130 (Issue #4138, ADR-0185 D9) for the Keiko for Quality review agent.
 Definitions, labeling rules and the holdout discipline are in
 [review-agent-measurement.md](review-agent-measurement.md).
 Where the epic stood when it was handed over on 2026-11-19, and how to run the next measurement

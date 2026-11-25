@@ -114,7 +114,7 @@ export interface ProductionWorkspaceAuthorityInput {
   // human-approval gate, so no grant means no outbound request (fail closed).
   readonly researchEgressEnabled?: boolean | undefined;
   /**
-   * ADR-0184 D1/D2 (#4135): `review` composes the Keiko for Quality review instance. Every context it
+   * ADR-0185 D1/D2 (#4135): `review` composes the Keiko for Quality review instance. Every context it
    * mints then carries the review authority's grants (`workspace-read` only, no command, connector
    * or network) at `governed-assist`, whatever the request asked for, and is marked `review` so the
    * run's tool facade and catalog bridge refuse every non-read action. Absent is `coding`.
@@ -272,7 +272,7 @@ function contextFromActive(
 }
 
 /**
- * The review instance's narrowing of a minted context (ADR-0184 D2 layer 3): the grants are the
+ * The review instance's narrowing of a minted context (ADR-0185 D2 layer 3): the grants are the
  * review authority's, never the mode's, the deployment ceiling is `governed-assist`, and the
  * context is marked so the run's facade refuses every non-read action. Budgets stay the review
  * composition's own envelope bound (`maxDurationMinutes`).

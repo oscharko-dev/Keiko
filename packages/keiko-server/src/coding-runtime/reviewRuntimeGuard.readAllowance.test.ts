@@ -1,4 +1,4 @@
-// The Reviewer session's read allowance (ADR-0184 D1, Issue #4130): the counter the review runtime
+// The Reviewer session's read allowance (ADR-0185 D1, Issue #4130): the counter the review runtime
 // creates per session, and the predicate the tool facade asks before any admission.
 
 import { describe, expect, it } from "vitest";

@@ -1305,13 +1305,13 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
   // fixed native Git runner and conservative caps.
   readonly gitRouteOptions?: GitRouteOptions | undefined;
-  // Issue #4133 (ADR-0184 D3): pull request reads, review target resolution and the server-owned
+  // Issue #4133 (ADR-0185 D3): pull request reads, review target resolution and the server-owned
   // review worktrees. Composed once per graph over `<state>/review-worktrees`.
   readonly reviewServices?: ReviewServices | undefined;
-  // Issue #4135 (ADR-0184 D1/D2): the dedicated, server-owned Keiko for Quality review runtime
+  // Issue #4135 (ADR-0185 D1/D2): the dedicated, server-owned Keiko for Quality review runtime
   // instances, composed from the same activated OpenCode runtime as the Coding Workbench's.
   readonly reviewRuntime?: ReviewRuntimeService | undefined;
-  // Issue #4136 (ADR-0184 D5/D6): the review run service (start, records, progress, cancel, diff),
+  // Issue #4136 (ADR-0185 D5/D6): the review run service (start, records, progress, cancel, diff),
   // composed over the review services, the review runtime and the server store.
   readonly reviewRunService?: ReviewRunService | undefined;
   // Epic #1941 — native OS file/folder dialog seam. Tests inject a fake adapter, platform, or
@@ -1425,7 +1425,7 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // browser and no SDP is persisted.
   readonly voiceRealtimeNegotiationRequest?:
     ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>) | undefined;
-  // Issue #4137 (ADR-0184 D8): review settings, pair status and the local pair qualification.
+  // Issue #4137 (ADR-0185 D8): review settings, pair status and the local pair qualification.
   readonly reviewPolicy?: ReviewPolicyServices | undefined;
 }
 
@@ -1433,7 +1433,7 @@ export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependenc
   // Issue #4133 test seam: inject review services instead of composing them over the state dir.
   readonly reviewServices?: ReviewServices | undefined;
   /**
-   * Issue #4138 (ADR-0184 D9): the offline gate's measurement switches. Only the evaluation
+   * Issue #4138 (ADR-0185 D9): the offline gate's measurement switches. Only the evaluation
    * composition (`tests/review-quality/`) passes them; no CLI flag, environment variable or
    * configuration key sets them, so a product server always composes the product review service.
    */
@@ -5514,7 +5514,7 @@ function reviewRunServiceFactory(
 }
 
 /**
- * Issue #4136 (ADR-0184 D5/D6): the review run service over the review services, the review runtime
+ * Issue #4136 (ADR-0185 D5/D6): the review run service over the review services, the review runtime
  * and the review run records. Its counter-checks run on the generalized read-only child runner with
  * the graph's own model port factory (every call passes the Model Gateway). Composed only beside
  * production review services and records; otherwise the review run routes answer 503. Composing it
@@ -5568,7 +5568,7 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
 }
 
 /**
- * Issue #4137 (ADR-0184 D8): the local pair qualification drives the review run service above with
+ * Issue #4137 (ADR-0185 D8): the local pair qualification drives the review run service above with
  * the shipped seed corpus; its seed repositories live under `<state>/review-qualification`, which
  * is swept at start. Invalid operator review values are reported once at start, by key and source.
  */
@@ -5612,7 +5612,7 @@ function attachPairQualificationService(
 }
 
 /**
- * Issue #4135 (ADR-0184 D1): the review runtime service, composed only beside production review
+ * Issue #4135 (ADR-0185 D1): the review runtime service, composed only beside production review
  * services and an activated coding runtime. Each review instance is the same OpenCode composition
  * the Coding Workbench runs on, with its own state root, orchestrator and run slot. A composition
  * failure leaves reviews unavailable and records a diagnostic; it never fails server start.

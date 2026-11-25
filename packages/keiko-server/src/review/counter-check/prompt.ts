@@ -1,4 +1,4 @@
-// The Counter-checker's task for one candidate finding (ADR-0184 D5, Issue #4136).
+// The Counter-checker's task for one candidate finding (ADR-0185 D5, Issue #4136).
 //
 // The counter-check is independent by construction: its only inputs are the candidate's location,
 // category, condition, mechanism, consequence and evidence locations and the repository's review

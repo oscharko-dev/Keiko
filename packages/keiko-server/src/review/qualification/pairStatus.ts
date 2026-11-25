@@ -1,4 +1,4 @@
-// The status of a review model pair (ADR-0184 D8, Issue #4137). A status belongs to exactly one
+// The status of a review model pair (ADR-0185 D8, Issue #4137). A status belongs to exactly one
 // pair: the Reviewer model, the Counter-checker model and the gateway configuration generation it
 // was measured under. A different model in either role, or a configuration change that advances the
 // generation, reads `unmeasured` until that pair is qualified itself; nothing carries over. The

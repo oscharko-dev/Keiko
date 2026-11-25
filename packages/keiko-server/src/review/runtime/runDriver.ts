@@ -1,4 +1,4 @@
-// Drives one Reviewer run on a review instance's own orchestrator (ADR-0184 D1, Issue #4135).
+// Drives one Reviewer run on a review instance's own orchestrator (ADR-0185 D1, Issue #4135).
 //
 // The run is started exactly like a Coding Workbench run, through the orchestrator of the review
 // instance: the task is the rendered review task, the mode is `governed-assist`, project memory is

@@ -374,7 +374,7 @@ it("answers a request whose re-probe cannot reach the gateway instead of throwin
 
 it("retains a healthy model through a long idle without timer or Chat probes", async () => {
   const deps = composition();
-  // The review services' startup sweep (ADR-0184) arms their own daily retention interval once
+  // The review services' startup sweep (ADR-0185) arms their own daily retention interval once
   // it settles. Settled here, before the fake clock, so the count below still proves that the
   // readiness renewal itself leaves no timer behind.
   await deps.reviewServices?.startup();

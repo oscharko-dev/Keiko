@@ -1,4 +1,4 @@
-// The review target resolver (ADR-0184 D3, Issue #4133). Not a route: the review run calls it in
+// The review target resolver (ADR-0185 D3, Issue #4133). Not a route: the review run calls it in
 // its `preparing` phase.
 //
 // A pull request resolves to the base and head SHAs GitHub reports NOW (never a cached answer),

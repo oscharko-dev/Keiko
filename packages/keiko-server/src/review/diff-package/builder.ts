@@ -1,4 +1,4 @@
-// The review diff package builder (ADR-0184 D6, Epic #4130, Issue #4134).
+// The review diff package builder (ADR-0185 D6, Epic #4130, Issue #4134).
 //
 // Computes what a review target changed from the Git OBJECTS of its base and head commits, never
 // from a working tree, and returns a compact, budget-bounded, prioritized package for the

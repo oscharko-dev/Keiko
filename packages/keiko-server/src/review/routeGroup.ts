@@ -1,5 +1,5 @@
 // The routes of the review model policy (Issue #4137) and the `enabled` guard of the whole Pull
-// requests area (`/api/git-review/*`, ADR-0184): `API_ROUTES` passes every route through
+// requests area (`/api/git-review/*`, ADR-0185): `API_ROUTES` passes every route through
 // `guardReviewRoute`, so while the area is off each one answers 404 with the closed code
 // `REVIEW_DISABLED` before its handler runs, wherever it is registered. The one exception is
 // `model-policy`, which reports `enabled: false` so the UI knows not to mount the area.

@@ -1,4 +1,4 @@
-// The Counter-checker's four tools, bound to one review run's head commit (ADR-0184 D5, #4136).
+// The Counter-checker's four tools, bound to one review run's head commit (ADR-0185 D5, #4136).
 //
 // Every read is served from the Git objects of the reviewed head commit in the review worktree's
 // object store, never from a working tree: what the Counter-checker reads is exactly what was

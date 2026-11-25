@@ -1,4 +1,4 @@
-// The review instance's sidecar routes (ADR-0184 D1, Issue #4135).
+// The review instance's sidecar routes (ADR-0185 D1, Issue #4135).
 //
 // A review instance's sandboxed OpenCode sidecar reaches the server under `/api/review-sidecar/*`,
 // on the same attested loopback port as the Coding Workbench's sidecar. Each route serves the SAME

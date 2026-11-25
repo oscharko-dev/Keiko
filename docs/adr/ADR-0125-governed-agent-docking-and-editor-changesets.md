@@ -471,11 +471,11 @@ computes the digest.
 
 ### Amendment — review authority never reaches the changeset path (2026-10-30, #4135)
 
-The Keiko for Quality review instance (ADR-0184 D1) composes the same editor-agent ports for its
+The Keiko for Quality review instance (ADR-0185 D1) composes the same editor-agent ports for its
 runs, because its tool facade is the coding facade. A review run can nevertheless never submit a
 changeset: its generated configuration and registered tool set carry no edit tool, its review
 authority grants `workspace-read` alone so the D5 policy composition denies a workspace write
-before admission, and its facade and catalog bridge refuse every `edit` action outright (ADR-0184 D2
+before admission, and its facade and catalog bridge refuse every `edit` action outright (ADR-0185 D2
 layers 1 to 4). The policy table of D1 is unchanged; a review run is not a fourth mode and its
 refusals are not approval requests.
 

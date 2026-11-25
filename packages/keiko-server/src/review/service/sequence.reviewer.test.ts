@@ -1,4 +1,4 @@
-// The `reviewing` phase hands every Reviewer launch the model's readiness check (ADR-0184 D8,
+// The `reviewing` phase hands every Reviewer launch the model's readiness check (ADR-0185 D8,
 // Issue #4130), on the phase itself with a clock the test advances. The launch accepts only a fresh
 // readiness observation, and the rules read and the instance start take time before it reads one,
 // so the check has to run at the launch, not before the session is requested (R4130-048).

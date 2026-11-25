@@ -1,4 +1,4 @@
-// Types of the Keiko for Quality review evaluation family (Issue #4132, ADR-0184 D9): the
+// Types of the Keiko for Quality review evaluation family (Issue #4132, ADR-0185 D9): the
 // body-free harvest dataset, the thread labels, the replay run record, the precision summary and
 // the seed gate report. Review contract shapes (findings, settlements, seed cases) come from
 // keiko-contracts; nothing here redeclares them.
@@ -147,7 +147,7 @@ export interface ReviewEvaluationManifest {
   /** Pull requests below this number form the development set; it and later ones the holdout. */
   readonly holdoutFromPullRequest: number;
   readonly holdoutRule: string;
-  /** ADR-0184 D9 offline thresholds. */
+  /** ADR-0185 D9 offline thresholds. */
   readonly minimumActionableRate: number;
   readonly maximumFindingsPerPullRequest: number;
   /**

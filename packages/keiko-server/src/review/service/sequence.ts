@@ -1,4 +1,4 @@
-// The run sequence of one Keiko for Quality review (ADR-0184 D3-D6, Issue #4136):
+// The run sequence of one Keiko for Quality review (ADR-0185 D3-D6, Issue #4136):
 //   preparing         validate both role models, resolve and fetch the target (child 3), create the
 //                     review worktree (child 3), build the diff package (child 4);
 //   reviewing         one Reviewer run on the review runtime instance (child 5) per diff package

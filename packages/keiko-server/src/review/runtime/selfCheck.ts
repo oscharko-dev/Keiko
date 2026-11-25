@@ -1,4 +1,4 @@
-// The review instance's startup self-check (ADR-0184 D2, Issue #4135).
+// The review instance's startup self-check (ADR-0185 D2, Issue #4135).
 //
 // A Keiko for Quality review instance starts only when every one of its four read-only layers is
 // present and exact, and only on the governed review profile:
@@ -66,7 +66,7 @@ export type ReviewRuntimeSelfCheck =
     };
 
 /**
- * The SHA-256 of each generated review plugin source (ADR-0184 D2 layer 2). The governed-tools
+ * The SHA-256 of each generated review plugin source (ADR-0185 D2 layer 2). The governed-tools
  * plugin registers exactly `keiko_read`, `keiko_discover`, `keiko_search` and
  * `keiko_review_report`. The context plugin registers no tool: it adds Keiko's guidance to the
  * system prompt and, for a model that requires reasoning continuation (#4267), leaves the

@@ -1,4 +1,4 @@
-// The review root's crash-recovery registry (ADR-0184 D3, ADR-0098, Issue #4133).
+// The review root's crash-recovery registry (ADR-0185 D3, ADR-0098, Issue #4133).
 //
 // A review worktree and its private refs live in the user's repository (an administrative entry
 // and refs under `refs/keiko-review/`), so cleanup after a crash must know WHICH repository to

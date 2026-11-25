@@ -1,4 +1,4 @@
-// The per-repository review settings documents (ADR-0184 D8, Issue #4137): one versioned JSON
+// The per-repository review settings documents (ADR-0185 D8, Issue #4137): one versioned JSON
 // document per repository under `<stateDir>/review-settings/`, named by the content-free repository
 // id and published atomically through the shared model-policy document store. A stored document is
 // untrusted on read: one that does not validate is reported as `invalid` and never used.

@@ -1,4 +1,4 @@
-// SHA-256 step of the Keiko for Quality finding fingerprint (ADR-0184 D7, Issue #4131). The
+// SHA-256 step of the Keiko for Quality finding fingerprint (ADR-0185 D7, Issue #4131). The
 // framed preimage and its normalization are owned by keiko-contracts, which cannot hash; this is
 // the one place that turns it into the digest, so every consumer computes the same identity.
 

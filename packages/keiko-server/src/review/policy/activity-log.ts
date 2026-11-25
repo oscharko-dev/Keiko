@@ -1,4 +1,4 @@
-// Activity Log evidence of the review model policy (ADR-0184 `review.model-policy.*`, Issue #4137).
+// Activity Log evidence of the review model policy (ADR-0185 `review.model-policy.*`, Issue #4137).
 //
 // A model-policy read, a saved settings change and every refusal (a settings write, a run start or
 // dry run, a pair qualification, an invalid operator value at startup) are reconstructable from these

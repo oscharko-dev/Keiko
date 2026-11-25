@@ -2974,7 +2974,7 @@ describe("OpenCode V2 history window", () => {
   });
 });
 
-it("admits exactly the four review tools in a review run's history (ADR-0184 D2, #4135)", () => {
+it("admits exactly the four review tools in a review run's history (ADR-0185 D2, #4135)", () => {
   const review = (): ReturnType<typeof createOpenCodeV2HistoryProjection> =>
     createOpenCodeV2HistoryProjection({
       runId: "review-history",

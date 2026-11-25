@@ -1,4 +1,4 @@
-// The pure half of the review harvest (Issue #4132, ADR-0184 D9): turn raw GitHub review threads
+// The pure half of the review harvest (Issue #4132, ADR-0185 D9): turn raw GitHub review threads
 // into body-free, labelable records and assemble the versioned dataset with its content digest.
 //
 // Ported in meaning from the retired Keiko for Quality reviewer (oscharko-dev/Keiko-for-Quality

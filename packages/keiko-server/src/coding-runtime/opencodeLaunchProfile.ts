@@ -341,7 +341,7 @@ function launchEnvironment(
     // not touch.
     OPENCODE_DISABLE_PROJECT_CONFIG: "true",
     // The native and review profiles pin the fields no layer below Keiko may change (the review
-    // agent and its system prompt among them, ADR-0184 D2) as the runtime's last configuration word.
+    // agent and its system prompt among them, ADR-0185 D2) as the runtime's last configuration word.
     ...(input.toolProfile === "native" ||
     input.toolProfile === "review" ||
     input.contextGeometry?.reasoningContinuation === "required-with-tools"
@@ -619,7 +619,7 @@ export function createFixedOpenCodeV2Config(
 }
 
 /**
- * The review instance's permission rules (ADR-0184 D2 layer 1): everything denied, then exactly the
+ * The review instance's permission rules (ADR-0185 D2 layer 1): everything denied, then exactly the
  * three read tools and `keiko_review_report` allowed. No `question`, no `execute`; last match wins.
  */
 export function openCodeReviewPermissionRules(): readonly Readonly<Record<string, string>>[] {
@@ -630,7 +630,7 @@ export function openCodeReviewPermissionRules(): readonly Readonly<Record<string
 }
 
 /**
- * The governed configuration of a Keiko for Quality review instance (ADR-0184 D1/D2, #4135). It is
+ * The governed configuration of a Keiko for Quality review instance (ADR-0185 D1/D2, #4135). It is
  * the governed profile reduced to the review tools, on every platform, with one server-defined
  * primary agent whose system prompt is Keiko's: `default_agent` names it, `agents` defines it, and
  * the launch environment pins both as server-owned. No MCP server, configured instruction source or

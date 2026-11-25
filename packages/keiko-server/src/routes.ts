@@ -678,7 +678,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
   },
-  // ADR-0184 D1 (#4135): the Keiko for Quality review instance's sidecar, served by the same
+  // ADR-0185 D1 (#4135): the Keiko for Quality review instance's sidecar, served by the same
   // handlers with the review instance's runtime capabilities (review/runtime/routes.ts).
   {
     method: "POST",
@@ -904,11 +904,11 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/git/remotes",
     handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
   },
-  // Issue #4133 (Epic #4130, ADR-0184) — read-only pull request list and detail of the Pull requests
+  // Issue #4133 (Epic #4130, ADR-0185) — read-only pull request list and detail of the Pull requests
   // area: two fixed GraphQL reads, the repository addressed by `root` like every Git window read.
   { method: "GET", pattern: REVIEW_PULL_REQUESTS_ROUTE, handler: handleReviewPullRequestList },
   { method: "GET", pattern: REVIEW_PULL_REQUEST_ROUTE, handler: handleReviewPullRequestDetail },
-  // Issue #4136 (ADR-0184 D5/D6) — review runs: start (and dry run), records, history, per pull
+  // Issue #4136 (ADR-0185 D5/D6) — review runs: start (and dry run), records, history, per pull
   // request review state, the reviewed diff, the progress stream and cancellation.
   { method: "POST", pattern: REVIEW_RUNS_ROUTE, handler: handleReviewRunStart },
   { method: "GET", pattern: REVIEW_RUNS_ROUTE, handler: handleReviewRunHistory },
@@ -1866,7 +1866,7 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     handler: handleDownloadSupportReport,
   },
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
-  // Issue #4137 (ADR-0184 D8) — the review model policy, review settings and pair qualification.
+  // Issue #4137 (ADR-0185 D8) — the review model policy, review settings and pair qualification.
   ...REVIEW_POLICY_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,

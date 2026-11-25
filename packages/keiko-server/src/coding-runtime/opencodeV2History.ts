@@ -50,7 +50,7 @@ const REVIEW_HISTORY_TOOLS: ReadonlySet<string> = new Set(REVIEW_RUNTIME_TOOL_NA
 /** The native profile (#3897) reports OpenCode's own tool ids, bounded by shape, not by list. */
 function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolean {
   if (profile === "native") return isAdmissibleOpenCodeToolName(name);
-  // ADR-0184 D2: a review run's history holds exactly the four review tools.
+  // ADR-0185 D2: a review run's history holds exactly the four review tools.
   if (profile === "review") return REVIEW_HISTORY_TOOLS.has(name);
   return HISTORY_TOOLS.has(name) || (profile === "code-mode" && name === "execute");
 }

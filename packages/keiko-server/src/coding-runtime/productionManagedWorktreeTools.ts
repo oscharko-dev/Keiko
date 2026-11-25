@@ -517,13 +517,13 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 
 export interface ProductionManagedWorktreeToolInput {
   /**
-   * ADR-0184 D2 layer 4: `review` for a run that carries review authority; the facade and the
+   * ADR-0185 D2 layer 4: `review` for a run that carries review authority; the facade and the
    * catalog bridge then refuse every non-read action. Absent is an ordinary coding run.
    */
   readonly runtimePurpose?: CodingRuntimePurpose | undefined;
-  /** ADR-0184 D4: the run's `keiko_review_report` port; present only on a review run. */
+  /** ADR-0185 D4: the run's `keiko_review_report` port; present only on a review run. */
   readonly reviewReport?: GovernedCodingToolPort<"review-report"> | undefined;
-  /** ADR-0184 D1 (#4130): the run's read allowance; present only on a review run. */
+  /** ADR-0185 D1 (#4130): the run's read allowance; present only on a review run. */
   readonly reviewReadAllowance?: ReviewReadAllowance | undefined;
   /**
    * `"folder"` when the workspace is an ordinary directory without a repository: the Git and

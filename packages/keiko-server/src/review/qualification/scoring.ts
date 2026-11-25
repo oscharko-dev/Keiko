@@ -3,7 +3,7 @@
 // `scoreReviewSeedRun`, both per case (for the case's own result) and for the whole corpus. A run
 // that did not settle `complete` or `incomplete` has no presented findings to score: the case is
 // `not-scored` and the qualification can only end `incomplete`, never qualified or failed. An
-// `incomplete` run proves only what it presented (ADR-0184 D8): a presented finding on the seed is
+// `incomplete` run proves only what it presented (ADR-0185 D8): a presented finding on the seed is
 // `found`, and one on a clean control is a `false-alarm`. Its absence proves nothing, because the
 // Reviewer may have failed or run out of time before reaching the seed (R4130-012), and the one
 // settlement reason can hide that failure or a counter-check that never presented the seed's own

@@ -1,4 +1,4 @@
-// The Keiko for Quality review run records (ADR-0184 D6, Issue #4136), over the server's SQLite
+// The Keiko for Quality review run records (ADR-0185 D6, Issue #4136), over the server's SQLite
 // store (schema migrations 80, 81 and 82): one row per run, its coverage entries and its candidate
 // findings. All SQL is module-scope constants with bound parameters. Paths and finding text are local
 // product data for the UI; this module never logs. One unsettled run per repository is enforced by

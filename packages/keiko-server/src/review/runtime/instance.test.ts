@@ -1,4 +1,4 @@
-// The review runtime service's lifecycle (ADR-0184 D1, Issue #4135): on-demand start, one review
+// The review runtime service's lifecycle (ADR-0185 D1, Issue #4135): on-demand start, one review
 // at a time per repository, idle stop, the rules and self-check refusals, and the run-bound intake
 // behind `keiko_review_report`. The composition is a hermetic stand-in that drives the same ports
 // the production composition exposes; the composition itself is proven in composition.test.ts.

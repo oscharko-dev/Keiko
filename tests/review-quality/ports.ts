@@ -1,4 +1,4 @@
-// The review ports of the offline gate (Issue #4138, ADR-0184 D9): the evaluation family's replay
+// The review ports of the offline gate (Issue #4138, ADR-0185 D9): the evaluation family's replay
 // and seed gate call these, and each one runs one review through the composed review service, the
 // same service the review routes use, with the requested model pair. A review settles before the
 // next one starts, and the repository's review instance is released after each review, as the pair

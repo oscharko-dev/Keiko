@@ -4,7 +4,7 @@ Epic #4130 moves from the agent session that drove it with the 4-bit lab pair to
 continues it with 8-bit models. This page states where the epic stands, what the measurements
 show, what is open, and how to run the next measurement. The measurement record itself is
 [review-agent-offline-gate-2026-11-01.md](review-agent-offline-gate-2026-11-01.md); the decisions
-are in [ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review-agent.md).
+are in [ADR-0185](../adr/ADR-0185-keiko-for-quality-governed-pull-request-review-agent.md).
 
 ## Where the epic stands
 
@@ -13,7 +13,7 @@ are in [ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review
 - Children #4131 to #4137 are closed. #4138, the offline gate, is open: the one holdout run failed.
   Work on children #4139 to #4142 does not start until a holdout passes, and the review area stays
   off by default (`KEIKO_REVIEW_ENABLED`). #4143, publishing to GitHub, waits for the live gate
-  as well (ADR-0184 D9).
+  as well (ADR-0185 D9).
 - The one holdout run (2026-11-02 to 2026-11-06, 229 pull requests from #3066) failed on coverage:
   185 of 229 reviews did not settle `complete` (limit 20 %), with an actionable rate of 53.1 %
   (17 of 32). The seed gate failed on one missed and two incomplete required seeds. #4138

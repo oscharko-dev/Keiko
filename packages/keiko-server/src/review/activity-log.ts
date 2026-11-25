@@ -1,4 +1,4 @@
-// Activity Log evidence for review targets and review worktrees (ADR-0184, Issue #4133).
+// Activity Log evidence for review targets and review worktrees (ADR-0185, Issue #4133).
 //
 // Every field is a count, a closed outcome, a digest or an opaque id (ADR-0173 D4): never a path,
 // a ref name, a pull request title, an author or a remote. Object ids are recorded as digests.

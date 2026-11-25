@@ -1,5 +1,5 @@
 // The dedicated review instance composed end to end through the production resolver, authority
-// service, orchestrator, tool facade, catalog bridge and finding intake (ADR-0184 D1/D2/D4, Issue
+// service, orchestrator, tool facade, catalog bridge and finding intake (ADR-0185 D1/D2/D4, Issue
 // #4135). Only the OpenCode process is replaced: a scripted backend whose turn issues the model's
 // tool calls against the REAL facade the resolver composed for the run, with the run's real
 // tool-facade capability. It proves AC1 (refusals end to end), AC2 (the production self-check

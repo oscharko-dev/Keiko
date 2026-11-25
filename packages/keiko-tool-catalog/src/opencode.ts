@@ -46,7 +46,7 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
  * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
  * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
  * and tool hooks instead of substituting mapped tools. `review` is the server-owned Keiko for
- * Quality review instance's governed profile (ADR-0184 D2, #4135): the three read tools and
+ * Quality review instance's governed profile (ADR-0185 D2, #4135): the three read tools and
  * `keiko_review_report`, and nothing else -- no `question`, no edit, command, web or Git tool.
  */
 export const OPENCODE_TOOL_PROFILES = Object.freeze([
@@ -783,7 +783,7 @@ function ciStatusSpec(): OpenCodeToolSpec {
   };
 }
 
-// ADR-0184 D4 (#4135): the one way a finding leaves the Reviewer. It changes nothing in the
+// ADR-0185 D4 (#4135): the one way a finding leaves the Reviewer. It changes nothing in the
 // workspace; the server validates the report against the reviewed commit and appends it to the
 // run's intake, so the only effect class it needs is the read the validation performs.
 function reviewReportSpec(): OpenCodeToolSpec {

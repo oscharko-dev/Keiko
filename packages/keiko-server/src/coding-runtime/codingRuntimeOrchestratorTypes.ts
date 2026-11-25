@@ -111,7 +111,7 @@ export interface CodingRuntimeApprovalAuthority {
 
 export interface CodingRuntimeOrchestratorDeps {
   /**
-   * ADR-0184 D1 (#4135): `review` for the Keiko for Quality review instance's own orchestrator, so
+   * ADR-0185 D1 (#4135): `review` for the Keiko for Quality review instance's own orchestrator, so
    * its run lifecycle lines carry `runtimePurpose: "review"`. Absent is the Coding Workbench's.
    */
   readonly runtimePurpose?: CodingRuntimePurpose | undefined;

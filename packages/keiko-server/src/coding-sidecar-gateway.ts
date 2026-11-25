@@ -603,7 +603,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
     admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: false },
     maxInputMessages: { type: "integer", dataClass: "count", required: false },
-    // ADR-0184 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
+    // ADR-0185 D1 (#4135): `runtimePurpose: "review"` on its review sidecar twin.
     ...SIDECAR_RUNTIME_PURPOSE_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },

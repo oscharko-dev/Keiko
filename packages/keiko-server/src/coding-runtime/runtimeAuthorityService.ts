@@ -269,7 +269,7 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
     // because a record written before this field existed (1.2.0) lacks it, and a missing REQUIRED
     // field would read as an incomplete record; every line written since carries it.
     maxRuntimeMs: { type: "integer", dataClass: "duration", required: false },
-    // ADR-0173 / ADR-0184 D1 (#4135): which runtime instance minted the authority. The Keiko for
+    // ADR-0173 / ADR-0185 D1 (#4135): which runtime instance minted the authority. The Keiko for
     // Quality review instance always sets `review`; absent on lines written before the field.
     runtimePurpose: {
       type: "string",
@@ -493,7 +493,7 @@ export function codingRuntimeActionClassesForMode(
 }
 
 /**
- * The Keiko for Quality review authority's grants (ADR-0184 D2 layer 3, #4135): the `workspace-read`
+ * The Keiko for Quality review authority's grants (ADR-0185 D2 layer 3, #4135): the `workspace-read`
  * action class only, no command, no connector scope and no network, whatever any mode would grant.
  * Its mode is `governed-assist`, which the envelope schema requires.
  */
@@ -643,7 +643,7 @@ export interface CodingRuntimeTrustedContext {
   readonly budget: CodingWorkbenchBudget;
   readonly expiresAt: string;
   /**
-   * ADR-0184 D1/D2 (#4135): `review` for the Keiko for Quality review instance, whose context grants
+   * ADR-0185 D1/D2 (#4135): `review` for the Keiko for Quality review instance, whose context grants
    * `workspace-read` only and whose tool facade refuses every other action. Absent is `coding`.
    */
   readonly runtimePurpose?: CodingRuntimePurpose | undefined;

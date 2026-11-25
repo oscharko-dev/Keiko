@@ -1,4 +1,4 @@
-// One counter-check of one candidate finding (ADR-0184 D5, Issue #4136).
+// One counter-check of one candidate finding (ADR-0185 D5, Issue #4136).
 //
 // The session runs on the generalized read-only child machinery: `runGovernedReadOnlySession`
 // owns the governance (read-only gate, per-candidate tool-call ceiling, cancellation, wall-clock
@@ -65,7 +65,7 @@ const ATTESTATIONS = (["read", "discover", "search", "verdict"] as const).map((t
   catalogAction: REVIEW_COUNTER_CHECK_TOOL_ALIASES[tool],
 }));
 
-/** Per-candidate bounds; operators may configure them (ADR-0184 D5). */
+/** Per-candidate bounds; operators may configure them (ADR-0185 D5). */
 export interface CounterCheckLimits {
   readonly maxToolCalls: number;
   /** Read, list and search calls the session's tools answer; the verdict tool is not counted. */

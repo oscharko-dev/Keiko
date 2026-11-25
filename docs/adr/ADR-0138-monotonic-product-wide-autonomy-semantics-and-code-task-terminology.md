@@ -334,7 +334,7 @@ remain in force as enumerated in the Amends section above.
 
 ### D6 — Amendment: server-owned review runs are outside the user-selectable modes (2026-10-30, #4135)
 
-ADR-0184's Keiko for Quality review run is not a Code task and not a fourth mode. Its authority is
+ADR-0185's Keiko for Quality review run is not a Code task and not a fourth mode. Its authority is
 minted at `governed-assist` only because the Authority Envelope requires a mode; its grants are the
 review authority's (`workspace-read` alone, no command, connector or network), not the D2 matrix
 column. The monotonic matrix of D2 is unchanged and still governs every user-selectable surface. A

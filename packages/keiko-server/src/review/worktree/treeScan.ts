@@ -1,4 +1,4 @@
-// Pre-checkout scan of a pull request head's tree (ADR-0184 D3, Issue #4133).
+// Pre-checkout scan of a pull request head's tree (ADR-0185 D3, Issue #4133).
 //
 // Decided from the tree listing alone, before a single file is written:
 // - more paths than the path cap, or more bytes than the materialization budget, refuse the

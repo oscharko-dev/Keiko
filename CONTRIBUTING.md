@@ -967,7 +967,9 @@ No payment method, finding dismissal, or gate bypass is an accepted repair path.
 Keiko for Quality is retired by
 [ADR-0176](docs/adr/ADR-0176-retire-keiko-for-quality.md). It has no workflow, review profile,
 repository variable, credential consumer, or protected context in this repository. Its product is
-being rebuilt inside Keiko itself; until that ships, no model-backed reviewer runs on a pull
+being rebuilt inside Keiko itself as a read-only review agent in the Git window
+([ADR-0185](docs/adr/ADR-0185-keiko-for-quality-governed-pull-request-review-agent.md)); that agent
+adds no reviewer to this repository, and until it ships no model-backed reviewer runs on a pull
 request here.
 
 Qodo is retired by

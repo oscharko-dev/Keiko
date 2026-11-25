@@ -1,4 +1,4 @@
-// The review precision gate (Issue #4132, ADR-0184 D9), ported in meaning from the retired
+// The review precision gate (Issue #4132, ADR-0185 D9), ported in meaning from the retired
 // reviewer's `precision-gate-lib.mjs`: of the findings that could be decided, how many were
 // actionable — with the absolute counts, the per-category and per-severity breakdown, the findings
 // per pull request, the cost per pull request and a Wilson interval next to every rate.
@@ -162,7 +162,7 @@ function defined(values: readonly (string | undefined)[]): string[] {
 }
 
 /**
- * The offline verdict against ADR-0184 D9's thresholds: at least the minimum actionable rate, at
+ * The offline verdict against ADR-0185 D9's thresholds: at least the minimum actionable rate, at
  * most the presented-finding limit on every pull request and at most the manifest's share of
  * reviews that did not settle `complete`. Only a holdout evaluation over the default selection is
  * gate evidence (R4130-011); any other run, an empty run and a run with no finding on a measurable

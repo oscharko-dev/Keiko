@@ -1,8 +1,13 @@
-# ADR-0184: Keiko for Quality — governed pull request review agent
+# ADR-0185: Keiko for Quality — governed pull request review agent
 
 ## Status
 
 Accepted (owner decision, 2026-10-29; Epic #4130, Issue #4131).
+
+Numbering: the epic's plan named this record ADR-0182, and the epic branch carried it as ADR-0184.
+Both numbers were taken on `dev` first (ADR-0182 Windows owner-private files, ADR-0184 repository
+credential relay), so it was renumbered to ADR-0185 on 2026-11-25 before integration; earlier
+review threads and issue comments that say ADR-0182 or ADR-0184 for this agent mean this record.
 
 This decision records the architecture of a product capability. It does not reintroduce a
 model-backed reviewer on `oscharko-dev/Keiko`, does not change that repository's review settlement,

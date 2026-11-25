@@ -1,4 +1,4 @@
-// The review profile's pieces inside the coding runtime (ADR-0184 D2/D4, Issue #4135): the
+// The review profile's pieces inside the coding runtime (ADR-0185 D2/D4, Issue #4135): the
 // `review-report` wire action, the launch environment's server-owned binding of the review agent,
 // the generated report tool, the facade's acknowledgement projection and the catalog coverage.
 

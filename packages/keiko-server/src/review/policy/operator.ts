@@ -1,4 +1,4 @@
-// The operator's review configuration as the server reads it (ADR-0184 D8, Issue #4137): the
+// The operator's review configuration as the server reads it (ADR-0185 D8, Issue #4137): the
 // `review` section of `keiko.config.json` parsed together with its environment overrides by the
 // gateway configuration loader, so every configuration change (setup, catalog refresh, file reload)
 // is seen at the next read. Without a gateway configuration only the environment applies.

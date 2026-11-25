@@ -1,4 +1,4 @@
-// The synthetic review seed corpus (Issue #4132, ADR-0184 D9): nine planted-defect cases and three
+// The synthetic review seed corpus (Issue #4132, ADR-0185 D9): nine planted-defect cases and three
 // clean controls in small generated repositories, shipped with the server so customer pair
 // qualification (Issue #4137) can run it, and scored with `scoreReviewSeedRun` — the same rule the
 // development seed gate in keiko-evaluations applies.

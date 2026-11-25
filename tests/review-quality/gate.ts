@@ -1,4 +1,4 @@
-// The offline review gate (Issue #4138, ADR-0184 D9): replays the development sample, the holdout
+// The offline review gate (Issue #4138, ADR-0185 D9): replays the development sample, the holdout
 // or the seed sets through the real review pipeline and writes body-free evidence. Usage:
 //
 //   node scripts/testing/review-quality/run.mjs --set development|holdout|seeds [--variant ...] ...

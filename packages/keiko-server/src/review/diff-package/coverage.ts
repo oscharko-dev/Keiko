@@ -1,4 +1,4 @@
-// Coverage assembly of the review diff package (ADR-0184 D6, Issue #4134).
+// Coverage assembly of the review diff package (ADR-0185 D6, Issue #4134).
 //
 // Every changed path lands in exactly one list with its closed reason; the lists are ordered by
 // the stored path bytes, so the coverage is identical on every platform and in every locale.

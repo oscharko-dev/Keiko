@@ -219,7 +219,7 @@ export interface CodingToolFacadeOptions {
    */
   readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
   /**
-   * ADR-0184 D2 layer 4: `review` marks a run that carries review authority. The facade then refuses
+   * ADR-0185 D2 layer 4: `review` marks a run that carries review authority. The facade then refuses
    * every action other than the three reads and `review-report` before any admission, whatever the
    * authority port would answer. Absent or `coding` changes nothing.
    */
@@ -228,7 +228,7 @@ export interface CodingToolFacadeOptions {
   readonly runtimePurposeLog?:
     { readonly sink: ServerLogSink; readonly correlationId: () => string | undefined } | undefined;
   /**
-   * ADR-0184 D1 (#4130): a review run's read allowance. Once it is used up, the facade refuses the
+   * ADR-0185 D1 (#4130): a review run's read allowance. Once it is used up, the facade refuses the
    * run's read, discover and search calls with one fixed instruction, before any admission. Absent,
    * or on a run without the review purpose, nothing is counted.
    */

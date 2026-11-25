@@ -1,4 +1,4 @@
-// Activity Log evidence of a Keiko for Quality review run (ADR-0184 `review.run.*`, Issue #4136).
+// Activity Log evidence of a Keiko for Quality review run (ADR-0185 `review.run.*`, Issue #4136).
 //
 // The run's correlation id threads every line of one run, from `review.run.started` through each
 // `review.run.phase` to `review.run.settled`; counter-check sessions point at it through their

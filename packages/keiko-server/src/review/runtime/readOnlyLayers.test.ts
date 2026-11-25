@@ -1,4 +1,4 @@
-// ADR-0184 D2 (Issue #4135, AC1): each of the four read-only layers of a review run is proven on its
+// ADR-0185 D2 (Issue #4135, AC1): each of the four read-only layers of a review run is proven on its
 // own. Every block disables the other three -- it composes only its own layer, with the other
 // layers permissive or absent -- and shows this layer alone still refuses a write, shell, web and
 // Git tool, while the review tools pass. Each block also proves failure-first: the same probe

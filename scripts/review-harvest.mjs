@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Review harvest (Issue #4132, ADR-0184 D9): reads every review thread on a repository's merged and
+// Review harvest (Issue #4132, ADR-0185 D9): reads every review thread on a repository's merged and
 // closed pull requests and writes the body-free, versioned dataset the review replay, precision
 // gate and baseline read. Repository tooling, not product runtime: deterministic PASS/FAIL output,
 // read-only against GitHub (one `gh api graphql` query shape and its node continuations), and

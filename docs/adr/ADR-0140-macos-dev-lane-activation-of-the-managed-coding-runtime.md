@@ -190,7 +190,7 @@ itself) and a run whose profile has no member (`unproven`, the gateway profile) 
 unended, so the manager reports `runtime-reap-unproven` instead of a stopped runtime. The run stays
 recovery-required and quarantined; only a Keiko for Quality review whose Reviewer turn had settled
 `succeeded` before that stop still settles on its coverage and findings, and records
-`runtimeCleanup: unproven` as a warning (ADR-0184 D6, #4136). No other recovery is reclassified.
+`runtimeCleanup: unproven` as a warning (ADR-0185 D6, #4136). No other recovery is reclassified.
 `coding-runtime.descendants.swept` records the outcome, the SIGKILL broadcasts (`roundCount`), the
 kernel's answers (`checkCount`), the identity proofs (`identityProofCount`) and the distinct members
 they named (`memberCount`); a process table the host cannot read is `listing-failed`, and a host
