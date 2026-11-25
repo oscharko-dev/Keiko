@@ -245,13 +245,10 @@ async function runStartupAttempt(
   try {
     await launchAttempt(deps, input, plan, attempt, progress);
   } catch (error: unknown) {
-    const retry = await releaseFailedAttempt(deps, input, attempt.attemptId);
-    recordStartupAttemptFailed(deps.activityLog, {
-      correlationId: input.correlationId,
+    const retry = await releaseAndRecordFailedAttempt(deps, input, {
       attempt: attempt.attemptId,
       phase: progress.phase,
       error,
-      retry: retry && !(error instanceof DapProcessManagerError),
       durationMs: performance.now() - startedAt,
     });
     if (error instanceof DapProcessManagerError) {
@@ -367,12 +364,38 @@ async function launchAttempt(
   });
 }
 
-async function releaseFailedAttempt(
+interface FailedStartupAttempt {
+  readonly attempt: number;
+  readonly phase: DebugStartupProgress["phase"];
+  readonly error: unknown;
+  readonly durationMs: number;
+}
+
+/**
+ * Releases a failed attempt and reports whether the start may retry. The attempt line is written in
+ * `finally`, so a release that itself throws still leaves the failed step on the log (with no
+ * retry) while its own error propagates.
+ */
+async function releaseAndRecordFailedAttempt(
   deps: DapProcessManagerDeps,
   input: DapProcessStartInput,
-  attemptId: number,
+  failure: FailedStartupAttempt,
 ): Promise<boolean> {
-  return deps.registry.completeLaunchFailure(input.identity.sessionId, attemptId);
+  let retry = false;
+  try {
+    const released = await deps.registry.completeLaunchFailure(
+      input.identity.sessionId,
+      failure.attempt,
+    );
+    retry = released && !(failure.error instanceof DapProcessManagerError);
+    return retry;
+  } finally {
+    recordStartupAttemptFailed(deps.activityLog, {
+      ...failure,
+      correlationId: input.correlationId,
+      retry,
+    });
+  }
 }
 
 function planBinding(input: DapProcessStartInput): DebugCapsulePlanBinding {

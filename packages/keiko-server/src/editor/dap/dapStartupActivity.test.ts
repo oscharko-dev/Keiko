@@ -48,6 +48,7 @@ describe("debugStartFailureCode", () => {
   it.each([
     { label: "an error without a code", error: new Error("boom") },
     { label: "an unknown code", error: Object.assign(new Error("x"), { code: "ENOENT" }) },
+    { label: "a prototype key", error: Object.assign(new Error("x"), { code: "constructor" }) },
     { label: "a non-string code", error: Object.assign(new Error("x"), { code: 7 }) },
     { label: "a plain object with a closed code", error: { code: "CAPACITY" } },
     { label: "a string", error: "STARTUP_THROTTLED" },

@@ -749,6 +749,32 @@ describe("dapProcessManager canonical orchestration", () => {
     ]);
   });
 
+  it("still records a failed attempt whose release itself fails", async () => {
+    const events: ServerLogEvent[] = [];
+    const current = setup({
+      activityLog: { write: (e) => events.push(e) },
+      connectEndpoint: () =>
+        Promise.reject(Object.assign(new Error("endpoint closed"), { code: "UNEXPECTED_EOF" })),
+    });
+    const releaseFailure = new Error("release failed");
+    vi.spyOn(current.registry, "completeLaunchFailure").mockRejectedValueOnce(releaseFailure);
+
+    await expect(current.manager.start(startInput)).rejects.toBe(releaseFailure);
+
+    expect(events).toStrictEqual([
+      expect.objectContaining({
+        op: "dap.debug-session.startup-attempt-failed",
+        errorKind: "unavailable",
+        extra: expect.objectContaining({
+          attempt: 1,
+          phase: "endpoint-connect",
+          failureCode: "UNEXPECTED_EOF",
+          retry: false,
+        }) as unknown,
+      }),
+    ]);
+  });
+
   it("does not treat another DAP event as initialized", async () => {
     vi.useFakeTimers();
     try {
