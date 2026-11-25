@@ -92,7 +92,7 @@ export interface ReviewServices {
   ): Promise<ReviewDiffPackageResult>;
   sweepRefs(trigger: ReviewRefSweepTrigger, correlationId?: string): Promise<ReviewRefSweepResult>;
   /** The observed hardened local review runner (rules file and finding evidence reads, #4135). */
-  reviewRunner(correlationId?: string): GitProcessRunner;
+  reviewRunner(correlationId?: string, options?: GitReviewRunnerOptions): GitProcessRunner;
   startup(correlationId?: string): Promise<void>;
   dispose(correlationId?: string): Promise<void>;
 }
@@ -223,7 +223,15 @@ class ReviewServicesImpl implements ReviewServices {
   }
 
   private retainedRefs(repositoryRoot: string): ReadonlySet<string> {
-    const refs = new Set(this.deps.retainedRunRefs?.(repositoryRoot) ?? []);
+    return new Set([
+      ...(this.deps.retainedRunRefs?.(repositoryRoot) ?? []),
+      ...this.liveRefs(repositoryRoot),
+    ]);
+  }
+
+  /** The refs the pinned, in-flight runs of one repository read. */
+  private liveRefs(repositoryRoot: string): ReadonlySet<string> {
+    const refs = new Set<string>();
     for (const pin of this.pinned.values()) {
       if (pin.repositoryRoot !== repositoryRoot) continue;
       for (const ref of pin.refs) refs.add(ref);
@@ -282,6 +290,7 @@ class ReviewServicesImpl implements ReviewServices {
         activityLog: this.deps.activityLog,
         now: this.now,
         retainedRefs: (repositoryRoot) => this.retainedRefs(repositoryRoot),
+        liveRefs: (repositoryRoot) => this.liveRefs(repositoryRoot),
         openPullRequests: (repositoryRoot) =>
           this.pullRequests.openNumbers(repositoryRoot, correlationId),
       },
@@ -290,8 +299,11 @@ class ReviewServicesImpl implements ReviewServices {
     );
   }
 
-  public reviewRunner(correlationId?: string): GitProcessRunner {
-    return this.localRunner({}, correlationId);
+  public reviewRunner(
+    correlationId?: string,
+    options: GitReviewRunnerOptions = {},
+  ): GitProcessRunner {
+    return this.localRunner(options, correlationId);
   }
 
   public startup(correlationId?: string): Promise<void> {

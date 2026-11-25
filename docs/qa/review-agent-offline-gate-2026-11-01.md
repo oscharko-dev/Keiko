@@ -426,13 +426,13 @@ dataset schema 2 (`sha256:376d45f51991cc68ec72c3d9ba40f29e0d93a9debf9cd47653cbb5
 `evaluateReviewPrecisionGate` evaluates the result. No review ran again; settlements, costs and
 finding locations are the stored ones.
 
-| Measure                                                   | Value                                    | Threshold     |
-| --------------------------------------------------------- | ---------------------------------------- | ------------- |
-| Verdict                                                   | fail                                     |               |
-| Reviews that did not settle `complete`                    | 185 of 229 (80.8 %)                      | at most 20 %  |
-| Actionable rate, hits / (hits + false alarms + undecided) | 53.1 % (17 / 32; 95 % CI 36.4 to 69.1 %) | at least 50 % |
-| Acceptance rate, hits / (hits + false alarms)             | 100 % (17 / 17), not gated               |               |
-| Findings per pull request                                 | mean 0.54, max 3                         | at most 3     |
+| Measure                                                                | Value                                    | Threshold     |
+| ---------------------------------------------------------------------- | ---------------------------------------- | ------------- |
+| Verdict                                                                | fail                                     |               |
+| Reviews that did not settle `complete`                                 | 185 of 229 (80.8 %)                      | at most 20 %  |
+| Actionable rate, hits / (hits + false alarms + undecided + duplicates) | 53.1 % (17 / 32; 95 % CI 36.4 to 69.1 %) | at least 50 % |
+| Acceptance rate, hits / (hits + false alarms)                          | 100 % (17 / 17), not gated               |               |
+| Findings per pull request                                              | mean 0.54, max 3                         | at most 3     |
 
 The 124 findings split into 17 hits, no false alarm, 15 undecided, 10 unmeasured, no duplicate and
 82 unmatched to any historical thread. The re-score matches findings against the anchors carried

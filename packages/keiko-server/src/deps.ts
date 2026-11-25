@@ -5462,12 +5462,17 @@ function attachReviewServicesLifecycle(args: UiHandlerDepsAssemblyArgs, deps: Ui
   }
   const disposeGraph = deps.dispose;
   Object.assign(deps, {
+    // A failing review disposal must not leave the database and the Coding graph open: the graph
+    // is disposed in any case, and the review failure still reaches the caller.
     dispose: async (): Promise<void> => {
-      await deps.reviewPolicy?.qualifications?.dispose();
-      await deps.reviewRunService?.dispose();
-      await deps.reviewRuntime?.dispose();
-      await reviewServices.dispose();
-      await disposeGraph?.();
+      try {
+        await deps.reviewPolicy?.qualifications?.dispose();
+        await deps.reviewRunService?.dispose();
+        await deps.reviewRuntime?.dispose();
+        await reviewServices.dispose();
+      } finally {
+        await disposeGraph?.();
+      }
     },
   });
 }
@@ -5535,7 +5540,7 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       counterCheckCandidate(
         {
           modelPortFactory: deps.modelPortFactory,
-          runner: () => reviewServices.reviewRunner(input.runCorrelationId),
+          runner: (options) => reviewServices.reviewRunner(input.runCorrelationId, options),
           activityLog,
           // R4130-067: a counter-check turn never asks for more output than the model declares.
           declaredMaxOutputTokens: (modelId) => {

@@ -30,6 +30,8 @@ export interface ReviewRefRetentionDeps {
   readonly now: () => number;
   /** Refs a live worktree or a retained review run still needs, per repository root. */
   readonly retainedRefs: (repositoryRoot: string) => ReadonlySet<string>;
+  /** Refs a running review reads right now; no rule deletes them until the run lets go. */
+  readonly liveRefs: (repositoryRoot: string) => ReadonlySet<string>;
   /** Open pull request numbers when known completely; `undefined` skips the closed-PR criterion. */
   readonly openPullRequests: (repositoryRoot: string) => Promise<ReadonlySet<number> | undefined>;
 }
@@ -49,6 +51,7 @@ function pullRequestNumber(ref: string): number | undefined {
 
 interface RepositoryFacts {
   readonly retained: ReadonlySet<string>;
+  readonly live: ReadonlySet<string>;
   readonly open: ReadonlySet<number> | undefined;
   readonly records: ReadonlyMap<string, ReviewPrivateRefRecord>;
   readonly nowMs: number;
@@ -56,6 +59,9 @@ interface RepositoryFacts {
 
 /** Whether one private ref must be deleted now. Exported for the retention rule's unit tests. */
 export function reviewRefExpired(ref: string, facts: RepositoryFacts): boolean {
+  // A pull request that closes, or a ref that turns 30 days old, while a review still reads it
+  // must not pull the head out from under that run; the next sweep after the run settles applies.
+  if (facts.live.has(ref)) return false;
   if (!facts.retained.has(ref)) return true;
   const record = facts.records.get(ref);
   if (record !== undefined && facts.nowMs - record.createdAtMs > REVIEW_PRIVATE_REF_RETENTION_MS) {
@@ -101,6 +107,7 @@ async function sweepRepository(
   if (!listed.ok) return { deleted: 0, dropped: [], retained: 0, failed: 1 };
   const facts: RepositoryFacts = {
     retained: deps.retainedRefs(repositoryRoot),
+    live: deps.liveRefs(repositoryRoot),
     open: await openPullRequestsOrUnknown(deps, repositoryRoot, correlationId),
     records: new Map(records.map((record) => [record.ref, record])),
     nowMs: deps.now(),

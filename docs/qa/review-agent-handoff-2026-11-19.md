@@ -100,8 +100,8 @@ scripts/testing/review-quality/lab/lab.sh run 8bit seeds
 
 These owner decisions are binding for the rest of the epic:
 
-- The gated rate is hits / (hits + false alarms + undecided). The not-complete limit is 20 % and is
-  never loosened.
+- The gated rate is hits / (hits + false alarms + undecided + duplicates), as `precision-gate.ts`
+  counts it. The not-complete limit is 20 % and is never loosened.
 - A holdout runs once, and holdout pull requests are never used to tune prompts.
 - Work on children #4139 to #4142 does not start until a holdout passes.
 - Pull requests into the epic branch may be merged once green and reviewed; only @oscharko merges

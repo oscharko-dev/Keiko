@@ -15,6 +15,7 @@ function facts(
 ): Parameters<typeof reviewRefExpired>[1] {
   return {
     retained: new Set([REF, LOCAL]),
+    live: new Set(),
     open: new Set([12]),
     records: new Map([
       [REF, { ref: REF, repositoryRoot: "/r", createdAtMs: 0, pullRequestNumber: 12 }],
@@ -38,6 +39,14 @@ describe("reviewRefExpired", () => {
     expect(reviewRefExpired(REF, facts({ open: new Set([13]) }))).toBe(true);
     expect(reviewRefExpired(REF, facts({ open: undefined }))).toBe(false);
     expect(reviewRefExpired(LOCAL, facts({ open: new Set() }))).toBe(false);
+  });
+
+  it("never expires a ref a running review still reads, whatever its pull request or age", () => {
+    const live = new Set([REF]);
+    expect(reviewRefExpired(REF, facts({ live, open: new Set([13]) }))).toBe(false);
+    expect(reviewRefExpired(REF, facts({ live, nowMs: REVIEW_PRIVATE_REF_RETENTION_MS + 1 }))).toBe(
+      false,
+    );
   });
 
   it("expires a ref after 30 days even while referenced", () => {

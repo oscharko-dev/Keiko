@@ -3,8 +3,9 @@
 // The rules come from the BASE commit object only: `<baseSha>:<path>` is resolved and read through
 // the hardened review runner, never from the head commit, the review worktree or the user's
 // checkout, so a pull request cannot change the rules it is reviewed against. The path is the
-// repository's configured review-rules path (default `.keiko/review-rules.md`); `AGENTS.md` is never
-// read here. The content is untrusted data: it reaches the Reviewer only inside a fenced data
+// repository's configured review-rules path (default `.keiko/review-rules.md`); a denied sensitive
+// path (`.env`, keys, credentials) is refused like any other invalid path, because the text reaches
+// the Reviewer's model. The content is untrusted data: it reaches the Reviewer only inside a fenced data
 // block (`reviewPrompt.ts`) and never decides a tool, a permission or the output contract.
 
 import {
@@ -13,6 +14,7 @@ import {
   type ReviewRulesFileOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { isReviewRulesFilePath } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   readGitReviewBlob,
   readGitReviewPathObject,
@@ -66,11 +68,14 @@ function readFailure(result: GitProcessResult): ReviewRulesReadFailure {
 
 /**
  * Resolves the configured path: absent is the default, anything that is not a portable,
- * workspace-relative path is `path-invalid` (never a lookup outside the tree).
+ * workspace-relative path is `path-invalid` (never a lookup outside the tree), and so is a denied
+ * sensitive path: the same denial the Reviewer's and the counter-check's reads apply. The default
+ * lives under `.keiko/`, which that denial covers for workspace reads; it is Keiko's own path.
  */
 export function resolveReviewRulesPath(path: string | undefined): string | undefined {
   const candidate = path ?? REVIEW_RULES_FILE_DEFAULT_PATH;
-  return isReviewRulesFilePath(candidate) ? candidate : undefined;
+  if (candidate === REVIEW_RULES_FILE_DEFAULT_PATH) return candidate;
+  return isReviewRulesFilePath(candidate) && !isDenied(candidate) ? candidate : undefined;
 }
 
 /** A decoded rules text Keiko admits: no replacement character (invalid UTF-8) and no NUL. */

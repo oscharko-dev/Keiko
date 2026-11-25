@@ -174,7 +174,7 @@ function deps(
 ): CounterCheckDeps {
   return {
     modelPortFactory: () => (model === undefined ? undefined : { call: model.call }),
-    runner: () => createGitReviewProcessRunner(),
+    runner: (runnerOptions) => createGitReviewProcessRunner(runnerOptions),
     activityLog: log.sink,
     limits,
   };
@@ -291,6 +291,21 @@ describe("counterCheckCandidate", () => {
       reasonCode: "insufficient-context",
     });
     expect(outcome.effect).toBe("none");
+  });
+
+  it("searches the head even when the pull request's .gitattributes marks every file binary", async () => {
+    // A hostile head can ship `* binary`; `git grep -I` would then skip every file and hide a guard
+    // from the counter-check. The search reads attributes from the empty tree, never the head.
+    headSha = commitFile(repo, ".gitattributes", "* binary\n", "hide every file from grep");
+    const candidate = await candidateOf(report());
+    const model = scripted([
+      { tool: TOOLS.search, args: { literal: "GUARD_MARKER" } },
+      { text: "no verdict" },
+    ]);
+    await check(model, candidate);
+    expect(model.toolOutputs.join("\n")).toContain(
+      "src/total.ts:6: export const GUARD_MARKER = 1;",
+    );
   });
 
   it("ignores free text and an invalid verdict: undecided with insufficient context", async () => {

@@ -122,6 +122,21 @@ describe("readReviewRulesFromBase", () => {
     }
   });
 
+  it("refuses a configured path that names a denied sensitive file, even when it is tracked", async () => {
+    const repo = fixture();
+    const base = repo.commit([
+      { path: ".env", content: "TOKEN=secret\n" },
+      { path: "config/id_rsa", content: "key\n" },
+    ]);
+
+    for (const path of [".env", "config/id_rsa"]) {
+      await expect(read(repo, base, path)).resolves.toEqual({
+        outcome: "path-invalid",
+        byteCount: 0,
+      });
+    }
+  });
+
   it("uses the default path when the repository configures none and never reads AGENTS.md", async () => {
     const repo = fixture();
     const base = repo.commit([

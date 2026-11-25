@@ -54,6 +54,7 @@ import type {
   ReviewDiffPackageLimits,
   ReviewDiffPackageResult,
 } from "./types.js";
+import { reviewObjectFormat } from "../objectFormat.js";
 
 const LISTING_TIMEOUT_MS = 120_000;
 const FILE_TIMEOUT_MS = 60_000;
@@ -139,7 +140,7 @@ function operationContext(
 ): Pick<ReviewDiffReadContext, "ctx" | "fileCtx"> {
   const runner = deps.runner({
     bigFileThresholdBytes: limits.blobLimitBytes,
-    neutralizeTreeAttributes: sha.length === 40 ? "sha1" : "sha256",
+    neutralizeTreeAttributes: reviewObjectFormat(sha),
   });
   const base: GitReviewOperationContext = { runner, abortSignal: abort.signal };
   return {

@@ -25,7 +25,7 @@ import {
   REVIEW_COUNTER_CHECK_PROFILE,
   REVIEW_COUNTER_CHECK_TOOL_ALIASES,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
+import type { GitProcessRunner, GitReviewRunnerOptions } from "@oscharko-dev/keiko-git";
 
 import {
   runGovernedReadOnlySession,
@@ -57,6 +57,7 @@ import {
   type CounterCheckToolsetInput,
   type CounterCheckToolsetState,
 } from "./tools.js";
+import { reviewObjectFormat } from "../objectFormat.js";
 
 const ATTESTATIONS = (["read", "discover", "search", "verdict"] as const).map((tool) => ({
   alias: REVIEW_COUNTER_CHECK_TOOL_ALIASES[tool],
@@ -84,7 +85,11 @@ export const DEFAULT_COUNTER_CHECK_LIMITS: CounterCheckLimits = {
 
 export interface CounterCheckDeps {
   readonly modelPortFactory: (modelId: string) => ModelPort | undefined;
-  readonly runner: () => GitProcessRunner;
+  /**
+   * The hardened local review runner. The counter-check asks for one that reads `.gitattributes`
+   * from the empty tree, so a head's attributes cannot hide files from its search.
+   */
+  readonly runner: (options: GitReviewRunnerOptions) => GitProcessRunner;
   readonly activityLog: ServerLogSink;
   readonly limits?: Partial<CounterCheckLimits> | undefined;
   /**
@@ -287,7 +292,9 @@ function counterCheckToolset(
     attestations: ATTESTATIONS,
     tools: createCounterCheckToolPort(
       {
-        runner: deps.runner(),
+        runner: deps.runner({
+          neutralizeTreeAttributes: reviewObjectFormat(input.headSha),
+        }),
         worktreeRoot: input.worktreeRoot,
         headSha: input.headSha,
         fingerprint: input.candidate.fingerprint,

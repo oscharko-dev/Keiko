@@ -103,6 +103,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ServerLogEvent } from "./observability/index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createReviewServices } from "./review/services.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
 import { UI_HOST } from "./server.js";
@@ -117,6 +118,7 @@ import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { RuntimeShutdownCleanup } from "./deps-activity.js";
+import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
@@ -1513,6 +1515,28 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     } finally {
       await deps.dispose?.();
     }
+  });
+
+  it("still closes the store and the Coding graph when a review service fails to dispose", async () => {
+    const stateDir = tmp("review-dispose-failure-");
+    const reviewServices = createReviewServices({
+      reviewRoot: join(stateDir, "review"),
+      activityLog: captureActivityLog().sink,
+    });
+    vi.spyOn(reviewServices, "dispose").mockRejectedValue(new Error("review dispose failed"));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("review-dispose-failure-evidence-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      reviewServices,
+    });
+    expect(deps.store.listProjects()).toEqual([]);
+
+    await expect(deps.dispose?.()).rejects.toThrow("review dispose failed");
+
+    // The graph's own dispose ran after the failed review disposal: the database is closed.
+    expect(() => deps.store.listProjects()).toThrow();
   });
 
   it("diagnoses a DAP production composition failure instead of only marking it unavailable", () => {

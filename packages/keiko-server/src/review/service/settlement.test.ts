@@ -33,6 +33,14 @@ describe("settleReviewRun", () => {
     expect(settle({ counterChecks: [] })).toEqual({ kind: "complete" });
   });
 
+  it("never settles complete when the Reviewer's outcome or the coverage was never recorded", () => {
+    expect(settle({ reviewer: undefined })).toEqual({ kind: "incomplete", reason: "model-failed" });
+    expect(settle({ coverage: undefined })).toEqual({
+      kind: "incomplete",
+      reason: "files-unprocessed",
+    });
+  });
+
   it("reaches every incomplete reason", () => {
     expect(settle({ coverage: { kind: "incomplete", reason: "files-unprocessed" } })).toEqual({
       kind: "incomplete",

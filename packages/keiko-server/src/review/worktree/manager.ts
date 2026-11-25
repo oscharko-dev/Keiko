@@ -62,6 +62,7 @@ import {
   type ReviewTreeLimits,
   type ReviewTreeScan,
 } from "./treeScan.js";
+import { reviewObjectFormat } from "../objectFormat.js";
 
 const GIT_TIMEOUT_MS = 120_000;
 const LISTING_MAX_BYTES = 64 * 1024 * 1024;
@@ -334,7 +335,7 @@ class ReviewWorktreeManagerImpl implements ReviewWorktreeManager {
     const limits = this.limits;
     const runnerOptions = {
       bigFileThresholdBytes: limits.blobLimitBytes,
-      neutralizeTreeAttributes: sha.length === 40 ? "sha1" : "sha256",
+      neutralizeTreeAttributes: reviewObjectFormat(sha),
     } as const;
     const base = context(this.deps.runner(runnerOptions, correlationId), abort.signal);
     unwrap(await addGitReviewWorktree(base, { repositoryRoot, path, sha }), abort);

@@ -54,7 +54,11 @@ describe("scale", () => {
     const started = performance.now();
     const result = await packaged(fixture, base, head, { budgetTokens: 120_000 });
     const elapsed = performance.now() - started;
-    expect(elapsed).toBeLessThan(LARGE_FIXTURE_BOUND_MS);
+    // A measured duration gates only where wall-clock budgets are enforced (ADR-0139 D1): a loaded
+    // runner must not fail the behaviour asserted below.
+    if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1") {
+      expect(elapsed).toBeLessThan(LARGE_FIXTURE_BOUND_MS);
+    }
     expect(result.coverage.summary.changedFiles).toBe(2_000);
     expect(reportedCount(result.coverage)).toBe(2_000);
     expect(countContextTokens(result.text)).toBeLessThanOrEqual(120_000);
@@ -257,7 +261,11 @@ describe("pathological hunks", () => {
     const result = await packaged(fixture, base, head, { budgetTokens: 13_832, maxParts: 12 });
     const elapsed = performance.now() - started;
 
-    expect(elapsed).toBeLessThan(LARGE_FIXTURE_BOUND_MS);
+    // A measured duration gates only where wall-clock budgets are enforced (ADR-0139 D1): a loaded
+    // runner must not fail the behaviour asserted below.
+    if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1") {
+      expect(elapsed).toBeLessThan(LARGE_FIXTURE_BOUND_MS);
+    }
     expect(result.windowedHunks).toBe(0);
     expect(result.files.map((file) => file.coverage.path)).toEqual(["s1.ts"]);
     expect(result.coverage.unprocessed.map((file) => file.path).sort()).toEqual(names);
