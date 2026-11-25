@@ -1546,6 +1546,13 @@ describe("GitClientWindow — repository list", () => {
     await waitFor(() =>
       expect(vi.mocked(client.getStatus).mock.calls.at(-1)?.[0]).toBe(REPO_B.path),
     );
+    // The new window writes its own branch connector once its status arrives. Count from after
+    // that write, so only a write of the replaced window's registration can change the count.
+    await waitFor(() =>
+      expect(updateCfg).toHaveBeenLastCalledWith(
+        expect.objectContaining({ gitChangeHeadRef: "main" }),
+      ),
+    );
     const cfgWritesBefore = updateCfg.mock.calls.length;
     await act(async () => {
       resolveRegistration(makeProjectResponse(handedOff));
