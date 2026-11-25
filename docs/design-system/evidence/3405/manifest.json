@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-25T12:58:19.186Z",
+  "generatedAt": "2026-11-25T15:36:54.701Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -89,7 +89,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.module.css",
-      "sha256": "f006cca56743db6c5657098c63f6fc2c5c6d8671942f2b7ea5664eab222a8642"
+      "sha256": "e91fab6bcb0de0304e1b0f9e59230ad55787f7b4005a86e5a7ba54280617f834"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
@@ -137,7 +137,7 @@
     }
   ],
   "harnessProvenanceSha256": {
-    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "da27cc7608262e1da586363dca36d91509925b8aa8181241bfe708c6282846aa",
+    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "b551f4eb24b74b4cf44d6970b756edad6c9959ea3c89cbe938e8fe8122e09f76",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
     "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
     "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f",
