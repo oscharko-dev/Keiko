@@ -203,6 +203,13 @@ import {
   CodingWorkbenchRunAnnouncement,
   CodingWorkbenchRunStatus,
 } from "./CodingWorkbenchRunStatus";
+import { failedCommandCount } from "./CodingWorkbenchToolDetail";
+import {
+  feedRowCount,
+  JumpToLatest,
+  ListFollowContext,
+  useJoinedFollow,
+} from "./CodingWorkbenchJumpToLatest";
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
@@ -1723,10 +1730,12 @@ function WorkbenchColumns({
     onScroll: onStreamScroll,
     regionRef: streamRegionRef,
     resume: followNewest,
+    paused: followPaused,
   } = useFollowNewest(
     sessionStreamRef,
     `${sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length)}:${transcriptGrowthKey(history.detail)}`,
   );
+  const joinedFollow = useJoinedFollow(followPaused, followNewest);
   const runId = state.run.value?.runId;
   const shownTaskId = history.detail?.task.id;
   useEffect(() => {
@@ -1896,6 +1905,7 @@ function WorkbenchColumns({
         events: state.events,
         pendingDecision: questions.questions.length > 0 || editorBridge.pendingReview !== null,
       })}
+      failedCommandCount={failedCommandCount(activity.feed)}
     />
   );
   const showWelcome = welcomeEligible(history, state, {
@@ -1993,27 +2003,35 @@ function WorkbenchColumns({
               runId={state.run.value?.runId}
               revision={state.run.value?.revision}
             />
-            <Timeline
-              active={runIsActive}
-              generating={generatingRunState(state.run.value?.state)}
-              events={timeline.events}
-              activity={timeline.activity}
-              questions={questions}
-              focusRef={focusRef}
-              onRunCheck={
-                canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
-                  ? (): void => {
-                      taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
-                    }
-                  : undefined
-              }
-            />
+            <ListFollowContext.Provider value={joinedFollow.reportList}>
+              <Timeline
+                active={runIsActive}
+                generating={generatingRunState(state.run.value?.state)}
+                events={timeline.events}
+                activity={timeline.activity}
+                questions={questions}
+                focusRef={focusRef}
+                onRunCheck={
+                  canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
+                    ? (): void => {
+                        taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
+                      }
+                    : undefined
+                }
+              />
+            </ListFollowContext.Provider>
             <CodingWorkbenchRevertBar
               revert={revert.revert}
               busy={state.mutation.status === "pending"}
               onRevert={(action): void => void actions.revert(action)}
             />
             <CodingWorkbenchChangesView changes={journeyChanges} pairing={state.pairing} />
+            <JumpToLatest
+              paused={joinedFollow.paused}
+              rowCount={feedRowCount(activity.feed)}
+              onJump={joinedFollow.jump}
+              t={t}
+            />
           </div>
         )}
       </div>

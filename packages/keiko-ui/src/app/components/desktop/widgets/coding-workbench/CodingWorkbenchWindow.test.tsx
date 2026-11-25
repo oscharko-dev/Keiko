@@ -1029,19 +1029,36 @@ describe("CodingWorkbenchWindow", () => {
         expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
       });
 
-      it("shows a message above the per-message bound cut and marked, once, and says so", () => {
+      it("shows a prompt above the per-message bound cut and marked, once, and says so", () => {
         const oversized = CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES * 3;
         renderRestored([
-          historyMessage("m-3", "run-7", "user", labelledText("P1", PROMPT_CHARS)),
-          historyMessage("m-4", "run-7", "assistant", labelledText("A1", oversized)),
+          historyMessage("m-3", "run-7", "user", labelledText("P1", oversized)),
+          historyMessage("m-4", "run-7", "assistant", labelledText("A1", PROMPT_CHARS)),
         ]);
 
         expect(inTimeline("P1") + inTranscript("P1")).toBe(1);
         expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
         // What the bound cut is shown nowhere, and the page says so on the message and the activity.
-        expect(endShown(shownText(), "A1")).toBe(false);
+        expect(endShown(shownText(), "P1")).toBe(false);
         expect(screen.getAllByText(/Output truncated/u)).toHaveLength(1);
         expect(screen.getByText("Activity truncated.")).toBeInTheDocument();
+      });
+
+      // Owner decision "Work-ending limits": a model's answer of 100+ KiB is restored whole, to its
+      // last character, once, with no truncation mark — the feed's bound never cuts an answer.
+      it("restores an answer far above the per-message bound whole, once, and unmarked", () => {
+        const oversized = 112 * 1024;
+        expect(oversized).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES * 6);
+        renderRestored([
+          historyMessage("m-3", "run-7", "user", labelledText("P1", PROMPT_CHARS)),
+          historyMessage("m-4", "run-7", "assistant", labelledText("A1", oversized)),
+        ]);
+
+        expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
+        expect(endShown(timelineText(), "A1")).toBe(true);
+        expect(screen.queryByText(/Output truncated/u)).not.toBeInTheDocument();
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Copy answer as Markdown" })).toBeInTheDocument();
       });
 
       it("says the activity is truncated when Coding History itself cut the task's messages", () => {
@@ -2192,7 +2209,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
-    expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
+    expect(screen.getByTestId("coding-runtime-elapsed")).toHaveTextContent(/^Elapsed /u);
     expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
     const readiness = screen.getByTestId("coding-runtime-readiness");
     expect(readiness).toHaveTextContent("Model source ready.");
@@ -4357,8 +4374,10 @@ describe("CodingWorkbenchWindow", () => {
 
     const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
     expect(timeline).toHaveTextContent("Review the repository");
-    expect(timeline).toHaveTextContent("Workspace Read");
-    expect(timeline).toHaveTextContent("workspace.read");
+    // An id Keiko has no name for reads "Tool"; the id is the row's tooltip only.
+    expect(timeline).toHaveTextContent("Tool");
+    expect(timeline).not.toHaveTextContent("workspace.read");
+    expect(timeline.querySelector('[title="workspace.read"]')).not.toBeNull();
     expect(timeline).toHaveTextContent("Succeeded");
     expect(timeline).toHaveTextContent("Current plan");
     expect(timeline).toHaveTextContent("Output truncated");

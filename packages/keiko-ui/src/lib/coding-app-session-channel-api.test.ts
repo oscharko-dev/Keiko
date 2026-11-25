@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contracts";
 
 import {
+  getCodingAppSessionAnswerPage,
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
   STREAM_INACTIVITY_TIMEOUT_MS,
@@ -189,6 +190,71 @@ describe("coding app-session channel API", () => {
 // snapshot — for longer than STREAM_INACTIVITY_TIMEOUT_MS aborts the reader and rejects with a typed
 // error, and (b) heartbeat-only chunks reset the clock, so a quiet-but-alive stream is never
 // mistaken for a dead one.
+describe("coding app-session answer pages", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("reads one validated page of a named answer by run, message and offset", async () => {
+    const page = {
+      schemaVersion: "1",
+      runId: "run-1",
+      messageId: "message-1",
+      part: "answer",
+      offset: 4,
+      text: "rest of the answer",
+      length: 22,
+      truncated: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ schemaVersion: "1", page }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getCodingAppSessionAnswerPage({ runId: "run-1", messageId: "message-1", offset: 4 }),
+    ).resolves.toEqual({ schemaVersion: "1", page });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/coding-workbench/app-session/channel/answer?runId=run-1&messageId=message-1&part=answer&offset=4",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("accepts the page-free reply and fails closed on a page that breaks the contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ schemaVersion: "1", page: null }))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            schemaVersion: "1",
+            page: {
+              schemaVersion: "1",
+              runId: "run-1",
+              messageId: "message-1",
+              part: "answer",
+              offset: 30,
+              text: "beyond the end",
+              length: 22,
+              truncated: false,
+            },
+          }),
+        ),
+    );
+    const request = { runId: "run-1", messageId: "message-1", offset: 0 };
+
+    await expect(getCodingAppSessionAnswerPage(request)).resolves.toEqual({
+      schemaVersion: "1",
+      page: null,
+    });
+    await expect(getCodingAppSessionAnswerPage(request)).rejects.toThrow();
+  });
+});
+
 describe("KEIKO-0308 — stream inactivity guard", () => {
   afterEach(() => {
     vi.useRealTimers();

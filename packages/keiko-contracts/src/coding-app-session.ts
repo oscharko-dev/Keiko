@@ -16,8 +16,12 @@ import {
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 import {
+  validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
+  type CodingSafeActivityAnswerPage,
   type CodingSafeActivityFeed,
+  type CodingSafeActivityTextDelta,
 } from "./coding-safe-activity.js";
 
 export {
@@ -107,6 +111,12 @@ export interface CodingAppSessionTextContent {
 export interface CodingAppSessionSafeActivityContent {
   readonly kind: "safe-activity";
   readonly feed: CodingSafeActivityFeed;
+  /**
+   * The model text appended since the previous live update, for a reader to append in place. Only a
+   * live update carries deltas, and never more than the snapshot budget admits: what one leaves
+   * out, the reader reads as pages.
+   */
+  readonly textDeltas?: readonly CodingSafeActivityTextDelta[];
 }
 
 export type CodingAppSessionChannelContent =
@@ -135,6 +145,37 @@ export function contentFreeCodingAppSessionChannelSnapshot(): CodingAppSessionCh
   return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION, content: null };
 }
 
+/**
+ * One page of a retained assistant answer the feed names (`fullAnswer`), read over the authenticated
+ * channel. Fail-closed like the snapshot (ADR-0141 D6): an unpaired caller, an unknown run or
+ * message and an expired projection all receive the same `page: null` shape.
+ */
+export interface CodingAppSessionAnswerResponse {
+  readonly schemaVersion: typeof CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION;
+  readonly page: CodingSafeActivityAnswerPage | null;
+}
+
+/** The single source of the fail-closed page-free answer response. */
+export function contentFreeCodingAppSessionAnswerResponse(): CodingAppSessionAnswerResponse {
+  return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION, page: null };
+}
+
+/** Validate an answer response: exact keys, correct version, and a valid page or `null`. */
+export function validateCodingAppSessionAnswerResponse(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingAppSessionAnswerResponse> {
+  if (!isRecord(value)) return invalid("answer response must be an object");
+  const errors = exactKeys(value, ["schemaVersion", "page"], "answerResponse");
+  if (value.schemaVersion !== CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION) {
+    errors.push("answerResponse.schemaVersion is invalid");
+  }
+  if (!("page" in value)) errors.push("answerResponse.page is required");
+  else if (value.page !== null && !validateCodingSafeActivityAnswerPage(value.page).ok) {
+    errors.push("answerResponse.page is invalid");
+  }
+  return result(value, errors);
+}
+
 /** The content-free acknowledgement shape returned by pairing and lifecycle endpoints. */
 export function codingAppSessionAcknowledgement(): CodingAppSessionAcknowledgement {
   return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION };
@@ -160,9 +201,12 @@ function checkChannelContent(value: unknown, path: string, errors: string[]): vo
     return;
   }
   if (value.kind === "safe-activity") {
-    errors.push(...exactKeys(value, ["kind", "feed"], path));
+    errors.push(...exactKeys(value, ["kind", "feed", "textDeltas"], path));
     if (!validateCodingSafeActivityFeed(value.feed).ok) {
       errors.push(`${path}.feed is invalid`);
+    }
+    if ("textDeltas" in value) {
+      validateCodingSafeActivityTextDeltas(value.textDeltas, `${path}.textDeltas`, errors);
     }
     return;
   }

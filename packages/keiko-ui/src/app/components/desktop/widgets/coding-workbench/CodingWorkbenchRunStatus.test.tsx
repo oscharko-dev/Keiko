@@ -185,6 +185,38 @@ describe("CodingWorkbenchRunStatus", () => {
   // read "Running. Revision 4." for the whole outage and a screen reader user heard nothing of it.
   // The gateway phase is part of the polite, atomic status sentence — which is also the visible
   // text, so the phase is shown once, not twice — and no separate phase span repeats it.
+  // A failed command is a fact beside the run sentence, outside the live region, so a growing count
+  // never interrupts the reader; no failure, no fact.
+  it("counts the run's failed commands beside the run sentence, never inside its live region", () => {
+    const { rerender } = render(
+      <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />,
+    );
+    expect(screen.queryByTestId("coding-runtime-failed-commands")).toBeNull();
+    rerender(
+      <CodingWorkbenchRunStatus
+        state={RUNNING}
+        researchGrant={null}
+        phase="model"
+        failedCommandCount={1}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-failed-commands")).toHaveTextContent(
+      /^1 command failed$/u,
+    );
+    rerender(
+      <CodingWorkbenchRunStatus
+        state={RUNNING}
+        researchGrant={null}
+        phase="model"
+        failedCommandCount={3}
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-failed-commands")).toHaveTextContent(
+      /^3 commands failed$/u,
+    );
+    expect(screen.getByTestId("coding-runtime-announcement")).not.toHaveTextContent("failed");
+  });
+
   it("announces a model gateway that is unavailable and being retried in the live status sentence", async () => {
     const { container } = render(
       <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="gateway" />,

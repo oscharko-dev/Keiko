@@ -38,6 +38,7 @@ import {
   isOpenCodeToolExecutionFailure,
 } from "./opencodeNativeTools.js";
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
+import { openCodeToolDetail } from "./codingSafeActivityToolDetail.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
@@ -633,13 +634,18 @@ function toolState(
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
   const exit = name === "shell" ? shellExitEvidence(state) : {};
+  const displayState = displayToolState(name, state);
+  // What the row shows beside its state: the command, the error, the output's ends and the origin
+  // of a failure (owner order 2026-11-25). Credential floor only; never logged or stored.
+  const detail = openCodeToolDetail(name, part, state, displayState);
   return {
     kind: "tool",
     messageId,
     callId: id,
     tool: name,
-    state: displayToolState(name, state),
+    state: displayState,
     occurredAt: toolOccurredAt(part),
+    ...(Object.keys(detail).length === 0 ? {} : { presentation: detail }),
     ...exit,
   };
 }
