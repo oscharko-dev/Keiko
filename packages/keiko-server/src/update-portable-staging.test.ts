@@ -648,6 +648,17 @@ describe("portable archive limit guards", () => {
     );
   });
 
+  // #4495: OpenCode 2.4.1's Windows executable (278,383,496 bytes, about 110 MB compressed) is one
+  // entry of the portable payload; a 256 MiB entry bound refused every Windows update carrying it.
+  it("accepts the OpenCode 2.4.1 Windows executable as one entry", () => {
+    expect(() => {
+      assertPortableArchiveEntryLimits(
+        { compressedSize: 110_000_000, uncompressedSize: 278_383_496 },
+        { entries: 0, inflated: 0 },
+      );
+    }).not.toThrow();
+  });
+
   it("applies the frozen archive, inflation, current-tree, and 512 MiB disk formula", () => {
     expect(requiredPortableDiskBytes(100, 200, 300)).toBe(200 + 300 + 512 * 1024 * 1024);
     expect(requiredPortableDiskBytes(10_000_000_000, 200, 300)).toBe(

@@ -42,6 +42,7 @@ import {
   windowsGenerationBindingsEqual,
   type WindowsGenerationBinding,
 } from "./update-portable-windows-generation.js";
+import { sha256FileSync } from "./file-sha256.js";
 
 export interface PortableActivationFileInput {
   readonly sessionId: string;
@@ -95,10 +96,6 @@ export class PortableUpdateActivationError extends Error {
     super(message);
     this.name = "PortableUpdateActivationError";
   }
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function sha256Text(value: string): string {
@@ -258,7 +255,7 @@ function validateLayout(
   validateSetupManifest(setupManifest, target, targetVersion);
   if (
     layout.windowsGeneration !== undefined &&
-    sha256File(layout.launcherPath) !== layout.windowsGeneration.launcherSha256
+    sha256FileSync(layout.launcherPath) !== layout.windowsGeneration.launcherSha256
   ) {
     throw activationFailed("portable activation root launcher digest did not match setup");
   }
@@ -835,7 +832,7 @@ export function portableRegistrationDocument(input: {
 }): string {
   const manifest = readJsonRecord(input.layout.setupManifestPath);
   const launcherIdentitySha256 =
-    input.launcherIdentitySha256 ?? sha256File(input.layout.launcherPath);
+    input.launcherIdentitySha256 ?? sha256FileSync(input.layout.launcherPath);
   if (!/^[a-f0-9]{64}$/u.test(launcherIdentitySha256)) {
     throw activationFailed("portable registration launcher identity is invalid");
   }
@@ -856,7 +853,7 @@ export function portableRegistrationDocument(input: {
       input.env,
       input.home,
     ),
-    setupManifestSha256: sha256File(input.layout.setupManifestPath),
+    setupManifestSha256: sha256FileSync(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realpathSync(input.layout.installRoot)),
     launcherIdentitySha256,
     ...(windowsGeneration === undefined ? {} : { windowsGeneration }),

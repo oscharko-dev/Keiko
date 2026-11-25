@@ -34,6 +34,7 @@ import {
   secureWorkspaceReadNativeProtocol,
   type SecureWorkspaceTextReadArtifact,
 } from "./secureWorkspaceTextReadArtifact.js";
+import { sha256FileSync } from "../file-sha256.js";
 
 export const KEIKO_CODING_RUNTIME_DEV_LANE_ENV = "KEIKO_CODING_RUNTIME_DEV_LANE";
 export const DEV_LANE_STAGED_PAYLOADS_DIR = ".portable-sidecar-payloads";
@@ -313,7 +314,7 @@ function npmLaneRuntimeSupervisor(
   if (pin === undefined) return { ok: false, refusal: "payload-unapproved" };
   const path = join(runtimeRoot, runtimeSupervisorRelativePath(target));
   if (!isRegularFile(path)) return { ok: false, refusal: "payload-missing" };
-  if (statSync(path).size !== pin.sizeBytes || sha256File(path) !== pin.sha256) {
+  if (statSync(path).size !== pin.sizeBytes || sha256FileSync(path) !== pin.sha256) {
     return { ok: false, refusal: "payload-tampered" };
   }
   return { ok: true, supervisor: { path, sha256: pin.sha256 } };
@@ -343,7 +344,7 @@ function selectNpmLanePackage(
   if (!payload.ok) return { ok: false, refusal: payload.refusal };
   if (!isRegularFile(helperPath)) return { ok: false, refusal: "secure-read-helper-missing" };
   const helperMatches =
-    sha256File(helperPath) === approval.helperSha256 &&
+    sha256FileSync(helperPath) === approval.helperSha256 &&
     statSync(helperPath).size === approval.helperSizeBytes;
   return helperMatches
     ? { ok: true, payload, helper: approval, helperPath }
@@ -769,7 +770,7 @@ function verifiedSecureRead(
   }
   const helperStat = statSync(helperPath);
   if (
-    sha256File(helperPath) !== manifest.sha256 ||
+    sha256FileSync(helperPath) !== manifest.sha256 ||
     helperStat.size !== manifest.sizeBytes ||
     hashHelperSourceTree(join(checkoutRoot, HELPER_SOURCE_DIR)) !== manifest.sourceTreeSha256
   ) {
@@ -813,7 +814,7 @@ function verifiedRuntimeSupervisor(
     target,
   );
   if (manifest === undefined || !isRegularFile(path)) return undefined;
-  const sha256 = sha256File(path);
+  const sha256 = sha256FileSync(path);
   const valid =
     sha256 === manifest.sha256 &&
     statSync(path).size === manifest.sizeBytes &&
@@ -955,10 +956,6 @@ function isRegularFile(path: string): boolean {
   }
 }
 
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function digestText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -993,7 +990,7 @@ function hashTree(root: string, order: (left: string, right: string) => number):
   const hash = createHash("sha256");
   for (const file of listFiles(root, order)) {
     const rel = relative(root, file).split(sep).join("/");
-    hash.update(`${rel}\0${sha256File(file)}\0`);
+    hash.update(`${rel}\0${sha256FileSync(file)}\0`);
   }
   return hash.digest("hex");
 }

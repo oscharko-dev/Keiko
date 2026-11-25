@@ -117,7 +117,8 @@ pattern probe, not the full stager or a native release-device baseline; temporar
 Current-tree M is unavailable, so the disk formula fails closed rather than claiming a pass.
 
 Frozen engineering defaults are: current caps 256,000-byte text, 512 MiB archive, 60,000 entries,
-2 GiB tree, 256 MiB/entry, 100x ratio, three redirects, five minutes/request, 30 seconds/platform
+2 GiB tree, 256 MiB/entry (1 GiB since #4495: OpenCode 2.4.1's Windows executable is 278,383,496
+bytes; every reader hashes or copies it in 1 MiB chunks), 100x ratio, three redirects, five minutes/request, 30 seconds/platform
 command; preflight 8 seconds/request; portable operation 15-minute monotonic deadline covering
 archive read, extraction/hash/native verify/cleanup; relaunch 30 seconds; native output 16 KiB;
 `maxConcurrent=1`. No automatic full-session retry. Metadata/download may retry two additional times

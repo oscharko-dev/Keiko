@@ -44,6 +44,7 @@ import {
   type PortableUpdateStageInput,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
+import { sha256FileSync } from "./file-sha256.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
 import {
   parseWindowsGenerationBinding,
@@ -507,7 +508,7 @@ function treeFiles(root: string, cursor = root): readonly ExtractedTreeFile[] {
     } else if (entry.isFile() && !lstatSync(fullPath).isSymbolicLink()) {
       files.push({
         relativePath: relative(root, fullPath).split(sep).join("/"),
-        sha256: createHash("sha256").update(readFileSync(fullPath)).digest("hex"),
+        sha256: sha256FileSync(fullPath),
       });
     } else {
       throw new PortableUpdateStagingError(
@@ -742,9 +743,7 @@ function validateWindowsRootFiles(
       "staged Windows support launcher is not canonical",
     );
   }
-  if (
-    createHash("sha256").update(readFileSync(launcher)).digest("hex") !== binding.launcherSha256
-  ) {
+  if (sha256FileSync(launcher) !== binding.launcherSha256) {
     throw new PortableUpdateStagingError(
       "portable-staging-failed",
       "staged Windows root launcher digest mismatch",

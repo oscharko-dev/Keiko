@@ -3,11 +3,12 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import {
   hashPortableTreeKht1,
+  PORTABLE_MAX_FILE_BYTES,
   PortableTreeAttestationError,
 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
-const MAX_FILE_BYTES = 256 * 1024 * 1024;
+const MAX_FILE_BYTES = PORTABLE_MAX_FILE_BYTES;
 const BUFFER_BYTES = 64 * 1024;
 
 export const PORTABLE_HANDOFF_TREE_HASH_SCHEMA = "KHT1";
