@@ -124,10 +124,11 @@ function e2eSources(dir: string = E2E_ROOT): readonly string[] {
   });
 }
 
-// An env key the harness sets itself (`env: …` or the `env,` shorthand), not `process.env`.
-const OWN_ENV_KEY = /(?<![.\w])env\s*[:,]/u;
+// An env key the harness sets itself (`env: …`, or the `env,` / `env }` shorthand), not `process.env`.
+const OWN_ENV_KEY = /(?<![.\w])env\s*[:,}]/u;
 
-function isHermeticHarness(source: string): boolean {
+function isHermeticHarness(raw: string): boolean {
+  const source = withoutComments(raw);
   if (!OWN_ENV_KEY.test(source)) return true;
   return source.includes("...HERMETIC_OUTBOUND_ENV") || source.includes("...hermeticOutboundEnv");
 }
@@ -227,6 +228,14 @@ describe("every Playwright web server's outbound traffic", () => {
       false,
     );
     expect(isHermeticHarness("buildUiHandlerDeps({ env: { KEIKO_STATE_DIR: dir } })")).toBe(false);
+    expect(
+      isHermeticHarness("const env = { KEIKO_STATE_DIR: dir }; buildUiHandlerDeps({ store, env })"),
+    ).toBe(false);
+    expect(
+      isHermeticHarness(
+        "buildUiHandlerDeps({ env: { KEIKO_STATE_DIR: dir } }); // ...HERMETIC_OUTBOUND_ENV",
+      ),
+    ).toBe(false);
     expect(
       isHermeticHarness("const env = { ...HERMETIC_OUTBOUND_ENV }; buildUiHandlerDeps({ env })"),
     ).toBe(true);
