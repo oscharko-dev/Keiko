@@ -297,7 +297,7 @@ async function finished(context, runId, observed) {
         throw new Error("fixture-throughput-incomplete");
       return performance.now() - observed.firstYieldAt;
     }
-    await delay(5); // NOSONAR javascript:S9382 -- each status poll is due only after the previous answer.
+    await delay(5);
   }
   throw new Error("fixture-terminal-deadline");
 }
