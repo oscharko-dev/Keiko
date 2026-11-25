@@ -5,6 +5,7 @@ import { DebugPanel } from "../panels/DebugPanel";
 import { EditorDebugSessionHost } from "./EditorDebugSessionHost";
 import { debugSessionSnapshot, resetDebugSessionStoreForTests } from "./debugSessionStore";
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
+import { DebugRequestError } from "./debugRequestError";
 import {
   pendingDebugStreamResyncRequestsForTests,
   resetDebugBootstrapRequestsForTests,
@@ -1130,6 +1131,40 @@ describe("useDebugSession", () => {
       "/api/editor/debug/sessions",
       expect.objectContaining({ method: "POST" }),
     ]);
+  });
+
+  // #4103: a refused start keeps the closed reason the server answered with.
+  it("rejects a refused start with the closed refusal code of its response", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url === "/api/editor/debug/sessions") {
+        return new Response(
+          JSON.stringify({ error: { code: "STARTUP_THROTTLED", message: "not started" } }),
+          { status: 503 },
+        );
+      }
+      return response(
+        url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")
+          ? instrumentation()
+          : {},
+      );
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+
+    let rejection: unknown;
+    await act(async () => {
+      rejection = await result.current.actions
+        .start({ kind: "file", fileId: "src/program.ts" }, 4)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+    });
+
+    expect(rejection).toBeInstanceOf(DebugRequestError);
+    expect(rejection).toMatchObject({ status: 503, code: "STARTUP_THROTTLED" });
+    expect(result.current.snapshot.session).toBeNull();
   });
 
   it("does not substitute a browser root for the canonical workspace identity", () => {

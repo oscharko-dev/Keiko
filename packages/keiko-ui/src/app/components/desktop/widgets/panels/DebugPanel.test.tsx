@@ -7,6 +7,7 @@ import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { fetchCommandCatalog } from "../../../../../lib/commands-api";
 import type { DebugSessionSnapshot } from "../cards/debugSessionStore";
 import { useDebugSession } from "../cards/useDebugSession";
+import { DebugRequestError } from "../cards/debugRequestError";
 import { DebugPanel, draftWatchId } from "./DebugPanel";
 
 vi.mock("../../../../../lib/commands-api", () => ({
@@ -293,6 +294,63 @@ describe("DebugPanel", () => {
     await waitFor(() =>
       expect(actions.start).toHaveBeenCalledWith({ kind: "file", fileId: "src/program.ts" }, 7),
     );
+  });
+
+  // #4103: a refused start says why it did not start instead of the generic failure sentence.
+  it.each([
+    { code: "STARTUP_THROTTLED", text: "The debugger did not start. Try again." },
+    {
+      code: "CAPACITY",
+      text: "Too many debug sessions are running. Stop one and try again.",
+    },
+    {
+      code: "SESSION_TERMINATING",
+      text: "The previous debug session is still ending. Try again in a moment.",
+    },
+  ])("explains a start refused with $code", async ({ code, text }) => {
+    const user = userEvent.setup();
+    vi.mocked(actions.start).mockRejectedValueOnce(new DebugRequestError(503, code));
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: null },
+      actions,
+    });
+    render(
+      <DebugPanel
+        root="/repo"
+        activeFile="src/program.ts"
+        workspaceId="canonical-workspace-id"
+        activationRevision={7}
+        debugEnabled
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start debugging current file/i }));
+
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(screen.queryByText(/the debug action failed/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic failure sentence for a start that failed without a known reason", async () => {
+    const user = userEvent.setup();
+    vi.mocked(actions.start).mockRejectedValueOnce(new Error("network"));
+    vi.mocked(useDebugSession).mockReturnValue({
+      snapshot: { ...snapshot, session: null },
+      actions,
+    });
+    render(
+      <DebugPanel
+        root="/repo"
+        activeFile="src/program.ts"
+        workspaceId="canonical-workspace-id"
+        activationRevision={7}
+        debugEnabled
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start debugging current file/i }));
+
+    expect(await screen.findByText(/the debug action failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/did not start/i)).not.toBeInTheDocument();
   });
 
   it("starts a recognized test file through the discovered, trusted catalog test task (Epic #2096, ADR-0136 D4)", async () => {

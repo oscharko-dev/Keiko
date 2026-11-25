@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7bc3337c1d2905d907eb1ce08baccdbf8d2bb119ff9c1c880b5722d08eeb43e0"
+    "catalogDigest": "d6f4586b0a3cdee18ae1b5bae20ea11a2edfb6cc081e333c46c4486934583a46"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 725,
-    "proofCount": 749,
-    "resolvedProofCount": 749,
-    "failureClassCount": 417,
+    "operationCount": 727,
+    "proofCount": 751,
+    "resolvedProofCount": 751,
+    "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -688,6 +688,8 @@
       "operations": [
         "chat.tool-authority.operation",
         "dap.debug-runtime.selected",
+        "dap.debug-session.start-refused",
+        "dap.debug-session.startup-attempt-failed",
         "editor.agent.action-queue",
         "editor.agent.bridge-registration",
         "editor.agent.changeset-byte-order-mark",
@@ -1067,6 +1069,7 @@
     "connected-context-retrieval": ["memory-knowledge.dependency-failure"],
     "consolidation-summary-generation": ["memory-knowledge.dependency-failure"],
     "debug-runtime-selection": ["editor-delivery.dependency-failure"],
+    "debug-session-start": ["editor-delivery.rejection"],
     "discovery-scope": ["memory-knowledge.dependency-failure"],
     "discovery-truncated": ["memory-knowledge.loss"],
     "document-chunking": ["memory-knowledge.dependency-failure"],
@@ -2179,6 +2182,12 @@
     ],
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
+    ],
+    "dap.debug-session.start-refused.line": [
+      "packages/keiko-server/src/editor/dap/dapDebugRoutes.test.ts"
+    ],
+    "dap.debug-session.startup-attempt-failed.line": [
+      "packages/keiko-server/src/editor/dap/dapStartupActivity.test.ts"
     ],
     "editor.agent.action-queue.refusal": ["packages/keiko-server/src/editor/agentRoutes.test.ts"],
     "editor.agent.bridge-registration.lifecycle": [

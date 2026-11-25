@@ -50,6 +50,7 @@ import {
   type DebugStackSnapshot,
   type DebugVariableSnapshot,
 } from "./debugSessionStore";
+import { DebugRequestError, refusalCodeOf } from "./debugRequestError";
 
 interface DebugEventEnvelope {
   readonly sequence: number;
@@ -732,16 +733,6 @@ function sharedInstrumentation(workspaceId: string): Promise<InstrumentationSnap
   return request;
 }
 
-class DebugRequestError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DebugRequestError";
-  }
-}
-
 function isRevisionConflict(error: unknown): boolean {
   return error instanceof DebugRequestError && error.status === 409;
 }
@@ -749,7 +740,7 @@ function isRevisionConflict(error: unknown): boolean {
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
   const body = (await response.json()) as unknown;
-  if (!response.ok) throw new DebugRequestError(response.status, "Debug request was rejected.");
+  if (!response.ok) throw new DebugRequestError(response.status, refusalCodeOf(body));
   return body;
 }
 
