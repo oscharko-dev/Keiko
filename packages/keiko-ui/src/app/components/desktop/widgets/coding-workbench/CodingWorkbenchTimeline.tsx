@@ -29,6 +29,12 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import type {
+  CodingWorkbenchAnswerText,
+  CodingWorkbenchAnswers,
+} from "@/lib/useCodingWorkbenchAnswers";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
@@ -36,6 +42,7 @@ import {
 import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { AnswerCopyButton, type AnswerCopyButtonLabels } from "../../AnswerCopyButton";
 import { SupportReportButton } from "../../SupportReportButton";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -188,6 +195,10 @@ export interface CodingWorkbenchTimelineProps {
 // timeline, and none of those rows otherwise carries an action.
 const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 
+// The complete answers read beside the bounded feed reach each message row the same way.
+const NO_ANSWERS: CodingWorkbenchAnswers = new Map();
+const AnswersContext = createContext<CodingWorkbenchAnswers>(NO_ANSWERS);
+
 export function Timeline({
   active = false,
   generating = active,
@@ -209,24 +220,26 @@ export function Timeline({
     return null;
   return (
     <RunCheckContext.Provider value={onRunCheck}>
-      <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-        <TimelineHeading titleRef={titleRef} t={t} />
-        <ActivityStatus activity={activity} attention={attention} t={t} />
-        <RunDetailsToggle
-          visible={events.length > 0}
-          expanded={showEvents}
-          onToggle={() => setShowEvents(!showEvents)}
-          t={t}
-        />
-        <QuestionSummary questions={questions} />
-        <TimelineContent
-          items={items}
-          timeline={timeline}
-          questions={questions}
-          restoreFocusRef={titleRef}
-          t={t}
-        />
-      </section>
+      <AnswersContext.Provider value={activity.answers ?? NO_ANSWERS}>
+        <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+          <TimelineHeading titleRef={titleRef} t={t} />
+          <ActivityStatus activity={activity} attention={attention} t={t} />
+          <RunDetailsToggle
+            visible={events.length > 0}
+            expanded={showEvents}
+            onToggle={() => setShowEvents(!showEvents)}
+            t={t}
+          />
+          <QuestionSummary questions={questions} />
+          <TimelineContent
+            items={items}
+            timeline={timeline}
+            questions={questions}
+            restoreFocusRef={titleRef}
+            t={t}
+          />
+        </section>
+      </AnswersContext.Provider>
     </RunCheckContext.Provider>
   );
 }
@@ -436,6 +449,7 @@ function timelineItems(
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
+    message.fullAnswer !== undefined ||
     message.reasoning !== undefined ||
     message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
   );
@@ -1055,21 +1069,8 @@ function MessageContent({
   readonly runId: string;
   readonly live: boolean;
 }): ReactNode {
-  if (message.role === "assistant") {
-    // While the answer still streams, SafeMarkdown renders its code without highlighting or list
-    // evidence on every update; the finished answer renders in full as soon as it is finished — also
-    // while the run waits for the operator's decision.
-    return (
-      <SafeMarkdownBoundary
-        source={message.segments.map((segment) => segment.text).join("")}
-        streaming={live}
-        diagnosticCorrelationId={runId}
-        diagnosticMessageId={message.messageId}
-        trailing={truncationFor(message, t)}
-        richContent={CODING_WORKBENCH_RICH_CONTENT}
-      />
-    );
-  }
+  if (message.role === "assistant")
+    return <AssistantAnswer message={message} runId={runId} live={live} t={t} />;
   // Segments are the feed's transport bound (4,096 characters each), not paragraphs: a long prompt
   // is one text, so it renders as one block. A paragraph per segment opened a gap at an arbitrary
   // character, mid-word or between the CR and LF of a Windows line ending (#4068 W12).
@@ -1079,6 +1080,123 @@ function MessageContent({
       {truncationFor(message, t) ?? null}
     </p>
   );
+}
+
+// What an answer shows: its complete Markdown source once read, otherwise the part the feed carries.
+// A model's answer is never cut to fit the bounded feed, so the truncation mark appears only for a
+// real cut — the server's memory bound, or a failed read of the rest — and a still-loading rest is
+// said as such, never marked as cut.
+interface ShownAnswer {
+  readonly source: string;
+  readonly state: "whole" | "loading" | "cut";
+}
+
+function shownAnswer(
+  message: CodingSafeActivityMessage,
+  answer: CodingWorkbenchAnswerText | undefined,
+): ShownAnswer {
+  const carried = message.segments.map((segment) => segment.text).join("");
+  const full = message.fullAnswer;
+  if (full === undefined) {
+    const cut = message.truncated || message.segments.some((segment) => segment.truncated);
+    return { source: carried, state: cut ? "cut" : "whole" };
+  }
+  const source =
+    answer !== undefined && answer.text.length >= carried.length ? answer.text : carried;
+  if (answer?.failed === true) return { source, state: "cut" };
+  if (source.length < full.length) return { source, state: "loading" };
+  return { source, state: full.truncated ? "cut" : "whole" };
+}
+
+function AssistantAnswer({
+  message,
+  runId,
+  live,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+  readonly runId: string;
+  readonly live: boolean;
+}): ReactNode {
+  const answers = useContext(AnswersContext);
+  const shown = shownAnswer(message, answers.get(message.messageId));
+  // While the answer still streams, SafeMarkdown renders its code without highlighting or list
+  // evidence on every update; the finished answer renders in full as soon as it is finished — also
+  // while the run waits for the operator's decision.
+  return (
+    <>
+      <SafeMarkdownBoundary
+        source={shown.source}
+        streaming={live}
+        diagnosticCorrelationId={runId}
+        diagnosticMessageId={message.messageId}
+        trailing={answerTrailing(shown.state, t)}
+        richContent={CODING_WORKBENCH_RICH_CONTENT}
+      />
+      {live || shown.state === "loading" || shown.source.trim().length === 0 ? null : (
+        <div className={styles.messageActions}>
+          <WorkbenchAnswerCopyButton text={shown.source} runId={runId} t={t} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function answerTrailing(state: ShownAnswer["state"], t: CodingWorkbenchTranslate): ReactNode {
+  if (state === "cut") return <TruncationMark t={t} />;
+  if (state === "loading")
+    return (
+      <span className={styles.answerLoading}>{t("codingWorkbench.activity.answerLoading")}</span>
+    );
+  return undefined;
+}
+
+// The answer's own Markdown source, as the model wrote it, is what lands on the clipboard. The
+// outcome is recorded body-free under the run's correlation: never the copied text.
+function WorkbenchAnswerCopyButton({
+  text,
+  runId,
+  t,
+}: {
+  readonly text: string;
+  readonly runId: string;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const labels = useMemo<AnswerCopyButtonLabels>(
+    () => ({
+      copy: t("codingWorkbench.activity.copy.answer"),
+      copied: t("codingWorkbench.activity.copy.copied"),
+      copiedStatus: t("codingWorkbench.activity.copy.copiedStatus"),
+      failedStatus: t("codingWorkbench.activity.copy.failedStatus"),
+    }),
+    [t],
+  );
+  const onOutcome = useCallback(
+    (error?: unknown) => {
+      reportWorkbenchAnswerCopy(runId, error);
+    },
+    [runId],
+  );
+  return <AnswerCopyButton text={text} labels={labels} onOutcome={onOutcome} />;
+}
+
+function reportWorkbenchAnswerCopy(runId: string, error?: unknown): void {
+  const correlationId = isActivityLogCorrelationId(runId) ? runId : undefined;
+  const evidence = { grounded: false, strippedGroupCount: 0, keptGroupCount: 0 } as const;
+  if (error === undefined) {
+    reportClientDiagnostic("Keiko Coding Workbench answer copied.", {
+      correlationId,
+      answerCopy: { outcome: "copied", ...evidence },
+    });
+    return;
+  }
+  reportClientDiagnostic("Keiko Coding Workbench answer copy failed.", {
+    correlationId,
+    answerCopy: { outcome: "failed", ...evidence },
+    errorKind: "unavailable",
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function truncationFor(

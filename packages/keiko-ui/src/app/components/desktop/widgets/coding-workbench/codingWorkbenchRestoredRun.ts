@@ -21,6 +21,10 @@ import type { ClientDiagnosticCodingRunRestore } from "@oscharko-dev/keiko-contr
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import type {
+  CodingWorkbenchAnswers,
+  CodingWorkbenchAnswerText,
+} from "@/lib/useCodingWorkbenchAnswers";
 import { settledRunState } from "./codingWorkbenchRunFacts";
 
 // #3873 live review: after a reload a settled run showed only "Previous conversation" and
@@ -133,20 +137,25 @@ interface RestorableMessage {
   readonly position: number;
 }
 
-// A message holding `text`; when `cut`, the text was shortened to fit and its last segment says so.
+// A message holding `text`; when `cut`, the text was shortened to fit. A cut prompt says so on its
+// last segment. A cut answer is not truncated: the feed names it (`fullAnswer`), and the timeline
+// shows its whole text, which Coding History holds (owner decision "Work-ending limits").
 function restoredMessage(
   source: RestorableMessage,
   text: string,
   cut: boolean,
 ): CodingSafeActivityMessage {
   const segments = textSegments(text);
+  const named = cut && source.role === "assistant";
+  const marked = cut && !named;
   const last = segments.pop();
   return {
     messageId: source.messageId,
     role: source.role,
     occurredAt: source.occurredAt,
-    segments: last === undefined ? segments : [...segments, { ...last, truncated: cut }],
-    truncated: cut,
+    segments: last === undefined ? segments : [...segments, { ...last, truncated: marked }],
+    truncated: marked,
+    ...(named ? { fullAnswer: { length: source.text.length, truncated: false } } : {}),
   };
 }
 
@@ -279,6 +288,8 @@ interface PackedConversation {
   readonly turns: readonly TurnMessages[];
   /** The newest message the bounds did not admit; absent when every message was carried. */
   readonly unplaced: RestorableMessage | undefined;
+  /** The whole text of every carried answer the feed names as longer than it carries. */
+  readonly answers: CodingWorkbenchAnswers;
 }
 
 // Fills the feed from the run's newest message backwards for as long as the bounds admit one more,
@@ -291,12 +302,22 @@ function packedConversation(
   newestFirst: Iterable<RestorableMessage>,
 ): PackedConversation {
   let turns: readonly TurnMessages[] = [];
+  // Coding History holds every answer whole; the text already examined for the cut is the answer.
+  const answers = new Map<string, CodingWorkbenchAnswerText>();
   for (const source of newestFirst) {
-    const next = withOlderMessage(context, turns, fittedMessage(source));
-    if (next === undefined) return { turns, unplaced: source };
+    const fitted = fittedMessage(source);
+    const next = withOlderMessage(context, turns, fitted);
+    if (next === undefined) return { turns, unplaced: source, answers };
     turns = next;
+    if (fitted.fullAnswer !== undefined)
+      answers.set(source.messageId, {
+        text: source.text,
+        complete: true,
+        truncated: false,
+        failed: false,
+      });
   }
-  return { turns, unplaced: undefined };
+  return { turns, unplaced: undefined, answers };
 }
 
 // The run's messages the feed leaves to the transcript: the one that ended the packing and every
@@ -330,6 +351,8 @@ function restoreCounts(
 export interface RestoredConversation {
   /** The run's newest messages the contract's bounds admit, packed into turns. */
   readonly feed: AvailableCodingSafeActivityFeed;
+  /** The whole text of every answer the feed names as longer than it carries. */
+  readonly answers: CodingWorkbenchAnswers;
   /** The run's older messages the feed leaves out: the transcript shows exactly these, whole. */
   readonly overflowMessageIds: ReadonlySet<string>;
   /** What the restoration did, for the body-free client diagnostic. */
@@ -358,7 +381,7 @@ export function restoreConversation(
   const runId = settledRunId(snapshot);
   if (snapshot === null || runId === undefined || detail === null) return null;
   const context = { runId, updatedAt: snapshot.updatedAt, historyCut: detail.truncated };
-  const { turns, unplaced } = packedConversation(
+  const { turns, unplaced, answers } = packedConversation(
     context,
     newestRestorableMessages(detail.messages, runId),
   );
@@ -367,6 +390,7 @@ export function restoreConversation(
   const overflow = overflowMessages(detail.messages, runId, unplaced);
   return {
     feed,
+    answers,
     overflowMessageIds: new Set(overflow.map((message) => message.id)),
     counts: restoreCounts(feed, overflow, detail.truncated),
   };
@@ -463,7 +487,7 @@ export function useRestoredRunTimeline(
   const feed = restoration?.feed ?? activity.feed;
   return {
     events: restoredEvents,
-    activity: feed === activity.feed ? activity : { ...activity, feed },
+    activity: restoration === null ? activity : { ...activity, feed, answers: restoration.answers },
     shownRun,
   };
 }

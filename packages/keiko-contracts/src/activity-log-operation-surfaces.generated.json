@@ -116,6 +116,7 @@
   "client.support-report.preparation-failed": "client-diagnostics",
   "client.support-report.prepared": "client-diagnostics",
   "client.update-notice.presented": "client-diagnostics",
+  "coding-app-session.answer-page.read": "tools-workflows",
   "coding-app-session.browser-approval.state": "tools-workflows",
   "coding-app-session.browser-open": "tools-workflows",
   "coding-app-session.channel.closed": "tools-workflows",

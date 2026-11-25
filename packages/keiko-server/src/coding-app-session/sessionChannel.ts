@@ -8,10 +8,14 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 // HTTP, cookies, and streaming. A content source is injected (W1.6+ feeds transcript/plan/diffs); in
 // this wave production leaves it absent, so even a paired session reads content-free until W1.5.
 
+import type { CodingSafeActivityAnswerPage } from "@oscharko-dev/keiko-contracts";
 import {
+  contentFreeCodingAppSessionAnswerResponse,
   contentFreeCodingAppSessionChannelSnapshot,
+  validateCodingAppSessionAnswerResponse,
   validateCodingAppSessionChannelContent,
   validateCodingAppSessionChannelSnapshot,
+  type CodingAppSessionAnswerResponse,
   type CodingAppSessionChannelContent,
   type CodingAppSessionChannelSnapshot,
 } from "./channelContract.js";
@@ -45,6 +49,16 @@ export interface CodingAppSessionContentSource {
         readonly detach: () => void;
       })
     | undefined;
+  /** One page of a retained assistant answer the content names; absent serves no page. */
+  readonly answerPageFor?:
+    ((request: CodingAppSessionAnswerRequest) => CodingSafeActivityAnswerPage | null) | undefined;
+}
+
+/** Which page of which answer a paired session asks for; read from the request, so untrusted. */
+export interface CodingAppSessionAnswerRequest {
+  readonly runId: string;
+  readonly messageId: string;
+  readonly offset: number;
 }
 
 /**
@@ -107,6 +121,15 @@ export interface CodingAppSessionChannel {
     cookieToken: string | undefined,
     observation?: SessionProofObservation,
   ) => CodingAppSessionChannelSnapshot;
+  /**
+   * One page of a retained answer for a valid session; the same page-free response for every
+   * invalid presentation and every answer there is none of (ADR-0141 D6).
+   */
+  readonly answerPage: (
+    cookieToken: string | undefined,
+    request: CodingAppSessionAnswerRequest,
+    observation?: SessionProofObservation,
+  ) => CodingAppSessionAnswerResponse;
   readonly rotate: (
     cookieToken: string | undefined,
     correlationId?: string,
@@ -212,6 +235,21 @@ function snapshotForContent(
   return validateCodingAppSessionChannelSnapshot(snapshot).ok
     ? snapshot
     : contentFreeCodingAppSessionChannelSnapshot();
+}
+
+function projectAnswerPage(
+  contentSource: CodingAppSessionContentSource | undefined,
+  request: CodingAppSessionAnswerRequest,
+): CodingAppSessionAnswerResponse {
+  const page = contentSource?.answerPageFor?.(request) ?? null;
+  const response: CodingAppSessionAnswerResponse = {
+    ...contentFreeCodingAppSessionAnswerResponse(),
+    page,
+  };
+  // Never serve a page that breaks the published contract; fail closed to the page-free response.
+  return page !== null && validateCodingAppSessionAnswerResponse(response).ok
+    ? response
+    : contentFreeCodingAppSessionAnswerResponse();
 }
 
 function subscribeToContent(
@@ -548,6 +586,11 @@ export function createCodingAppSessionChannel(
       const session = registry.verify(cookieToken, observation);
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();
       return projectContent(session, contentSource);
+    },
+    answerPage: (cookieToken, request, observation): CodingAppSessionAnswerResponse => {
+      const session = registry.verify(cookieToken, observation);
+      if (session === undefined) return contentFreeCodingAppSessionAnswerResponse();
+      return projectAnswerPage(contentSource, request);
     },
     rotate: (cookieToken, correlationId = UNKNOWN_CORRELATION_ID): CodingAppSessionRotateResult =>
       rotateSession(registry, cookieToken, correlationId),

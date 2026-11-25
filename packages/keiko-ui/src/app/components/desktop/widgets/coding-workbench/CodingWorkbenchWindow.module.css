@@ -1957,6 +1957,19 @@ details[open] > .cmpActivitySummary::after {
   background: var(--surface-inset);
 }
 
+.answerLoading {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.messageActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-1);
+}
+
 .truncationMark {
   display: block;
   margin-top: var(--space-1);

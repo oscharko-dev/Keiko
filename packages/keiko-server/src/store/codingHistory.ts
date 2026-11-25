@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { withImmediateTransaction } from "./transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -200,6 +200,25 @@ export const CODING_HISTORY_MESSAGE_MAX_CHARS = 65_536;
 export function codingHistoryChunkEnd(content: string, offset: number): number {
   const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
   return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
+}
+
+/**
+ * The source id of the stored chunk at `offset` of one long message: the first keeps the message's
+ * own id, every later one a digest of it and its offset, so offsets stay stable while it streams.
+ */
+export function codingHistoryChunkSourceId(messageId: string, offset: number): string {
+  return offset === 0
+    ? messageId
+    : `${createHash("sha256").update(messageId).digest("hex")}:${String(offset)}`;
+}
+
+const CHUNK_CONTINUATION_SOURCE_ID = /^[0-9a-f]{64}:([1-9]\d*)$/u;
+
+/** The offset a continuation chunk's source id names, or undefined for any other source id. */
+function continuationOffset(sourceId: unknown): number | undefined {
+  if (typeof sourceId !== "string") return undefined;
+  const offset = CHUNK_CONTINUATION_SOURCE_ID.exec(sourceId)?.[1];
+  return offset === undefined ? undefined : Number(offset);
 }
 
 function assertId(value: string): void {
@@ -656,24 +675,52 @@ function readDetail(
   const task = readTask(db, store, id, operator);
   if (task === undefined) return undefined;
   const binding = db.prepare(
-    "SELECT run_id FROM coding_history_message_bindings WHERE message_id = ?",
+    "SELECT run_id, source_id FROM coding_history_message_bindings WHERE message_id = ?",
   );
   const listed = store.listMessages(id, 200);
   const repeated = repeatedIntentMessageIds(db, id);
   const scheduled = scheduledIntentMessageIds(db, id);
   const keikoNotes = keikoNoteMessageIds(db, id);
-  const messages = listed
-    .filter((message) => !repeated.has(message.id))
-    .map((message) => {
-      const row = binding.get(message.id);
-      return {
-        ...message,
-        ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}),
-        ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
-        ...(keikoNotes.has(message.id) ? { taskType: CODING_HISTORY_KEIKO_TASK_TYPE } : {}),
-      };
+  const messages: CodingHistoryDetail["messages"][number][] = [];
+  for (const message of listed) {
+    if (repeated.has(message.id)) continue;
+    const row = binding.get(message.id);
+    const runId = typeof row?.run_id === "string" ? row.run_id : undefined;
+    if (joinContinuation(messages, message, runId, continuationOffset(row?.source_id))) continue;
+    messages.push({
+      ...message,
+      ...(runId === undefined ? {} : { runId }),
+      ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
+      ...(keikoNotes.has(message.id) ? { taskType: CODING_HISTORY_KEIKO_TASK_TYPE } : {}),
     });
+  }
   return { task, messages, truncated: store.countMessages(id) > listed.length };
+}
+
+/**
+ * A long message is stored as consecutive chunks (`codingHistoryChunkEnd`); the conversation shows
+ * it as the one message the model wrote. A chunk joins the message before it only when that message
+ * is the same run's same-role text and ends exactly where the chunk's own offset says it starts, so a
+ * chunk whose start the listed window no longer holds stays a message of its own.
+ */
+function joinContinuation(
+  messages: CodingHistoryDetail["messages"][number][],
+  chunk: CodingHistoryDetail["messages"][number],
+  runId: string | undefined,
+  offset: number | undefined,
+): boolean {
+  const previous = messages.at(-1);
+  if (
+    offset === undefined ||
+    previous === undefined ||
+    previous.runId !== runId ||
+    previous.role !== chunk.role ||
+    previous.content.length !== offset
+  ) {
+    return false;
+  }
+  messages[messages.length - 1] = { ...previous, content: previous.content + chunk.content };
+  return true;
 }
 
 function updateTask(

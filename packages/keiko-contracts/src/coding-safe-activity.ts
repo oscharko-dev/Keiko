@@ -51,6 +51,16 @@ export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS = 64;
 export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS = 256;
 // Fits inside the aggregate feed budget beside a fully populated turn history.
 export const CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES = 8 * 1_024;
+/**
+ * A model's answer is never cut to fit the bounded feed (owner decision "Work-ending limits"): the
+ * projection keeps every assistant answer's complete text outside the feed and the feed names it
+ * (`CodingSafeActivityMessage.fullAnswer`). This bound protects server memory alone: it covers all
+ * answers one run holds at once, in UTF-16 code units, far above any answer a model's output window
+ * produces, and a cut it makes is shown on the message and recorded, never silent.
+ */
+export const CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS = 16 * 1_024 * 1_024;
+/** One page of a retained answer, in UTF-16 code units; a page never splits a surrogate pair. */
+export const CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS = 32 * 1_024;
 
 /** The existing governed edit facade's closed refusal vocabulary, shared with its live UI. */
 export const CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES = [
@@ -172,6 +182,18 @@ export interface CodingSafeActivityReasoning {
   readonly truncated: boolean;
 }
 
+/**
+ * An assistant answer longer than the feed carries. Its segments hold a part of it, or none, and its
+ * complete text is read page by page (`CodingSafeActivityAnswerPage`). The answer only grows while
+ * it streams, so `length` only grows; `truncated` is the retention bound's own visible cut.
+ */
+export interface CodingSafeActivityFullAnswer {
+  /** UTF-16 code units of the complete answer the server holds. */
+  readonly length: number;
+  /** True when the server's memory bound shortened the answer it holds. */
+  readonly truncated: boolean;
+}
+
 export interface CodingSafeActivityMessage {
   readonly messageId: string;
   readonly role: CodingSafeActivityMessageRole;
@@ -182,6 +204,25 @@ export interface CodingSafeActivityMessage {
   readonly origin?: CodingSafeActivityMessageOrigin;
   /** Assistant messages only; absent when the model returned no reasoning or it is not shown. */
   readonly reasoning?: CodingSafeActivityReasoning;
+  /** Assistant messages only; present when the segments do not carry the whole answer. */
+  readonly fullAnswer?: CodingSafeActivityFullAnswer;
+}
+
+/**
+ * One page of a retained assistant answer, read through the authenticated app-session channel.
+ * Untrusted model text with the same rendering rules as a feed segment.
+ */
+export interface CodingSafeActivityAnswerPage {
+  readonly schemaVersion: typeof CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
+  readonly runId: string;
+  readonly messageId: string;
+  /** Where `text` starts in the answer, in UTF-16 code units. */
+  readonly offset: number;
+  readonly text: string;
+  /** The answer's whole length when the page was read. */
+  readonly length: number;
+  /** The retention bound's cut, as on `CodingSafeActivityFullAnswer`. */
+  readonly truncated: boolean;
 }
 
 export interface CodingSafeActivityTool {
@@ -437,7 +478,16 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   errors.push(
     ...exactKeys(
       value,
-      ["messageId", "role", "occurredAt", "segments", "truncated", "reasoning", "origin"],
+      [
+        "messageId",
+        "role",
+        "occurredAt",
+        "segments",
+        "truncated",
+        "reasoning",
+        "origin",
+        "fullAnswer",
+      ],
       path,
     ),
   );
@@ -449,6 +499,7 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
   validateSegments(value.segments, path, errors);
   if ("reasoning" in value) validateReasoning(value, path, errors);
+  if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
   if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
@@ -523,6 +574,84 @@ function validateReasoning(message: Record<string, unknown>, path: string, error
   }
   if (typeof value.truncated !== "boolean") {
     errors.push(`${reasoningPath}.truncated must be a boolean`);
+  }
+}
+
+function validateFullAnswer(
+  message: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  const answerPath = `${path}.fullAnswer`;
+  const value = message.fullAnswer;
+  if (message.role !== "assistant") errors.push(`${answerPath} is only allowed on assistant`);
+  if (!isRecord(value)) {
+    errors.push(`${answerPath} must be an object`);
+    return;
+  }
+  errors.push(...exactKeys(value, ["length", "truncated"], answerPath));
+  if (!validAnswerLength(value.length)) errors.push(`${answerPath}.length is invalid`);
+  if (typeof value.truncated !== "boolean") {
+    errors.push(`${answerPath}.truncated must be a boolean`);
+  } else if (value.truncated && message.truncated !== true) {
+    errors.push(`${path}.truncated must reflect a truncated answer`);
+  }
+}
+
+function validAnswerLength(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS
+  );
+}
+
+const ANSWER_PAGE_KEYS = [
+  "schemaVersion",
+  "runId",
+  "messageId",
+  "offset",
+  "text",
+  "length",
+  "truncated",
+] as const;
+
+/** Validates one retained-answer page: exact keys, a bounded page that lies inside the answer. */
+export function validateCodingSafeActivityAnswerPage(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingSafeActivityAnswerPage> {
+  if (!isRecord(value)) return invalid("safe activity answer page must be an object");
+  const errors = exactKeys(value, ANSWER_PAGE_KEYS, "answerPage");
+  if (value.schemaVersion !== CODING_SAFE_ACTIVITY_CONTRACT_VERSION) {
+    errors.push("answerPage.schemaVersion is invalid");
+  }
+  validateSafeId(value.runId, "answerPage.runId", errors, 128);
+  validateSafeId(value.messageId, "answerPage.messageId", errors, 128);
+  validateAnswerPageText(value, errors);
+  if (typeof value.truncated !== "boolean") errors.push("answerPage.truncated must be a boolean");
+  return result(value, errors);
+}
+
+function validateAnswerPageText(value: Record<string, unknown>, errors: string[]): void {
+  const { offset, text, length } = value;
+  if (!validAnswerLength(length)) {
+    errors.push("answerPage.length is invalid");
+    return;
+  }
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+    errors.push("answerPage.offset is invalid");
+    return;
+  }
+  if (
+    typeof text !== "string" ||
+    text.length > CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS ||
+    offset + text.length > length ||
+    (text.length === 0 && offset < length)
+  ) {
+    errors.push("answerPage.text must be a bounded page inside the answer");
+  } else if (stripUnsafeFormatChars(text) !== text) {
+    errors.push("answerPage.text contains unsafe format characters");
   }
 }
 

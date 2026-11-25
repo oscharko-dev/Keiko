@@ -1602,6 +1602,8 @@ export type {
   CodingSafeActivityMessageOrigin,
   CodingSafeActivityMessageRole,
   CodingSafeActivityPlan,
+  CodingSafeActivityAnswerPage,
+  CodingSafeActivityFullAnswer,
   CodingSafeActivityPlanStep,
   CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,
@@ -1633,6 +1635,7 @@ export type {
 } from "./coding-safe-activity.js";
 export type {
   CodingAppSessionAcknowledgement,
+  CodingAppSessionAnswerResponse,
   CodingAppSessionChannelContent,
   CodingAppSessionChannelSnapshot,
   CodingAppSessionSafeActivityContent,

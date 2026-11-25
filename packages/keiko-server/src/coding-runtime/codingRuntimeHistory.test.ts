@@ -229,11 +229,11 @@ describe("paired coding conversation history", () => {
     expect(captures[1]?.contextDigest).not.toBe(captures[0]?.contextDigest);
     const long = { ...message, messageId: `msg_${"a".repeat(251)}`, content: "x".repeat(90_000) };
     expect(history.captureNative(runId, [long])).toBe(true);
+    // Stored as two chunks, read back as the one answer the model wrote.
     expect(history.detail(id, "read-stream")?.messages.map((item) => item.content)).toEqual([
       "Inspect a private source file",
       "Hello world",
-      "x".repeat(65_536),
-      "x".repeat(24_464),
+      "x".repeat(90_000),
     ]);
     expect(history.captureNative(runId, [{ ...message, content: "Different" }])).toBe(false);
     const line = formatActivityLogProofLine(sink.events.at(-1) ?? {});
@@ -330,6 +330,49 @@ describe("paired coding conversation history", () => {
     ]);
   });
 
+  // A long answer outgrows the bounded display feed; Coding History still stores it whole, in the
+  // same chunks the native capture writes, and reads it back as the one answer the model wrote.
+  it("stores a display-feed answer beyond the feed's budget whole, never the feed's part", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId,
+      workspaceId: "ws-1",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const occurredAt = "2026-07-18T17:00:00.000Z";
+    const answer = "## Finding\n\nDetails ".repeat(7_000);
+    projection.ingest(runId, { kind: "message", messageId: "task", role: "user", occurredAt });
+    projection.ingest(runId, { kind: "text", messageId: "task", text: "Review it", occurredAt });
+    projection.ingest(runId, {
+      kind: "message",
+      messageId: "answer",
+      role: "assistant",
+      parentMessageId: "task",
+      occurredAt,
+    });
+    for (let offset = 0; offset < answer.length; offset += 4_000) {
+      projection.ingest(runId, {
+        kind: "text",
+        messageId: "answer",
+        text: answer.slice(offset, offset + 4_000),
+        occurredAt,
+      });
+    }
+    expect(answer.length).toBeGreaterThan(100 * 1_024);
+    history.capture(runId, projection.currentContent(), (messageId) =>
+      projection.answerText(runId, messageId),
+    );
+    expect(
+      history.detail(id, "read-long-display")?.messages.map(({ role, content }) => [role, content]),
+    ).toEqual([
+      ["user", "Inspect a private source file"],
+      ["assistant", answer],
+    ]);
+  });
+
   // #3611 review: the display feed drops its oldest turns when it outgrows its bounds. The task
   // prompt's turn goes first, so a truncated feed no longer holds the intent echo, and its first
   // remaining operator message is a follow-up that must be stored, not skipped as the echo.
@@ -388,8 +431,7 @@ describe("paired coding conversation history", () => {
     expect(history.captureNative(runId, [message])).toBe(true);
     expect(history.captureNative(runId, [message])).toBe(true);
     const messages = history.detail(id, "read-unicode")?.messages.slice(1);
-    expect(messages?.map((item) => item.content)).toEqual(["a".repeat(65_535), "😀z"]);
-    expect(messages?.map((item) => item.content).join("")).toBe(content);
+    expect(messages?.map((item) => item.content)).toEqual([content]);
     expect(history.captureNative(runId, [{ ...message, content: content + " next" }])).toBe(true);
     expect(
       history

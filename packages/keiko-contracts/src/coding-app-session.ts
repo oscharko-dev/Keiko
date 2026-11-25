@@ -16,7 +16,9 @@ import {
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 import {
+  validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  type CodingSafeActivityAnswerPage,
   type CodingSafeActivityFeed,
 } from "./coding-safe-activity.js";
 
@@ -133,6 +135,37 @@ export interface CodingAppSessionAcknowledgement {
 /** The single source of the fail-closed content-free snapshot shape (ADR-0141 D6). */
 export function contentFreeCodingAppSessionChannelSnapshot(): CodingAppSessionChannelSnapshot {
   return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION, content: null };
+}
+
+/**
+ * One page of a retained assistant answer the feed names (`fullAnswer`), read over the authenticated
+ * channel. Fail-closed like the snapshot (ADR-0141 D6): an unpaired caller, an unknown run or
+ * message and an expired projection all receive the same `page: null` shape.
+ */
+export interface CodingAppSessionAnswerResponse {
+  readonly schemaVersion: typeof CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION;
+  readonly page: CodingSafeActivityAnswerPage | null;
+}
+
+/** The single source of the fail-closed page-free answer response. */
+export function contentFreeCodingAppSessionAnswerResponse(): CodingAppSessionAnswerResponse {
+  return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION, page: null };
+}
+
+/** Validate an answer response: exact keys, correct version, and a valid page or `null`. */
+export function validateCodingAppSessionAnswerResponse(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingAppSessionAnswerResponse> {
+  if (!isRecord(value)) return invalid("answer response must be an object");
+  const errors = exactKeys(value, ["schemaVersion", "page"], "answerResponse");
+  if (value.schemaVersion !== CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION) {
+    errors.push("answerResponse.schemaVersion is invalid");
+  }
+  if (!("page" in value)) errors.push("answerResponse.page is required");
+  else if (value.page !== null && !validateCodingSafeActivityAnswerPage(value.page).ok) {
+    errors.push("answerResponse.page is invalid");
+  }
+  return result(value, errors);
 }
 
 /** The content-free acknowledgement shape returned by pairing and lifecycle endpoints. */

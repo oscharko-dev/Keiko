@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d6f4586b0a3cdee18ae1b5bae20ea11a2edfb6cc081e333c46c4486934583a46"
+    "catalogDigest": "2fe15b360a7b80f0f959b811f6ff0eef70b21fbd5fab16aabf3a27ee831667ce"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 727,
-    "proofCount": 751,
-    "resolvedProofCount": 751,
+    "operationCount": 728,
+    "proofCount": 752,
+    "resolvedProofCount": 752,
     "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -379,6 +379,7 @@
       "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
         "chat.approval-continuation.state",
+        "coding-app-session.answer-page.read",
         "coding-app-session.browser-approval.state",
         "coding-app-session.browser-open",
         "coding-app-session.channel.closed",
@@ -1724,6 +1725,9 @@
     ],
     "client.update-notice.presented.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "coding-app-session.answer-page.read.outcome": [
+      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
     "coding-app-session.browser-approval.state.line": [
       "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts"

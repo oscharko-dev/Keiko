@@ -5072,6 +5072,8 @@ function safeActivityContentSource(
           projection.subscribeContent((content) => {
             listener(presentCodingReasoning(content, visible()));
           }),
+        answerPageFor: ({ runId, messageId, offset }) =>
+          projection.answerPage(runId, messageId, offset),
       };
 }
 

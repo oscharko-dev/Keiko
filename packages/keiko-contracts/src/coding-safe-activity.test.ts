@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -16,6 +18,7 @@ import {
   CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
   isCodingSafeActivityToolPresentation,
   unavailableCodingSafeActivityFeed,
+  validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
   type CodingSafeActivityPlan,
@@ -566,6 +569,101 @@ describe("coding safe-activity contract — model reasoning", () => {
     ["as a bare string", "x", "assistant"],
   ] as const)("rejects reasoning %s", (_label, reasoning, role) => {
     expect(validateCodingSafeActivityFeed(withAssistantReasoning(reasoning, role)).ok).toBe(false);
+  });
+});
+
+// A long answer is never cut to fit the feed: the feed names it and its pages carry it whole.
+describe("coding safe-activity contract — full answer", () => {
+  function withFullAnswer(fullAnswer: unknown, role = "assistant", truncated = false): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const [user, assistant] = turn.messages;
+    return {
+      ...feed,
+      turns: [
+        {
+          ...turn,
+          truncated: truncated || turn.truncated,
+          messages: [user, { ...assistant, role, fullAnswer, truncated }],
+        },
+      ],
+    };
+  }
+
+  it("accepts a whole or retention-cut full answer on an assistant message", () => {
+    expect(
+      validateCodingSafeActivityFeed(withFullAnswer({ length: 120_000, truncated: false })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(
+        withFullAnswer(
+          { length: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS, truncated: true },
+          "assistant",
+          true,
+        ),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["on a user message", { length: 10, truncated: false }, "user", false],
+    ["of zero length", { length: 0, truncated: false }, "assistant", false],
+    [
+      "beyond the retention bound",
+      { length: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS + 1, truncated: false },
+      "assistant",
+      false,
+    ],
+    ["of fractional length", { length: 1.5, truncated: false }, "assistant", false],
+    ["with an extra key", { length: 10, truncated: false, text: "raw" }, "assistant", false],
+    ["without its truncation flag", { length: 10 }, "assistant", false],
+    ["cut while the message claims it whole", { length: 10, truncated: true }, "assistant", false],
+    ["as a bare number", 10, "assistant", false],
+  ] as const)("rejects a full answer %s", (_label, fullAnswer, role, truncated) => {
+    expect(validateCodingSafeActivityFeed(withFullAnswer(fullAnswer, role, truncated)).ok).toBe(
+      false,
+    );
+  });
+
+  function page(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      runId: "run-safe-activity-1",
+      messageId: "msg_assistant_1",
+      offset: 0,
+      text: "## Review\n",
+      length: 100,
+      truncated: false,
+      ...overrides,
+    };
+  }
+
+  it("accepts a bounded page inside the answer and the empty page at its end", () => {
+    expect(validateCodingSafeActivityAnswerPage(page({})).ok).toBe(true);
+    const full = "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
+    expect(validateCodingSafeActivityAnswerPage(page({ text: full, length: 70_000 })).ok).toBe(
+      true,
+    );
+    expect(validateCodingSafeActivityAnswerPage(page({ offset: 100, text: "" })).ok).toBe(true);
+  });
+
+  it.each([
+    [
+      "longer than a page",
+      { text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1), length: 70_000 },
+    ],
+    ["beyond the answer's end", { offset: 95, text: "0123456789" }],
+    ["empty before the end", { offset: 10, text: "" }],
+    ["at a negative offset", { offset: -1 }],
+    ["with unsafe format characters", { text: "a\u202Eb" }],
+    ["with an unsafe run id", { runId: "../run" }],
+    ["with an extra key", { raw: "private" }],
+    ["without its truncation flag", { truncated: undefined }],
+    ["of another schema version", { schemaVersion: "2" }],
+  ] as const)("rejects a page %s", (_label, overrides) => {
+    expect(validateCodingSafeActivityAnswerPage(page(overrides)).ok).toBe(false);
   });
 });
 

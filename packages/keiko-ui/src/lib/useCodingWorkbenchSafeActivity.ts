@@ -24,6 +24,10 @@ import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
+import {
+  useCodingWorkbenchAnswers,
+  type CodingWorkbenchAnswers,
+} from "./useCodingWorkbenchAnswers";
 
 const RESYNC_DEBOUNCE_MS = 400;
 const STREAM_BATCH_MS = 32;
@@ -63,6 +67,11 @@ export interface UseCodingWorkbenchSafeActivityInput {
 
 export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSafeActivityState {
   readonly retry: () => void;
+  /**
+   * The complete text of every answer the feed names as longer than it carries, by message id.
+   * Absent or without an entry: the feed's segments are the whole answer.
+   */
+  readonly answers?: CodingWorkbenchAnswers;
 }
 
 const IDLE_STATE: CodingWorkbenchSafeActivityState = {
@@ -88,7 +97,8 @@ export function useCodingWorkbenchSafeActivity(
   useActivityConnection({ runId, epoch, batch, runStateRef, setState });
   useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
   useActivityAutoReconnect({ runId, status: state.status, retry });
-  return { ...state, retry };
+  const answers = useCodingWorkbenchAnswers(state.feed);
+  return { ...state, answers, retry };
 }
 
 interface SnapshotBatch {

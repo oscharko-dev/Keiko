@@ -1,5 +1,5 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { codingHistoryChunkEnd } from "../store/codingHistory.js";
+import { codingHistoryChunkEnd, codingHistoryChunkSourceId } from "../store/codingHistory.js";
 import { contentFreeErrorClass } from "../diagnostics-log.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
@@ -680,8 +680,7 @@ export class CodingRuntimeHistory {
     for (let offset = 0; offset < content.length;) {
       // Source offsets stay stable across streaming captures.
       const end = codingHistoryChunkEnd(content, offset);
-      const sourceId =
-        offset === 0 ? message.messageId : `${digest(message.messageId)}:${String(offset)}`;
+      const sourceId = codingHistoryChunkSourceId(message.messageId, offset);
       if (
         this.store.codingHistory?.upsert(
           id,
@@ -698,9 +697,18 @@ export class CodingRuntimeHistory {
     return written;
   }
 
-  public capture(runId: string, content: CodingSafeActivityContent | null | undefined): void {
+  /**
+   * Stores the display feed's conversation. `answerText` reads an assistant answer's complete text,
+   * which the bounded feed only names when it is longer than the feed carries, so Coding History
+   * keeps the answer whole rather than the feed's part of it.
+   */
+  public capture(
+    runId: string,
+    content: CodingSafeActivityContent | null | undefined,
+    answerText?: (messageId: string) => string | undefined,
+  ): void {
     try {
-      this.captureAvailable(runId, content);
+      this.captureAvailable(runId, content, answerText);
     } catch (error) {
       recordHistory(this.log, "failed", { correlationId: runId, runId, error });
     }
@@ -709,6 +717,7 @@ export class CodingRuntimeHistory {
   private captureAvailable(
     runId: string,
     content: CodingSafeActivityContent | null | undefined,
+    answerText: ((messageId: string) => string | undefined) | undefined,
   ): void {
     const task = this.forRun(runId);
     if (task === undefined) {
@@ -732,7 +741,7 @@ export class CodingRuntimeHistory {
     // The display feed is armed only after the readiness handshake, so its first turn is the task
     // prompt, and a truncated feed dropped its oldest turns first: it no longer holds the intent
     // echo, and its first remaining operator message is a follow-up to keep (#3611 review).
-    this.captureMessages(task.id, runId, messages, !feed.truncated);
+    this.captureMessages(task.id, runId, messages, !feed.truncated, answerText);
     recordHistory(this.log, "captured", {
       correlationId: runId,
       conversationId: task.id,
@@ -748,18 +757,25 @@ export class CodingRuntimeHistory {
     runId: string,
     messages: readonly CodingSafeActivityMessage[],
     intentEchoPresent: boolean,
+    answerText: ((messageId: string) => string | undefined) | undefined,
   ): void {
     for (const message of operatorConversation(messages, displayText, intentEchoPresent)) {
-      const text = displayText(message);
-      if (text.length > 0)
+      const text =
+        (message.fullAnswer === undefined ? undefined : answerText?.(message.messageId)) ??
+        displayText(message);
+      // A long answer is stored as consecutive chunks, exactly as the native capture stores it.
+      for (let offset = 0; offset < text.length;) {
+        const end = codingHistoryChunkEnd(text, offset);
         this.store.codingHistory?.append(
           id,
           runId,
-          message.messageId,
+          codingHistoryChunkSourceId(message.messageId, offset),
           message.role,
-          text,
+          text.slice(offset, end),
           message.origin,
         );
+        offset = end;
+      }
     }
   }
 

@@ -16,6 +16,7 @@ import {
   fakePairingRequestBody,
 } from "./_support.js";
 import {
+  handleCodingAppSessionAnswerPage,
   handleCodingAppSessionChannelSnapshot,
   handleCodingAppSessionChannelStream,
   handleCodingAppSessionLocalSession,
@@ -826,4 +827,125 @@ it("records an absent channel only in the denial aggregate", () => {
     handleCodingAppSessionLocalSession(ctx(), { ...deps(undefined), activityLog }).status,
   ).toBe(200);
   expect(activityLog.events).toEqual([]);
+});
+
+// A long answer is read page by page over the authenticated channel, never cut to fit the feed.
+describe("app-session answer pages", () => {
+  const PAGE = {
+    schemaVersion: "1",
+    runId: "run-answer",
+    messageId: "msg-answer",
+    offset: 0,
+    text: "## Review\n",
+    length: 10,
+    truncated: false,
+  } as const;
+
+  function answerChannel(
+    answerPageFor: (request: { runId: string; messageId: string; offset: number }) => unknown,
+  ): { channel: CodingAppSessionChannel; cookie: string } {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      contentSource: {
+        contentFor: () => CANARY,
+        answerPageFor: answerPageFor as never,
+      },
+    });
+    const result = channel.pair(fakePairingRequestBody());
+    if (!result.paired) throw new Error("pair failed");
+    return { channel, cookie: `${APP_SESSION_COOKIE_NAME}=${result.cookieToken}` };
+  }
+
+  function answerCtx(query: string, cookie?: string): RouteContext {
+    return {
+      ...ctx(cookie),
+      correlationId: "answer-correlation",
+      url: new URL(`http://127.0.0.1/api/coding-workbench/app-session/channel/answer?${query}`),
+    };
+  }
+
+  function loggedDeps(channel?: CodingAppSessionChannel): {
+    readonly deps: UiHandlerDeps;
+    readonly events: readonly ServerLogEvent[];
+  } {
+    const activityLog = createBufferedServerLogSink();
+    return {
+      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      events: activityLog.events,
+    };
+  }
+
+  it("serves a paired session the page it names and records it body-free", () => {
+    const requests: unknown[] = [];
+    const { channel, cookie } = answerChannel((request) => {
+      requests.push(request);
+      return PAGE;
+    });
+    const { deps: logDeps, events } = loggedDeps(channel);
+
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      logDeps,
+    );
+
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: PAGE } });
+    expect(requests).toEqual([{ runId: "run-answer", messageId: "msg-answer", offset: 0 }]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "coding-app-session.answer-page.read",
+      correlationId: "run-answer",
+      extra: {
+        outcome: "served",
+        offset: 0,
+        pageChars: 10,
+        answerChars: 10,
+        complete: true,
+        answerTruncated: false,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("Review");
+    expect(
+      expectActivityLogProof(
+        "coding-app-session.answer-page.read.outcome",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ outcome: "served" });
+  });
+
+  it.each([
+    ["no channel", undefined, "runId=run-answer&messageId=msg-answer&offset=0", false],
+    ["no session", "unpaired", "runId=run-answer&messageId=msg-answer&offset=0", false],
+    ["a malformed offset", "paired", "runId=run-answer&messageId=msg-answer&offset=01", true],
+    ["a negative offset", "paired", "runId=run-answer&messageId=msg-answer&offset=-1", true],
+    ["a missing message", "paired", "runId=run-answer&offset=0", true],
+    ["an extra key", "paired", "runId=run-answer&messageId=msg-answer&offset=0&raw=1", true],
+  ] as const)("serves the page-free response for %s", (_label, session, query, paired) => {
+    let asked = 0;
+    const { channel, cookie } = answerChannel(() => {
+      asked += 1;
+      return PAGE;
+    });
+    const { deps: logDeps, events } = loggedDeps(session === undefined ? undefined : channel);
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx(query, session === "paired" ? cookie : undefined),
+      logDeps,
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
+    expect(asked).toBe(0);
+    expect(paired || session !== "paired").toBe(true);
+    expect(events[0]).toMatchObject({
+      correlationId: "answer-correlation",
+      extra: { outcome: "unavailable", pageChars: 0 },
+    });
+  });
+
+  it("fails closed when the source returns a page that breaks the contract", () => {
+    const { channel, cookie } = answerChannel(() => ({ ...PAGE, text: "x".repeat(11) }));
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      deps(channel),
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
+  });
 });

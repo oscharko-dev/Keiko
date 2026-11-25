@@ -12,12 +12,15 @@ export {
   CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS,
   CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
   codingAppSessionAcknowledgement,
+  contentFreeCodingAppSessionAnswerResponse,
   contentFreeCodingAppSessionChannelSnapshot,
+  validateCodingAppSessionAnswerResponse,
   validateCodingAppSessionChannelContent,
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 export type {
   CodingAppSessionAcknowledgement,
+  CodingAppSessionAnswerResponse,
   CodingAppSessionChannelContent,
   CodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts";

@@ -754,6 +754,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Activity truncated.",
   "codingWorkbench.activity.dropped": "{count} update(s) omitted.",
   "codingWorkbench.activity.truncationMark": "Output truncated",
+  "codingWorkbench.activity.answerLoading": "Loading the rest of the answer…",
+  "codingWorkbench.activity.copy.answer": "Copy answer as Markdown",
+  "codingWorkbench.activity.copy.copied": "Copied",
+  "codingWorkbench.activity.copy.copiedStatus": "Answer copied as Markdown",
+  "codingWorkbench.activity.copy.failedStatus":
+    "Clipboard access failed. Select the answer manually and copy it.",
   "codingWorkbench.activity.role.user": "You",
   "codingWorkbench.activity.role.assistant": "Coding agent",
   "codingWorkbench.activity.role.keiko": "Keiko",

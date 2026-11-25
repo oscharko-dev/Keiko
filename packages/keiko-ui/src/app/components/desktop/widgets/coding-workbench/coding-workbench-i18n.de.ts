@@ -787,6 +787,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Aktivität gekürzt.",
   "codingWorkbench.activity.dropped": "{count} Aktualisierung(en) ausgelassen.",
   "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
+  "codingWorkbench.activity.answerLoading": "Der Rest der Antwort wird geladen …",
+  "codingWorkbench.activity.copy.answer": "Antwort als Markdown kopieren",
+  "codingWorkbench.activity.copy.copied": "Kopiert",
+  "codingWorkbench.activity.copy.copiedStatus": "Antwort als Markdown kopiert",
+  "codingWorkbench.activity.copy.failedStatus":
+    "Zugriff auf die Zwischenablage fehlgeschlagen. Markiere die Antwort und kopiere sie selbst.",
   "codingWorkbench.activity.role.user": "Du",
   "codingWorkbench.activity.role.assistant": "Coding-Agent",
   "codingWorkbench.activity.role.keiko": "Hinweis von Keiko",
