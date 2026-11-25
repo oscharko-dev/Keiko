@@ -133,6 +133,27 @@ describe("every Playwright web server's outbound traffic", () => {
     expect(offenders).toStrictEqual([]);
   });
 
+  it("reaches a Keiko server whose harness replaces process.env", () => {
+    // A harness that builds Keiko's handler deps with an explicit env drops process.env, so it
+    // must forward the hermetic settings itself, by the names HERMETIC_OUTBOUND_ENV defines.
+    const harnesses = [join(E2E_ROOT, "support"), join(E2E_ROOT, "servers")].flatMap((dir) =>
+      readdirSync(dir)
+        .filter((name) => /\.(mjs|mts|ts)$/u.test(name))
+        .map((name) => join(dir, name)),
+    );
+    const explicitEnvHarnesses = harnesses.filter((path) =>
+      /buildUiHandlerDeps\(\{[\s\S]{0,400}?\benv:\s*\{/u.test(readFileSync(path, "utf8")),
+    );
+    expect(
+      explicitEnvHarnesses.map((path) => relative(E2E_ROOT, path).split("\\").join("/")),
+    ).toStrictEqual(["support/jira-chat-4081-server.mjs"]);
+    for (const path of explicitEnvHarnesses) {
+      const source = readFileSync(path, "utf8");
+      expect(source).toContain("...hermeticOutboundEnv,");
+      for (const name of Object.keys(HERMETIC_OUTBOUND_ENV)) expect(source).toContain(`"${name}"`);
+    }
+  });
+
   it("flags a web server env block without the hermetic settings", () => {
     expect(nonHermeticEnvBlocks('webServer: { env: { KEIKO_OS_KEYCHAIN: "off" } }')).toBe(1);
     expect(nonHermeticEnvBlocks("webServer: { env: { ...HERMETIC_OUTBOUND_ENV, A: 1 } }")).toBe(0);
