@@ -8639,6 +8639,61 @@ describe("verification truth at task settlement", () => {
     });
   }
 
+  // #4492 (Windows lab): a task's run ended "Changes not checked"; the follow-up the person started
+  // with "Run the check now" changed nothing, its check failed, and it settled as succeeded, which
+  // erased the warning. A follow-up of an unverified change owes the same evidence.
+  async function followUpOf(prior: Partial<CodingRuntimeSnapshot>) {
+    const history = new CodingRuntimeHistory(createInMemoryUiStore(), () => "operator", undefined);
+    vi.spyOn(history, "admits").mockReturnValue(true);
+    vi.spyOn(history, "previousRunId").mockReturnValue("run-prior");
+    vi.spyOn(history, "begin").mockImplementation(() => undefined);
+    vi.spyOn(history, "initialContext").mockReturnValue("HISTORY-CONTEXT");
+    const f = fixtureFrom({
+      seededRows: [{ ...settledRow("run-prior", "2025-12-31T00:00:00.000Z", 3), ...prior }],
+      history,
+      newRunId: () => "run-1",
+    });
+    let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+    const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    f.taskDispatcher.dispatch.mockResolvedValue({ ok: false });
+    await f.orchestrator.start({ ...start, conversationId: "task-prior" });
+    return { f, finish: (): void => finish?.("succeeded") };
+  }
+
+  it("keeps a failed rerun of an unverified change from settling as succeeded", async () => {
+    const { f, finish } = await followUpOf({
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+    });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it.each([
+    [
+      "a passing rerun of an unverified change",
+      { state: "failed", failureCode: "verification-not-evidenced" },
+      "passed",
+    ],
+    ["a failed check after a verified task", {}, "failed"],
+  ] as const)("settles %s as succeeded", async (_name, prior, status) => {
+    const { f, finish } = await followUpOf(prior);
+    await verification(f, status);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
   it.each(["failed", "partial"] as const)(
     "completes a read-only %s diagnosis without initiating a repair",
     async (status) => {

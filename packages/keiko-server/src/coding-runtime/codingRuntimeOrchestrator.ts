@@ -4404,10 +4404,7 @@ export class CodingRuntimeOrchestrator {
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
-    if ("gap" in scope) {
-      recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap);
-      return this.fail("authority-resolution-failed");
-    }
+    if ("gap" in scope) return this.refuseStartScope(scope.gap, correlationId);
     const { active, principal } = scope;
     let { request } = scope;
     const runId = this.newRunId();
@@ -4438,11 +4435,22 @@ export class CodingRuntimeOrchestrator {
     this.deps.snapshots.create(snapshot);
     this.runIdentity = startedRunIdentity(runId, request);
     this.activateStartedRun(runId, launch, selection, request.taskIntent);
+    // The task's last change still has no passing check (#4492): a follow-up that only reruns the
+    // check owes the same evidence, so a failed rerun cannot settle the task as succeeded.
+    this.effort.inheritVerificationDebt(runId, scope.unverifiedPredecessor === true);
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     if (!this.beginHistory(request, active, runId)) return this.failMintedStart(runId);
     return this.startWithCancellation(request, active, runId, launch, issue.attachment);
+  }
+
+  private refuseStartScope(
+    gap: StartScopeGap,
+    correlationId: string | undefined,
+  ): CodingRuntimeOrchestratorResult {
+    recordStartScopeGap(this.deps.diagnostics, correlationId, gap);
+    return this.fail("authority-resolution-failed");
   }
 
   /**
@@ -4595,6 +4603,7 @@ export class CodingRuntimeOrchestrator {
         readonly active: ActiveWorkspaceView;
         readonly principal: string;
         readonly request: CodingWorkbenchRuntimeStartRequest;
+        readonly unverifiedPredecessor?: boolean;
       }
     | { readonly gap: StartScopeGap } {
     const active = this.activeWorkspaceOrUndefined();
@@ -4609,7 +4618,12 @@ export class CodingRuntimeOrchestrator {
     const priorId = this.deps.history.previousRunId(request.conversationId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
     if (prior === undefined) return { gap: "prior-run-missing" };
-    return { active, principal, request: this.continuedIssueRequest(request, prior) };
+    return {
+      active,
+      principal,
+      request: this.continuedIssueRequest(request, prior),
+      unverifiedPredecessor: prior.failureCode === "verification-not-evidenced",
+    };
   }
 
   private continuedIssueRequest(

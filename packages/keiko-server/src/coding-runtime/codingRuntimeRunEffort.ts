@@ -283,6 +283,15 @@ export class CodingRuntimeRunEffortLedger {
   }
 
   /**
+   * A run that continues a task whose last change was left without a passing check (#4492)
+   * inherits that debt: it demands verification as if it had made that change itself.
+   */
+  inheritVerificationDebt(runId: string, unverifiedPredecessor: boolean): void {
+    const run = this.runs.get(runId);
+    if (run !== undefined && unverifiedPredecessor) run.verificationRequired = true;
+  }
+
+  /**
    * An applied edit of the run. An edit that changed documentation alone is no change a check could
    * contradict: it demands no verification and leaves the run's earlier results standing; any edit
    * that changed code, or named no path, demands one after it (#4491).
