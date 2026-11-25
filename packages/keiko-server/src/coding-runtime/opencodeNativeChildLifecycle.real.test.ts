@@ -783,6 +783,70 @@ describe("pinned native OpenCode session tree: background subagents", () => {
     120_000,
   );
 
+  // #4546 (policy audit): 2.4.1's `subagent` tool also takes a `model` and the `sessionID` of a
+  // child to call again. Keiko reviews the call by its action alone, so the runtime must refuse a
+  // model the gateway-only provider policy does not admit and any session that is not a child of
+  // the calling one, before a child runs.
+  it.skipIf(skip).each([
+    [
+      "a model outside the gateway",
+      { model: "opencode/big-pickle" },
+      /^Model "opencode\/big-pickle" is not available/u,
+    ],
+    [
+      "an unknown session",
+      { sessionID: "ses_0000000000000000000000000" },
+      /^Subagent session not found/u,
+    ],
+    [
+      "the calling session itself",
+      { sessionID: "SELF" },
+      /is not a child of the current session$/u,
+    ],
+  ] as const)(
+    "refuses a subagent call naming %s before any child runs",
+    async (_name, extra, refusal) => {
+      await withRun(async (run) => {
+        let parentCalls = 0;
+        run.gateway.script = (context): ModelPlan => {
+          if (context.role !== "parent") return { kind: "text", text: "CHILD_DONE" };
+          parentCalls += 1;
+          if (parentCalls > 1) return { kind: "text", text: "The parent continued." };
+          const named = Object.fromEntries(
+            Object.entries(extra).map(([key, value]) => [
+              key,
+              value === "SELF" ? run.sessionId : value,
+            ]),
+          );
+          return {
+            kind: "tool",
+            name: "subagent",
+            arguments: {
+              agent: "explore",
+              description: "Synthetic child",
+              prompt: "CHILD_TASK do the synthetic work.",
+              ...named,
+            },
+          };
+        };
+        await run.client.prompt(run.sessionId, "PARENT_TASK delegate to explore");
+        await expect.poll(() => parentCalls, { timeout: 60_000 }).toBeGreaterThan(1);
+        const parts = (await run.client.messages(run.sessionId))
+          .flatMap((message): readonly unknown[] =>
+            Array.isArray(message.content) ? (message.content as readonly unknown[]) : [],
+          )
+          .map(object)
+          .filter((part) => part?.name === "subagent")
+          .map((part) => object(part?.state));
+        expect(parts.map((state) => state?.status)).toEqual(["error"]);
+        expect(object(parts[0]?.error)?.message).toMatch(refusal);
+        expect(run.gateway.requests.filter((request) => request.role === "child")).toEqual([]);
+        expect((await run.client.sessions()).map((entry) => entry.id)).toEqual([run.sessionId]);
+      });
+    },
+    120_000,
+  );
+
   // #3903 AC1 (owner decision 2026-10-25): the orchestrating parent keeps the run's model and a
   // subagent configured with its own gateway model runs on it; both requests reach the gateway.
   it.skipIf(skip)(

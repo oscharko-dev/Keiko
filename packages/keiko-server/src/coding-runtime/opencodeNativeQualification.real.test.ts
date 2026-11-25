@@ -2508,6 +2508,27 @@ describe("pinned native OpenCode shell processes (T13)", () => {
     120_000,
   );
 
+  // #4546 (policy audit): 2.4.1 moves a foreground command that outlives its timeout to the
+  // background on its own; such a job is the same background job and is reaped the same way.
+  it.skipIf(skip)(
+    "reaps a command its timeout moved to the background when the runtime is stopped",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          const moved = await scriptedTurn(
+            run,
+            shell(idleCommand(120, marker), { timeout: 1_000 }),
+          );
+          expect(moved).toContain("moved to the background");
+          await expect.poll(() => liveCount(marker), { timeout: 20_000 }).toBeGreaterThan(0);
+          await stopChild(run.child, "SIGTERM");
+          await expect.poll(() => liveCount(marker), { timeout: 20_000 }).toBe(0);
+        });
+      });
+    },
+    120_000,
+  );
+
   // The control shows what only Keiko's native supervisor can cover: a runtime that is killed
   // instead of stopped leaves its background job running as an orphan of launchd. The supervisor
   // reaps such a process by its kernel resource coalition (`native/runtime-supervisor`), which a test
