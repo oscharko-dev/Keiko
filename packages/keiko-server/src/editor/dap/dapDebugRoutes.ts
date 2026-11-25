@@ -5,6 +5,7 @@ import type {
   DebugParseResult,
   DebugSession,
   DebugSessionStatus,
+  DebugSessionStartRequest,
   DebugActivationSummary,
   DebugVariableInput,
   EvaluateWatchRequest,
@@ -80,6 +81,12 @@ import {
   type DapSessionConfigurationPort,
 } from "./dapProcessManager.js";
 import { DapProtocolError } from "./dapProtocolClient.js";
+import { processServerLogSink } from "../../process-log-sink.js";
+import {
+  debugStartFailureCode,
+  debugStartRefusal,
+  recordStartRefused,
+} from "./dapStartupActivity.js";
 import type { DapProductionService } from "./dapProductionService.js";
 import { createDebugReferenceStore } from "./dapReferenceStore.js";
 import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
@@ -628,13 +635,42 @@ export async function handleStartDebugSession(
   if (!snapshot.ok) {
     return { status: 503, body: errorBody("STATE_UNAVAILABLE", "Debug state is unavailable.") };
   }
+  return startAndProject(ctx, service, authorized.workspace, request);
+}
+
+async function startAndProject(
+  ctx: RouteContext,
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  request: DebugSessionStartRequest,
+): Promise<RouteResult> {
   const sessionId = mintedSessionId();
-  await service.manager.start({
+  try {
+    await startSession(ctx, service, workspace, request, sessionId);
+  } catch (error: unknown) {
+    const refused = refusedStart(ctx, error);
+    if (refused === undefined) throw error;
+    return refused;
+  }
+  const projection = service.manager.health(sessionId);
+  if (projection === undefined) throw new Error("DEBUG_SESSION_PROJECTION_UNAVAILABLE");
+  return { status: 201, body: sessionProjection(projection, workspace.workspaceId) };
+}
+
+function startSession(
+  ctx: RouteContext,
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  request: DebugSessionStartRequest,
+  sessionId: string,
+): Promise<void> {
+  return service.manager.start({
+    correlationId: ctx.correlationId,
     identity: {
       sessionId,
-      workspaceId: authorized.workspace.workspaceId,
-      workspacePartitionKey: authorized.workspace.partition,
-      browserSessionBinding: authorized.workspace.browserSessionBinding,
+      workspaceId: workspace.workspaceId,
+      workspacePartitionKey: workspace.partition,
+      browserSessionBinding: workspace.browserSessionBinding,
       targetKind: request.target.kind,
       activationRevision: request.activationRevision,
       network: "none",
@@ -643,11 +679,18 @@ export async function handleStartDebugSession(
     adapterRuntime: "node",
     adapterProviderId: "node",
     planCandidate: request.target,
-    configure: sessionConfiguration(service, authorized.workspace),
+    configure: sessionConfiguration(service, workspace),
   });
-  const projection = service.manager.health(sessionId);
-  if (projection === undefined) throw new Error("DEBUG_SESSION_PROJECTION_UNAVAILABLE");
-  return { status: 201, body: sessionProjection(projection, authorized.workspace.workspaceId) };
+}
+
+// #4103: a closed DAP failure is a typed refusal with its own Activity Log line, not an opaque 500.
+// An unclassified error returns undefined and keeps reaching the top-level catch with its frames.
+function refusedStart(ctx: RouteContext, error: unknown): RouteResult | undefined {
+  const code = debugStartFailureCode(error);
+  if (code === undefined) return undefined;
+  const refusal = debugStartRefusal(code);
+  recordStartRefused(processServerLogSink(), ctx.correlationId, code, refusal.status);
+  return { status: refusal.status, body: errorBody(code, refusal.message, ctx.correlationId) };
 }
 
 async function handleGetDebugSession(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {

@@ -82,27 +82,10 @@ export function RepositoryErrorNotice({ error, onRetry }: RepositoryErrorNoticeP
   );
 }
 
-function RecentRepositories({
+function RepositoryList({
   repositories,
-  loading,
-  error,
   onSelect,
-  onRetry,
-}: RecentRepositoriesProps): ReactNode {
-  const t = useOptionalWidgetTranslate();
-  if (error !== null) return <RepositoryErrorNotice error={error} onRetry={onRetry} />;
-  if (loading && repositories.length === 0) {
-    return (
-      <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-        {t("gitClientWindow.ui.loadingRepos")}
-      </output>
-    );
-  }
-  if (repositories.length === 0) {
-    return (
-      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>{t("gitClientWindow.ui.noReposYet")}</p>
-    );
-  }
+}: Pick<RecentRepositoriesProps, "repositories" | "onSelect">): ReactNode {
   return (
     <ul
       style={{
@@ -147,6 +130,41 @@ function RecentRepositories({
       ))}
     </ul>
   );
+}
+
+function RecentRepositories({
+  repositories,
+  loading,
+  error,
+  onSelect,
+  onRetry,
+}: RecentRepositoriesProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  if (error !== null) {
+    const notice = <RepositoryErrorNotice error={error} onRetry={onRetry} />;
+    // #4103: a refused or failed repository leaves the loaded list usable, so it stays below the
+    // notice and the person can choose another repository; a failed list load leaves no list.
+    if (repositories.length === 0) return notice;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {notice}
+        <RepositoryList repositories={repositories} onSelect={onSelect} />
+      </div>
+    );
+  }
+  if (loading && repositories.length === 0) {
+    return (
+      <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
+        {t("gitClientWindow.ui.loadingRepos")}
+      </output>
+    );
+  }
+  if (repositories.length === 0) {
+    return (
+      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>{t("gitClientWindow.ui.noReposYet")}</p>
+    );
+  }
+  return <RepositoryList repositories={repositories} onSelect={onSelect} />;
 }
 
 export function ConnectPanel({

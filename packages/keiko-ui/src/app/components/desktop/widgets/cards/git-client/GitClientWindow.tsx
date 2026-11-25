@@ -1867,7 +1867,10 @@ export function GitClientWindow({
   const refuseRepository = useCallback(
     (path: string, reason: RepositoryRefusalReason, endsHandOff: boolean): void => {
       setSelectedPath(null);
-      updateCfg?.(endsHandOff ? { connectRepository: undefined } : { projectPath: "" });
+      // The refused folder stays configured (#4103): clearing it would re-key the desktop's window
+      // onto the globally selected repository and drop this notice. Retry reloads the list, and
+      // choosing another repository replaces the configured folder.
+      if (endsHandOff) updateCfg?.({ connectRepository: undefined });
       setReposFailure(
         repositoryFailure(
           optionalT(

@@ -2964,11 +2964,15 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByText("Opening chat...")).toBeInTheDocument();
-    await waitFor((): void =>
-      expect(ctx.updateCfg).toHaveBeenCalledWith({ projectPath: "/repo-a" }),
-    );
-    expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA);
+    // #4103: the opening state is asserted in the initial commit, while the lookup is still pending.
+    // A `findByText` resolved first and asserted later, so under load the recovery could finish in
+    // between and detach the element; and the project open runs in an effect after the persisted
+    // binding, so both are awaited together instead of reading the open one step too early.
+    expect(screen.getByText("Opening chat...")).toBeInTheDocument();
+    await waitFor((): void => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ projectPath: "/repo-a" });
+      expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA);
+    });
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
