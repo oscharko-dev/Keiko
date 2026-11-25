@@ -709,6 +709,27 @@ truncated.". Counts only — never a message, path or run name. An explicit Stop
 run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
 with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
 
+A model's answer is never cut to fit the bounded safe-activity feed (owner decision "Work-ending
+limits"). The projection keeps the complete text of every assistant answer the feed lists beside the
+feed, under a per-run memory bound, and the feed message names the answer's whole length
+(`fullAnswer`) when its segments carry less. `coding-runtime.safe-activity` records
+`event=answer-retained reason=feed-bound` the first time an answer outgrows the feed, and
+`event=answer-clipped reason=retention-bound` at `warn` when the memory bound cut one, which the
+message then shows as cut; `occurrenceCount` is the run's running count of each. The Workbench reads
+the rest of a named answer page by page through the authenticated app-session channel:
+`coding-app-session.answer-page.read` records each page read under the run's id with `outcome`
+`served` or `unavailable` (no such run, message, offset or session), the page's `offset`,
+`pageChars` and `answerChars`, whether the page reached the answer's end (`complete`), whether the
+memory bound cut the answer (`answerTruncated`) and the message id only as `messageIdSha256`. The
+browser reports a failed read of the rest under the run's correlation (`errorKind=unavailable`) and
+keeps the carried part marked as cut. Restored runs join Coding History's stored chunks of one
+answer back into one message and show it whole. Copying an answer as Markdown is recorded as the
+closed `answerCopy` outcome, never the copied text. The model's reasoning is kept the same way:
+`event=reasoning-retained reason=feed-bound` the first time it outgrows the feed,
+`event=reasoning-clipped reason=retention-bound` at `warn` on a memory-bound cut, and page reads of
+it carry `textPart=reasoning` (an answer page `textPart=answer`). A live update's append-only
+`textDeltas` are never logged: they carry model text.
+
 `coding-runtime.history` also records a refused history request as `event=refused` under the
 request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
 `invalid-request` (400). A status or title update checks that the task exists without reading its

@@ -3,6 +3,7 @@
 import type {
   CodingAppSessionAnswerResponse,
   CodingAppSessionChannelSnapshot,
+  CodingSafeActivityTextPart,
   CodingWorkbenchValidationResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -68,6 +69,8 @@ function answerValidator(path: string, value: unknown): CodingAppSessionAnswerRe
 export interface CodingAppSessionAnswerPageRequest {
   readonly runId: string;
   readonly messageId: string;
+  /** The answer (default) or the model's reasoning. */
+  readonly part?: CodingSafeActivityTextPart;
   readonly offset: number;
 }
 
@@ -82,6 +85,7 @@ export function getCodingAppSessionAnswerPage(
   const query = new URLSearchParams({
     runId: request.runId,
     messageId: request.messageId,
+    part: request.part ?? "answer",
     offset: String(request.offset),
   });
   return bffFetchJson(

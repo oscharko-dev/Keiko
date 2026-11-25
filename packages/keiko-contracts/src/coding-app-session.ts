@@ -18,8 +18,10 @@ import {
 import {
   validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
   type CodingSafeActivityAnswerPage,
   type CodingSafeActivityFeed,
+  type CodingSafeActivityTextDelta,
 } from "./coding-safe-activity.js";
 
 export {
@@ -109,6 +111,12 @@ export interface CodingAppSessionTextContent {
 export interface CodingAppSessionSafeActivityContent {
   readonly kind: "safe-activity";
   readonly feed: CodingSafeActivityFeed;
+  /**
+   * The model text appended since the previous live update, for a reader to append in place. Only a
+   * live update carries deltas, and never more than the snapshot budget admits: what one leaves
+   * out, the reader reads as pages.
+   */
+  readonly textDeltas?: readonly CodingSafeActivityTextDelta[];
 }
 
 export type CodingAppSessionChannelContent =
@@ -193,9 +201,12 @@ function checkChannelContent(value: unknown, path: string, errors: string[]): vo
     return;
   }
   if (value.kind === "safe-activity") {
-    errors.push(...exactKeys(value, ["kind", "feed"], path));
+    errors.push(...exactKeys(value, ["kind", "feed", "textDeltas"], path));
     if (!validateCodingSafeActivityFeed(value.feed).ok) {
       errors.push(`${path}.feed is invalid`);
+    }
+    if ("textDeltas" in value) {
+      validateCodingSafeActivityTextDeltas(value.textDeltas, `${path}.textDeltas`, errors);
     }
     return;
   }

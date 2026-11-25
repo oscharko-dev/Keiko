@@ -8606,6 +8606,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["served", "unavailable"],
       },
+      textPart: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["answer", "reasoning"],
+      },
       offset: {
         type: "integer",
         dataClass: "count",
@@ -17230,6 +17236,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "interrupted",
           "answer-retained",
           "answer-clipped",
+          "reasoning-retained",
+          "reasoning-clipped",
         ],
       },
       reason: {

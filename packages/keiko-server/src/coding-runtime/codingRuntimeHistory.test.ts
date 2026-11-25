@@ -353,6 +353,11 @@ describe("paired coding conversation history", () => {
       parentMessageId: "task",
       occurredAt,
     });
+    const capture = (): void => {
+      history.capture(runId, projection.currentContent(), (messageId) =>
+        projection.answerText(runId, messageId),
+      );
+    };
     for (let offset = 0; offset < answer.length; offset += 4_000) {
       projection.ingest(runId, {
         kind: "text",
@@ -360,6 +365,9 @@ describe("paired coding conversation history", () => {
         text: answer.slice(offset, offset + 4_000),
         occurredAt,
       });
+      // A capture mid-stream stores a short last chunk; the next capture must extend it, never
+      // leave it behind beside the grown one.
+      if (offset === 68_000) capture();
     }
     expect(answer.length).toBeGreaterThan(100 * 1_024);
     history.capture(runId, projection.currentContent(), (messageId) =>

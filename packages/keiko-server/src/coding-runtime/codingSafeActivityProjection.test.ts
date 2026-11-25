@@ -7,7 +7,10 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
+  type CodingSafeActivityTextPart,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -1907,7 +1910,10 @@ describe("model reasoning in the live feed", () => {
     expect(answer.truncated).toBe(false);
   });
 
-  it("clips reasoning at its own bound and keeps it a true prefix of what the model wrote", () => {
+  // The feed carries reasoning only up to its own bound, as a true prefix; the reasoning itself is
+  // never cut: the feed names its whole length and its pages carry every character, the part the
+  // model wrote after the bound included.
+  it("bounds reasoning in the feed as a true prefix and keeps it whole in its pages", () => {
     const projection = assistantTurn();
     const long = "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 100);
     projection.ingest(RUN_ID, reasoning("msg_answer", long));
@@ -1917,8 +1923,10 @@ describe("model reasoning in the live feed", () => {
     const answer = projected(projection);
     expect(answer.reasoning).toEqual({
       text: "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES),
-      truncated: true,
+      truncated: false,
     });
+    expect(answer.fullReasoning).toEqual({ length: long.length + 5, truncated: false });
+    expect(readWholeAnswer(projection, "msg_answer", "reasoning")).toBe(`${long}LATER`);
     // The reasoning bound leaves the answer room of its own.
     expect(answer.truncated).toBe(false);
     expect(joinedText(answer)).toBe("y".repeat(7_000));
@@ -1940,7 +1948,7 @@ describe("model reasoning in the live feed", () => {
     expect(readWholeAnswer(projection)).toBe("z".repeat(700));
   });
 
-  it("sheds older answers' feed text losslessly, then older reasoning, under turn pressure", () => {
+  it("sheds older answers' and older reasoning's feed text losslessly under turn pressure", () => {
     const projection = assistantTurn({ limits: { maxTurnBytes: 2_000 } });
     projection.ingest(RUN_ID, reasoning("msg_answer", "o".repeat(900)));
     projection.ingest(RUN_ID, text("msg_answer", "first answer"));
@@ -1953,10 +1961,13 @@ describe("model reasoning in the live feed", () => {
     expect(older).not.toHaveProperty("reasoning");
     expect(older.segments).toEqual([]);
     expect(older.fullAnswer).toEqual({ length: "first answer".length, truncated: false });
+    expect(older.fullReasoning).toEqual({ length: 900, truncated: false });
     expect(readWholeAnswer(projection)).toBe("first answer");
+    expect(readWholeAnswer(projection, "msg_answer", "reasoning")).toBe("o".repeat(900));
     expect(newest.reasoning?.text).toBe("n".repeat(900));
+    // Nothing was lost, so the turn is not marked as cut.
     const feed = projection.currentContent()?.feed;
-    expect(feed?.availability === "available" && feed.turns[0]?.truncated).toBe(true);
+    expect(feed?.availability === "available" && feed.turns[0]?.truncated).toBe(false);
   });
 
   it("drops reasoning that a format-character redactor empties", () => {
@@ -2209,13 +2220,17 @@ describe("OpenCode permission rejection evidence (#4271)", () => {
 
 // A model's answer is never cut to fit the bounded feed (owner decision "Work-ending limits"): the
 // projection keeps its complete text, the feed names it, and pages carry it whole.
-function readWholeAnswer(projection: Projection, messageId = "msg_answer"): string {
+function readWholeAnswer(
+  projection: Projection,
+  messageId = "msg_answer",
+  part: CodingSafeActivityTextPart = "answer",
+): string {
   let whole = "";
   for (;;) {
-    const page = projection.answerPage(RUN_ID, messageId, whole.length);
+    const page = projection.answerPage(RUN_ID, { messageId, part, offset: whole.length });
     if (page === null) throw new TypeError(`no page for ${messageId} at ${String(whole.length)}`);
     expect(validateCodingSafeActivityAnswerPage(page).ok).toBe(true);
-    expect(page.offset).toBe(whole.length);
+    expect(page).toMatchObject({ offset: whole.length, part });
     whole += page.text;
     if (whole.length >= page.length) return whole;
     expect(page.text.length).toBeGreaterThan(0);
@@ -2311,30 +2326,116 @@ describe("complete answers beyond the feed budget", () => {
     const projection = assistantTurn();
     projection.ingest(RUN_ID, text("msg_user", "Review the module."));
     projection.ingest(RUN_ID, text("msg_answer", "Answer."));
-    expect(projection.answerPage("run-other", "msg_answer", 0)).toBeNull();
-    expect(projection.answerPage(RUN_ID, "msg_missing", 0)).toBeNull();
-    expect(projection.answerPage(RUN_ID, "msg_user", 0)).toBeNull();
-    expect(projection.answerPage(RUN_ID, "msg_answer", 8)).toBeNull();
-    expect(projection.answerPage(RUN_ID, "msg_answer", -1)).toBeNull();
-    expect(projection.answerPage(RUN_ID, "msg_answer", 7)).toMatchObject({ text: "", length: 7 });
+    expect(
+      projection.answerPage("run-other", { messageId: "msg_answer", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_missing", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_user", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 8 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: -1 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 7 }),
+    ).toMatchObject({ text: "", length: 7 });
   });
 
   it("releases a retained answer with its turn and with a purge", () => {
     const projection = assistantTurn({ limits: { maxTurns: 1 } });
     projection.ingest(RUN_ID, text("msg_answer", "First answer."));
     projection.ingest(RUN_ID, message("msg_user_2", "user"));
-    expect(projection.answerPage(RUN_ID, "msg_answer", 0)).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 0 }),
+    ).toBeNull();
     projection.ingest(RUN_ID, message("msg_answer_2", "assistant", "msg_user_2"));
     projection.ingest(RUN_ID, text("msg_answer_2", "Second answer."));
-    expect(projection.answerPage(RUN_ID, "msg_answer_2", 0)?.text).toBe("Second answer.");
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer_2", part: "answer", offset: 0 })?.text,
+    ).toBe("Second answer.");
     projection.purge(RUN_ID, "stop");
-    expect(projection.answerPage(RUN_ID, "msg_answer_2", 0)).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer_2", part: "answer", offset: 0 }),
+    ).toBeNull();
   });
 
   it("keeps the answer's complete text in the page while a Keiko note stays bounded text", () => {
     const projection = assistantTurn();
     projection.ingest(RUN_ID, message("msg_note", "user", undefined, "keiko"));
     projection.ingest(RUN_ID, text("msg_note", "Continue."));
-    expect(projection.answerPage(RUN_ID, "msg_note", 0)).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_note", part: "answer", offset: 0 }),
+    ).toBeNull();
+  });
+});
+
+// A live update carries what each model text gained as an append-only delta beside the bounded
+// feed, so a reader keeps up without a page read per update; a gain past the feed's own bound still
+// reaches it whole.
+describe("live model-text deltas", () => {
+  it("streams a long answer and its reasoning as contiguous deltas inside the snapshot budget", () => {
+    const projection = assistantTurn();
+    const updates: NonNullable<ReturnType<Projection["currentContent"]>>[] = [];
+    projection.subscribeContent((content) => {
+      if (content !== null) updates.push(content);
+    });
+    const thought = "t".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 3_000);
+    projection.ingest(RUN_ID, reasoning("msg_answer", thought));
+    const answer = longMarkdownAnswer(110 * 1024);
+    for (let at = 0; at < answer.length; at += 3_000) {
+      projection.ingest(RUN_ID, text("msg_answer", answer.slice(at, at + 3_000)));
+    }
+
+    const rebuilt: Record<CodingSafeActivityTextPart, string> = { answer: "", reasoning: "" };
+    for (const update of updates) {
+      expect(Buffer.byteLength(JSON.stringify(update), "utf8")).toBeLessThanOrEqual(
+        CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
+      );
+      const errors: string[] = [];
+      validateCodingSafeActivityTextDeltas(update.textDeltas ?? [], "textDeltas", errors);
+      expect(errors).toEqual([]);
+      for (const delta of update.textDeltas ?? []) {
+        expect(delta.offset).toBe(rebuilt[delta.part].length);
+        rebuilt[delta.part] += delta.text;
+      }
+    }
+    expect(rebuilt).toEqual({ answer, reasoning: thought });
+    expect(JSON.stringify(projection.currentContent())).not.toContain("textDeltas");
+  });
+
+  it("records reasoning the feed names and reasoning the memory bound cuts, body-free", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({
+      activityLog: log,
+      limits: { maxRetainedAnswerChars: 9_000 },
+    });
+    projection.ingest(
+      RUN_ID,
+      reasoning("msg_answer", "s".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 10)),
+    );
+    projection.ingest(RUN_ID, reasoning("msg_answer", "s".repeat(2_000)));
+
+    const events = log.events
+      .filter((event) => event.op === "coding-runtime.safe-activity")
+      .map((event) => [event.extra?.event, event.extra?.reason, event.level]);
+    expect(events).toEqual([
+      ["reasoning-retained", "feed-bound", undefined],
+      ["reasoning-clipped", "retention-bound", "warn"],
+    ]);
+    expect(projected(projection).fullReasoning).toEqual({ length: 9_000, truncated: true });
+    // The cut is shown on the reasoning; the answer itself is whole.
+    expect(projected(projection).reasoning?.truncated).toBe(true);
+    expect(projected(projection).truncated).toBe(false);
+    for (const event of log.events) {
+      expect(validateRegisteredActivityLogEvent(event as never)).toMatchObject({
+        op: "coding-runtime.safe-activity",
+      });
+    }
+    expect(JSON.stringify(log.events)).not.toContain("s".repeat(50));
   });
 });

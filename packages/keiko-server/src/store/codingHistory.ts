@@ -212,13 +212,23 @@ export function codingHistoryChunkSourceId(messageId: string, offset: number): s
     : `${createHash("sha256").update(messageId).digest("hex")}:${String(offset)}`;
 }
 
-const CHUNK_CONTINUATION_SOURCE_ID = /^[0-9a-f]{64}:([1-9]\d*)$/u;
+const CHUNK_CONTINUATION_SOURCE_ID = /^([0-9a-f]{64}):([1-9]\d*)$/u;
 
-/** The offset a continuation chunk's source id names, or undefined for any other source id. */
-function continuationOffset(sourceId: unknown): number | undefined {
+/** Which message a continuation chunk continues, and where; undefined for any other source id. */
+interface ChunkContinuation {
+  /** SHA-256 of the source id of the message's first chunk. */
+  readonly sourceDigest: string;
+  readonly offset: number;
+}
+
+function chunkContinuation(sourceId: unknown): ChunkContinuation | undefined {
   if (typeof sourceId !== "string") return undefined;
-  const offset = CHUNK_CONTINUATION_SOURCE_ID.exec(sourceId)?.[1];
-  return offset === undefined ? undefined : Number(offset);
+  const match = CHUNK_CONTINUATION_SOURCE_ID.exec(sourceId);
+  const sourceDigest = match?.[1];
+  const offset = match?.[2];
+  return sourceDigest === undefined || offset === undefined
+    ? undefined
+    : { sourceDigest, offset: Number(offset) };
 }
 
 function assertId(value: string): void {
@@ -682,11 +692,15 @@ function readDetail(
   const scheduled = scheduledIntentMessageIds(db, id);
   const keikoNotes = keikoNoteMessageIds(db, id);
   const messages: CodingHistoryDetail["messages"][number][] = [];
+  // The source id of the message last shown, which a continuation chunk must name as its start.
+  let lastSourceId: string | undefined;
   for (const message of listed) {
     if (repeated.has(message.id)) continue;
     const row = binding.get(message.id);
     const runId = typeof row?.run_id === "string" ? row.run_id : undefined;
-    if (joinContinuation(messages, message, runId, continuationOffset(row?.source_id))) continue;
+    const continuation = chunkContinuation(row?.source_id);
+    if (joinContinuation(messages, message, { runId, continuation, lastSourceId })) continue;
+    lastSourceId = typeof row?.source_id === "string" ? row.source_id : undefined;
     messages.push({
       ...message,
       ...(runId === undefined ? {} : { runId }),
@@ -700,22 +714,29 @@ function readDetail(
 /**
  * A long message is stored as consecutive chunks (`codingHistoryChunkEnd`); the conversation shows
  * it as the one message the model wrote. A chunk joins the message before it only when that message
- * is the same run's same-role text and ends exactly where the chunk's own offset says it starts, so a
- * chunk whose start the listed window no longer holds stays a message of its own.
+ * is the start the chunk's own source id names (by digest), of the same run and role, and ends
+ * exactly where the chunk's offset says it starts, so a chunk whose start the listed window no
+ * longer holds stays a message of its own and no chunk ever joins another message.
  */
 function joinContinuation(
   messages: CodingHistoryDetail["messages"][number][],
   chunk: CodingHistoryDetail["messages"][number],
-  runId: string | undefined,
-  offset: number | undefined,
+  binding: {
+    readonly runId: string | undefined;
+    readonly continuation: ChunkContinuation | undefined;
+    readonly lastSourceId: string | undefined;
+  },
 ): boolean {
   const previous = messages.at(-1);
+  const { continuation, lastSourceId } = binding;
   if (
-    offset === undefined ||
+    continuation === undefined ||
+    lastSourceId === undefined ||
     previous === undefined ||
-    previous.runId !== runId ||
+    previous.runId !== binding.runId ||
     previous.role !== chunk.role ||
-    previous.content.length !== offset
+    previous.content.length !== continuation.offset ||
+    createHash("sha256").update(lastSourceId).digest("hex") !== continuation.sourceDigest
   ) {
     return false;
   }

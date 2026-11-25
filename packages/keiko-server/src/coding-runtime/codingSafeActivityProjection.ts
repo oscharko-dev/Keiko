@@ -34,7 +34,10 @@ import {
   type CodingSafeActivityFullAnswer,
   type CodingSafeActivityMessageOrigin,
   type CodingSafeActivityReasoning,
+  type CodingSafeActivityTextDelta,
+  type CodingSafeActivityTextPart,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
   isCodingWorkbenchNativeRetry,
   type CodingWorkbenchNativeRetry,
@@ -52,14 +55,18 @@ import {
 } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import {
-  createRetainedAnswers,
-  FULL_ANSWER_RESERVE,
-  releaseUnlistedAnswers,
-  retainAnswerText,
-  retainedAnswerPage,
-  syncFullAnswer,
-  type RetainedAnswer,
-  type RetainedAnswers,
+  cloneRetainedTexts,
+  createRetainedTexts,
+  FULL_TEXT_RESERVE,
+  fullTextFor,
+  releaseUnlistedTexts,
+  restoreRetainedTexts,
+  retainedText,
+  retainedTextPage,
+  retainText,
+  takeTextDeltas,
+  type RetainedText,
+  type RetainedTexts,
 } from "./codingSafeActivityAnswers.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -105,9 +112,11 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       required: true,
       // `interrupted`: an explicit Stop or takeover settled the calls still open as cancelled and kept
       // the feed, as OpenCode keeps an aborted session's tool steps (owner decision 2026-10-30, #3907).
-      // `answer-retained`: an assistant answer grew longer than the bounded feed carries; the feed
-      // names it and its complete text is read page by page, so nothing of it is lost.
-      // `answer-clipped`: the run's memory bound for retained answers cut one, shown on the message.
+      // `answer-retained` / `reasoning-retained`: an assistant answer or the model's reasoning grew
+      // longer than the bounded feed carries; the feed names it and its complete text is streamed as
+      // deltas and read page by page, so nothing of it is lost.
+      // `answer-clipped` / `reasoning-clipped`: the run's memory bound for retained model text cut
+      // one, shown on the message.
       values: [
         "purged",
         "dropped",
@@ -115,6 +124,8 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
         "interrupted",
         "answer-retained",
         "answer-clipped",
+        "reasoning-retained",
+        "reasoning-clipped",
       ],
     },
     reason: {
@@ -322,6 +333,15 @@ export type CodingSafeActivityDropReason =
 export interface CodingSafeActivityContent {
   readonly kind: "safe-activity";
   readonly feed: CodingSafeActivityFeed;
+  /** What the model texts gained since the previous live update; live updates only. */
+  readonly textDeltas?: readonly CodingSafeActivityTextDelta[];
+}
+
+/** Which page of which retained model text to read; from the request, so untrusted. */
+export interface CodingSafeActivityTextPageRequest {
+  readonly messageId: string;
+  readonly part: CodingSafeActivityTextPart;
+  readonly offset: number;
 }
 
 export interface CodingSafeActivityProjectionLimits {
@@ -379,11 +399,10 @@ export interface CodingSafeActivityProjection {
   readonly currentContent: () => CodingSafeActivityContent | null;
   /** A listed assistant answer's complete text, for Coding History; undefined when there is none. */
   readonly answerText: (runId: string, messageId: string) => string | undefined;
-  /** One page of a listed assistant answer's complete text; null when there is none. */
+  /** One page of a listed assistant answer's or reasoning's complete text; null when none. */
   readonly answerPage: (
     runId: string,
-    messageId: string,
-    offset: number,
+    request: CodingSafeActivityTextPageRequest,
   ) => CodingSafeActivityAnswerPage | null;
   readonly subscribeContent: (
     listener: (content: CodingSafeActivityContent | null) => void,
@@ -399,6 +418,7 @@ interface MutableMessage {
   truncated: boolean;
   reasoning?: CodingSafeActivityReasoning;
   fullAnswer?: CodingSafeActivityFullAnswer;
+  fullReasoning?: CodingSafeActivityFullAnswer;
 }
 
 interface MutableTurn {
@@ -433,6 +453,27 @@ interface MutableFeed {
   droppedEventCount: number;
 }
 
+// What an ingest near a bound may have to roll back to.
+interface PriorState {
+  readonly feed: StoredFeed | undefined;
+  readonly messageTurns: Map<string, string> | undefined;
+  readonly texts: RetainedTexts | undefined;
+}
+
+const TEXT_PARTS: readonly CodingSafeActivityTextPart[] = ["answer", "reasoning"];
+type TextCounts = Record<
+  CodingSafeActivityTextPart,
+  { readonly named: number; readonly clipped: number }
+>;
+type TextFactEvent = `${CodingSafeActivityTextPart}-${"retained" | "clipped"}`;
+
+function textCounts(texts: RetainedTexts): TextCounts {
+  return { answer: { ...texts.counts.answer }, reasoning: { ...texts.counts.reasoning } };
+}
+
+// The channel snapshot's own keys around its content (`{"schemaVersion":"1","content":…}`), with room.
+const SNAPSHOT_ENVELOPE_BYTES = 64;
+
 interface ProjectionEntry {
   readonly runId: string;
   readonly workspaceId: string;
@@ -440,8 +481,8 @@ interface ProjectionEntry {
   readonly expiresAtMs: number;
   readonly signalIds: Set<string>;
   readonly messageTurns: Map<string, string>;
-  /** The complete text of every assistant answer the feed lists, beside the bounded feed. */
-  readonly answers: RetainedAnswers;
+  /** The complete text of every assistant answer and reasoning the feed lists, beside the feed. */
+  readonly texts: RetainedTexts;
   feed: StoredFeed;
   /** An explicit Stop or takeover settled the open calls; no new open call is admitted after it. */
   interrupted: boolean;
@@ -529,7 +570,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs,
       signalIds: new Set(),
       messageTurns: new Map(),
-      answers: createRetainedAnswers(this.limits.maxRetainedAnswerChars),
+      texts: createRetainedTexts(this.limits.maxRetainedAnswerChars),
       feed: emptyFeed(input.runId, instant(now)),
       interrupted: false,
     };
@@ -560,9 +601,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const answerCounts = { named: entry.answers.namedCount, clipped: entry.answers.clippedCount };
+    const priorTexts = rollbackNeeded ? cloneRetainedTexts(entry.texts) : undefined;
+    const countsBefore = textCounts(entry.texts);
     const application = this.applyRecordingDenial(runId, entry, signal);
-    this.recordAnswerFacts(runId, entry, answerCounts);
     const ended = this.endedApplication(runId, entry, signal, application);
     if (ended !== undefined) return ended;
     if (signal.signalId !== undefined) {
@@ -576,36 +617,34 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signal.occurredAt,
     );
     enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(
-      runId,
-      entry,
-      priorFeed,
-      priorMessageTurns,
+    const finalized = this.finalizeCapacityDrop(runId, entry, {
+      feed: priorFeed,
+      messageTurns: priorMessageTurns,
+      texts: priorTexts,
       capacityDrop,
-    );
-    releaseUnlistedAnswers(entry.answers, (messageId) => entry.messageTurns.has(messageId));
+    });
+    releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
+    if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     return finalized;
   }
 
-  // Body-free facts of the retained answers: one line the first time an answer outgrows the feed,
-  // and one for every cut the memory bound makes. Neither carries any text.
-  private recordAnswerFacts(
-    runId: string,
-    entry: ProjectionEntry,
-    before: { readonly named: number; readonly clipped: number },
-  ): void {
-    const { namedCount, clippedCount } = entry.answers;
-    if (namedCount > before.named) {
-      this.writeAnswerFact(runId, "answer-retained", "feed-bound", namedCount);
-    }
-    if (clippedCount > before.clipped) {
-      this.writeAnswerFact(runId, "answer-clipped", "retention-bound", clippedCount);
+  // Body-free facts of the retained texts: one line the first time an answer or a reasoning outgrows
+  // the feed, and one for every cut the memory bound makes. None carries any text.
+  private recordTextFacts(runId: string, entry: ProjectionEntry, before: TextCounts): void {
+    for (const part of TEXT_PARTS) {
+      const { named, clipped } = entry.texts.counts[part];
+      if (named > before[part].named) {
+        this.writeTextFact(runId, `${part}-retained`, "feed-bound", named);
+      }
+      if (clipped > before[part].clipped) {
+        this.writeTextFact(runId, `${part}-clipped`, "retention-bound", clipped);
+      }
     }
   }
 
-  private writeAnswerFact(
+  private writeTextFact(
     runId: string,
-    event: "answer-retained" | "answer-clipped",
+    event: TextFactEvent,
     reason: "feed-bound" | "retention-bound",
     occurrenceCount: number,
   ): void {
@@ -614,7 +653,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
         CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
         {
           correlationId: correlationIdOrUnknown(runId),
-          ...(event === "answer-clipped" ? { level: "warn" } : {}),
+          ...(event.endsWith("-clipped") ? { level: "warn" } : {}),
         },
         { event, reason, occurrenceCount },
       ),
@@ -626,30 +665,28 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (entry?.feed.availability !== "available" || !entry.messageTurns.has(messageId)) {
       return undefined;
     }
-    const text = entry.answers.byMessage.get(messageId)?.text;
+    const text = retainedText(entry.texts, "answer", messageId)?.text;
     return text === undefined || text.length === 0 ? undefined : text;
   }
 
   public answerPage(
     runId: string,
-    messageId: string,
-    offset: number,
+    request: CodingSafeActivityTextPageRequest,
   ): CodingSafeActivityAnswerPage | null {
     const entry = this.liveEntry(runId);
-    if (entry?.feed.availability !== "available" || !entry.messageTurns.has(messageId)) {
+    if (entry?.feed.availability !== "available" || !entry.messageTurns.has(request.messageId)) {
       return null;
     }
-    return retainedAnswerPage(entry.answers, runId, messageId, offset);
+    return retainedTextPage(entry.texts, runId, request);
   }
 
   private finalizeCapacityDrop(
     runId: string,
     entry: ProjectionEntry,
-    priorFeed: StoredFeed | undefined,
-    priorMessageTurns: Map<string, string> | undefined,
-    capacityDrop: DropCountChange | undefined,
+    prior: PriorState & { readonly capacityDrop: DropCountChange | undefined },
   ): boolean {
-    const finalized = this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    const finalized = this.finalizeIngest(runId, entry, prior);
+    const { capacityDrop } = prior;
     if (finalized && capacityDrop !== undefined) {
       this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
     }
@@ -663,19 +700,16 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
    * rejected state that isFeedNearProjectionLimit believed was within limits (a bug signal for
    * that threshold, per KEIKO-0878).
    */
-  private finalizeIngest(
-    runId: string,
-    entry: ProjectionEntry,
-    priorFeed: StoredFeed | undefined,
-    priorMessageTurns: Map<string, string> | undefined,
-  ): boolean {
+  private finalizeIngest(runId: string, entry: ProjectionEntry, prior: PriorState): boolean {
     if (validateCodingSafeActivityFeed(entry.feed).ok) {
       this.notify();
       return true;
     }
-    if (priorFeed !== undefined && priorMessageTurns !== undefined) {
-      entry.feed = priorFeed;
-      replaceMap(entry.messageTurns, priorMessageTurns);
+    if (prior.feed !== undefined && prior.messageTurns !== undefined) {
+      entry.feed = prior.feed;
+      replaceMap(entry.messageTurns, prior.messageTurns);
+      // The retained texts roll back with the feed, so the feed names exactly what they hold.
+      if (prior.texts !== undefined) restoreRetainedTexts(entry.texts, prior.texts);
       return this.reject(runId, "capacity-rejected");
     }
     // KEIKO-0878: pre-mutation state was in the safe zone yet validate rejected -- indicates
@@ -739,7 +773,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs: this.now() + this.ttlMs,
       signalIds: new Set(),
       messageTurns: new Map(),
-      answers: createRetainedAnswers(0),
+      texts: createRetainedTexts(0),
       feed,
       interrupted: false,
     };
@@ -864,8 +898,19 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   private notify(): void {
+    this.notifySubscribers([...this.subscribers], this.liveUpdateContent());
+  }
+
+  // A live update carries what every model text gained since the previous update, within what the
+  // channel's snapshot budget leaves beside the feed; a reader reads anything left out as pages.
+  private liveUpdateContent(): CodingSafeActivityContent | null {
     const content = this.currentContentWithoutExpiry();
-    this.notifySubscribers([...this.subscribers], content);
+    const entry = this.entry;
+    if (content === null || entry === undefined) return content;
+    const budget =
+      CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES - SNAPSHOT_ENVELOPE_BYTES - bytes(content);
+    const deltas = takeTextDeltas(entry.texts, (id) => entry.messageTurns.has(id), budget);
+    return deltas.length === 0 ? content : { ...content, textDeltas: deltas };
   }
 
   private notifySubscribers(
@@ -1169,16 +1214,41 @@ function applyAnswerText(
   text: string,
   limits: ResolvedLimits,
 ): void {
-  const { answer, kept } = retainAnswerText(entry.answers, message.messageId, text);
+  const { retained, kept } = retainText(entry.texts, "answer", message.messageId, text);
   const close = (): void => {
-    answer.feedClosed = true;
+    retained.feedClosed = true;
   };
   let rest = kept;
-  while (rest.length > 0 && !answer.feedClosed) {
+  while (rest.length > 0 && !retained.feedClosed) {
     rest = appendTextPiece(message, rest, limits, { lossless: true, close });
   }
-  if (answer.truncated) markMessageTruncated(message, turn);
-  if (syncFullAnswer(message, answer)) entry.answers.namedCount += 1;
+  if (retained.truncated) markMessageTruncated(message, turn);
+  syncFullAnswer(entry, message, retained);
+}
+
+// Names the answer on its feed message when the segments do not carry all of it.
+function syncFullAnswer(
+  entry: ProjectionEntry,
+  message: MutableMessage,
+  retained: RetainedText,
+): void {
+  const carried = message.segments.reduce((length, segment) => length + segment.text.length, 0);
+  const { full, firstNamed } = fullTextFor(carried, retained);
+  if (full === undefined) delete message.fullAnswer;
+  else message.fullAnswer = full;
+  if (firstNamed) entry.texts.counts.answer.named += 1;
+}
+
+// Names the reasoning on its feed message when `reasoning` does not carry all of it.
+function syncFullReasoning(
+  entry: ProjectionEntry,
+  message: MutableMessage,
+  retained: RetainedText,
+): void {
+  const { full, firstNamed } = fullTextFor(message.reasoning?.text.length ?? 0, retained);
+  if (full === undefined) delete message.fullReasoning;
+  else message.fullReasoning = full;
+  if (firstNamed) entry.texts.counts.reasoning.named += 1;
 }
 
 /** How a full feed message ends: with a truncation mark, or closed to a retained answer. */
@@ -1258,7 +1328,11 @@ function textCandidateBytes(
 // `fullAnswer` the feed may add later never pushes a fitting message over its byte bound.
 function measuredMessage(message: MutableMessage): MutableMessage {
   return message.role === "assistant"
-    ? { ...message, fullAnswer: message.fullAnswer ?? FULL_ANSWER_RESERVE }
+    ? {
+        ...message,
+        fullAnswer: message.fullAnswer ?? FULL_TEXT_RESERVE,
+        fullReasoning: message.fullReasoning ?? FULL_TEXT_RESERVE,
+      }
     : message;
 }
 
@@ -1288,28 +1362,38 @@ function applyReasoning(
   if (located === undefined) return "message-unknown";
   const { message } = located;
   if (message.role !== "assistant") return "reasoning-role-invalid";
-  if (message.reasoning?.truncated !== true) {
-    appendReasoning(message, stripUnsafeFormatChars(signal.text), limits);
+  const text = stripUnsafeFormatChars(signal.text);
+  const { retained, kept } = retainText(entry.texts, "reasoning", message.messageId, text);
+  if (!retained.feedClosed) appendReasoning(message, retained, kept, limits);
+  if (retained.truncated && message.reasoning !== undefined) {
+    message.reasoning = { text: message.reasoning.text, truncated: true };
   }
+  syncFullReasoning(entry, message, retained);
   return "accepted";
 }
 
-// #3878: the model's reasoning grows with every streamed piece inside its own bound (half the
-// message budget, so the answer keeps room of its own) and the message budget. Clipped once, it
-// takes no further piece, so the shown reasoning is always a true prefix of what the model wrote.
-function appendReasoning(message: MutableMessage, text: string, limits: ResolvedLimits): void {
+// #3878: the model's reasoning grows with every streamed piece. The feed carries as much of it as
+// its own bound (half the message budget, so the answer keeps room of its own) and the message
+// budget admit; once full it closes to the reasoning the projection retains whole, which the feed
+// then names (`fullReasoning`) — the reasoning is never cut to fit the feed (owner decision). What
+// the feed carries is always a true prefix of what the model wrote.
+function appendReasoning(
+  message: MutableMessage,
+  retained: RetainedText,
+  text: string,
+  limits: ResolvedLimits,
+): void {
   const prefix = message.reasoning?.text ?? "";
-  const clipped = clipToBudget(codePoints(text), (candidate, truncated) => {
-    const reasoning = { text: prefix + candidate, truncated };
+  const clipped = clipToBudget(codePoints(text), (candidate) => {
+    const reasoning = { text: prefix + candidate, truncated: false };
     return (
       bytes(reasoning.text) <= limits.maxReasoningBytes &&
       bytes({ ...measuredMessage(message), reasoning }) <= limits.maxMessageBytes
     );
   });
+  if (clipped.truncated) retained.feedClosed = true;
   const reasoningText = prefix + clipped.text;
-  if (reasoningText.length > 0) {
-    message.reasoning = { text: reasoningText, truncated: clipped.truncated };
-  }
+  if (reasoningText.length > 0) message.reasoning = { text: reasoningText, truncated: false };
 }
 
 interface NativeToolDenial {
@@ -1565,7 +1649,7 @@ function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void
   const feed = entry.feed;
   for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
   shedRetainedSegments(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
-  shedSettledReasoning(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
+  shedSettledReasoning(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
     const removed = feed.turns.shift();
     if (removed !== undefined) releaseTurn(entry, removed);
@@ -1576,7 +1660,12 @@ function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void
 // #3878: under byte pressure the model's reasoning yields first. The reasoning of every message but
 // the newest one goes, oldest first, before any answer text, tool or turn is evicted; the newest
 // message keeps the reasoning that may still be streaming.
-function shedSettledReasoning(turns: readonly MutableTurn[], over: () => boolean): void {
+// A reasoning the projection retains loses nothing: the feed then names it and its pages carry it.
+function shedSettledReasoning(
+  entry: ProjectionEntry,
+  turns: readonly MutableTurn[],
+  over: () => boolean,
+): void {
   const newest = turns.at(-1)?.messages.at(-1);
   for (const turn of turns) {
     for (const message of turn.messages) {
@@ -1585,7 +1674,13 @@ function shedSettledReasoning(turns: readonly MutableTurn[], over: () => boolean
       if (message === newest || message.reasoning === undefined) continue;
       if (!over()) return;
       delete message.reasoning;
-      turn.truncated = true;
+      const retained = retainedText(entry.texts, "reasoning", message.messageId);
+      if (retained === undefined || retained.text.length === 0) {
+        turn.truncated = true;
+        continue;
+      }
+      retained.feedClosed = true;
+      syncFullReasoning(entry, message, retained);
     }
   }
 }
@@ -1600,12 +1695,12 @@ function shedRetainedSegments(
 ): void {
   for (const turn of turns) {
     for (const message of turn.messages) {
-      const answer = entry.answers.byMessage.get(message.messageId);
-      if (answer === undefined || answer.text.length === 0 || message.segments.length === 0) {
+      const retained = retainedText(entry.texts, "answer", message.messageId);
+      if (retained === undefined || retained.text.length === 0 || message.segments.length === 0) {
         continue;
       }
       if (!over()) return;
-      shedAnswerSegments(entry, message, answer);
+      shedAnswerSegments(entry, message, retained);
     }
   }
 }
@@ -1613,16 +1708,16 @@ function shedRetainedSegments(
 function shedAnswerSegments(
   entry: ProjectionEntry,
   message: MutableMessage,
-  answer: RetainedAnswer,
+  retained: RetainedText,
 ): void {
   message.segments = [];
-  answer.feedClosed = true;
-  if (syncFullAnswer(message, answer)) entry.answers.namedCount += 1;
+  retained.feedClosed = true;
+  syncFullAnswer(entry, message, retained);
 }
 
 function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
   shedRetainedSegments(entry, [turn], () => bytes(turn) > maxBytes);
-  shedSettledReasoning([turn], () => bytes(turn) > maxBytes);
+  shedSettledReasoning(entry, [turn], () => bytes(turn) > maxBytes);
   while (bytes(turn) > maxBytes && turn.messages.length > 0) {
     const message = turn.messages[0];
     if (message !== undefined && message.segments.length > 0) message.segments.shift();

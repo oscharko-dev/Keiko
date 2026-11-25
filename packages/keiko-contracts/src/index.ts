@@ -1604,6 +1604,8 @@ export type {
   CodingSafeActivityPlan,
   CodingSafeActivityAnswerPage,
   CodingSafeActivityFullAnswer,
+  CodingSafeActivityTextDelta,
+  CodingSafeActivityTextPart,
   CodingSafeActivityPlanStep,
   CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,

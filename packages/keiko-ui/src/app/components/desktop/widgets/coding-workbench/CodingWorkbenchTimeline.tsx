@@ -12,12 +12,14 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type SyntheticEvent,
   type RefCallback,
   type RefObject,
   type UIEvent,
 } from "react";
 import type {
   CodingSafeActivityMessage,
+  CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
   CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
@@ -196,8 +198,40 @@ export interface CodingWorkbenchTimelineProps {
 const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 
 // The complete answers read beside the bounded feed reach each message row the same way.
+// The complete model texts read beside the bounded feed reach each message row the same way, with
+// the reasoning blocks the person opened, so a row the virtual list remounts keeps its state.
+interface ModelTextsView {
+  readonly answers: CodingWorkbenchAnswers;
+  readonly reasoning: CodingWorkbenchAnswers;
+  readonly readReasoning: (messageId: string) => void;
+  readonly retryText: (part: CodingSafeActivityTextPart, messageId: string) => void;
+  readonly openReasoning: Set<string>;
+}
+
 const NO_ANSWERS: CodingWorkbenchAnswers = new Map();
-const AnswersContext = createContext<CodingWorkbenchAnswers>(NO_ANSWERS);
+const NO_MODEL_TEXTS: ModelTextsView = {
+  answers: NO_ANSWERS,
+  reasoning: NO_ANSWERS,
+  readReasoning: () => undefined,
+  retryText: () => undefined,
+  openReasoning: new Set(),
+};
+const ModelTextsContext = createContext<ModelTextsView>(NO_MODEL_TEXTS);
+
+function useModelTextsView(activity: UseCodingWorkbenchSafeActivityResult): ModelTextsView {
+  const openReasoning = useRef(new Set<string>()).current;
+  const { answers, reasoning, readReasoning, retryText } = activity;
+  return useMemo(
+    () => ({
+      answers: answers ?? NO_ANSWERS,
+      reasoning: reasoning ?? NO_ANSWERS,
+      readReasoning: readReasoning ?? NO_MODEL_TEXTS.readReasoning,
+      retryText: retryText ?? NO_MODEL_TEXTS.retryText,
+      openReasoning,
+    }),
+    [answers, reasoning, readReasoning, retryText, openReasoning],
+  );
+}
 
 export function Timeline({
   active = false,
@@ -216,11 +250,12 @@ export function Timeline({
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
   const attention = useShownActivityAttention(activity);
+  const modelTexts = useModelTextsView(activity);
   if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
     <RunCheckContext.Provider value={onRunCheck}>
-      <AnswersContext.Provider value={activity.answers ?? NO_ANSWERS}>
+      <ModelTextsContext.Provider value={modelTexts}>
         <section className={styles.cmpConversation} aria-labelledby="timeline-title">
           <TimelineHeading titleRef={titleRef} t={t} />
           <ActivityStatus activity={activity} attention={attention} t={t} />
@@ -239,7 +274,7 @@ export function Timeline({
             t={t}
           />
         </section>
-      </AnswersContext.Provider>
+      </ModelTextsContext.Provider>
     </RunCheckContext.Provider>
   );
 }
@@ -450,6 +485,7 @@ function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
     message.fullAnswer !== undefined ||
+    message.fullReasoning !== undefined ||
     message.reasoning !== undefined ||
     message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
   );
@@ -988,8 +1024,9 @@ function MessageRow({
           <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
             {t(`codingWorkbench.activity.role.${item.message.role}`)}
           </p>
-          {item.message.reasoning === undefined ? null : (
-            <ModelReasoning reasoning={item.message.reasoning} t={t} />
+          {item.message.reasoning === undefined &&
+          item.message.fullReasoning === undefined ? null : (
+            <ModelReasoning message={item.message} t={t} />
           )}
           <div className={styles.messageText}>
             <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -1031,19 +1068,40 @@ function KeikoNote({
 // owner: less is more). The timeline's boundary sentence still says it is unverified. It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
-// reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
-// the reader needs (#3873 review). A collapsed block exposes only its summary; an opened one keeps
-// its streaming text out of the announcement with a nested `aria-live="off"`. The collapsed state
-// is never driven from the run's state, so every toggle is the reader's and is reported.
+// reader reads out, and unverified reasoning would crowd out the answer the reader needs (#3873
+// review). A collapsed block exposes only its summary; an opened one keeps its streaming text out of
+// the announcement with a nested `aria-live="off"`. The collapsed state is never driven from the
+// run's state, so every toggle is the reader's and is reported, and it is remembered for the run.
+// The reasoning is never cut to fit the feed (owner decision "Work-ending limits"): the block shows
+// it whole, and the part the feed does not carry is read only once the reader opens it.
 function ModelReasoning({
-  reasoning,
+  message,
   t,
 }: {
-  readonly reasoning: NonNullable<CodingSafeActivityMessage["reasoning"]>;
+  readonly message: CodingSafeActivityMessage;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const texts = useContext(ModelTextsContext);
+  const { messageId } = message;
+  const shown = shownText(
+    message.reasoning?.text ?? "",
+    message.reasoning?.truncated === true,
+    message.fullReasoning,
+    texts.reasoning.get(messageId),
+  );
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
+    if (event.currentTarget.open) {
+      texts.openReasoning.add(messageId);
+      texts.readReasoning(messageId);
+    } else texts.openReasoning.delete(messageId);
+  };
   return (
-    <details className={styles.cmpReasoning} aria-live="off">
+    <details
+      className={styles.cmpReasoning}
+      aria-live="off"
+      open={texts.openReasoning.has(messageId)}
+      onToggle={onToggle}
+    >
       <summary
         className={styles.cmpActivitySummary}
         onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
@@ -1051,8 +1109,12 @@ function ModelReasoning({
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
       </summary>
       <p className={styles.cmpReasoningText}>
-        {reasoning.text}
-        {reasoning.truncated ? <TruncationMark t={t} /> : null}
+        {shown.source}
+        <TextTrailing
+          state={shown.state}
+          onRetry={() => texts.retryText("reasoning", messageId)}
+          t={t}
+        />
       </p>
     </details>
   );
@@ -1088,24 +1150,34 @@ function MessageContent({
 // said as such, never marked as cut.
 interface ShownAnswer {
   readonly source: string;
-  readonly state: "whole" | "loading" | "cut";
+  /** `failed`: reading the rest failed, so the cut is marked and a retry is offered. */
+  readonly state: "whole" | "loading" | "cut" | "failed";
+}
+
+// The same rule for the answer and the reasoning: the carried part, or the longer held text.
+function shownText(
+  carried: string,
+  carriedCut: boolean,
+  full: CodingSafeActivityMessage["fullAnswer"],
+  held: CodingWorkbenchAnswerText | undefined,
+): ShownAnswer {
+  if (full === undefined) return { source: carried, state: carriedCut ? "cut" : "whole" };
+  const source = held !== undefined && held.text.length >= carried.length ? held.text : carried;
+  if (held?.failed === true) return { source, state: "failed" };
+  if (source.length < full.length) return { source, state: "loading" };
+  return { source, state: full.truncated ? "cut" : "whole" };
 }
 
 function shownAnswer(
   message: CodingSafeActivityMessage,
   answer: CodingWorkbenchAnswerText | undefined,
 ): ShownAnswer {
-  const carried = message.segments.map((segment) => segment.text).join("");
-  const full = message.fullAnswer;
-  if (full === undefined) {
-    const cut = message.truncated || message.segments.some((segment) => segment.truncated);
-    return { source: carried, state: cut ? "cut" : "whole" };
-  }
-  const source =
-    answer !== undefined && answer.text.length >= carried.length ? answer.text : carried;
-  if (answer?.failed === true) return { source, state: "cut" };
-  if (source.length < full.length) return { source, state: "loading" };
-  return { source, state: full.truncated ? "cut" : "whole" };
+  return shownText(
+    message.segments.map((segment) => segment.text).join(""),
+    message.truncated || message.segments.some((segment) => segment.truncated),
+    message.fullAnswer,
+    answer,
+  );
 }
 
 function AssistantAnswer({
@@ -1119,8 +1191,8 @@ function AssistantAnswer({
   readonly runId: string;
   readonly live: boolean;
 }): ReactNode {
-  const answers = useContext(AnswersContext);
-  const shown = shownAnswer(message, answers.get(message.messageId));
+  const texts = useContext(ModelTextsContext);
+  const shown = shownAnswer(message, texts.answers.get(message.messageId));
   // While the answer still streams, SafeMarkdown renders its code without highlighting or list
   // evidence on every update; the finished answer renders in full as soon as it is finished — also
   // while the run waits for the operator's decision.
@@ -1131,7 +1203,15 @@ function AssistantAnswer({
         streaming={live}
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
-        trailing={answerTrailing(shown.state, t)}
+        trailing={
+          shown.state === "whole" ? undefined : (
+            <TextTrailing
+              state={shown.state}
+              onRetry={() => texts.retryText("answer", message.messageId)}
+              t={t}
+            />
+          )
+        }
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
       {live || shown.state === "loading" || shown.source.trim().length === 0 ? null : (
@@ -1143,13 +1223,31 @@ function AssistantAnswer({
   );
 }
 
-function answerTrailing(state: ShownAnswer["state"], t: CodingWorkbenchTranslate): ReactNode {
+// The end of a model text that is not shown whole: still loading, cut, or a failed read with its
+// next action.
+function TextTrailing({
+  state,
+  onRetry,
+  t,
+}: {
+  readonly state: ShownAnswer["state"];
+  readonly onRetry: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (state === "whole") return null;
   if (state === "cut") return <TruncationMark t={t} />;
   if (state === "loading")
     return (
       <span className={styles.answerLoading}>{t("codingWorkbench.activity.answerLoading")}</span>
     );
-  return undefined;
+  return (
+    <span className={styles.truncationMark}>
+      … {t("codingWorkbench.activity.textReadFailed")}{" "}
+      <button type="button" className={styles.textRetry} onClick={onRetry}>
+        {t("codingWorkbench.activity.textRetry")}
+      </button>
+    </span>
+  );
 }
 
 // The answer's own Markdown source, as the model wrote it, is what lands on the clipboard. The

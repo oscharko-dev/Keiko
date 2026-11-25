@@ -61,6 +61,15 @@ export const CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES = 8 * 1_024;
 export const CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS = 16 * 1_024 * 1_024;
 /** One page of a retained answer, in UTF-16 code units; a page never splits a surrogate pair. */
 export const CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS = 32 * 1_024;
+/**
+ * The two kinds of model text the projection retains whole beside the feed: the answer and the
+ * model's reasoning. Neither is cut to fit the feed; both are read page by page and streamed as
+ * append-only deltas.
+ */
+export const CODING_SAFE_ACTIVITY_TEXT_PARTS = ["answer", "reasoning"] as const;
+export type CodingSafeActivityTextPart = (typeof CODING_SAFE_ACTIVITY_TEXT_PARTS)[number];
+/** Most deltas one channel update carries; the rest are read as pages. */
+export const CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS = 64;
 
 /** The existing governed edit facade's closed refusal vocabulary, shared with its live UI. */
 export const CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES = [
@@ -178,7 +187,10 @@ export interface CodingSafeActivityTextSegment {
  */
 export interface CodingSafeActivityReasoning {
   readonly text: string;
-  /** True when the reasoning was shortened to remain inside its declared projection bound. */
+  /**
+   * True only when the server's memory bound shortened the reasoning it holds. The feed carries a
+   * prefix of a long reasoning and names the whole (`CodingSafeActivityMessage.fullReasoning`).
+   */
   readonly truncated: boolean;
 }
 
@@ -206,6 +218,8 @@ export interface CodingSafeActivityMessage {
   readonly reasoning?: CodingSafeActivityReasoning;
   /** Assistant messages only; present when the segments do not carry the whole answer. */
   readonly fullAnswer?: CodingSafeActivityFullAnswer;
+  /** Assistant messages only; present when `reasoning` does not carry the whole reasoning. */
+  readonly fullReasoning?: CodingSafeActivityFullAnswer;
 }
 
 /**
@@ -216,6 +230,8 @@ export interface CodingSafeActivityAnswerPage {
   readonly schemaVersion: typeof CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
   readonly runId: string;
   readonly messageId: string;
+  /** Which of the message's texts the page is of. */
+  readonly part: CodingSafeActivityTextPart;
   /** Where `text` starts in the answer, in UTF-16 code units. */
   readonly offset: number;
   readonly text: string;
@@ -223,6 +239,18 @@ export interface CodingSafeActivityAnswerPage {
   readonly length: number;
   /** The retention bound's cut, as on `CodingSafeActivityFullAnswer`. */
   readonly truncated: boolean;
+}
+
+/**
+ * Text appended to a retained answer or reasoning since the previous channel update, starting at
+ * `offset`. Append-only: a reader that holds exactly `offset` characters appends it; any other
+ * reader reads the missing part as pages. A delta never splits a surrogate pair.
+ */
+export interface CodingSafeActivityTextDelta {
+  readonly messageId: string;
+  readonly part: CodingSafeActivityTextPart;
+  readonly offset: number;
+  readonly text: string;
 }
 
 export interface CodingSafeActivityTool {
@@ -487,6 +515,7 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
         "reasoning",
         "origin",
         "fullAnswer",
+        "fullReasoning",
       ],
       path,
     ),
@@ -500,6 +529,7 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   validateSegments(value.segments, path, errors);
   if ("reasoning" in value) validateReasoning(value, path, errors);
   if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
+  if ("fullReasoning" in value) validateFullText(value, "fullReasoning", path, errors);
   if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
@@ -582,20 +612,32 @@ function validateFullAnswer(
   path: string,
   errors: string[],
 ): void {
-  const answerPath = `${path}.fullAnswer`;
-  const value = message.fullAnswer;
-  if (message.role !== "assistant") errors.push(`${answerPath} is only allowed on assistant`);
-  if (!isRecord(value)) {
-    errors.push(`${answerPath} must be an object`);
-    return;
-  }
-  errors.push(...exactKeys(value, ["length", "truncated"], answerPath));
-  if (!validAnswerLength(value.length)) errors.push(`${answerPath}.length is invalid`);
-  if (typeof value.truncated !== "boolean") {
-    errors.push(`${answerPath}.truncated must be a boolean`);
-  } else if (value.truncated && message.truncated !== true) {
+  if (!validateFullText(message, "fullAnswer", path, errors)) return;
+  const value = message.fullAnswer as Record<string, unknown>;
+  if (value.truncated === true && message.truncated !== true) {
     errors.push(`${path}.truncated must reflect a truncated answer`);
   }
+}
+
+// The whole length of a retained text the feed names; true when its shape is valid.
+function validateFullText(
+  message: Record<string, unknown>,
+  key: "fullAnswer" | "fullReasoning",
+  path: string,
+  errors: string[],
+): boolean {
+  const textPath = `${path}.${key}`;
+  const value = message[key];
+  if (message.role !== "assistant") errors.push(`${textPath} is only allowed on assistant`);
+  if (!isRecord(value)) {
+    errors.push(`${textPath} must be an object`);
+    return false;
+  }
+  const before = errors.length;
+  errors.push(...exactKeys(value, ["length", "truncated"], textPath));
+  if (!validAnswerLength(value.length)) errors.push(`${textPath}.length is invalid`);
+  if (typeof value.truncated !== "boolean") errors.push(`${textPath}.truncated must be a boolean`);
+  return errors.length === before;
 }
 
 function validAnswerLength(value: unknown): value is number {
@@ -611,6 +653,7 @@ const ANSWER_PAGE_KEYS = [
   "schemaVersion",
   "runId",
   "messageId",
+  "part",
   "offset",
   "text",
   "length",
@@ -628,6 +671,8 @@ export function validateCodingSafeActivityAnswerPage(
   }
   validateSafeId(value.runId, "answerPage.runId", errors, 128);
   validateSafeId(value.messageId, "answerPage.messageId", errors, 128);
+  if (!isOneOf(value.part, CODING_SAFE_ACTIVITY_TEXT_PARTS))
+    errors.push("answerPage.part is invalid");
   validateAnswerPageText(value, errors);
   if (typeof value.truncated !== "boolean") errors.push("answerPage.truncated must be a boolean");
   return result(value, errors);
@@ -652,6 +697,49 @@ function validateAnswerPageText(value: Record<string, unknown>, errors: string[]
     errors.push("answerPage.text must be a bounded page inside the answer");
   } else if (stripUnsafeFormatChars(text) !== text) {
     errors.push("answerPage.text contains unsafe format characters");
+  }
+}
+
+/** Validates one channel update's text deltas: a bounded list of non-empty, safe pieces. */
+export function validateCodingSafeActivityTextDeltas(
+  value: unknown,
+  path: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS) {
+    errors.push(`${path} must be a bounded array`);
+    return;
+  }
+  value.forEach((delta: unknown, index) => {
+    validateTextDelta(delta, `${path}[${String(index)}]`, errors);
+  });
+}
+
+function validateTextDelta(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+  errors.push(...exactKeys(value, ["messageId", "part", "offset", "text"], path));
+  validateSafeId(value.messageId, `${path}.messageId`, errors, 128);
+  if (!isOneOf(value.part, CODING_SAFE_ACTIVITY_TEXT_PARTS)) errors.push(`${path}.part is invalid`);
+  const { offset, text } = value;
+  if (
+    typeof offset !== "number" ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset >= CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS
+  ) {
+    errors.push(`${path}.offset is invalid`);
+  }
+  if (
+    typeof text !== "string" ||
+    text.length === 0 ||
+    text.length > CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS
+  ) {
+    errors.push(`${path}.text must be a bounded non-empty piece`);
+  } else if (stripUnsafeFormatChars(text) !== text) {
+    errors.push(`${path}.text contains unsafe format characters`);
   }
 }
 

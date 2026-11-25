@@ -20,6 +20,8 @@ import {
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   type CodingSafeActivityFeed,
   type CodingSafeActivityPlan,
 } from "./coding-safe-activity.js";
@@ -632,6 +634,7 @@ describe("coding safe-activity contract — full answer", () => {
       schemaVersion: "1",
       runId: "run-safe-activity-1",
       messageId: "msg_assistant_1",
+      part: "answer",
       offset: 0,
       text: "## Review\n",
       length: 100,
@@ -662,8 +665,84 @@ describe("coding safe-activity contract — full answer", () => {
     ["with an extra key", { raw: "private" }],
     ["without its truncation flag", { truncated: undefined }],
     ["of another schema version", { schemaVersion: "2" }],
+    ["of an unknown part", { part: "prompt" }],
+    ["without its part", { part: undefined }],
   ] as const)("rejects a page %s", (_label, overrides) => {
     expect(validateCodingSafeActivityAnswerPage(page(overrides)).ok).toBe(false);
+  });
+
+  it("accepts a reasoning page", () => {
+    expect(validateCodingSafeActivityAnswerPage(page({ part: "reasoning" })).ok).toBe(true);
+  });
+
+  function withFullReasoning(fullReasoning: unknown, role = "assistant"): unknown {
+    const feed = withFullAnswer(undefined) as { turns: { messages: Record<string, unknown>[] }[] };
+    const [turn] = feed.turns;
+    const assistant = turn?.messages[1];
+    if (turn === undefined || assistant === undefined) throw new TypeError("expected a message");
+    const { fullAnswer: _omitted, ...rest } = assistant;
+    turn.messages[1] = { ...rest, role, fullReasoning };
+    return feed;
+  }
+
+  it("names whole or memory-cut reasoning on an assistant message", () => {
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 20_000, truncated: false })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 20_000, truncated: true })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 10, truncated: false }, "user"))
+        .ok,
+    ).toBe(false);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 0, truncated: false })).ok,
+    ).toBe(false);
+    expect(
+      validateCodingSafeActivityFeed(
+        withFullReasoning({ length: 10, text: "raw", truncated: false }),
+      ).ok,
+    ).toBe(false);
+  });
+});
+
+// A live update carries what each model text gained as append-only deltas.
+describe("coding safe-activity contract — text deltas", () => {
+  const delta = { messageId: "msg_assistant_1", part: "answer", offset: 0, text: "Hello" };
+  function valid(value: unknown): boolean {
+    const errors: string[] = [];
+    validateCodingSafeActivityTextDeltas(value, "textDeltas", errors);
+    return errors.length === 0;
+  }
+
+  it("accepts bounded deltas of either part", () => {
+    expect(valid([])).toBe(true);
+    expect(valid([delta, { ...delta, part: "reasoning", offset: 7 }])).toBe(true);
+    expect(valid(Array.from({ length: CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS }, () => delta))).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["too many", Array.from({ length: CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS + 1 }, () => delta)],
+    ["of an unknown part", [{ ...delta, part: "prompt" }]],
+    ["with empty text", [{ ...delta, text: "" }]],
+    [
+      "longer than a page",
+      [{ ...delta, text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1) }],
+    ],
+    ["at a negative offset", [{ ...delta, offset: -1 }]],
+    [
+      "past the retention bound",
+      [{ ...delta, offset: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS }],
+    ],
+    ["with unsafe format characters", [{ ...delta, text: "a\u202Eb" }]],
+    ["with an unsafe message id", [{ ...delta, messageId: "../m" }]],
+    ["with an extra key", [{ ...delta, raw: 1 }]],
+    ["as an object", delta],
+  ] as const)("rejects deltas %s", (_label, value) => {
+    expect(valid(value)).toBe(false);
   });
 });
 

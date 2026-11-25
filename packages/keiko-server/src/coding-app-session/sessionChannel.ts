@@ -8,7 +8,10 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 // HTTP, cookies, and streaming. A content source is injected (W1.6+ feeds transcript/plan/diffs); in
 // this wave production leaves it absent, so even a paired session reads content-free until W1.5.
 
-import type { CodingSafeActivityAnswerPage } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingSafeActivityAnswerPage,
+  CodingSafeActivityTextPart,
+} from "@oscharko-dev/keiko-contracts";
 import {
   contentFreeCodingAppSessionAnswerResponse,
   contentFreeCodingAppSessionChannelSnapshot,
@@ -58,6 +61,7 @@ export interface CodingAppSessionContentSource {
 export interface CodingAppSessionAnswerRequest {
   readonly runId: string;
   readonly messageId: string;
+  readonly part: CodingSafeActivityTextPart;
   readonly offset: number;
 }
 
@@ -247,7 +251,11 @@ function projectAnswerPage(
     page,
   };
   // Never serve a page that breaks the published contract; fail closed to the page-free response.
-  return page !== null && validateCodingAppSessionAnswerResponse(response).ok
+  return page?.runId === request.runId &&
+    page.messageId === request.messageId &&
+    page.part === request.part &&
+    page.offset === request.offset &&
+    validateCodingAppSessionAnswerResponse(response).ok
     ? response
     : contentFreeCodingAppSessionAnswerResponse();
 }

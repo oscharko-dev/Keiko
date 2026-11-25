@@ -867,9 +867,28 @@ per turn count and for the whole feed, each measured as the contract measures it
 many turns as they need, and the transcript above it shows every older message of the run whole, so
 no message is shown in neither place. The rebuild reads the run's messages from the newest end and
 only as far as the feed can still hold them: nothing older is stripped, dated or measured, it is
-named for the transcript by position. Only a message cut to its own bound and the older messages
+named for the transcript by position. Only a prompt cut to its own bound and the older messages
 Coding History itself cut make the activity read as truncated. The body-free
 `client.coding-run.restored` line records the counts of this split (ADR-0173).
+
+A model's answer is never cut to a display bound (owner decision "Work-ending limits", 2026-11-24).
+The live projection keeps every listed assistant answer's complete text beside its bounded feed,
+under a per-run memory bound of 16 Mi UTF-16 code units; the feed message carries a prefix and names
+the whole length (`fullAnswer`), and segment shedding for such a message loses nothing. The
+Workbench reads the rest page by page (32 Ki characters) through the authenticated app-session
+channel, `GET /api/coding-workbench/app-session/channel/answer`, which fails closed to a page-free reply
+for an unpaired session, an unknown run, message or offset. Only the memory bound or a failed read
+marks an answer as cut. History detail joins the store's chunks of one answer back into one message
+by their binding source id, and the restored timeline shows that answer whole. The display
+projection's History capture stores the complete answer, not the feed's prefix, and a later capture
+extends the chunks an earlier one stored (upsert); a chunk joins only the start its source id names
+by digest. The model's reasoning follows the same rule: it is never cut to a display bound, the
+feed carries a prefix and names the whole (`fullReasoning`), its pages are read through the same
+route with `part=reasoning`, and only once someone opens it. A deployment that hides reasoning
+serves neither its snapshot, its deltas nor its pages. Memory protection is append-only: a live
+update carries what each listed text gained since the previous update as `textDeltas` (at most 64,
+inside the snapshot's 64 KiB budget beside the feed); a gain left out reaches the reader as pages,
+never as a silent gap. A restored answer above the memory bound names the bound and is marked cut.
 
 A task's History can also leave the machine's UI store, and only by the human's own action (#3904).
 Export JSON and Export Markdown in Coding History call `GET /api/coding-workbench/history/:id/export`

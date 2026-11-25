@@ -763,10 +763,12 @@ export class CodingRuntimeHistory {
       const text =
         (message.fullAnswer === undefined ? undefined : answerText?.(message.messageId)) ??
         displayText(message);
-      // A long answer is stored as consecutive chunks, exactly as the native capture stores it.
+      // A long answer is stored as consecutive chunks, exactly as the native capture stores it. A
+      // later capture of a grown answer extends the chunks it already stored (an upsert keeps the
+      // prefix), so a mid-stream capture never leaves a short chunk behind.
       for (let offset = 0; offset < text.length;) {
         const end = codingHistoryChunkEnd(text, offset);
-        this.store.codingHistory?.append(
+        this.store.codingHistory?.upsert(
           id,
           runId,
           codingHistoryChunkSourceId(message.messageId, offset),

@@ -28,7 +28,10 @@ import { handleCreateRun } from "./run-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
-import { contentFreeCodingAppSessionChannelSnapshot } from "./coding-app-session/channelContract.js";
+import {
+  contentFreeCodingAppSessionAnswerResponse,
+  contentFreeCodingAppSessionChannelSnapshot,
+} from "./coding-app-session/channelContract.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
@@ -475,6 +478,7 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
         ? { status: "active", maxAgeSeconds: 3600 }
         : { status: "unavailable" },
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
+    answerPage: () => contentFreeCodingAppSessionAnswerResponse(),
     rotate: () => ({ rotated: false }),
     signOut: () => false,
     sessionCount: () => 1,

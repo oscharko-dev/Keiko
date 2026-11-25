@@ -19,7 +19,7 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
-import { useCodingWorkbenchAnswers } from "@/lib/useCodingWorkbenchAnswers";
+import { useCodingWorkbenchModelTexts } from "@/lib/useCodingWorkbenchAnswers";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { Timeline } from "./CodingWorkbenchTimeline";
@@ -91,6 +91,7 @@ function servePages(answer: string, truncated = false): void {
       schemaVersion: "1",
       runId,
       messageId,
+      part: "answer",
       offset,
       text: answer.slice(offset, offset + CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS),
       length: answer.length,
@@ -108,13 +109,16 @@ function LiveTimeline({
   readonly feed: AvailableCodingSafeActivityFeed;
   readonly generating?: boolean;
 }): ReactNode {
-  const answers = useCodingWorkbenchAnswers(feed);
+  const texts = useCodingWorkbenchModelTexts(feed.runId, feed);
   const activity: UseCodingWorkbenchSafeActivityResult = {
     status: "live",
     feed,
     errorCode: null,
     retry: vi.fn(),
-    answers,
+    answers: texts.answers,
+    reasoning: texts.reasoning,
+    readReasoning: texts.readReasoning,
+    retryText: texts.retryText,
   };
   return (
     <Timeline
@@ -178,12 +182,12 @@ describe("CodingWorkbenchTimeline complete answers", () => {
       expect(answerText(container)).toContain("final-line-of-the-answer");
     });
     expect(container.querySelector(`.${styles.truncationMark}`)).toBeNull();
-    expect(screen.queryByText("Loading the rest of the answer…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading the rest…")).not.toBeInTheDocument();
+    // Reading starts where the feed's part ends and goes on page by page, never twice.
     const offsets = pageRequest.mock.calls.map(([request]) => request.offset);
-    expect(offsets[0]).toBe(0);
     expect(offsets.at(-1)).toBeLessThan(LONG_ANSWER.length);
     for (const [index, offset] of offsets.entries()) {
-      expect(offset).toBe(index * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
+      expect(offset).toBe(16_000 + index * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
     }
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -193,7 +197,7 @@ describe("CodingWorkbenchTimeline complete answers", () => {
     const { container } = render(<LiveTimeline feed={feedOf(namedMessage(LONG_ANSWER, 16_000))} />);
 
     expect(answerText(container)).toContain("Finding: the parser keeps every line.");
-    expect(screen.getByText("Loading the rest of the answer…")).toBeInTheDocument();
+    expect(screen.getByText("Loading the rest…")).toBeInTheDocument();
     expect(container.querySelector(`.${styles.truncationMark}`)).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy answer as Markdown" })).toBeNull();
   });
@@ -225,7 +229,7 @@ describe("CodingWorkbenchTimeline complete answers", () => {
       expect(container.querySelector(`.${styles.truncationMark}`)).not.toBeNull();
     });
     expect(answerText(container)).toContain("Finding:");
-    const report = reports.find(({ message }) => message.includes("rest of a long answer"));
+    const report = reports.find(({ message }) => message.includes("rest of a long model text"));
     expect(report?.meta?.errorKind).toBe("unavailable");
     expect(JSON.stringify(report)).not.toContain("parser keeps");
     expect(JSON.stringify(report)).not.toContain(MESSAGE_ID);
@@ -252,7 +256,7 @@ describe("CodingWorkbenchTimeline answer reading edge cases", () => {
       expect(container.querySelector(`.${styles.truncationMark}`)).not.toBeNull();
     });
     expect(pageRequest).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Loading the rest of the answer…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading the rest…")).not.toBeInTheDocument();
   });
 
   it("stops reading a run's answers when another run is shown, and reads that run's own", async () => {
@@ -276,7 +280,7 @@ describe("CodingWorkbenchTimeline answer reading edge cases", () => {
     });
     expect(signals[0]?.aborted).toBe(true);
     expect(signals[1]?.aborted).toBe(false);
-    expect(pageRequest.mock.calls[1]?.[0]).toMatchObject({ runId: "run-2", offset: 0 });
+    expect(pageRequest.mock.calls[1]?.[0]).toMatchObject({ runId: "run-2", offset: 16_000 });
   });
 });
 

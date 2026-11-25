@@ -12,6 +12,7 @@ import {
   CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TURNS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
@@ -149,14 +150,26 @@ function restoredMessage(
   const named = cut && source.role === "assistant";
   const marked = cut && !named;
   const last = segments.pop();
+  // Only the run's memory bound cuts an answer, and its cut is shown on the message.
+  const whole = restoredAnswer(source.text);
   return {
     messageId: source.messageId,
     role: source.role,
     occurredAt: source.occurredAt,
     segments: last === undefined ? segments : [...segments, { ...last, truncated: marked }],
-    truncated: marked,
-    ...(named ? { fullAnswer: { length: source.text.length, truncated: false } } : {}),
+    truncated: marked || (named && whole.truncated),
+    ...(named ? { fullAnswer: { length: whole.text.length, truncated: whole.truncated } } : {}),
   };
+}
+
+// The answer as the timeline holds it: whole, or cut on a whole character at the same memory bound
+// the live projection keeps, so a restored run never names more than the contract admits.
+function restoredAnswer(text: string): { readonly text: string; readonly truncated: boolean } {
+  const bound = CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS;
+  if (text.length <= bound) return { text, truncated: false };
+  const code = text.charCodeAt(bound - 1);
+  const end = code >= 0xd8_00 && code <= 0xdb_ff ? bound - 1 : bound;
+  return { text: text.slice(0, end), truncated: true };
 }
 
 // The message with as much of its text as the contract's per-message byte bound admits: the whole
@@ -309,13 +322,10 @@ function packedConversation(
     const next = withOlderMessage(context, turns, fitted);
     if (next === undefined) return { turns, unplaced: source, answers };
     turns = next;
-    if (fitted.fullAnswer !== undefined)
-      answers.set(source.messageId, {
-        text: source.text,
-        complete: true,
-        truncated: false,
-        failed: false,
-      });
+    if (fitted.fullAnswer !== undefined) {
+      const whole = restoredAnswer(source.text);
+      answers.set(source.messageId, { ...whole, complete: true, failed: false });
+    }
   }
   return { turns, unplaced: undefined, answers };
 }

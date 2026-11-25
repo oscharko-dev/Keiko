@@ -835,6 +835,7 @@ describe("app-session answer pages", () => {
     schemaVersion: "1",
     runId: "run-answer",
     messageId: "msg-answer",
+    part: "answer",
     offset: 0,
     text: "## Review\n",
     length: 10,
@@ -842,7 +843,12 @@ describe("app-session answer pages", () => {
   } as const;
 
   function answerChannel(
-    answerPageFor: (request: { runId: string; messageId: string; offset: number }) => unknown,
+    answerPageFor: (request: {
+      runId: string;
+      messageId: string;
+      part: string;
+      offset: number;
+    }) => unknown,
   ): { channel: CodingAppSessionChannel; cookie: string } {
     const channel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),
@@ -890,7 +896,10 @@ describe("app-session answer pages", () => {
     );
 
     expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: PAGE } });
-    expect(requests).toEqual([{ runId: "run-answer", messageId: "msg-answer", offset: 0 }]);
+    // An unnamed part is the answer.
+    expect(requests).toEqual([
+      { runId: "run-answer", messageId: "msg-answer", part: "answer", offset: 0 },
+    ]);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       op: "coding-app-session.answer-page.read",
@@ -902,6 +911,7 @@ describe("app-session answer pages", () => {
         answerChars: 10,
         complete: true,
         answerTruncated: false,
+        textPart: "answer",
       },
     });
     expect(JSON.stringify(events)).not.toContain("Review");
@@ -920,6 +930,12 @@ describe("app-session answer pages", () => {
     ["a negative offset", "paired", "runId=run-answer&messageId=msg-answer&offset=-1", true],
     ["a missing message", "paired", "runId=run-answer&offset=0", true],
     ["an extra key", "paired", "runId=run-answer&messageId=msg-answer&offset=0&raw=1", true],
+    [
+      "an unknown part",
+      "paired",
+      "runId=run-answer&messageId=msg-answer&part=prompt&offset=0",
+      true,
+    ],
   ] as const)("serves the page-free response for %s", (_label, session, query, paired) => {
     let asked = 0;
     const { channel, cookie } = answerChannel(() => {
@@ -938,6 +954,36 @@ describe("app-session answer pages", () => {
       correlationId: "answer-correlation",
       extra: { outcome: "unavailable", pageChars: 0 },
     });
+  });
+
+  it("serves a reasoning page under the run's correlation", () => {
+    const reasoningPage = { ...PAGE, part: "reasoning", text: "Think.", length: 6 } as const;
+    const { channel, cookie } = answerChannel(() => reasoningPage);
+    const { deps: logDeps, events } = loggedDeps(channel);
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&part=reasoning&offset=0", cookie),
+      logDeps,
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: reasoningPage } });
+    expect(events[0]).toMatchObject({
+      correlationId: "run-answer",
+      extra: { outcome: "served", textPart: "reasoning" },
+    });
+    expect(JSON.stringify(events)).not.toContain("Think");
+  });
+
+  it.each([
+    ["another run", { runId: "run-other" }],
+    ["another message", { messageId: "msg-other" }],
+    ["another part", { part: "reasoning" }],
+    ["another offset", { offset: 3 }],
+  ] as const)("fails closed when the source returns a page of %s", (_label, override) => {
+    const { channel, cookie } = answerChannel(() => ({ ...PAGE, ...override }));
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      deps(channel),
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
   });
 
   it("fails closed when the source returns a page that breaks the contract", () => {

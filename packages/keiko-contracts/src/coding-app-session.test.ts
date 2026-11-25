@@ -88,6 +88,28 @@ describe("coding app-session channel contract", () => {
     ).toBe(false);
   });
 
+  it("accepts a live update's text deltas beside the feed and rejects malformed ones", () => {
+    const feed = {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-activity",
+      updatedAt: "2026-07-18T17:00:00.000Z",
+      turns: [],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+    const delta = { messageId: "msg_a", part: "reasoning", offset: 40, text: "more" };
+    const content = (textDeltas: unknown): unknown => ({ kind: "safe-activity", feed, textDeltas });
+    expect(validateCodingAppSessionChannelContent(content([delta])).ok).toBe(true);
+    expect(validateCodingAppSessionChannelContent(content([{ ...delta, part: "prompt" }])).ok).toBe(
+      false,
+    );
+    expect(validateCodingAppSessionChannelContent(content([{ ...delta, text: "" }])).ok).toBe(
+      false,
+    );
+    expect(validateCodingAppSessionChannelContent(content("more")).ok).toBe(false);
+  });
+
   it("rejects snapshots with a wrong version, extra keys, or a breached aggregate budget", () => {
     expect(validateCodingAppSessionChannelSnapshot({ schemaVersion: "2", content: null }).ok).toBe(
       false,
@@ -119,6 +141,7 @@ describe("coding app-session answer response contract", () => {
     schemaVersion: "1",
     runId: "run-1",
     messageId: "msg-1",
+    part: "answer",
     offset: 0,
     text: "Answer",
     length: 6,

@@ -6,7 +6,7 @@ import {
   installConnectedFolderChatCatalogRuntime,
   type ConnectedFolderChatCatalogRuntime,
 } from "./connected-folder-chat-catalog.js";
-import { presentCodingReasoning } from "./coding-reasoning-continuation.js";
+import { codingSafeActivityContentSource } from "./coding-reasoning-continuation.js";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -5060,23 +5060,6 @@ function gatewayOutcomeFailureCode(
   return {};
 }
 
-function safeActivityContentSource(
-  projection: CodingSafeActivityProjection | undefined,
-  visible: () => boolean,
-): CodingAppSessionContentSource | undefined {
-  return projection === undefined
-    ? undefined
-    : {
-        contentFor: () => presentCodingReasoning(projection.currentContent(), visible()),
-        subscribeContent: (listener) =>
-          projection.subscribeContent((content) => {
-            listener(presentCodingReasoning(content, visible()));
-          }),
-        answerPageFor: ({ runId, messageId, offset }) =>
-          projection.answerPage(runId, messageId, offset),
-      };
-}
-
 // A selection (Local checkout, folder) ends the previous workspace's safe activity like any switch.
 function purgingSelection<Request, Result>(
   select: ((request: Request) => Result) | undefined,
@@ -5444,7 +5427,7 @@ function buildAssemblyCodingAppSessionChannel(
       args.options.sessionPairingPort ?? resolveLauncherSessionPairingPort(args.options.env),
     contentSource:
       args.options.codingAppSessionContentSource ??
-      safeActivityContentSource(
+      codingSafeActivityContentSource(
         codingRuntimeControlPlane?.safeActivityProjection,
         () => args.runtimeConfig.current()?.codingReasoningDisplay !== "off",
       ),

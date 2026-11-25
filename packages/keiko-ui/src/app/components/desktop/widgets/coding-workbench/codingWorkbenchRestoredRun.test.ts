@@ -11,6 +11,7 @@ import type { ChatMessage, CodingHistoryDetail } from "@oscharko-dev/keiko-contr
 import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
@@ -401,6 +402,24 @@ describe("restoreConversation bounds and truncation", () => {
     expect(new TextEncoder().encode(JSON.stringify(named)).length).toBeLessThanOrEqual(
       CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
     );
+    expectContractValid(feed);
+  });
+
+  // The run's memory bound is the one cut an answer can show: a restored answer above it names the
+  // bound, marks the cut and hands over the text up to it, on a whole character.
+  it("cuts a restored answer only at the memory bound, on a whole character, and marks it", () => {
+    const bound = CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS;
+    const text = `${"a".repeat(bound - 1)}\u{1F600}tail`;
+    const { feed, answers } = restoration([message("m-1", "run-7", "assistant", text)]);
+    const [named] = restoredMessages(feed);
+    expect(named?.fullAnswer).toEqual({ length: bound - 1, truncated: true });
+    expect(named?.truncated).toBe(true);
+    expect(answers.get("m-1")).toEqual({
+      text: "a".repeat(bound - 1),
+      complete: true,
+      truncated: true,
+      failed: false,
+    });
     expectContractValid(feed);
   });
 

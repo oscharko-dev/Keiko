@@ -27,7 +27,15 @@ import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID, resolveCorrelationId } from "../correlation.js";
+import {
+  correlationIdOrUnknown,
+  UNKNOWN_CORRELATION_ID,
+  resolveCorrelationId,
+} from "../correlation.js";
+import {
+  CODING_SAFE_ACTIVITY_TEXT_PARTS,
+  type CodingSafeActivityTextPart,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { STREAMING } from "../route-outcome.js";
@@ -92,6 +100,13 @@ const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["served", "unavailable"],
+    },
+    // Which model text the page is of: the answer or the model's reasoning.
+    textPart: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["answer", "reasoning"],
     },
     offset: { type: "integer", dataClass: "count", required: true },
     pageChars: { type: "integer", dataClass: "count", required: true },
@@ -592,7 +607,7 @@ export function handleCodingAppSessionChannelSnapshot(
   return { status: 200, body: currentSnapshot(deps, ctx.req) };
 }
 
-const ANSWER_QUERY_KEYS: ReadonlySet<string> = new Set(["runId", "messageId", "offset"]);
+const ANSWER_QUERY_KEYS: ReadonlySet<string> = new Set(["runId", "messageId", "part", "offset"]);
 const ANSWER_OFFSET = /^(?:0|[1-9]\d{0,8})$/u;
 
 /** The answer a request names, or undefined for any other query shape. */
@@ -602,9 +617,14 @@ function answerRequest(url: URL): CodingAppSessionAnswerRequest | undefined {
   const runId = params.get("runId");
   const messageId = params.get("messageId");
   const offset = params.get("offset");
+  const part = params.get("part") ?? "answer";
   if (runId === null || messageId === null || offset === null) return undefined;
-  if (!ANSWER_OFFSET.test(offset)) return undefined;
-  return { runId, messageId, offset: Number(offset) };
+  if (!ANSWER_OFFSET.test(offset) || !isTextPart(part)) return undefined;
+  return { runId, messageId, part, offset: Number(offset) };
+}
+
+function isTextPart(value: string): value is CodingSafeActivityTextPart {
+  return (CODING_SAFE_ACTIVITY_TEXT_PARTS as readonly string[]).includes(value);
 }
 
 function answerResponse(
@@ -636,11 +656,14 @@ export function handleCodingAppSessionAnswerPage(
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_ANSWER_PAGE_OPERATION,
-      { correlationId: page?.runId ?? ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {
+        correlationId: correlationIdOrUnknown(page?.runId ?? ctx.correlationId),
+      },
       page === null
         ? { outcome: "unavailable", offset: request?.offset ?? 0, pageChars: 0 }
         : {
             outcome: "served",
+            textPart: page.part,
             offset: page.offset,
             pageChars: page.text.length,
             answerChars: page.length,

@@ -1964,6 +1964,21 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
+.textRetry {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.textRetry:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .messageActions {
   display: flex;
   justify-content: flex-end;

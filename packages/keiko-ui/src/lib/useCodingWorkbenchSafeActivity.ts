@@ -25,8 +25,9 @@ import {
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
 import {
-  useCodingWorkbenchAnswers,
+  useCodingWorkbenchModelTexts,
   type CodingWorkbenchAnswers,
+  type UseCodingWorkbenchModelTextsResult,
 } from "./useCodingWorkbenchAnswers";
 
 const RESYNC_DEBOUNCE_MS = 400;
@@ -72,6 +73,10 @@ export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSaf
    * Absent or without an entry: the feed's segments are the whole answer.
    */
   readonly answers?: CodingWorkbenchAnswers;
+  /** The same for the model's reasoning; read only once someone opens it. */
+  readonly reasoning?: CodingWorkbenchAnswers;
+  readonly readReasoning?: UseCodingWorkbenchModelTextsResult["readReasoning"];
+  readonly retryText?: UseCodingWorkbenchModelTextsResult["retryText"];
 }
 
 const IDLE_STATE: CodingWorkbenchSafeActivityState = {
@@ -94,11 +99,19 @@ export function useCodingWorkbenchSafeActivity(
     runStateRef.current = runState;
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
-  useActivityConnection({ runId, epoch, batch, runStateRef, setState });
+  const texts = useCodingWorkbenchModelTexts(runId, state.feed);
+  const { ingestDeltas } = texts;
+  useActivityConnection({ runId, epoch, batch, runStateRef, setState, ingestDeltas });
   useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
   useActivityAutoReconnect({ runId, status: state.status, retry });
-  const answers = useCodingWorkbenchAnswers(state.feed);
-  return { ...state, answers, retry };
+  return {
+    ...state,
+    answers: texts.answers,
+    reasoning: texts.reasoning,
+    readReasoning: texts.readReasoning,
+    retryText: texts.retryText,
+    retry,
+  };
 }
 
 interface SnapshotBatch {
@@ -145,10 +158,11 @@ interface ActivityConnectionInput {
   readonly batch: SnapshotBatch;
   readonly runStateRef: RefObject<CodingWorkbenchRuntimeStateName | undefined>;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchSafeActivityState>>;
+  readonly ingestDeltas: UseCodingWorkbenchModelTextsResult["ingestDeltas"];
 }
 
 function useActivityConnection(input: ActivityConnectionInput): void {
-  const { batch, epoch, runId, runStateRef, setState } = input;
+  const { batch, epoch, runId, runStateRef, setState, ingestDeltas } = input;
   const { cancel, enqueue, flush } = batch;
   // A re-pair without a page load reopens the channel (F65).
   const redemptions = useCodingAppSessionRedemptions();
@@ -167,7 +181,11 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       errorCode: null,
     }));
     const publish = (snapshot: CodingAppSessionChannelSnapshot): void => {
-      if (!controller.signal.aborted) enqueue(snapshot);
+      if (controller.signal.aborted) return;
+      // Deltas are appended as they arrive: the batch below keeps only the newest snapshot.
+      const content = snapshot.content;
+      if (content !== null && "feed" in content) ingestDeltas(content.textDeltas);
+      enqueue(snapshot);
     };
     void connectActivity(controller, publish, runStateRef)
       .then(() => {
@@ -184,7 +202,7 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       controller.abort();
       cancel();
     };
-  }, [cancel, enqueue, epoch, flush, redemptions, runId, runStateRef, setState]);
+  }, [cancel, enqueue, epoch, flush, ingestDeltas, redemptions, runId, runStateRef, setState]);
 }
 
 async function connectActivity(
