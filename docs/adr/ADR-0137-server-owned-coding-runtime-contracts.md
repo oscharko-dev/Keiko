@@ -904,7 +904,11 @@ what the call printed with the lines between counted (each part 2 000 characters
 the tool handed the model (1 000 characters), the call's duration and a closed `failureOrigin`:
 `keiko-refused` (Keiko's permission decision, with the closed `refusalCause` when a person declined
 or let an approval expire), `command-failed` (the process ran and exited non-zero), `tool-error`,
-`timed-out` or `cancelled`. A command a signal killed is `command-failed`; `cancelled` is only the
+`timed-out`, `invalid-arguments` (the runtime's closed error type `tool.input-json` or
+`tool.input-incomplete`: the call's arguments could not be read, so the tool never ran) or
+`cancelled`. An unknown tool or arguments that miss the tool's schema carry only the runtime's
+ordinary `tool.execution` type, so they stay `tool-error` and the row shows the runtime's own
+message; telling them apart would mean parsing prose. A command a signal killed is `command-failed`; `cancelled` is only the
 display state of a call an explicit Stop or takeover settled, which is no failure: it is not counted
 and the Activity Log's per-call failure line is not written for it. The origin is derived from the runtime's status facts and the governed
 facade's decision, never from prose, and a verification or Git step keeps its own outcome vocabulary

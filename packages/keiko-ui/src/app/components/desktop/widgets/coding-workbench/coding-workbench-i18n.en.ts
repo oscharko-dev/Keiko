@@ -1451,6 +1451,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failureOrigin.command-failed": "Command failed",
   "codingWorkbench.activity.failureOrigin.tool-error": "Tool error",
   "codingWorkbench.activity.failureOrigin.timed-out": "Timed out",
+  "codingWorkbench.activity.failureOrigin.invalid-arguments": "Invalid arguments",
   "codingWorkbench.activity.failureOrigin.cancelled": "Stopped",
   "codingWorkbench.activity.failure.command-failed":
     "The command did not finish successfully (exit code {code}).",
@@ -1459,6 +1460,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failure.tool-error": "The tool could not complete this step.",
   "codingWorkbench.activity.failure.keiko-refused": "Keiko did not allow this step.",
   "codingWorkbench.activity.failure.timed-out": "The command ran out of time.",
+  "codingWorkbench.activity.failure.invalid-arguments":
+    "The call's arguments could not be read, so the tool did not run.",
   "codingWorkbench.activity.failure.cancelled": "This step was stopped.",
   "codingWorkbench.activity.failure.agentRetries": "The agent sees this and will try another way.",
   "codingWorkbench.activity.refusalCause.approval-declined": "You declined it.",

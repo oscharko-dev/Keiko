@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+  codingSafeActivityStateFailureOrigin,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
@@ -797,3 +798,14 @@ function planStep(
     ...overrides,
   } as CodingSafeActivityPlan["steps"][number];
 }
+
+describe("a failed call's origin from its closed state", () => {
+  it("falls back to the closed state for a producer that named none", () => {
+    expect(codingSafeActivityStateFailureOrigin("failed", 1)).toBe("command-failed");
+    expect(codingSafeActivityStateFailureOrigin("failed", 0)).toBe("tool-error");
+    expect(codingSafeActivityStateFailureOrigin("failed", undefined)).toBe("tool-error");
+    expect(codingSafeActivityStateFailureOrigin("denied", undefined)).toBe("keiko-refused");
+    expect(codingSafeActivityStateFailureOrigin("cancelled", undefined)).toBe("cancelled");
+    expect(codingSafeActivityStateFailureOrigin("succeeded", undefined)).toBeUndefined();
+  });
+});

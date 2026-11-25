@@ -153,10 +153,25 @@ export const CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS = [
   "command-failed",
   "tool-error",
   "timed-out",
+  "invalid-arguments",
   "cancelled",
 ] as const;
 export type CodingSafeActivityToolFailureOrigin =
   (typeof CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)[number];
+
+/**
+ * A failed call's origin when its producer named none: the closed state decides it. The server's
+ * projection and the Workbench share this one rule, so a row and the run's log never disagree.
+ */
+export function codingSafeActivityStateFailureOrigin(
+  state: CodingSafeActivityToolState,
+  exitCode: number | undefined,
+): CodingSafeActivityToolFailureOrigin | undefined {
+  if (state === "denied") return "keiko-refused";
+  if (state === "cancelled") return "cancelled";
+  if (state !== "failed") return undefined;
+  return exitCode !== undefined && exitCode !== 0 ? "command-failed" : "tool-error";
+}
 
 /** Why Keiko refused a call, where the governed facade knows it: a person declined, or nobody decided in time. */
 export const CODING_SAFE_ACTIVITY_TOOL_REFUSAL_CAUSES = [

@@ -60,9 +60,20 @@ function failureOrigin(
   if (displayState === "denied") return "keiko-refused";
   if (displayState === "cancelled") return "cancelled";
   if (displayState !== "failed") return undefined;
+  if (unreadableArguments(state)) return "invalid-arguments";
   return name === "shell" && state.status === "completed"
     ? shellFailureOrigin(record(state.metadata) ?? {})
     : "tool-error";
+}
+
+// The runtime's own closed error type for a call whose arguments it could not read as JSON, or that
+// the model's output ended in the middle of: the tool never ran. Only this type is a fact; an unknown
+// tool or arguments that miss the tool's schema share `tool.execution` with every other tool error,
+// and the row shows the runtime's own message for them.
+function unreadableArguments(state: Readonly<Record<string, unknown>>): boolean {
+  if (state.status !== "error") return false;
+  const type = record(state.error)?.type;
+  return type === "tool.input-json" || type === "tool.input-incomplete";
 }
 
 // A shell that ran to its end failed by its clock or by the command itself: its own exit status or
@@ -74,17 +85,6 @@ function shellFailureOrigin(
   if (metadata.timeout === true) return "timed-out";
   if (typeof metadata.signal === "string") return "command-failed";
   return Number.isInteger(metadata.exit) ? "command-failed" : "tool-error";
-}
-
-/** A failed call's origin when its producer named none: the closed state decides it. */
-export function stateFailureOrigin(
-  state: CodingSafeActivityToolState,
-  exitCode: number | undefined,
-): CodingSafeActivityToolFailureOrigin | undefined {
-  if (state === "denied") return "keiko-refused";
-  if (state === "cancelled") return "cancelled";
-  if (state !== "failed") return undefined;
-  return exitCode !== undefined && exitCode !== 0 ? "command-failed" : "tool-error";
 }
 
 function shellCommand(
@@ -141,10 +141,7 @@ export function toolOutputPreview(raw: string): CodingSafeActivityToolOutput | u
 }
 
 function displayLines(text: string): readonly string[] {
-  const lines = text
-    .replaceAll("\r\n", "\n")
-    .split("\n")
-    .map(finalConsoleState);
+  const lines = text.replaceAll("\r\n", "\n").split("\n").map(finalConsoleState);
   while (lines.length > 0 && lines.at(-1)?.trim() === "") lines.pop();
   while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
   return lines;

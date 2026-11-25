@@ -2595,7 +2595,13 @@ describe("failed tool rows", () => {
     );
     expect(failedLines(log)).toHaveLength(3);
     const logged = JSON.stringify(log.events);
-    for (const body of ["private-case", "FAIL private", "private-error-text", "call_a", "call_err"]) {
+    for (const body of [
+      "private-case",
+      "FAIL private",
+      "private-error-text",
+      "call_a",
+      "call_err",
+    ]) {
       expect(logged).not.toContain(body);
     }
   });

@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+  CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   unavailableCodingSafeActivityFeed,
+  validateCodingSafeActivityFeed,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { CodingSafeActivityContent } from "./coding-runtime/codingSafeActivityProjection.js";
 import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
@@ -140,7 +142,7 @@ function toolContent(
       schemaVersion: CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
       availability: "available",
       runId: "run",
-      updatedAt: "2026-11-05T00:00:00Z",
+      updatedAt: "2026-11-05T00:00:00.000Z",
       truncated: false,
       droppedEventCount: 0,
       turns: [
@@ -152,7 +154,7 @@ function toolContent(
             callId: `call-${String(index)}`,
             tool: "shell",
             state: "succeeded" as const,
-            occurredAt: "2026-11-05T00:00:00Z",
+            occurredAt: "2026-11-05T00:00:00.000Z",
             presentation: { exitCode: 0, command: { text, truncated: false } },
           })),
         },
@@ -212,4 +214,46 @@ it("measures the budget in UTF-8 bytes, not characters", () => {
   expect(commandsOf(redacted)).toEqual([
     { exitCode: 0, command: { text: "echo [REDACTED]", truncated: false } },
   ]);
+});
+
+it("keeps a feed at its own bounds valid when the redaction would push it past them", () => {
+  const short = "Zq9wXy7k";
+  const bound = CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES;
+  const turnBytes = (content: CodingSafeActivityContent): number =>
+    content.feed.availability === "available"
+      ? new TextEncoder().encode(JSON.stringify(content.feed.turns[0])).length
+      : 0;
+  const commands: string[] = [];
+  const withSecret = `echo ${short} ${"x".repeat(900)}`;
+  while (turnBytes(toolContent([...commands, withSecret])) < bound - 200) commands.push(withSecret);
+  const secretRows = commands.length;
+  // Rows without the secret that bring the turn to one byte under its 32 KiB bound.
+  for (;;) {
+    const rest = bound - 1 - turnBytes(toolContent([...commands, "echo "]));
+    if (rest <= 990) {
+      commands.push(`echo ${"y".repeat(rest)}`);
+      break;
+    }
+    commands.push(`echo ${"y".repeat(500)}`);
+  }
+  // Deltas larger than the redaction's growth: dropping them alone would fit the snapshot budget.
+  const content = toolContent(commands, [
+    { messageId: "message", part: "answer", offset: 0, text: "z".repeat(2_000) },
+  ]);
+  expect(turnBytes(content)).toBe(bound - 1);
+  expect(validateCodingSafeActivityFeed(content.feed).ok).toBe(true);
+
+  const redacted = presentCodingToolTexts(content, [short]);
+  if (redacted === null) throw new TypeError("expected content");
+  expect(validateCodingSafeActivityFeed(redacted.feed).ok).toBe(true);
+  expect(redacted.textDeltas).toBeUndefined();
+  expect(JSON.stringify(redacted)).not.toContain(short);
+  const rows = commandsOf(redacted);
+  expect(rows.filter((row) => JSON.stringify(row).includes("detailOmitted"))).toHaveLength(
+    secretRows,
+  );
+  expect(rows.at(-1)).toEqual({
+    exitCode: 0,
+    command: { text: commands.at(-1), truncated: false },
+  });
 });

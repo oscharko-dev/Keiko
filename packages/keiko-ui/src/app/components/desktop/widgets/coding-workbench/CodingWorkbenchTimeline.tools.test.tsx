@@ -151,6 +151,30 @@ describe("a failed command's row", () => {
     expect(row(container, 1)).toHaveTextContent("The command ran out of time.");
   });
 
+  it("says plainly when the call's arguments could not be read, without blaming anyone", () => {
+    const container = renderTools([
+      {
+        callId: "call-args",
+        tool: "edit",
+        state: "failed",
+        occurredAt: AT,
+        presentation: {
+          failureOrigin: "invalid-arguments",
+          errorText: { text: "Expected a JSON object", truncated: false },
+        },
+      },
+    ]);
+    const invalid = row(container, 0);
+    expect(invalid.open).toBe(true);
+    expect(invalid.dataset.failureOrigin).toBe("invalid-arguments");
+    expect(invalid).toHaveTextContent("Invalid arguments");
+    expect(invalid).toHaveTextContent(
+      "The call's arguments could not be read, so the tool did not run.",
+    );
+    expect(invalid).toHaveTextContent("Expected a JSON object");
+    expect(invalid).toHaveTextContent("The agent sees this and will try another way.");
+  });
+
   it("keeps a stopped call closed and says it was stopped", () => {
     const container = renderTools([
       shell("call-stop", "cancelled", { failureOrigin: "cancelled" }),
@@ -179,11 +203,13 @@ describe("a failed command's row", () => {
     const container = renderTools([
       FAILED_TEST_RUN,
       shell("call-push", "denied", { failureOrigin: "keiko-refused" }),
+      shell("call-args", "failed", { failureOrigin: "invalid-arguments" }),
     ]);
     expect(row(container, 0)).toHaveTextContent("Befehl fehlgeschlagen");
     expect(row(container, 0)).toHaveTextContent("(beendet mit Code 1)");
     expect(row(container, 0)).toHaveTextContent("115 Zeilen ausgeblendet");
     expect(row(container, 1)).toHaveTextContent("Keiko hat blockiert");
+    expect(row(container, 2)).toHaveTextContent("Ungültige Argumente");
     expect(row(container, 0)).not.toHaveTextContent("dem Modell gemeldet");
   });
 });

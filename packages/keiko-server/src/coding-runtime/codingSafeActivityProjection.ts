@@ -9,7 +9,6 @@ import type {
   UnavailableCodingSafeActivityFeed,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
-import { stateFailureOrigin } from "./codingSafeActivityToolDetail.js";
 import {
   countFailedCall,
   createToolFailureLedger,
@@ -36,6 +35,7 @@ import {
   CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS,
+  codingSafeActivityStateFailureOrigin,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   isCodingSafeActivityToolPresentation,
@@ -1621,7 +1621,7 @@ function settledPresentation(
   const failed = state === "failed" || state === "denied" || state === "cancelled";
   const origin =
     failed && !hasOwnOutcome(facts)
-      ? (failureOrigin ?? stateFailureOrigin(state, facts.exitCode))
+      ? (failureOrigin ?? codingSafeActivityStateFailureOrigin(state, facts.exitCode))
       : undefined;
   const presentation: CodingSafeActivityToolPresentation = {
     ...facts,

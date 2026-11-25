@@ -739,13 +739,15 @@ are never logged: they carry model text.
 `coding-runtime.tool.failed` records one line per tool call that failed, under the run's id, also
 for a call the bounded feed had no room for; a call an explicit Stop or takeover cancelled is not a
 failure and writes no line (the `interrupted` event above counts those). The line carries the closed `failureOrigin` (`keiko-refused`, `command-failed`, `tool-error`, `timed-out`,
-`cancelled` only as a display state, never logged), the tool's closed class (a native tool's name, `keiko` for Keiko's governed tools,
-`other`), a shell's `exitCodeClass` (`none`, `0`, `1`, `2`, `126`, `127`, `signal`, `other`; a command a
-signal killed is `command-failed`, not a stop), how often
+`invalid-arguments`, `cancelled` only as a display state, never logged), the tool's closed class (a native tool's name, `keiko` for Keiko's governed tools,
+`other`), a shell's `exitCodeClass` (`none`, `0`, `1`, `2`, `126`, `127`, `signal` for an exit status of
+128+n, `other`; a command a signal killed outright reports no exit status, so it is
+`command-failed` with `none`, never a stop), how often
 that command has failed in the run (`commandFailureCount`) and the run's running totals of failed
 calls and of repeated failures. The origin comes from the runtime's own status facts — Keiko's
-permission decision, the shell's timeout, kill signal or exit status, or the tool's structured
-error — never from parsing a message. The command, its output, the tool's error message and the call
+permission decision, the shell's timeout, kill signal or exit status, the runtime's closed error
+type for arguments it could not read (`invalid-arguments`), or the tool's structured error — never
+from parsing a message. The command, its output, the tool's error message and the call
 id never reach the log; the Workbench row shows them, after the credential floor, and commands are
 told apart by a digest held in memory only. A verification or Git step keeps its own outcome
 operations and has no failure origin. `keiko support analyze` therefore shows a run's pattern, for

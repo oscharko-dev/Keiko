@@ -89,7 +89,8 @@ const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
 // The end of one read of a retained answer (the feed's `fullAnswer`), body-free: the page that
 // completed it, where it starts and how long it and the answer are, in UTF-16 code units, never its
 // text. The pages before it write no line of their own. A refused or unknown read is recorded at
-// its 1st, 2nd, 4th, 8th … occurrence with the count, so no caller can flood the log.
+// its 1st, 2nd, 4th, 8th … occurrence with the count, so a client retrying a gone answer cannot flood
+// the log; a served read writes one line per completed read of an answer.
 const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

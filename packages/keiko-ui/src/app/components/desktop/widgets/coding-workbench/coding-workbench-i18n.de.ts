@@ -1504,6 +1504,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.failureOrigin.command-failed": "Befehl fehlgeschlagen",
   "codingWorkbench.activity.failureOrigin.tool-error": "Werkzeug-Fehler",
   "codingWorkbench.activity.failureOrigin.timed-out": "Zeitüberschreitung",
+  "codingWorkbench.activity.failureOrigin.invalid-arguments": "Ungültige Argumente",
   "codingWorkbench.activity.failureOrigin.cancelled": "Abgebrochen",
   "codingWorkbench.activity.failure.command-failed":
     "Der Befehl wurde nicht erfolgreich abgeschlossen (beendet mit Code {code}).",
@@ -1513,6 +1514,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Werkzeug konnte diesen Schritt nicht ausführen.",
   "codingWorkbench.activity.failure.keiko-refused": "Keiko hat diesen Schritt nicht zugelassen.",
   "codingWorkbench.activity.failure.timed-out": "Der Befehl hat sein Zeitlimit überschritten.",
+  "codingWorkbench.activity.failure.invalid-arguments":
+    "Die Argumente des Aufrufs waren nicht lesbar, das Werkzeug lief nicht.",
   "codingWorkbench.activity.failure.cancelled": "Dieser Schritt wurde abgebrochen.",
   "codingWorkbench.activity.failure.agentRetries":
     "Der Agent sieht das und versucht einen anderen Weg.",

@@ -8,6 +8,7 @@ import type {
   CodingSafeActivityToolOutput,
   CodingSafeActivityToolText,
 } from "@oscharko-dev/keiko-contracts";
+import { codingSafeActivityStateFailureOrigin } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -29,17 +30,7 @@ export function toolFailureOrigin(
   const facts = tool.presentation ?? {};
   // A verification or Git step says what happened in its own outcome vocabulary.
   if (facts.verificationOutcome !== undefined || facts.gitOutcome !== undefined) return undefined;
-  return facts.failureOrigin ?? stateOrigin(tool.state, facts.exitCode);
-}
-
-function stateOrigin(
-  state: CodingSafeActivityTool["state"],
-  exitCode: number | undefined,
-): CodingSafeActivityToolFailureOrigin | undefined {
-  if (state === "denied") return "keiko-refused";
-  if (state === "cancelled") return "cancelled";
-  if (state !== "failed") return undefined;
-  return exitCode !== undefined && exitCode !== 0 ? "command-failed" : "tool-error";
+  return facts.failureOrigin ?? codingSafeActivityStateFailureOrigin(tool.state, facts.exitCode);
 }
 
 /** A failure a person has to read opens by itself; a stopped call stays one line. */

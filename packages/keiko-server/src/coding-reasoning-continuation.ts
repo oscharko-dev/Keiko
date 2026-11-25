@@ -1,5 +1,6 @@
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { CodingAppSessionContentSource } from "./coding-app-session/sessionChannel.js";
+import { validateCodingSafeActivityFeed } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { redactToolTexts } from "./coding-runtime/codingSafeActivityToolDetail.js";
 import type {
   CodingSafeActivityContent,
@@ -64,8 +65,9 @@ export function codingSafeActivityContentSource(
 /**
  * The deployment's own secret values removed from every tool text the update carries. A redaction
  * that made the update longer drops its text deltas, so the snapshot stays inside its budget; the
- * reader reads what they carried as pages. A redaction that outgrows even that keeps the changed
- * rows without their texts, never an update the channel would refuse whole.
+ * reader reads what they carried as pages. A redaction that outgrows even that, or pushes the feed
+ * past its own bounds, keeps the changed rows without their texts, so the channel does not refuse
+ * the update whole. Sizes are UTF-8 bytes, as the channel measures them.
  */
 export function presentCodingToolTexts(
   content: CodingSafeActivityContent | null,
@@ -82,9 +84,11 @@ export function presentCodingToolTexts(
   const { textDeltas, ...rest } = content;
   const before = utf8Bytes(content.feed);
   const after = utf8Bytes(feed);
-  if (after <= before)
+  const fits = validateCodingSafeActivityFeed(feed).ok;
+  if (fits && after <= before) {
     return textDeltas === undefined ? { ...rest, feed } : { ...rest, feed, textDeltas };
-  if (after <= before + utf8Bytes(textDeltas ?? [])) return { ...rest, feed };
+  }
+  if (fits && after <= before + utf8Bytes(textDeltas ?? [])) return { ...rest, feed };
   return { ...rest, feed: withoutChangedTexts(content.feed, feed) };
 }
 

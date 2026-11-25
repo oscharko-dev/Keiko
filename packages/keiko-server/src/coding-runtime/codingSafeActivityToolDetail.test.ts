@@ -12,7 +12,6 @@ import {
   boundedToolText,
   openCodeToolDetail,
   redactToolTexts,
-  stateFailureOrigin,
   toolOutputPreview,
   withoutCutSecretStart,
 } from "./codingSafeActivityToolDetail.js";
@@ -65,6 +64,25 @@ describe("the origin of a call that did not succeed", () => {
     expect(JSON.stringify(detail)).not.toContain("PROVIDER_BODY");
   });
 
+  it.each([
+    ["arguments that are not JSON", "tool.input-json", "invalid-arguments"],
+    ["arguments the model's output ended in", "tool.input-incomplete", "invalid-arguments"],
+    // An unknown tool or a schema miss is the runtime's ordinary execution error: no closed fact
+    // tells it apart, so the row names it a tool error and shows the runtime's own message.
+    ["an unknown tool or a schema miss", "tool.execution", "tool-error"],
+  ] as const)("names %s from the runtime's closed error type", (_label, type, origin) => {
+    const state = {
+      status: "error",
+      input: {},
+      error: { type, message: 'Invalid arguments for tool "read"' },
+    };
+    const detail = openCodeToolDetail("read", shellPart(state), state, "failed");
+    expect(detail).toMatchObject({
+      failureOrigin: origin,
+      errorText: { text: 'Invalid arguments for tool "read"', truncated: false },
+    });
+  });
+
   it("names Keiko's refusal and a stop from the display state alone", () => {
     const state = { status: "error", error: "permission.rejected" };
     expect(openCodeToolDetail("edit", shellPart(state), state, "denied").failureOrigin).toBe(
@@ -83,15 +101,6 @@ describe("the origin of a call that did not succeed", () => {
     expect(openCodeToolDetail("shell", shellPart(state), state, "running")).not.toHaveProperty(
       "failureOrigin",
     );
-  });
-
-  it("falls back to the closed state for a producer that named none", () => {
-    expect(stateFailureOrigin("failed", 1)).toBe("command-failed");
-    expect(stateFailureOrigin("failed", 0)).toBe("tool-error");
-    expect(stateFailureOrigin("failed", undefined)).toBe("tool-error");
-    expect(stateFailureOrigin("denied", undefined)).toBe("keiko-refused");
-    expect(stateFailureOrigin("cancelled", undefined)).toBe("cancelled");
-    expect(stateFailureOrigin("succeeded", undefined)).toBeUndefined();
   });
 });
 
@@ -235,7 +244,13 @@ describe("the deployment's own secrets in a live update", () => {
     const cut = `${"a".repeat(max - 5)}${SECRET.slice(0, 5)}`;
     const presentation = {
       command: { text: cut, truncated: true },
-      output: { head: `ok ${SECRET.slice(0, 9)}`, tail: "", lineCount: 1, hiddenLineCount: 0, truncated: true },
+      output: {
+        head: `ok ${SECRET.slice(0, 9)}`,
+        tail: "",
+        lineCount: 1,
+        hiddenLineCount: 0,
+        truncated: true,
+      },
     };
     const redacted = redactToolTexts(presentation, [SECRET]);
     expect(redacted.command).toEqual({ text: "a".repeat(max - 5), truncated: true });

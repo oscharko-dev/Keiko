@@ -18377,7 +18377,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["keiko-refused", "command-failed", "tool-error", "timed-out", "cancelled"],
+        values: [
+          "keiko-refused",
+          "command-failed",
+          "tool-error",
+          "timed-out",
+          "invalid-arguments",
+          "cancelled",
+        ],
       },
       exitCodeClass: {
         type: "string",
