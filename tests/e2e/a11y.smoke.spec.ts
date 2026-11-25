@@ -212,7 +212,7 @@ function updateNoticeOpener(severity: UpdateNoticeSeverity): SurfaceOpener {
     await expect(notice).toBeVisible();
     // The notice fades in from opacity 0; a scan during that fade measures a blend, not its colours.
     await notice.evaluate(async (element) => {
-      await Promise.all(element.getAnimations().map(async (animation) => animation.finished));
+      await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
     });
     return ".update-notice";
   };
@@ -430,13 +430,22 @@ for (const theme of A11Y_THEMES) {
       request,
     }) => {
       const selector = await updateNoticeOpener(severity)(page, request, theme);
+      const buttons = page.locator(selector).getByRole("button");
+      await expect(buttons).toHaveCount(2);
       for (const mode of A11Y_CONTRAST_MODES) {
         await applyContrastMode(page, mode);
-        await expectNoViolations(
-          page,
-          selector,
-          `startup update notice (${severity}, ${theme}, ${mode})`,
-        );
+        const label = `startup update notice (${severity}, ${theme}, ${mode}`;
+        await expectNoViolations(page, selector, `${label})`);
+        // The buttons' hover rules are authored colours too; each hover state is scanned on its own.
+        for (const index of [0, 1]) {
+          await buttons.nth(index).hover();
+          await expectNoViolations(
+            page,
+            selector,
+            `${label}, button ${String(index + 1)} hovered)`,
+          );
+        }
+        await page.mouse.move(0, 0);
       }
     });
   }
