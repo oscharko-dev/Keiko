@@ -4,6 +4,7 @@ import {
   assertContainedRealPath,
   resolveWithinWorkspace,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 
 const GIT_DIR_POINTER_PREFIX = "gitdir: ";
@@ -64,6 +65,7 @@ export function indexStatMatches(
   // segment is admitted only by the owned-root port the prover bound to it; the plain default keeps
   // refusing it (run 5, 2026-09-10: every verification failed here with PathDeniedError).
   fs: WorkspaceFs = nodeWorkspaceFs,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (expected === undefined) return false;
   if (indexWriteTimeNs !== undefined && BigInt(expected.mtimeNs) >= BigInt(indexWriteTimeNs))
@@ -76,9 +78,17 @@ export function indexStatMatches(
     stat.isFile &&
     stat.hardLinkCount === 1 &&
     stat.size === expected.size &&
-    stat.ctimeNs === expected.ctimeNs &&
+    indexCtimeOf(stat, platform) === expected.ctimeNs &&
     stat.mtimeNs === expected.mtimeNs
   );
+}
+
+// Git for Windows records a file's creation time as its index ctime (its `st_ctime` is the NTFS
+// creation time), while Node reports the NTFS change time, which every ACL edit moves: compared
+// with the change time no Windows entry ever matched, and every CRLF checkout read as modified
+// (#4492). Elsewhere both name the inode change time.
+function indexCtimeOf(stat: WorkspaceStat, platform: NodeJS.Platform): string | undefined {
+  return platform === "win32" ? stat.birthtimeNs : stat.ctimeNs;
 }
 
 // `.git` is a plain directory for an ordinary clone, but a linked worktree or a submodule leaves a

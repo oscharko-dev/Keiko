@@ -125,6 +125,34 @@ describe("indexStatMatches", () => {
     expect(indexStatMatches(root, "settled.ts", expected, oneNsAfterEntry)).toBe(true);
   });
 
+  // #4492: Git for Windows records a file's creation time as its index ctime, while Node reports
+  // the NTFS change time, which every ACL edit (a step's grants) moves. Compared against the change
+  // time, no Windows file ever matched, and every CRLF checkout read as modified.
+  it("compares a Windows index ctime with the file's creation time", () => {
+    const { root } = makeWorkspace();
+    const written = writeAndStat(root, "windows.ts", "checked out on Windows");
+    const birthtimeNs = nodeWorkspaceFs.stat(join(root, "windows.ts")).birthtimeNs;
+    if (birthtimeNs === undefined) throw new Error("test-fixture-no-birthtime");
+    const recorded: GitIndexStat = { ...written, ctimeNs: birthtimeNs };
+    expect(
+      indexStatMatches(root, "windows.ts", recorded, undefined, nodeWorkspaceFs, "win32"),
+    ).toBe(true);
+    expect(
+      indexStatMatches(
+        root,
+        "windows.ts",
+        { ...recorded, ctimeNs: "1" },
+        undefined,
+        nodeWorkspaceFs,
+        "win32",
+      ),
+    ).toBe(false);
+    // Elsewhere Git records the change time, as before.
+    expect(
+      indexStatMatches(root, "windows.ts", written, undefined, nodeWorkspaceFs, "darwin"),
+    ).toBe(true);
+  });
+
   it("refuses a path outside the workspace root", () => {
     const { root } = makeWorkspace();
     const expected: GitIndexStat = { ctimeNs: "1", mtimeNs: "1", size: 0 };
