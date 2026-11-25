@@ -4047,6 +4047,9 @@ function ComposerCoreImpl({
     [repositoryMention, updateRepositoryMentionFromTextarea],
   );
 
+  // While the skill selection still loads, the Send button is unavailable and says so; Enter waits
+  // the same way instead of refusing the send with a "could not be updated" error.
+  const skillSelectionLoading = session.markdownSkill?.busy === true;
   const handleDraftKeyDown = useCallback(
     (event: ComposerKeyEvent, value: string): void => {
       if (repositoryPickerOpen) {
@@ -4059,7 +4062,7 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      if (!composerEnterSubmits(event)) return;
+      if (!composerEnterSubmits(event) || skillSelectionLoading) return;
       // A send while an answer runs is refused with a reason, and the draft stays (#4371).
       if (sending) refuseSend();
       else void sendMessage({ text: value, clearDraftOnAdmission: true });
@@ -4072,6 +4075,7 @@ function ComposerCoreImpl({
       repositoryPickerOpen,
       repositorySearch.results,
       sendMessage,
+      skillSelectionLoading,
     ],
   );
 
