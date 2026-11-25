@@ -344,7 +344,15 @@ export const GOVERNED_GIT_REMOTE_SANDBOX_POLICY: SandboxPolicy = {
 // the redacted audit metadata so keiko-verification's HONEST `enforced` network flag derives from a
 // real run rather than a hardcoded constant. Content-free: an enum, a boolean, and the platform name.
 export type SandboxBackend =
-  "bubblewrap" | "unshare" | "seatbelt" | "container-docker" | "container-podman" | "none";
+  | "bubblewrap"
+  | "unshare"
+  | "seatbelt"
+  | "container-docker"
+  | "container-podman"
+  // #4496 (ADR-0043 D21): the verified Windows runtime supervisor runs the step in a per-run
+  // AppContainer without any network capability, inside a kill-on-close Job Object.
+  | "windows-appcontainer"
+  | "none";
 
 export const SANDBOX_BACKENDS: readonly SandboxBackend[] = Object.freeze([
   "bubblewrap",
@@ -352,8 +360,28 @@ export const SANDBOX_BACKENDS: readonly SandboxBackend[] = Object.freeze([
   "seatbelt",
   "container-docker",
   "container-podman",
+  "windows-appcontainer",
   "none",
 ]);
+
+/** A private copy of the pinned Windows runtime supervisor for one step (#4496). */
+export interface WindowsStepSupervisorCopy {
+  readonly path: string;
+  /** Removes the copy; called once, after the step settled or failed to start. */
+  readonly release: () => void;
+}
+
+/**
+ * The Windows execution-root backend (#4496, ADR-0043 D21). keiko-server supplies it from the
+ * supervisor whose SHA-256 matches its pin, never from `PATH`; its presence is the backend's
+ * availability. keiko-tools frames each step to it and ends the step through it.
+ */
+export interface WindowsStepSupervisor {
+  /** A fresh verified copy; throws when the supervisor no longer matches its pin. */
+  readonly acquire: () => WindowsStepSupervisorCopy;
+  /** Absolute read-only directories a step's toolchains need besides its executable's own. */
+  readonly readRoots: readonly string[];
+}
 
 export interface SandboxAttestation {
   // The backend that wrapped the run; `"none"` means no isolation was applied (network: "inherit").

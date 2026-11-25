@@ -2418,6 +2418,8 @@ export type {
   OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
+  WindowsStepSupervisor,
+  WindowsStepSupervisorCopy,
   SandboxAttestation,
   CommandRule,
   CommandRunInput,

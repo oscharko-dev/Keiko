@@ -28,6 +28,7 @@ import {
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
+import type { WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -38,6 +39,8 @@ import {
   verificationDependencyFailureHandler,
   verificationTerminationHandler,
   type NetworkIsolationProbe,
+  planIsolationProbe,
+  windowsStepRunDeps,
 } from "./verificationExecution.js";
 
 function note(message: string): void {
@@ -542,4 +545,97 @@ it("records the real final targeted-project cause and forwards the same original
     platform.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+describe("planIsolationProbe (#4496)", () => {
+  const NONE = {
+    bubblewrap: false,
+    unshare: false,
+    seatbelt: false,
+    docker: false,
+    podman: false,
+  } as const;
+  const cwd = String.raw`C:\work\repo`;
+  const STEP_SUPERVISOR: WindowsStepSupervisor = {
+    acquire: () => ({ path: String.raw`C:\Temp\keiko-runtime-supervisor.exe`, release: () => 0 }),
+    readRoots: [],
+  };
+
+  it("keeps a served Docker on Windows even when the supervisor is available", () => {
+    expect(
+      planIsolationProbe(
+        cwd,
+        { ...NONE, docker: true, windowsAppContainer: true },
+        "win32",
+        () => true,
+      ),
+    ).toEqual({ available: true, backend: "container-docker" });
+  });
+
+  it("gives a Windows run whose Docker is not served to the supervisor's step backend", () => {
+    expect(
+      planIsolationProbe(
+        cwd,
+        { ...NONE, docker: true, windowsAppContainer: true },
+        "win32",
+        () => false,
+      ),
+    ).toEqual({ available: true, backend: "windows-appcontainer" });
+  });
+
+  it("prefers Podman over the step backend when Docker is not served", () => {
+    expect(
+      planIsolationProbe(
+        cwd,
+        { ...NONE, docker: true, podman: true, windowsAppContainer: true },
+        "win32",
+        () => false,
+      ),
+    ).toEqual({ available: true, backend: "container-podman" });
+  });
+
+  it("refuses a Docker that is not served where no step backend exists, exactly as before", () => {
+    expect(planIsolationProbe(cwd, { ...NONE, docker: true }, "win32", () => false)).toEqual({
+      available: false,
+      backend: "container-docker",
+    });
+    expect(
+      planIsolationProbe("/work/repo", { ...NONE, docker: true }, "darwin", () => false),
+    ).toEqual({ available: false, backend: "container-docker" });
+  });
+
+  it("runs on the step backend without any container runtime and refuses without it", () => {
+    expect(
+      planIsolationProbe(cwd, { ...NONE, windowsAppContainer: true }, "win32", () => false),
+    ).toEqual({
+      available: true,
+      backend: "windows-appcontainer",
+    });
+    expect(planIsolationProbe(cwd, NONE, "win32", () => false)).toMatchObject({ available: false });
+  });
+
+  it("hands the steps the backends the probe planned with, so an unserved Docker never takes them", () => {
+    const probe = { available: true, backend: "windows-appcontainer" } as const;
+    const installed = { ...NONE, docker: true };
+    const deps = windowsStepRunDeps(probe, STEP_SUPERVISOR, installed);
+    expect(deps.enforcedNetworkAvailable).toBe(true);
+    expect(deps.sandboxAvailability).toBeDefined();
+    expect(
+      sandbox.planIsolatedRun(
+        { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
+        deps.sandboxAvailability ?? installed,
+        "win32",
+      ).attestation.backend,
+    ).toBe("windows-appcontainer");
+  });
+
+  it("refuses the run when the supervisor the probe saw is gone when the steps start", () => {
+    const probe = { available: true, backend: "windows-appcontainer" } as const;
+    expect(windowsStepRunDeps(probe, undefined, NONE)).toEqual({ enforcedNetworkAvailable: false });
+  });
+
+  it("leaves every other backend's run as the probe found it", () => {
+    const probe = { available: true, backend: "container-docker" } as const;
+    expect(windowsStepRunDeps(probe, undefined, NONE)).toEqual({ enforcedNetworkAvailable: true });
+  });
 });

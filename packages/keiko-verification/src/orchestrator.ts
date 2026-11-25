@@ -81,6 +81,12 @@ export interface VerificationDeps {
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
   readonly sandboxAvailability?: RunCommandDeps["sandboxAvailability"] | undefined;
   readonly platform?: RunCommandDeps["platform"] | undefined;
+  // #4496: the pinned Windows runtime supervisor, which runs each step in a per-run AppContainer.
+  readonly windowsStepSupervisor?: RunCommandDeps["windowsStepSupervisor"] | undefined;
+  // #4496: the workspace the steps run in, when it is not `workspace` itself: a private copy that
+  // leaves credential-named entries out. Asked for at each step, after the dependency bootstrap
+  // installed into `workspace`, so the first step's request makes the copy and the others share it.
+  readonly stepWorkspace?: (() => WorkspaceInfo) | undefined;
   // Egress-enforcement policy for `network:"none"` steps. Default is "enforce-or-fail-closed": a
   // no-network verification step does not execute unless the caller attests an enforcing backend.
   readonly networkEnforcement?: NetworkEnforcementMode | undefined;
@@ -492,7 +498,7 @@ function buildRunDeps(
   network: NetworkPolicy,
 ): RunCommandDeps {
   return {
-    workspace: deps.workspace,
+    workspace: deps.stepWorkspace?.() ?? deps.workspace,
     policy: policyForStep(step.limits, network),
     commandRules: VERIFICATION_COMMAND_RULES,
     spawn,
@@ -501,10 +507,22 @@ function buildRunDeps(
     fs: deps.fs ?? nodeWorkspaceFs,
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
     ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    ...hostRunDeps(deps),
+  };
+}
+
+// The host the step runs on: its sandbox availability, platform and Windows supervisor, when given.
+function hostRunDeps(
+  deps: VerificationDeps,
+): Pick<RunCommandDeps, "sandboxAvailability" | "platform" | "windowsStepSupervisor"> {
+  return {
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),
     ...(deps.platform === undefined ? {} : { platform: deps.platform }),
+    ...(deps.windowsStepSupervisor === undefined
+      ? {}
+      : { windowsStepSupervisor: deps.windowsStepSupervisor }),
   };
 }
 

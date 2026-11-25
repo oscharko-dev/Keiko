@@ -13,6 +13,7 @@ import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
+import { Readable, Writable } from "node:stream";
 import {
   redact,
   environmentVariableValue,
@@ -22,6 +23,7 @@ import {
 import type {
   CommandTerminationEvidence,
   CommandTerminationReason,
+  WindowsStepSupervisor,
   WindowsTreeKillDisposition,
   WindowsTreeKillResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -54,6 +56,13 @@ import {
 } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
 import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
+import {
+  windowsStepFrames,
+  windowsStepLaunch,
+  windowsStepTerminateFrame,
+  WindowsStepResponses,
+  type WindowsStepLaunch,
+} from "./windows-step.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
@@ -65,6 +74,9 @@ export interface SpawnOptions {
   // every POSIX spawn and the network:"none" sandbox-wrapper branch — so it never widens what a
   // plain shell:false spawn already does.
   readonly windowsVerbatimArguments?: boolean | undefined;
+  // Set only for a `windows-appcontainer` step (#4496): descriptors 3 and 4 carry the supervisor's
+  // launch frames and its answers. Absent on every other spawn.
+  readonly stdio?: ["pipe", "pipe", "pipe", "pipe", "pipe"] | undefined;
 }
 
 export type SpawnFn = (
@@ -153,6 +165,10 @@ export interface RunCommandDeps {
   // no runCommand call on that lane can silently omit it; a per-input callback still wins when a
   // call site carries its own run-scoped correlation (review 5058544058 P1 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  // #4496 (ADR-0043 D21): the pinned Windows runtime supervisor. Its presence is the
+  // `windows-appcontainer` backend's availability; an execution-root step then runs in a per-run
+  // AppContainer without network instead of being refused for a missing container runtime.
+  readonly windowsStepSupervisor?: WindowsStepSupervisor | undefined;
 }
 
 // Body-free evidence of a termination decision, handed to the optional `onTerminated` seam below.
@@ -919,6 +935,10 @@ interface SpawnTarget {
   // A strict bubblewrap execution-root run's own home inside `cwd`, already created and mounted as
   // the child's /tmp. The run state takes it over, so it is removed when the run settles.
   readonly executionHome?: string | undefined;
+  // A `windows-appcontainer` step (#4496): what the supervisor copy in `command` is sent, and the
+  // removal of that copy. The run state takes it over.
+  readonly windowsStep?:
+    { readonly launch: WindowsStepLaunch; readonly release: () => void } | undefined;
 }
 
 // Resolves what to spawn for an INHERITED-network run (deps.policy.network !== "none"): normally
@@ -1010,7 +1030,12 @@ function resolveIsolatedSpawnTarget(
   cwd: string,
 ): SpawnTarget {
   const platform = deps.platform ?? process.platform;
-  const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  const probed = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  // The Windows backend is exactly the presence of the pinned supervisor (#4496).
+  const availability: BackendAvailability = {
+    ...probed,
+    windowsAppContainer: deps.windowsStepSupervisor !== undefined,
+  };
   const executionHome = bubblewrapExecutionHome(deps, availability, platform, cwd);
   try {
     const target = planIsolatedSpawnTarget(input, deps, executable, cwd, {
@@ -1054,6 +1079,12 @@ function releaseExecutionHome(
   if (executionHome !== undefined) executionHomeProvider(deps, cwd).cleanup(executionHome);
 }
 
+// What a target prepared before its run started: the execution home and the supervisor copy.
+function releaseSpawnTarget(deps: RunCommandDeps, cwd: string, target: SpawnTarget): void {
+  releaseExecutionHome(deps, cwd, target.executionHome);
+  target.windowsStep?.release();
+}
+
 function planIsolatedSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
@@ -1084,10 +1115,55 @@ function planIsolatedSpawnTarget(
   if (decision.kind === "passthrough") {
     return { command: executable(), args: input.args, attestation: decision.attestation };
   }
+  if (decision.attestation.backend === "windows-appcontainer") {
+    return windowsStepTarget(input, deps, executable, decision);
+  }
   return {
     command: resolveWrapperExecutable(decision.command, deps),
     args: isolatedWrapperArgs(decision, deps, cwd, input.command),
     attestation: decision.attestation,
+  };
+}
+
+function windowsStepTarget(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  executable: HostExecutable,
+  decision: Extract<ReturnType<typeof planIsolatedRun>, { kind: "wrapped" }>,
+): SpawnTarget {
+  const supervisor = deps.windowsStepSupervisor;
+  if (supervisor === undefined) {
+    throw new CommandDeniedError("the Windows step supervisor is unavailable", input.command);
+  }
+  const resolved = executable();
+  const invocation = buildWindowsShellInvocation(resolved, input.args, {
+    platform: "win32",
+    env: deps.processEnv,
+  });
+  const executionRoot = realRoot(workspaceFsOf(deps), deps.workspace.root);
+  const launch = windowsStepLaunch(
+    invocation,
+    resolved,
+    executionRoot,
+    supervisor,
+    input.command,
+    environmentVariableValue(deps.processEnv, "USERPROFILE", "win32"),
+  );
+  const copy = supervisor.acquire();
+  return {
+    command: copy.path,
+    args: decision.args,
+    attestation: decision.attestation,
+    windowsStep: { launch, release: onceOnly(copy.release) },
+  };
+}
+
+function onceOnly(action: () => void): () => void {
+  let done = false;
+  return (): void => {
+    if (done) return;
+    done = true;
+    action();
   };
 }
 
@@ -1182,6 +1258,15 @@ interface RunState {
   homeDir: string | undefined;
   homeCleaned: boolean;
   windowsTerminationReservation: WindowsTerminationReservation | undefined;
+  // A `windows-appcontainer` step (#4496): the supervisor's answers, the descriptor that ends the
+  // step, and the removal of the supervisor copy, run once when the run settles.
+  windowsStep: WindowsStepState | undefined;
+}
+
+interface WindowsStepState {
+  readonly responses: WindowsStepResponses;
+  readonly release: () => void;
+  control: NodeJS.WritableStream | undefined;
 }
 
 // Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
@@ -1292,6 +1377,7 @@ function cleanup(state: RunState, signal: AbortSignal): void {
     signal.removeEventListener("abort", state.onAbort);
   }
   state.windowsTerminationReservation?.release();
+  state.windowsStep?.release();
   // Remove the ephemeral HOME exactly once, on whichever settle path fires first (C5).
   if (!state.homeCleaned && state.home !== undefined && state.homeDir !== undefined) {
     state.homeCleaned = true;
@@ -1408,9 +1494,23 @@ function terminate(
   // deliberately did not signal, which is a different fact from a tree-kill that failed.
   const disposition = childExited(child, state)
     ? "not-attempted"
-    : killGroup(child, "SIGTERM", killDeps);
+    : firstTermination(child, state, killDeps);
   reportTermination(input, deps, reason, child.pid, disposition);
   return true;
+}
+
+// A Windows step is ended through its supervisor, which terminates the whole job, reaps it and
+// revokes the tree's grants (#4496). The grace escalation still ends the supervisor itself, whose
+// Job Object then ends every process of the step.
+function firstTermination(
+  child: ChildProcess,
+  state: RunState,
+  killDeps: KillGroupDeps,
+): WindowsTreeKillDisposition {
+  const control = state.windowsStep?.control;
+  if (control === undefined) return killGroup(child, "SIGTERM", killDeps);
+  control.write(windowsStepTerminateFrame());
+  return "not-attempted";
 }
 
 function wireStreams(
@@ -1467,18 +1567,63 @@ function settleClosedChild(
     reject(new CommandCancelledError("command cancelled"));
     return;
   }
+  const exitCode = settledExitCode(ctx, code);
+  if (exitCode instanceof Error) {
+    reject(exitCode);
+    return;
+  }
   resolve(
     buildResult({
       input: ctx.input,
       buffers: ctx.buffers,
       state: ctx.state,
-      exitCode: code,
+      exitCode,
       termSignal: signalName,
       deps: ctx.deps,
       startedAt: ctx.startedAt,
       attestation: ctx.attestation,
     }),
   );
+}
+
+// A Windows step's exit code is the one the supervisor reaped; the supervisor's own exit code only
+// says whether it could answer. A refused launch never ran the step (#4496).
+function settledExitCode(ctx: ExecContext, code: number | null): number | null | Error {
+  const step = ctx.state.windowsStep;
+  if (step === undefined) return code;
+  const answer = step.responses.answer();
+  if (answer.kind === "reaped") return answer.exitCode;
+  // A step Keiko ended itself (an output flood) whose supervisor the grace escalation ended before
+  // it reaped: the termination decides the result, as for any other ended command.
+  if (ctx.state.terminalReason !== undefined) return code;
+  // An error after the launch is no refusal: the step ran, and its outcome is unknown.
+  if (answer.kind === "refused" && !step.responses.launched()) {
+    return new CommandDeniedError(windowsStepRefusal(answer.code), ctx.input.command);
+  }
+  if (answer.kind === "refused") {
+    return new Error(
+      `the Windows step supervisor failed after the step started (${String(answer.code)})`,
+    );
+  }
+  return new Error("the Windows step supervisor ended without reporting the step's exit");
+}
+
+const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
+  [7, "a directory the step needs is missing or is a link"],
+  [
+    8,
+    "this account may not grant the step a directory it needs, such as a toolchain an " +
+      "administrator installed outside Program Files",
+  ],
+  [12, "the user environment could not be closed to the step"],
+  [16, "the Windows capabilities for listing C:\\ and C:\\Users are unavailable"],
+  [17, "the profile folders above the step's directories could not be prepared"],
+]);
+
+function windowsStepRefusal(code: number): string {
+  const reason =
+    WINDOWS_STEP_REFUSALS.get(code) ?? `the supervisor refused the launch (${String(code)})`;
+  return `Windows execution isolation refused the step: ${reason}`;
 }
 
 function settleChildProcessError(
@@ -1612,6 +1757,7 @@ function createRunState(
     homeDir,
     homeCleaned: false,
     windowsTerminationReservation,
+    windowsStep: undefined,
   };
 }
 
@@ -1651,6 +1797,7 @@ function applyHomeIsolation(
   const home = deps.home ?? executionHome(cwd, confined);
   const homeDir = target.executionHome ?? home.make();
   if (confined) prepareConfinedHome(env, cwd, homeDir);
+  if (target.windowsStep !== undefined) prepareWindowsStepHome(env, homeDir);
   env.HOME = homeDir;
   env.USERPROFILE = homeDir;
   return createRunState(home, homeDir, reservation);
@@ -1659,7 +1806,7 @@ function applyHomeIsolation(
 // The child's home lives inside its execution root: Seatbelt confines writes to that root, and
 // strict bubblewrap already mounted the run's own home there as /tmp.
 function confinedExecutionTarget(target: SpawnTarget): boolean {
-  if (target.executionHome !== undefined) return true;
+  if (target.executionHome !== undefined || target.windowsStep !== undefined) return true;
   return target.attestation?.backend === "seatbelt" && target.attestation.filesystemEnforced;
 }
 
@@ -1675,6 +1822,14 @@ function prepareConfinedHome(env: Record<string, string>, cwd: string, homeDir: 
     throw new CommandDeniedError("sandbox temporary directory escaped the execution root", "node");
   }
   env.TMPDIR = canonicalHome;
+}
+
+// The step's tree may write only its execution root, so its temporary files and npm's cache go to
+// the home inside it (#4496).
+function prepareWindowsStepHome(env: Record<string, string>, homeDir: string): void {
+  env.TEMP = homeDir;
+  env.TMP = homeDir;
+  env.npm_config_cache = join(homeDir, "npm-cache");
 }
 
 function reserveWindowsTermination(
@@ -1702,19 +1857,64 @@ function spawnChild(
   state: RunState,
 ): ChildProcess {
   try {
+    // Held first, so every refusal below releases the supervisor copy through `cleanup`.
+    if (target.windowsStep !== undefined) {
+      state.windowsStep = {
+        responses: new WindowsStepResponses(),
+        release: target.windowsStep.release,
+        control: undefined,
+      };
+    }
     if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
+    // Encoded before the spawn: a supervisor that never receives its frames is never started.
+    const frames =
+      target.windowsStep === undefined
+        ? undefined
+        : windowsStepFrames(target.windowsStep.launch, cwd, env);
     const child = deps.spawn(target.command, target.args, {
       cwd,
       env,
       shell: false,
       detached: POSIX,
       ...(target.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
+      ...(target.windowsStep === undefined ? {} : { stdio: windowsStepStdio() }),
     });
+    if (frames !== undefined && state.windowsStep !== undefined) {
+      startWindowsStep(child, state.windowsStep, frames);
+    }
     return child;
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");
   }
+}
+
+function windowsStepStdio(): ["pipe", "pipe", "pipe", "pipe", "pipe"] {
+  return ["pipe", "pipe", "pipe", "pipe", "pipe"];
+}
+
+// The supervisor reads the launch and grants from descriptor 3 and answers on descriptor 4. A
+// missing descriptor is a supervisor that cannot be governed: the spawn fails closed.
+function ignorePipeError(error: Error): Error {
+  return error;
+}
+
+function startWindowsStep(child: ChildProcess, step: WindowsStepState, frames: Buffer): void {
+  const control = child.stdio[3];
+  const answers = child.stdio[4];
+  if (!(control instanceof Writable) || !(answers instanceof Readable)) {
+    child.kill();
+    throw new Error("windows-step-supervisor-descriptors-unavailable");
+  }
+  step.control = control;
+  // A supervisor that ended or failed to start closes its pipes (`read ENOTCONN`, #4068); its
+  // answer or exit decides the step, and an unheard pipe error would end the server.
+  control.on("error", ignorePipeError);
+  answers.on("error", ignorePipeError);
+  answers.on("data", (chunk: Buffer) => {
+    step.responses.feed(chunk);
+  });
+  control.write(frames);
 }
 
 function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
@@ -1807,7 +2007,7 @@ function prepareRun(
     return { env, state: applyHomeIsolation(env, deps, reservation, target, cwd) };
   } catch (error) {
     reservation?.release();
-    releaseExecutionHome(deps, cwd, target.executionHome);
+    releaseSpawnTarget(deps, cwd, target);
     throw error;
   }
 }
@@ -1824,8 +2024,14 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
     const capacity = queuedWindowsCapacity(deps);
-    // A free slot admits synchronously, exactly as before; only a full capacity waits.
-    const immediate = capacity?.reserve(deps.processEnv);
+    let immediate: WindowsTerminationReservation | undefined;
+    try {
+      // A free slot admits synchronously, exactly as before; only a full capacity waits.
+      immediate = capacity?.reserve(deps.processEnv);
+    } catch (error) {
+      releaseSpawnTarget(deps, cwd, target);
+      throw error;
+    }
     if (capacity === undefined || immediate !== undefined) {
       return startRun(input, deps, target, cwd, immediate);
     }
@@ -1834,7 +2040,7 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
         (reservation) => startRunAfterWait(input, deps, target, cwd, reservation),
         (error: unknown) => {
           // No slot, no run: what the first target prepared is released, as on a refusal.
-          releaseExecutionHome(deps, cwd, target.executionHome);
+          releaseSpawnTarget(deps, cwd, target);
           throw error;
         },
       )
@@ -1857,7 +2063,7 @@ function startRunAfterWait(
   staleCwd: string,
   reservation: WindowsTerminationReservation,
 ): Promise<CommandResult> {
-  releaseExecutionHome(deps, staleCwd, staleTarget.executionHome);
+  releaseSpawnTarget(deps, staleCwd, staleTarget);
   try {
     if (input.signal.aborted) throw new CommandCancelledError("command cancelled before spawn");
     const executable = hostExecutable(input, deps);

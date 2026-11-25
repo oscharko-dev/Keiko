@@ -793,6 +793,27 @@ describe("runVerification — nested package steps", () => {
     expect(args).not.toContain(join(realpathSync(ws.info.root), "web/app"));
   });
 
+  it("runs every step in the step workspace when one is given, asked for at each step (#4496)", async () => {
+    const ws = makeWorkspace();
+    const copy = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    let asked = 0;
+    const report = await runVerification(planOf([step()], ws.info.root), {
+      ...depsWith(ws, rec.fn),
+      stepWorkspace: () => {
+        asked += 1;
+        return copy.info;
+      },
+    });
+
+    expect(report.results[0]?.status).toBe("passed");
+    expect(asked).toBe(1);
+    const args = rec.calls()[0]?.args ?? [];
+    expect(args).toEqual(expect.arrayContaining(["--bind", realpathSync(copy.info.root)]));
+    expect(args).not.toContain(realpathSync(ws.info.root));
+  });
+
   it("refuses a package folder that is not a directory before anything runs", async () => {
     const ws = makeWorkspace();
     ws.writeFile("web/app", "not a folder");

@@ -803,12 +803,13 @@ outcome as an optional field, declared `diagnosticWhen` for every outcome but `p
 report keeps a verification that did not pass.
 
 A verification step the orchestrator denied for want of an enforcing isolation backend (no container
-runtime on Windows, no bubblewrap, unshare or seatbelt elsewhere; ADR-0043 D20) is a host condition,
+runtime and no verified runtime supervisor on Windows, no bubblewrap, unshare or seatbelt elsewhere;
+ADR-0043 D20) is a host condition,
 not an authority or policy decision. The denial detail carries the closed prefix
 `isolation unavailable: `; the governed tool answers the model with the closed reason
 `VERIFICATION_ISOLATION_UNAVAILABLE` (not the generic `VERIFICATION_NOT_RUN`) and the step reason
 `isolation-unavailable`, and the Workbench says in one sentence that the computer has no container
-runtime, that the change is kept, and that the person can start one and verify again or check the
+runtime (and, on Windows, no verified isolation of Keiko's own), that the change is kept, and that the person can start one and verify again or check the
 change themselves. The same reason enters the run's verification ledger as a run-level blocker, so no
 verification continuation runs: no model turn can change the host. The denial stays fail closed and
 nothing runs unconfined. The run settles through the existing not-verified outcome (`failed` with

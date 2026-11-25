@@ -2678,6 +2678,11 @@ Findings:
    access at start. 5.1 reports "Requested registry access is not allowed". 7 fails in
    `ModuleIntrinsics.SetModulePath`, which reads `PSModulePath` from the registry: the user's
    `HKCU\Environment` and the machine key. The log does not say which `OpenSubKey` failed.
+   - Not measured, a likely cause (#4496): every confined tree, the step mode included, runs
+     while the supervisor's environment guard (`gateway_environment.h`) has removed the read
+     entries of `HKCU\Environment` for `ALL APPLICATION PACKAGES`, so that key is unreadable from
+     the tree by design. Lifting the guard would expose values stored with `setx`; PowerShell stays
+     a closed refusal until a measurement shows a narrower way.
 5. **An access entry cannot keep sensitive names away from a writable workspace.**
    - An explicit deny for `ALL APPLICATION PACKAGES` did not stop the tree, which also holds its
      own allow entry. The cause is not established.

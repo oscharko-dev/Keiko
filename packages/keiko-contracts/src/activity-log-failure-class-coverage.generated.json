@@ -24988,7 +24988,7 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["editor.assured-copy.completed"],
+        "state": ["editor.assured-copy.completed", "editor.verification.windows-step-copy"],
         "end": [],
         "failure": [],
         "loss": []
@@ -24997,10 +24997,14 @@
         {
           "op": "editor.assured-copy.completed",
           "mode": "correlation"
+        },
+        {
+          "op": "editor.verification.windows-step-copy",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["editor.assured-copy.completed"],
+      "resourceSignals": ["editor.assured-copy.completed", "editor.verification.windows-step-copy"],
       "replayReferences": [],
       "operations": [
         {
@@ -25036,6 +25040,48 @@
             "causeChain": false
           },
           "proofIds": ["editor.assured-copy.completed.links-skipped"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "editor.verification.windows-step-copy",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "copiedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "skippedCredentialCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "skippedLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.verification.windows-step-copy.credentials-skipped"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -47246,21 +47292,58 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["runtime.confinement.unavailable"],
+        "state": ["editor.verification.windows-step-supervisor", "runtime.confinement.unavailable"],
         "end": [],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
         {
+          "op": "editor.verification.windows-step-supervisor",
+          "mode": "correlation"
+        },
+        {
           "op": "runtime.confinement.unavailable",
           "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["runtime.confinement.unavailable"],
+      "resourceSignals": [
+        "editor.verification.windows-step-supervisor",
+        "runtime.confinement.unavailable"
+      ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "editor.verification.windows-step-supervisor",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "readRootCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "runtime.confinement.unavailable",
           "owner": "keiko-server",

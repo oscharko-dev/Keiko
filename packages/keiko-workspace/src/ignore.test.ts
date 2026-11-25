@@ -6,6 +6,7 @@ import {
 import {
   compileIgnore,
   DEFAULT_DENY_PATTERNS,
+  isCredentialNamedSegment,
   isDenied,
   isIgnored,
   isRepositoryClaudeSkillPath,
@@ -389,5 +390,39 @@ describe("isRepositoryClaudeSkillPath (the named .claude skills exception)", () 
     ".codex/skills/review/SKILL.md",
   ])("does not cover %s", (path) => {
     expect(isRepositoryClaudeSkillPath(path)).toBe(false);
+  });
+});
+
+describe("isCredentialNamedSegment (#4496)", () => {
+  it.each([
+    ".env",
+    ".ENV",
+    ".env.local",
+    "id_rsa",
+    "server.PEM",
+    ".npmrc",
+    ".ssh",
+    "keiko.config.json",
+    ".env. ",
+  ])("names %s a credential", (segment) => {
+    expect(isCredentialNamedSegment(segment)).toBe(true);
+  });
+
+  it.each([".env.example", ".git", "node_modules", "pom.xml", "src", "env", "pem"])(
+    "leaves %s to the toolchain",
+    (segment) => {
+      expect(isCredentialNamedSegment(segment)).toBe(false);
+    },
+  );
+
+  it("names every credential pattern and no tool-state pattern", () => {
+    const literal = (pattern: string): string => pattern.replaceAll("*", "x");
+    for (const pattern of CREDENTIAL_PATH_DENY_PATTERNS) {
+      expect(isCredentialNamedSegment(literal(pattern))).toBe(true);
+    }
+    const credentialHits = TOOL_STATE_PATH_DENY_PATTERNS.filter((pattern) =>
+      isCredentialNamedSegment(literal(pattern)),
+    );
+    expect(credentialHits).toEqual([]);
   });
 });

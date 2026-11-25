@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "002d8dcdb17a6cba470ab54307f53a9e9acfd8bc2654057c2433dd741e2353bf"
+    "catalogDigest": "e0fc2f0289a878af462596cf71384bad96419fffda4287ff1ed16209308c15f1"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 725,
-    "proofCount": 749,
-    "resolvedProofCount": 749,
+    "operationCount": 727,
+    "proofCount": 751,
+    "resolvedProofCount": 751,
     "failureClassCount": 417,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -699,6 +699,8 @@
         "editor.producer-turn.completed",
         "editor.verification.dependencies",
         "editor.verification.execute",
+        "editor.verification.windows-step-copy",
+        "editor.verification.windows-step-supervisor",
         "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
         "editor.workspace-watch.health-changed",
@@ -1264,7 +1266,10 @@
     "repository-fingerprint-diff": ["memory-knowledge.dependency-failure"],
     "rerank-degradation": ["memory-knowledge.dependency-failure"],
     "runtime-confinement": ["tools-workflows.dependency-failure"],
-    "runtime-confinement-unavailable": ["tools-workflows.dependency-failure"],
+    "runtime-confinement-unavailable": [
+      "editor-delivery.dependency-failure",
+      "tools-workflows.dependency-failure"
+    ],
     "runtime-git-identity": ["editor-delivery.dependency-failure"],
     "runtime-shutdown": ["lifecycle-crash.crash"],
     "security-atomic-publish": ["runtime-packages.dependency-failure"],
@@ -2212,6 +2217,12 @@
     "editor.verification.execute.emitted-line": [
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
+    ],
+    "editor.verification.windows-step-copy.credentials-skipped": [
+      "packages/keiko-server/src/editor/windowsStepWorkspace.test.ts"
+    ],
+    "editor.verification.windows-step-supervisor.emitted-line": [
+      "packages/keiko-server/src/editor/windowsStepSupervisor.test.ts"
     ],
     "editor.verification.workspace.emitted-line": [
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",

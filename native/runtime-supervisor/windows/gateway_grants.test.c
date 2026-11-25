@@ -280,6 +280,162 @@ done:
   return ok;
 }
 
+/* Two tree entries on different paths, built one after the other. */
+static size_t frame_two(unsigned char *frame, const char *first, int first_access,
+                        const char *second, int second_access) {
+  size_t at = frame_of(frame, 1, first_access, KEIKO_GRANT_TREE, first, NULL);
+  frame[12] = 2;
+  frame[at++] = (unsigned char)second_access;
+  frame[at++] = KEIKO_GRANT_TREE;
+  at += put_text(frame + at, second);
+  frame[8] = (unsigned char)(at - 12);
+  frame[9] = (unsigned char)((at - 12) >> 8);
+  return at;
+}
+
+/* Whether the folder carries exactly one entry for `sid`: explicit, not inherited, the list mask. */
+static int list_entry_only(const wchar_t *path, PSID sid) {
+  PACL dacl = NULL;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  ACL_SIZE_INFORMATION size;
+  int found = 0, other = 0;
+  if (GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, &dacl,
+                            NULL, &descriptor) != ERROR_SUCCESS)
+    return 0;
+  if (dacl != NULL && GetAclInformation(dacl, &size, sizeof(size), AclSizeInformation)) {
+    for (DWORD index = 0; index < size.AceCount; index++) {
+      ACCESS_ALLOWED_ACE *ace = NULL;
+      if (!GetAce(dacl, index, (LPVOID *)&ace) || ace == NULL ||
+          !EqualSid((PSID)&ace->SidStart, sid))
+        continue;
+      if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
+          ace->Mask == KEIKO_GATEWAY_ANCESTOR_MASK)
+        found++;
+      else
+        other++;
+    }
+  }
+  LocalFree(descriptor);
+  return found == 1 && other == 0;
+}
+
+static int child_directory(wchar_t *path, const wchar_t *parent, const wchar_t *name) {
+  if (_snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%ls\\%ls", parent, name) <= 0) return 0;
+  return CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+struct ancestor_tree {
+  wchar_t root[MAX_PATH], a[MAX_PATH], b[MAX_PATH], c[MAX_PATH], side[MAX_PATH];
+  char root_utf8[MAX_PATH * 3], a_utf8[MAX_PATH * 3], c_utf8[MAX_PATH * 3];
+};
+
+static int ancestor_tree_make(struct ancestor_tree *t) {
+  memset(t, 0, sizeof(*t));
+  return temporary_directory(t->root, L"ancestors") && child_directory(t->a, t->root, L"a") &&
+         child_directory(t->b, t->a, L"b") && child_directory(t->c, t->b, L"c") &&
+         child_directory(t->side, t->root, L"side") &&
+         WideCharToMultiByte(CP_UTF8, 0, t->root, -1, t->root_utf8, sizeof(t->root_utf8), NULL,
+                             NULL) > 0 &&
+         WideCharToMultiByte(CP_UTF8, 0, t->a, -1, t->a_utf8, sizeof(t->a_utf8), NULL, NULL) > 0 &&
+         WideCharToMultiByte(CP_UTF8, 0, t->c, -1, t->c_utf8, sizeof(t->c_utf8), NULL, NULL) > 0;
+}
+
+static void ancestor_tree_remove(struct ancestor_tree *t) {
+  const wchar_t *order[] = {t->c, t->b, t->a, t->side, t->root};
+  for (size_t index = 0; index < sizeof(order) / sizeof(order[0]); index++)
+    if (order[index][0] != L'\0') RemoveDirectoryW(order[index]);
+}
+
+/* #4496: the folders above a grant inside the profile get a list entry for the tree alone, the
+ * entry inherits nowhere, a revoke removes it, and a sweep removes a crashed run's entries. */
+static int ancestor_apply_rules(struct ancestor_tree *t, PSID tree) {
+  unsigned char frame[2048];
+  struct keiko_gateway_grants grants = {0};
+  struct keiko_gateway_sweep sweep = {0};
+  int ok = keiko_gateway_grants_parse(
+               frame, frame_of(frame, 1, KEIKO_GRANT_MODIFY, KEIKO_GRANT_TREE, t->c_utf8, NULL),
+               &grants) &&
+           keiko_gateway_ancestors_plan(&grants, t->root) && grants.ancestor_count == 3 &&
+           keiko_gateway_grants_apply(&grants, tree) == KEIKO_GRANTS_APPLIED &&
+           list_entry_only(t->root, tree) && list_entry_only(t->a, tree) &&
+           list_entry_only(t->b, tree) && entries_for(t->c, tree) == 1 &&
+           entries_for(t->side, tree) == 0;
+  if (ok) keiko_gateway_grants_revoke(&grants, tree);
+  ok = ok && entries_for(t->root, tree) == 0 && entries_for(t->a, tree) == 0 &&
+       entries_for(t->b, tree) == 0 && entries_for(t->c, tree) == 0;
+  /* A run that dies after its grants: the next run's sweep removes all four of its entries. */
+  ok = ok && keiko_gateway_grants_apply(&grants, tree) == KEIKO_GRANTS_APPLIED;
+  keiko_gateway_grants_clear(&grants);
+  ok = ok &&
+       keiko_gateway_grants_parse(
+           frame, frame_of(frame, 1, KEIKO_GRANT_MODIFY, KEIKO_GRANT_TREE, t->c_utf8, NULL),
+           &grants) &&
+       keiko_gateway_ancestors_plan(&grants, t->root);
+  sweep.grants = &grants;
+  if (ok) keiko_gateway_grants_sweep(&sweep);
+  ok = ok && sweep.removed == 4 && sweep.failed == 0 && entries_for(t->root, tree) == 0 &&
+       entries_for(t->a, tree) == 0 && entries_for(t->b, tree) == 0;
+  keiko_gateway_grants_clear(&grants);
+  return ok;
+}
+
+/* A folder a grant covers plans nothing; a grant outside the profile plans nothing; a profile in
+ * another shape and a chain deeper than the bound are refused. */
+static int ancestor_plan_rules(struct ancestor_tree *t) {
+  unsigned char frame[4096];
+  char deep[MAX_PATH * 3];
+  wchar_t trailing[MAX_PATH];
+  struct keiko_gateway_grants grants = {0};
+  size_t at;
+  int ok = keiko_gateway_grants_parse(frame, frame_two(frame, t->a_utf8, KEIKO_GRANT_READ,
+                                                       t->c_utf8, KEIKO_GRANT_MODIFY),
+                                      &grants) &&
+           keiko_gateway_ancestors_plan(&grants, t->root) && grants.ancestor_count == 1;
+  keiko_gateway_grants_clear(&grants);
+  ok = ok &&
+       keiko_gateway_grants_parse(
+           frame, frame_of(frame, 1, KEIKO_GRANT_READ, KEIKO_GRANT_TREE, t->root_utf8, NULL),
+           &grants) &&
+       keiko_gateway_ancestors_plan(&grants, t->a) && grants.ancestor_count == 0;
+  _snwprintf_s(trailing, MAX_PATH, _TRUNCATE, L"%ls\\", t->root);
+  ok = ok && !keiko_gateway_ancestors_plan(&grants, trailing) &&
+       !keiko_gateway_ancestors_plan(&grants, L"relative\\profile");
+  keiko_gateway_grants_clear(&grants);
+  at = (size_t)_snprintf_s(deep, sizeof(deep), _TRUNCATE, "%s", t->root_utf8);
+  for (int level = 0; level < KEIKO_GATEWAY_ANCESTORS_MAX + 2 && at + 3 < sizeof(deep); level++)
+    at += (size_t)_snprintf_s(deep + at, sizeof(deep) - at, _TRUNCATE, "\\d");
+  ok = ok &&
+       keiko_gateway_grants_parse(
+           frame, frame_of(frame, 1, KEIKO_GRANT_READ, KEIKO_GRANT_TREE, deep, NULL), &grants) &&
+       !keiko_gateway_ancestors_plan(&grants, t->root);
+  keiko_gateway_grants_clear(&grants);
+  return ok;
+}
+
+static int ancestor_rules(void) {
+  struct ancestor_tree tree_folders;
+  PSID tree = NULL;
+  int ok = ancestor_tree_make(&tree_folders) &&
+           SUCCEEDED(DeriveAppContainerSidFromAppContainerName(L"Keiko.Gateway.AncestorTest",
+                                                               &tree)) &&
+           ancestor_apply_rules(&tree_folders, tree) && ancestor_plan_rules(&tree_folders);
+  if (tree != NULL) FreeSid(tree);
+  ancestor_tree_remove(&tree_folders);
+  return ok;
+}
+
+/* Both Windows capabilities derive, and clearing the grants releases them. */
+static int system_capability_rules(void) {
+  struct keiko_gateway_grants grants = {0};
+  int ok = keiko_gateway_system_capabilities(&grants) && grants.system_capability_count == 2 &&
+           IsValidSid(grants.system_capabilities[0].Sid) &&
+           IsValidSid(grants.system_capabilities[1].Sid) &&
+           !EqualSid(grants.system_capabilities[0].Sid, grants.system_capabilities[1].Sid) &&
+           grants.system_capabilities[0].Attributes == SE_GROUP_ENABLED;
+  keiko_gateway_grants_clear(&grants);
+  return ok && grants.system_capability_count == 0;
+}
+
 #define CONCURRENT_RUNS 8
 #define CONCURRENT_ROUNDS 4
 
@@ -433,6 +589,8 @@ int main(void) {
   if (!missing_directory_rules()) { puts("gateway-grants-missing: failed"); return 1; }
   if (!sweep_rules()) { puts("gateway-grants-sweep: failed"); return 1; }
   if (!concurrent_rules()) { puts("gateway-grants-concurrent: failed"); return 1; }
+  if (!ancestor_rules()) { puts("gateway-grants-ancestors: failed"); return 1; }
+  if (!system_capability_rules()) { puts("gateway-grants-system-capabilities: failed"); return 1; }
   puts("gateway-grants-rules: passed");
   return 0;
 }

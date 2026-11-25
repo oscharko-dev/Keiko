@@ -465,7 +465,7 @@ describe("CodingWorkbenchTimeline", () => {
       "Cannot run here",
     );
     expect(noIsolation).toHaveTextContent(
-      "container runtime (Docker or Podman), and none is running",
+      "or, on Windows, inside its own verified isolation, and neither is available here",
     );
     expect(noIsolation).toHaveTextContent("The change is kept");
     expect(noIsolation).toHaveTextContent("run the check again, or check the change yourself");
@@ -670,7 +670,7 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("succeeded")).toContain("bestanden");
       expect(text("isolation-unavailable")).toContain("Hier nicht möglich");
       expect(text("isolation-unavailable")).toContain(
-        "Container-Laufzeit (Docker oder Podman) aus, und keine läuft",
+        "unter Windows in seiner eigenen geprüften Isolation aus, und beides ist hier nicht verfügbar",
       );
       expect(text("isolation-unavailable")).toContain("Deine Änderung bleibt erhalten");
       expect(text("dependencies-unavailable")).toContain("Abhängigkeiten fehlen");

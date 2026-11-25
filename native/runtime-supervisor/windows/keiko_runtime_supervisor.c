@@ -50,7 +50,11 @@ enum error_code {
   /* #4068: the relayed tree's AppContainer profile could not be created. */
   ERROR_RELAY_PROFILE = 14,
   /* #4068: the host side of the relay (its pipes or listener) could not be created. */
-  ERROR_RELAY_START = 15
+  ERROR_RELAY_START = 15,
+  /* #4496: the Windows capabilities that let a tree list C:\ and C:\Users could not be derived. */
+  ERROR_SYSTEM_CAPABILITIES = 16,
+  /* #4496: the profile folders above the grants could not be planned (no profile, too many). */
+  ERROR_GRANTS_ANCESTORS = 17
 };
 
 struct launch_request {
@@ -261,7 +265,11 @@ static wchar_t *append_quoted(wchar_t *output, const wchar_t *value) {
   return output;
 }
 
-static wchar_t *command_line(const struct launch_request *request, const wchar_t *executable) {
+/* `verbatim` (#4496): a verification step's arguments arrive already quoted for their image, as
+ * Node.js passes `windowsVerbatimArguments`, so the hardened `cmd.exe /d /s /c "..."` line of a
+ * command script reaches cmd.exe unchanged. Every other launch quotes each argument. */
+static wchar_t *command_line(const struct launch_request *request, const wchar_t *executable,
+                             int verbatim) {
   wchar_t **arguments = calloc(request->argument_count, sizeof(wchar_t *));
   wchar_t *line, *cursor;
   size_t length = quoted_length(executable), index;
@@ -269,14 +277,19 @@ static wchar_t *command_line(const struct launch_request *request, const wchar_t
   for (index = 0; index < request->argument_count; ++index) {
     arguments[index] = wide_string(request->arguments[index]);
     if (arguments[index] == NULL) goto failure;
-    length += 1 + quoted_length(arguments[index]);
+    length += 1 + (verbatim ? wcslen(arguments[index]) : quoted_length(arguments[index]));
   }
   line = calloc(length + 1, sizeof(wchar_t));
   if (line == NULL) goto failure;
   cursor = append_quoted(line, executable);
   for (index = 0; index < request->argument_count; ++index) {
     *cursor++ = L' ';
-    cursor = append_quoted(cursor, arguments[index]);
+    if (!verbatim) {
+      cursor = append_quoted(cursor, arguments[index]);
+      continue;
+    }
+    memcpy(cursor, arguments[index], wcslen(arguments[index]) * sizeof(wchar_t));
+    cursor += wcslen(arguments[index]);
   }
   *cursor = L'\0';
   for (index = 0; index < request->argument_count; ++index) free(arguments[index]);
@@ -449,6 +462,8 @@ struct confinement {
   struct keiko_gateway_connection *gateway;
   /* Non-NULL for a relayed launch: the relay root's plan argument. */
   const wchar_t *relay_plan;
+  /* Non-zero for a verification step: its arguments are already quoted (command_line). */
+  int verbatim_arguments;
 };
 
 static int launch_in_job(const struct launch_request *request, HANDLE job,
@@ -457,7 +472,7 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
   /* Retained through CreateProcessW, like the attribute list that points at it. */
-  SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1] = {0};
+  SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1 + KEIKO_GATEWAY_SYSTEM_CAPABILITIES] = {0};
   wchar_t *appdata = NULL;
   wchar_t self[MAX_PATH + 1];
   struct keiko_gateway_connection *gateway = confined ? confined->gateway : NULL;
@@ -473,6 +488,10 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
     for (DWORD i = 0; grants != NULL && i < grants->capability_count &&
                       i < KEIKO_GATEWAY_GRANTS_MAX; i++)
       held[capabilities.CapabilityCount++] = grants->capabilities[i];
+    /* #4496: list C:\ and C:\Users, which Node.js and Java walk to resolve a real path. */
+    for (DWORD i = 0; grants != NULL && i < grants->system_capability_count &&
+                      i < KEIKO_GATEWAY_SYSTEM_CAPABILITIES; i++)
+      held[capabilities.CapabilityCount++] = grants->system_capabilities[i];
     /* CreateProcessW refuses a capability array of length zero (ERROR_INVALID_PARAMETER). */
     capabilities.Capabilities = capabilities.CapabilityCount != 0 ? held : NULL;
     /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
@@ -486,7 +505,9 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
                          GetStdHandle(STD_ERROR_HANDLE)};
   wchar_t *executable = wide_string(request->executable);
   wchar_t *cwd = wide_string(request->cwd);
-  wchar_t *line = executable == NULL ? NULL : command_line(request, executable);
+  wchar_t *line = executable == NULL
+                      ? NULL
+                      : command_line(request, executable, confined && confined->verbatim_arguments);
   wchar_t *environment = environment_block(request, appdata);
   const wchar_t *image = executable;
   CoTaskMemFree(appdata);
@@ -704,19 +725,29 @@ static int read_relay_open(const struct launch_request *request, USHORT *gateway
   return 0;
 }
 
+/* The signed-in user's profile folder, resolved here and never taken from a packet. */
+static int plan_profile_ancestors(struct keiko_gateway_grants *grants) {
+  wchar_t *profile = NULL;
+  int planned;
+  if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &profile))) return 0;
+  planned = keiko_gateway_ancestors_plan(grants, profile);
+  CoTaskMemFree(profile);
+  return planned;
+}
+
 struct relay_container {
   wchar_t profile[64];
   PSID sid;
 };
 
 /* A fresh per-run AppContainer with no capability at all; a standard user may create it. */
-static int relay_profile_create(struct relay_container *container) {
+static int relay_profile_create(struct relay_container *container, const wchar_t *prefix) {
   static const wchar_t hex[] = L"0123456789abcdef";
   BYTE random[16];
   size_t offset;
   HRESULT result;
   if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return 0;
-  wcscpy_s(container->profile, 64, L"Keiko.Relay.");
+  wcscpy_s(container->profile, 64, prefix);
   offset = wcslen(container->profile);
   for (size_t i = 0; i < sizeof(random); i++) {
     container->profile[offset++] = hex[random[i] >> 4];
@@ -752,7 +783,9 @@ int wmain(int argc, wchar_t **argv) {
   int brokered = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
   /* #4068 (ADR-0043 D21): the same confinement without an installed broker or elevation. */
   int relayed = argc == 2 && wcscmp(argv[1], L"--relay-supervised") == 0;
-  int confined = brokered || relayed;
+  /* #4496: one verification step as the tree's root, with no relay and no network at all. */
+  int stepped = argc == 2 && wcscmp(argv[1], L"--step-supervised") == 0;
+  int confined = brokered || relayed || stepped;
   struct relay_container relay = {0};
   struct keiko_relay_plan plan = {0};
   wchar_t plan_text[KEIKO_RELAY_PLAN_CHARS];
@@ -802,7 +835,8 @@ int wmain(int argc, wchar_t **argv) {
     send_error(ERROR_GATEWAY_CONNECT);
     goto cleanup;
   }
-  if (relayed && !relay_profile_create(&relay)) {
+  if ((relayed || stepped) &&
+      !relay_profile_create(&relay, stepped ? L"Keiko.Step." : L"Keiko.Relay.")) {
     send_error(ERROR_RELAY_PROFILE);
     goto cleanup;
   }
@@ -811,6 +845,16 @@ int wmain(int argc, wchar_t **argv) {
    * must exist before the suspended root does; a refused grant refuses the launch. */
   if (confined && !keiko_gateway_grants_read(3, &grants)) {
     send_error(ERROR_GRANTS_FRAME);
+    goto cleanup;
+  }
+  /* #4496: a governed verification step only; a Coding run's tree is unchanged. Planned before
+   * the sweep, which also clears these folders of a crashed run's entries. */
+  if (stepped && !plan_profile_ancestors(&grants)) {
+    send_error(ERROR_GRANTS_ANCESTORS);
+    goto cleanup;
+  }
+  if (stepped && !keiko_gateway_system_capabilities(&grants)) {
+    send_error(ERROR_SYSTEM_CAPABILITIES);
     goto cleanup;
   }
   if (relayed) {
@@ -833,6 +877,7 @@ int wmain(int argc, wchar_t **argv) {
     confinement.relay_plan = plan_text;
   }
   confinement.sid = tree_sid;
+  confinement.verbatim_arguments = stepped;
   confinement.network_capability = brokered ? (PSID)gateway.network_capability : NULL;
   confinement.gateway = brokered ? &gateway : NULL;
   if (confined) {

@@ -69,6 +69,11 @@ own shell runs the checks there, the bootstrap installs for that shell (`host-sh
 `--no-save`, leaves a tree it did not install alone, and refuses with three closed reasons of its
 own what such an install cannot give.
 
+1.13 — #4496 records the owner's Gate G1 approval of 2026-11-25 in D20 and D21: a Windows host
+without a container runtime runs governed verification steps in the pinned supervisor's per-run
+AppContainer (`windows-appcontainer`, step mode), in a private copy of the workspace without
+credential-named entries; a host with a container runtime keeps its container path.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1203,29 +1208,35 @@ request correlation with its outcome, exit class and helper digest. The lifecycl
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.
 
-## Addendum — Windows governed verification stays container-backed (2026-11-03)
+## Addendum — Windows governed verification without a container runtime (2026-11-03, amended 2026-11-25)
 
-### D20 — No Windows-native execution-root boundary for repository verification
+### D20 — A Windows execution-root boundary for repository verification
 
-Proposed on 2026-11-03 by the #4068 assignee; pending repository-owner approval. Repository verification always requests the execution-root boundary (D9).
-Windows has no native unprivileged backend for it, so the verifier keeps its present behaviour there:
-its steps run in a container when a runtime is available and are refused when none is. Keiko does not
-build a Windows-native execution-root boundary for verification, and it does not run these steps
-unconfined on the host.
+Proposed on 2026-11-03 by the #4068 assignee as "no Windows-native boundary". The repository owner
+approved the native boundary instead at Gate G1 of #4493 on 2026-11-25 ("Go, Kind 5 starten"), and
+this section records that decision. Repository verification always requests the execution-root
+boundary (D9). On Windows the verifier selects it in this order:
 
-- **Evidence stays separate.** A container run qualifies the container-backed path. It does not
-  certify the native Windows kernel, and it satisfies no acceptance item that requires native
-  execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
-  path below the boundary and does not certify governed verification.
-- **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
-  verification. Such a run is denied and reports no pass. The orchestrator's aggregate `failed`
-  remains a failed gate, while the model and tool card use the existing not-run/denied outcome
-  when no check reached an executed failure. Real step failures, timeouts, resource ceilings and
-  failed dependency bootstrap remain distinct failures. The Workbench summary may carry an
-  optional `deniedCount` subset of its canonical non-passing `failedCount`, so blocked checks do
-  not appear as checks that ran unsuccessfully. Historical summaries without that subset retain
-  their original facts. The existing `coding-runtime.verification` not-run Activity Log evidence
-  records the closed denial reason; neither presentation nor counts grant verification authority.
+1. a container runtime, Docker before Podman, exactly as before: a host that has one keeps its
+   container path unchanged;
+2. without one, the pinned runtime supervisor's step backend (`windows-appcontainer`, D21);
+3. without that supervisor, or when its bytes miss the pin, nothing: the step is refused as
+   isolation unavailable and nothing runs unconfined on the host.
+
+- **Evidence stays separate.** A container run qualifies the container-backed path, and a step-mode
+  run qualifies the native one. Neither certifies the other. The native proof in
+  `windows-verification-loop.real.test.ts` qualifies the Windows shell path below the boundary and
+  does not certify governed verification.
+- **Refusal stays truthful.** A Windows host with neither backend cannot run governed
+  verification. Such a run is denied and reports no pass, and the model, the tool card and the
+  Workbench name both missing backends. The orchestrator's aggregate `failed` remains a failed
+  gate, while the model and tool card use the existing not-run/denied outcome when no check reached
+  an executed failure. Real step failures, timeouts, resource ceilings and failed dependency
+  bootstrap remain distinct failures. The Workbench summary may carry an optional `deniedCount`
+  subset of its canonical non-passing `failedCount`, so blocked checks do not appear as checks that
+  ran unsuccessfully. Historical summaries without that subset retain their original facts. The
+  existing `coding-runtime.verification` not-run Activity Log evidence records the closed denial
+  reason; neither presentation nor counts grant verification authority.
 - **Scope.** This decides repository verification only. It does not decide the Windows tool profile
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the
@@ -1275,5 +1286,36 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   (`gateway_relay.test.c`), the grant rules (`gateway_grants.test.c`) and an end-to-end proof
   (`scripts/testing/test-windows-relay-confinement.mjs`): the tree reaches the attested port
   through its pipe and is refused the host gateway port directly and the internet.
-- **Scope.** D20 is unchanged: governed repository verification on Windows stays container-backed,
-  as it is on macOS. D13 still holds.
+- **Step mode (#4496, Gate G1 of #4493, owner approval of 2026-11-25).** The same supervisor runs
+  one governed verification step with `--step-supervised`. keiko-tools frames it a KRP1 launch and
+  KGG1 grants on descriptor 3 and reads KRS1 answers on descriptor 4. The supervisor creates a
+  per-run profile (`Keiko.Step.<32 hex>`) without a network capability, so the step reaches neither
+  the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
+  kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
+  - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
+    modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
+    existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
+    grants, and no grant may hold the whole user profile. The step's `TEMP`, `TMP` and npm cache
+    stay inside the execution root.
+  - **The profile path (step mode only; a Coding run's tree is unchanged).** The tree's token carries `isolatedWin32-volumeRootMinimal` and
+    `isolatedWin32-profilesRootMinimal`, and the supervisor writes non-inherited list entries
+    (list, traverse, read attributes, synchronize) for the tree's SID on each profile folder between
+    the user profile and a grant's parent. The grant revocation and the sweep remove them with the
+    grants. Such an entry reveals the names, sizes and timestamps of that folder's entries, never
+    their contents.
+  - **Credential-named files.** An access entry cannot keep a credential-named file away from a
+    tree that may modify the workspace (#4493 finding 5). The steps of one run therefore share a
+    private copy of the workspace, made after the dependency bootstrap, that leaves out every entry
+    whose name the shared credential list (`CREDENTIAL_PATH_DENY_PATTERNS`) matches and every link;
+    the run removes it when it ends. The copy is shared with the assured pre-filter
+    (`linkFreeCopy.ts`), and `editor.verification.windows-step-copy` records its counts.
+  - **Closed refusals.** A grant the user may not write (a toolchain an administrator installed
+    outside `Program Files`), a protected environment, a missing system capability and more than
+    32 profile folders to list across the grants refuse the step with a closed reason. Windows PowerShell 5.1 and
+    PowerShell 7 fail inside the tree on registry access, and a Node.js child that opens pipes
+    hangs until a Node.js release ships libuv 1.53 (#4493); both are recorded limitations, not
+    silent failures.
+  - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
+    Windows Coding run and hands each step a private copy written from those bytes;
+    `editor.verification.windows-step-supervisor` records whether it is available.
+- **Scope.** D13 still holds.

@@ -105,6 +105,12 @@ export interface BackendAvailability {
   readonly seatbelt: boolean;
   readonly docker: boolean;
   readonly podman: boolean;
+  /**
+   * #4496 (ADR-0043 D21): a verified, pinned Windows runtime supervisor can confine an
+   * execution-root step. Never read from `PATH`: `probeBackends` reports false, and only a
+   * composition that holds the pinned supervisor (keiko-server) sets it.
+   */
+  readonly windowsAppContainer?: boolean | undefined;
 }
 
 // A command to run under isolation. `cwd` must already be a real, workspace-contained directory:
