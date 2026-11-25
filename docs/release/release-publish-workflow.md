@@ -340,10 +340,12 @@ published, a Windows npm installation reports `npm-runtime-package-missing`.
 
 **One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
 carries exactly the Windows helper and supervisor of the portable release. The secure-read helper
-`8699612e…` (128,512 bytes) and the pipe-relay supervisor `8966ba37…` (252,416 bytes, source tree
-`718efc73…`) are the bytes the 1.5.4 release build shipped at `d88ac1cb8…` (runner image
-`windows-2025-vs2026` 20261116, `/Brepro`); the supervisor was first built by the
-`relay-confinement` job of `windows-gateway-confinement.yml` (#4068). `npmLaneRuntimeApprovals.ts`
+`8699612e…` (128,512 bytes) is the helper the 1.5.4 release build shipped at `d88ac1cb8…` (runner
+image `windows-2025-vs2026` 20261116, `/Brepro`). The supervisor was first built by the
+`relay-confinement` job of `windows-gateway-confinement.yml` (#4068); its step mode (#4496) changed
+its source, and the pin `a9841962…` (255,488 bytes, source tree `feef6637…`) is the byte set the
+`portable-assets.yml` evaluation build compiled at `fef14e7ef`. A Windows runtime package that
+carries it must be published before an npm installation can use it. `npmLaneRuntimeApprovals.ts`
 pins the npm lane and the desktop package to those bytes, and `npmLaneRuntimeApprovals.test.ts`
 fails when the npm and portable Windows pins diverge.
 
