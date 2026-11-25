@@ -3148,8 +3148,14 @@ describe("CodingRuntimeOrchestrator", () => {
   // #4492: a recreated repository invalidated the active workspace, the start answered
   // `authority-resolution-failed`, and the log named no cause. Each scope gap now has its reason.
   it.each([
-    ["conversation-not-admitted", { admits: () => false, previousRunId: () => undefined }],
-    ["prior-run-missing", { admits: () => true, previousRunId: () => "run-unknown" }],
+    [
+      "conversation-not-admitted",
+      { admits: (): boolean => false, previousRunId: (): string | undefined => undefined },
+    ],
+    [
+      "prior-run-missing",
+      { admits: (): boolean => true, previousRunId: (): string | undefined => "run-unknown" },
+    ],
   ] as const)("names the start scope gap %s in its diagnostic", async (gap, history) => {
     const captured = captureDiagnostics();
     const f = fixtureFrom({ diagnostics: captured.diagnostics, history: history as never });
@@ -8675,6 +8681,17 @@ describe("verification truth at task settlement", () => {
         state: "failed",
         failureCode: "verification-not-evidenced",
       });
+    });
+  });
+
+  it("settles a follow-up of an unverified change that runs no check as succeeded", async () => {
+    const { f, finish } = await followUpOf({
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+    });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
   });
 

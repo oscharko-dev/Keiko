@@ -4622,7 +4622,10 @@ export class CodingRuntimeOrchestrator {
       active,
       principal,
       request: this.continuedIssueRequest(request, prior),
-      unverifiedPredecessor: prior.failureCode === "verification-not-evidenced",
+      // The debt also survives a follow-up that ran no check, was stopped or failed otherwise.
+      unverifiedPredecessor:
+        prior.failureCode === "verification-not-evidenced" ||
+        this.effort.carriesVerificationDebt(prior.runId),
     };
   }
 
