@@ -5,7 +5,10 @@
 // grants, the PATH inside the tree and the steps; docs/qa/opencode-windows-qualification.md records
 // the plans run and their results.
 //
-//   node scripts/testing/probe-windows-project-commands.mjs --helper <supervisor.exe> --plan <plan.json> --out <report.json>
+//   node scripts/testing/probe-windows-project-commands.mjs --helper <supervisor.exe> --plan <plan.json> --out <report.json> [--unconfined]
+//
+// `--unconfined` runs the same runner, plan, account and environment without the supervisor: the
+// control every confined result is read against.
 //
 // Plan: { "grants": [{ "access": "read" | "modify", "path": "C:\\..." }], "path": ["C:\\..."],
 //         "env": { "NAME": "value" }, "cwd": "C:\\...",
@@ -33,16 +36,17 @@ import {
 const DEADLINE_MS = 30 * 60_000;
 const OUTPUT_HEAD = 240;
 
-// Runs inside the tree: every step in order, synchronously, then announces a port so the host knows
-// the results file is complete. The supervisor keeps the tree alive until the host terminates it.
+// Runs inside the tree: every step in order, synchronously. It appends a start line and then a result
+// line per step, so a step that never returns is still named, and finally announces a port so the
+// host knows the results are complete. The supervisor keeps the tree alive until the host ends it.
 const RUNNER_SOURCE = String.raw`const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const head = (value) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, ${OUTPUT_HEAD});
 const fault = (error) => (error === undefined ? undefined : error.code ?? error.message);
-// Output goes to files, never to pipes: inside an AppContainer, libuv's anonymous stdio pipes are
-// named pipes it may not create, and it retries that refusal without end (#4493).
+// Output goes to files, never to pipes: a child with stdio pipes never started inside the tree
+// (#4493). libuv creates those pipes as named pipes, which the tree may not create.
 function command(step) {
   const started = Date.now();
   const paths = ["out", "err"].map((name) => require("node:path").join(process.env.TEMP, step.id + "." + name));
@@ -71,12 +75,10 @@ function detached(step) {
   } catch (error) { return { ok: false, error: fault(error) }; }
 }
 const run = (step) => (step.kind === undefined ? command(step) : step.kind === "detached" ? detached(step) : file(step));
-const progress = process.argv[3] + ".progress";
-const results = plan.steps.map((step) => {
-  fs.appendFileSync(progress, step.id + "\n");
-  return { id: step.id, ...run(step) };
-});
-fs.writeFileSync(process.argv[3], JSON.stringify(results));
+for (const step of plan.steps) {
+  fs.appendFileSync(process.argv[3], JSON.stringify({ id: step.id, started: true }) + "\n");
+  fs.appendFileSync(process.argv[3], JSON.stringify({ id: step.id, ...run(step) }) + "\n");
+}
 const server = http.createServer((req, res) => res.end("done"));
 server.listen(0, "127.0.0.1", () => console.log("opencode server listening on http://127.0.0.1:" + server.address().port));
 `;
@@ -89,15 +91,23 @@ function argument(name) {
   return value;
 }
 
+function readPlan(path) {
+  const plan = JSON.parse(readFileSync(path, "utf8"));
+  const ids = plan.steps.map((step) => step.id);
+  if (new Set(ids).size !== ids.length) throw new Error("every step needs its own id");
+  return plan;
+}
+
 // Plan values name the run's state as `${state}`, the account's profile as `${home}` and this run's
 // marker as `${marker}`, so one plan runs unchanged for any account on any machine.
 function substitute(value, state, marker) {
-  const escaped = (path) => path.replaceAll("\\", "\\\\");
+  // A function replacer, so a `$` in a path is never read as a replacement pattern.
+  const literal = (path) => () => path.replaceAll("\\", "\\\\");
   return JSON.parse(
     JSON.stringify(value)
-      .replaceAll("${state}", escaped(state))
-      .replaceAll("${home}", escaped(homedir()))
-      .replaceAll("${marker}", marker),
+      .replaceAll("${state}", literal(state))
+      .replaceAll("${home}", literal(homedir()))
+      .replaceAll("${marker}", literal(marker)),
   );
 }
 
@@ -132,7 +142,7 @@ function stage(helper, root, rawPlan, gatewayPort) {
   copyFileSync(process.execPath, join(runtime, "node.exe"));
   writeFileSync(join(runtime, "runner.js"), RUNNER_SOURCE);
   writeFileSync(join(runtime, "plan.json"), JSON.stringify(plan));
-  const results = join(state, "results.json");
+  const results = join(state, "results.jsonl");
   const args = ["--preserve-symlinks-main", "--preserve-symlinks", join(runtime, "runner.js")];
   const grants = [
     { access: GRANT_READ, path: runtime },
@@ -151,30 +161,62 @@ function stage(helper, root, rawPlan, gatewayPort) {
     treeEnvironment(plan, state),
   );
   const frames = Buffer.concat([launch, grantsFrame(grants), openFrame(handle, gatewayPort)]);
-  return { supervisor, frames, results, plan, marker: handle };
+  const direct = {
+    executable: join(runtime, "node.exe"),
+    args: [...args, join(runtime, "plan.json"), results],
+    cwd: plan.cwd ?? state,
+    env: Object.fromEntries(treeEnvironment(plan, state)),
+  };
+  return { supervisor, frames, results, plan, marker: handle, direct };
 }
 
-function announced(child) {
+function announced(child, exited) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
       if (/http:\/\/127\.0\.0\.1:\d+/u.test(stdout)) resolve();
     });
-    child.on("exit", (code) =>
+    void exited.then((code) =>
       reject(new Error(`supervisor exited before the runner finished: ${String(code)}`)),
     );
   });
 }
 
-// Processes still running with this run's marker on their command line after the tree was ended.
-function markedSurvivors(marker) {
-  // Split, so the query's own command line never carries the marker it counts.
+// Each step's last line wins: a step with only its start line never returned.
+// A runner that never reached its first step wrote no results file.
+function readText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+function readSteps(path) {
+  const text = readText(path);
+  const steps = new Map();
+  for (const line of text.split("\n").filter((entry) => entry !== "")) {
+    const step = JSON.parse(line);
+    steps.set(step.id, step);
+  }
+  return [...steps.values()];
+}
+
+// Processes running with this run's marker on their command line. A process whose command line the
+// account cannot read is not counted.
+function marked(marker, action) {
+  // Split, so the query's own command line never carries the marker it looks for.
   const pattern = `('*' + '${marker.slice(0, 8)}' + '${marker.slice(8)}' + '*')`;
-  const query = `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ${pattern} }).Count`;
-  const run = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", query], {
+  const query = `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ${pattern} }) | ${action}`;
+  return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", query], {
     encoding: "utf8",
   });
+}
+
+function markedProcesses(marker) {
+  const run = marked(marker, "Measure-Object | ForEach-Object Count");
   return run.status === 0 ? Number(run.stdout.trim()) : `query-failed:${String(run.status)}`;
 }
 
@@ -182,34 +224,57 @@ function alive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.code !== "ESRCH";
   }
 }
 
-async function supervise(staged) {
-  const child = spawn(staged.supervisor, ["--relay-supervised"], {
-    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+function processCensus(steps, marker) {
+  const pids = steps.flatMap((step) => (step.pid === undefined ? [] : [step.pid]));
+  return { detachedAlive: pids.filter((pid) => alive(pid)), marked: markedProcesses(marker) };
+}
+
+function launch(staged, unconfined) {
+  if (!unconfined)
+    return spawn(staged.supervisor, ["--relay-supervised"], {
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+    });
+  const { executable, args, cwd, env } = staged.direct;
+  const system = process.env.SystemRoot ?? String.raw`C:\Windows`;
+  return spawn(executable, args, {
+    cwd,
+    env: { ...env, SystemRoot: system, LOCALAPPDATA: process.env.LOCALAPPDATA ?? "" },
+    stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+async function supervise(staged, unconfined) {
+  const child = launch(staged, unconfined);
+  const exited = new Promise((resolve) => child.once("exit", resolve));
   let stderr = "";
   child.stderr.on("data", (chunk) => (stderr += String(chunk)));
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   try {
-    child.stdio[3].write(staged.frames);
-    await announced(child);
-    const steps = JSON.parse(readFileSync(staged.results, "utf8"));
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    child.stdio[3].write(terminateFrame());
-    const supervisorExit = await exited;
-    const survivors = steps.filter((step) => step.pid !== undefined && alive(step.pid));
-    return {
-      supervisorExit,
-      steps,
-      survivingDetachedPids: survivors.map((step) => step.pid),
-      markedSurvivors: markedSurvivors(staged.marker),
-    };
+    if (!unconfined) child.stdio[3].write(staged.frames);
+    await announced(child, exited);
+    const steps = readSteps(staged.results);
+    // Counted before and after the tree ends, so "none survived" also shows something was running.
+    const beforeEnd = processCensus(steps, staged.marker);
+    if (unconfined) child.kill();
+    else child.stdio[3].write(terminateFrame());
+    const supervisorExit = unconfined ? 0 : await exited;
+    const afterEnd = processCensus(steps, staged.marker);
+    // Without the tree's Job Object nothing ends a marked process; the control ends them itself.
+    if (unconfined)
+      marked(staged.marker, "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }");
+    return { supervisorExit, steps, beforeEnd, afterEnd };
   } catch (error) {
-    return { failure: error.message, supervisorStderr: stderr.slice(0, 2000) };
+    // A killed supervisor cannot revoke its grants; the next run's stale-entry sweep removes them.
+    return {
+      failure: error.message,
+      steps: readSteps(staged.results),
+      supervisorStderr: stderr.slice(0, 2000),
+    };
   } finally {
     clearTimeout(deadline);
     if (child.exitCode === null) child.kill();
@@ -221,23 +286,25 @@ async function main() {
     console.log("probe-windows-project-commands: SKIP (requires native Windows)");
     return;
   }
-  const plan = JSON.parse(readFileSync(argument("--plan"), "utf8"));
+  const [helper, plan, out] = [
+    argument("--helper"),
+    readPlan(argument("--plan")),
+    argument("--out"),
+  ];
   const root = mkdtempSync(join(tmpdir(), "keiko-project-commands-"));
   const gateway = createServer((_request, response) => response.end("gateway"));
   await new Promise((resolve) => gateway.listen(0, "127.0.0.1", resolve));
   try {
-    const staged = stage(argument("--helper"), root, plan, gateway.address().port);
-    const outcome = await supervise(staged);
-    const report = {
-      osRelease: release(),
-      arch: process.arch,
-      user: process.env.USERNAME,
-      ...outcome,
-    };
-    writeFileSync(argument("--out"), `${JSON.stringify(report, undefined, 2)}\n`);
-    for (const step of report.steps ?? []) console.log(JSON.stringify(step));
+    const staged = stage(helper, root, plan, gateway.address().port);
+    const unconfined = process.argv.includes("--unconfined");
+    const outcome = { confined: !unconfined, ...(await supervise(staged, unconfined)) };
+    const report = { osRelease: release(), arch: process.arch, ...outcome };
+    writeFileSync(out, `${JSON.stringify(report, undefined, 2)}\n`);
+    for (const step of report.steps) console.log(JSON.stringify(step));
+    const failure = report.failure ?? (report.supervisorExit === 0 ? undefined : "supervisor-exit");
+    if (failure !== undefined) process.exitCode = 1;
     console.log(
-      `probe-windows-project-commands: ${report.failure === undefined ? "DONE" : `FAILED ${report.failure}`}`,
+      `probe-windows-project-commands: ${failure === undefined ? "DONE" : `FAILED ${failure}`}`,
     );
   } finally {
     gateway.close();

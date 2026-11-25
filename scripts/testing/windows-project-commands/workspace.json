@@ -111,16 +111,6 @@
       "args": ["-e", "setInterval(()=>{},1000)", "${marker}"]
     },
     {
-      "id": "watcher-start-b",
-      "file": "C:\\Windows\\System32\\cmd.exe",
-      "args": [
-        "/d",
-        "/s",
-        "/c",
-        "start \"\" /b \"C:\\Program Files\\nodejs\\node.exe\" -e \"setInterval(()=>{},1000)\" ${marker}"
-      ]
-    },
-    {
       "id": "outside-workspace-write",
       "kind": "write",
       "path": "${home}\\keiko-4493\\outside.txt"

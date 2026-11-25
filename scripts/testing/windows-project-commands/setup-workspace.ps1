@@ -7,7 +7,9 @@ param([Parameter(Mandatory)][string]$NodeSource, [Parameter(Mandatory)][string]$
 $ErrorActionPreference = "Stop"
 $root = Join-Path $env:USERPROFILE "keiko-4493"
 $ws = Join-Path $root "ws"
-if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+# rmdir through \\?\ removes the limit plan's path beyond MAX_PATH and its junctions, not their targets.
+if (Test-Path $root) { & cmd.exe /d /c rmdir /s /q ("\\?\" + $root) }
+if (Test-Path $root) { throw "could not remove $root" }
 New-Item -ItemType Directory -Path $ws | Out-Null
 Set-Content -Path (Join-Path $ws "package.json") -Encoding ascii -Value '{ "name": "probe-4493", "version": "1.0.0", "private": true, "scripts": { "test": "node test.js" } }'
 Set-Content -Path (Join-Path $ws "test.js") -Encoding ascii -Value 'require("node:fs").writeFileSync("out.txt", "tests passed\n"); console.log("1 test passed");'
@@ -16,6 +18,8 @@ $denied = Join-Path $ws ".env.denied"
 Set-Content -Path $denied -Encoding ascii -Value "PROBE_VALUE=denied"
 # S-1-15-2-1 is ALL APPLICATION PACKAGES: an explicit deny for every AppContainer, read and write.
 & icacls.exe $denied /deny "*S-1-15-2-1:(R,W)" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls could not add the deny entry ($LASTEXITCODE)" }
+& icacls.exe $denied
 Push-Location $ws
 & $Git init -q -b main
 & $Git -c user.name=Probe -c user.email=probe@keiko.invalid -c commit.gpgsign=false add package.json test.js

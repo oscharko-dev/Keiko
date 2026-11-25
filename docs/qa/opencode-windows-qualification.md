@@ -2555,74 +2555,100 @@ publication, when naming the package becomes true.
 ## Project commands inside the per-run AppContainer (#4493, 2026-11-25)
 
 These experiments answer whether the per-run AppContainer plus Job Object of ADR-0043 D21 can host
-project commands for a standard user, the question behind ADR-0043 D20. The proof is
-`scripts/testing/probe-windows-project-commands.mjs`. It speaks the server's wire protocol
-(`scripts/testing/lib/windows-relay-frames.mjs`, shared with the relay confinement proof) to the
-published `keiko-runtime-supervisor.exe --relay-supervised`, so it needs no service and no
-elevation. It runs the steps of a plan inside the tree and records each result. It also counts
-every marked process still alive after the tree ends. The plans and the workspace setup are in
-`scripts/testing/windows-project-commands/`.
+project commands for a standard user, the question behind ADR-0043 D20.
 
-Machine and conditions:
+The proof is `scripts/testing/probe-windows-project-commands.mjs`:
+
+- It speaks the server's KRP1/KGG1/KGB1/KRC1 framing to the published
+  `keiko-runtime-supervisor.exe --relay-supervised`, so it needs no service and no elevation. The
+  framing lives in `scripts/testing/lib/windows-relay-frames.mjs`, shared with the relay
+  confinement proof, which passed again as the standard user after the move. The KGB1 policy
+  fields stay zero.
+- It runs a plan's steps inside the tree and records each result. A step that never returns is
+  named by its start line.
+- It counts the processes that carry the run's marker before and after the tree ends. The
+  supervisor's container relay carries it as well.
+- `--unconfined` runs the same runner, plan, account and environment without the supervisor. That
+  is the control column below.
+- The plans and the setup scripts are in `scripts/testing/windows-project-commands/`. Their
+  toolchain paths are this machine's and must be adjusted on another one.
+
+Machine, account and tree:
 
 - Machine: Windows 11 IoT Enterprise LTSC 2024, ARM64, build 26100.9974, hardware-virtualized on
   Apple silicon.
 - Account: the standard user `kstd` on its signed-in desktop, started as "Run as different user".
-- Supervisor: runtime package 1.1.7 (x64).
-- Tree: no network capability. Its private state (`HOME`, `USERPROFILE`, `TEMP`, npm cache) is
-  writable for the tree, and so are the workspace and its linked worktree when a plan grants them.
+- Supervisor: runtime package 1.1.7. It is x64, so it runs emulated.
+- Tree: the `--relay-supervised` profile, `Keiko.Relay.<random>`, with no capability and no
+  network. Its private state (`HOME`, `USERPROFILE`, `TEMP`, npm cache) is writable for the tree,
+  and so are the workspace and its linked worktree when a plan grants them.
+- Processes: the runner inside the tree is native ARM64 Node.js 26.13.1. The `node.exe` the steps
+  call is the x64 build, emulated.
 
-The runner inside the tree is native ARM64 Node.js 26.13.1. The `node.exe` the steps call is the
-x64 build under emulation. Results that depend on an x64 child stay indicative until they are
-repeated on x64 hardware; the named-pipe result came from native ARM64 processes as well.
+The named-pipe result holds for native ARM64 processes. Every result still needs the repeat on x64
+hardware.
 
-| Area            | Step inside the tree                                                                                         | Result                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Shell           | `cmd.exe /d /s /c ver`; `exit 7`                                                                             | exit 0; exit 7 (exit codes propagate)                                                                      |
-| Shell           | `cmd.exe /d /s /c "ver \| findstr Windows"`                                                                  | output arrives, but the exit status is `0xC0000008` (invalid handle); 0 for the same call outside the tree |
-| Shell           | Windows PowerShell 5.1 `-NoProfile -NonInteractive`                                                          | does not start: "Requested registry access is not allowed"                                                 |
-| Node.js         | `node.exe -v` under `Program Files`                                                                          | runs; `ALL APPLICATION PACKAGES` inherits read and execute there                                           |
-| Node.js         | `node.exe -v` placed by an administrator outside `Program Files`, no grant                                   | `ENOENT` (not visible to the tree)                                                                         |
-| Node.js         | the same with a read grant                                                                                   | the supervisor refuses the launch: a standard user cannot edit that folder's DACL                          |
-| Node.js         | per-user Node.js and the folder package's Node.js, no grant / read grant                                     | `ENOENT` / runs                                                                                            |
-| npm             | `npm.cmd -v`, `npx.cmd --version`, `npm test`                                                                | fail at start: Node.js `realpath` stats `C:\`, which the tree may not read (`EPERM`)                       |
-| npm             | the same with `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`                                    | run; `npm test` runs the project script and writes to the workspace                                        |
-| npm             | `npm install` of a registry package                                                                          | `ENOTFOUND`: no network, as designed                                                                       |
-| Child processes | Node.js `spawnSync` with default stdio pipes, `execSync`, `fork` with IPC                                    | never return; ended by the probe's timeout                                                                 |
-| Child processes | Node.js `spawnSync` with inherited handles                                                                   | runs                                                                                                       |
-| Child processes | Node.js named pipe server under `\\.\pipe\` and `\\.\pipe\LOCAL\`                                            | `EACCES`                                                                                                   |
-| Child processes | `cmd.exe start "" /b …`                                                                                      | "Access is denied."                                                                                        |
-| Process tree    | a detached Node.js child, then the tree is ended                                                             | no survivor                                                                                                |
-| Git             | `git status`, `git diff`, `git log` in a clone and in its linked worktree (Git 2.56.1 under `Program Files`) | run                                                                                                        |
-| Files           | write outside the granted workspace; list the profile or `Documents`                                         | `EPERM`                                                                                                    |
-| Sensitive names | read `.env` in a writable workspace                                                                          | readable                                                                                                   |
-| Sensitive names | read and write `.env.denied`, which carries an explicit deny for `ALL APPLICATION PACKAGES`                  | both succeed: the deny entry does not hold against the tree's own allow entry                              |
-| Sensitive names | a `.env*` file created or renamed after the launch                                                           | readable                                                                                                   |
+| Area            | Step inside the tree                                                                                                                         | Tree                                                                                                                  | Control                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Shell           | `cmd.exe /d /s /c ver`; `exit 7`                                                                                                             | exit 0; exit 7                                                                                                        | same                                  |
+| Shell           | `cmd.exe /d /s /c "ver \| findstr Windows"`                                                                                                  | output arrives, exit `0xC0000008` (invalid handle)                                                                    | exit 0                                |
+| Shell           | Windows PowerShell 5.1 `-NoProfile -NonInteractive`                                                                                          | does not start: "Requested registry access is not allowed"                                                            | runs                                  |
+| Node.js         | `node.exe -v` under `Program Files`; the file carries an inherited `ALL APPLICATION PACKAGES` read-and-execute entry                         | runs                                                                                                                  | runs                                  |
+| Node.js         | `node.exe -v` that an administrator placed outside `Program Files`, no grant                                                                 | `ENOENT`                                                                                                              | runs                                  |
+| Node.js         | the same with a read grant                                                                                                                   | the supervisor exits 1 before the runner starts; `icacls /grant` on that folder as the same user: "Access is denied." | —                                     |
+| Node.js         | per-user Node.js and the folder package's Node.js, without / with a read grant                                                               | `ENOENT` / runs                                                                                                       | runs                                  |
+| npm             | `npm.cmd -v`, `npx.cmd --version`, `npm test`                                                                                                | exit 1: Node.js `realpath` gets `EPERM` on `lstat C:\`                                                                | run                                   |
+| npm             | the same with `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`                                                                    | run; `npm test` writes its output into the workspace                                                                  | run                                   |
+| npm             | `npm install` of a registry package (with that option)                                                                                       | `ENOTFOUND`                                                                                                           | installs                              |
+| Child processes | Node.js `spawnSync` with default stdio pipes, `execSync`, `fork` with IPC                                                                    | never return; ended by the probe's timeout                                                                            | run                                   |
+| Child processes | Node.js `spawnSync` with inherited handles                                                                                                   | runs                                                                                                                  | runs                                  |
+| Child processes | Node.js named pipe server under `\\.\pipe\` and `\\.\pipe\LOCAL\`                                                                            | `EACCES`                                                                                                              | —                                     |
+| Process tree    | a detached Node.js child that is alive before the tree ends                                                                                  | gone after the end                                                                                                    | still alive (the control ends it)     |
+| Git             | `git status`, `git diff`, `git log` in a clone and its linked worktree (Git 2.56.1 under `Program Files`)                                    | run                                                                                                                   | run                                   |
+| Git             | the same in a folder that is not a repository                                                                                                | `fatal: failed to stat '<parent>': Permission denied`                                                                 | `not a git repository`                |
+| Files           | write outside the granted workspace; list the profile or `Documents`                                                                         | `EPERM`                                                                                                               | allowed                               |
+| Files           | a file below a path longer than `MAX_PATH` (read and write through Node.js)                                                                  | works                                                                                                                 | works                                 |
+| Files           | the same through `cmd type`                                                                                                                  | "The system cannot find the path specified."                                                                          | same                                  |
+| Files           | a junction inside the workspace to a folder inside it                                                                                        | readable                                                                                                              | readable                              |
+| Files           | a junction inside the workspace to a folder outside it                                                                                       | `EPERM`                                                                                                               | allowed                               |
+| Files           | `npm test` in a workspace on a second NTFS volume (`D:`)                                                                                     | runs                                                                                                                  | runs                                  |
+| Files           | a UNC path (`\\localhost\<share>`)                                                                                                           | Node.js `UNKNOWN`; `cmd`: "Network access is denied."                                                                 | allowed                               |
+| Sensitive names | read `.env` in a writable workspace                                                                                                          | readable                                                                                                              | readable                              |
+| Sensitive names | read and write `.env.denied`, which carries an explicit deny for `ALL APPLICATION PACKAGES` (checked with `icacls` before and after the run) | both succeed                                                                                                          | both succeed (the deny names no user) |
+| Sensitive names | a `.env*` file created, or renamed to that name, after the launch                                                                            | readable                                                                                                              | readable                              |
 
 Findings:
 
-1. **Node.js child processes with pipes cannot start in the tree.** libuv implements a child's
-   stdio and IPC pipes as named pipes under `\\?\pipe\uv\`. The AppContainer token may not create
-   them, and libuv retries `ERROR_ACCESS_DENIED` as if the name collided, without end, on one core.
-   This affects `exec`, `execSync`, `spawn` with the default stdio and `fork`, and therefore test
-   runners with worker processes. npm runs its foreground script with inherited handles, so
-   `npm test` with a plain script works. The probe's runner hit the same hang until it redirected
-   output to files.
-2. **Node.js needs `--preserve-symlinks`.** Without it, `realpath` walks to the drive root, which
-   the tree may not read. The product runtime is already started that way.
-3. **Toolchains outside `Program Files` need a grant the user may not be able to give.** A
-   per-user installation is grantable by its owner. A folder the administrator created elsewhere
-   is not, because the grant edits its DACL.
+1. **Node.js child processes with stdio or IPC pipes never start in the tree.**
+   - What was measured: the tree may not create a named pipe (`EACCES`), and every Node.js call
+     that gives a child pipes hangs. That covers `exec`, `execSync`, `spawn` with the default
+     stdio and `fork`. While hung, the process spins one core.
+   - The likely cause, not instrumented: libuv creates a child's pipes as named pipes under
+     `\\?\pipe\uv\`, and its source treats `ERROR_ACCESS_DENIED` there as a name collision and
+     tries a new name.
+   - Consequence: test runners with worker processes cannot run as they stand. npm runs its
+     foreground script with inherited handles, so `npm test` with a plain script works. The
+     probe's own runner hung the same way until it redirected output to files.
+2. **Node.js needs `--preserve-symlinks --preserve-symlinks-main` in the tree.** Without them,
+   `realpath` stats the drive root, which the tree may not read. The product does not set these
+   flags today; project commands would have to.
+3. **Toolchains outside `Program Files` need a grant that a standard user may not be able to
+   give.** A per-user installation is grantable by its owner. A folder an administrator created
+   elsewhere is not, because the grant edits its access list.
 4. **Windows PowerShell 5.1 does not start in the tree.**
-5. **Sensitive names cannot be denied by an access entry in a writable workspace.**
-   - An explicit deny for `ALL APPLICATION PACKAGES` did not stop the tree.
-   - The tree's own SID comes from a random per-run profile name, so no deny can be written
-     before the launch.
+5. **An access entry cannot keep sensitive names away from a writable workspace.**
+   - An explicit deny for `ALL APPLICATION PACKAGES` did not stop the tree, which also holds its
+     own allow entry. The cause is not established.
+   - The tree's own SID comes from a random per-run profile name, so no deny can be written before
+     the launch.
    - A file created or renamed later carries no entry at all.
-   - What remains is a private copy without these names, or the kernel-level policy of a
-     different mechanism.
-6. **Git, Windows command scripts and exit codes behave.** The one exception is a `cmd` pipeline:
-   it delivers its output but ends with `0xC0000008`.
+   - A private copy without these names, or another mechanism, is needed.
+6. **Git, Windows command scripts, exit codes, long paths through Node.js, a second volume and the
+   process-tree end behave.**
+   - A `cmd` pipeline delivers its output but ends with `0xC0000008`.
+   - Git outside a repository fails on the unreadable parent rather than reporting "not a git
+     repository".
+   - UNC paths are unusable without a network capability.
 
 Not run yet:
 
@@ -2632,7 +2658,6 @@ Not run yet:
 - A start without an interactive desktop. An earlier run recorded that a scheduled task with a
   stored password gets no desktop, and no AppContainer process initialises there.
 - The dependency bootstrap of ADR-0043 D17 and the secure workspace read helper.
-- Path length, a non-system volume, a UNC path and reparse points.
 - The repeat on x64 hardware.
 
 ## Update impact

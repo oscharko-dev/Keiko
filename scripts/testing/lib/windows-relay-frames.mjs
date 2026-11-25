@@ -1,6 +1,7 @@
 // The server's wire protocol to `keiko-runtime-supervisor.exe --relay-supervised` (ADR-0043 D21):
-// KRP1 launch, KGG1 grants, KGB1 open and KRC1 terminate, as `nativeRuntimeProcessBackend.ts`
-// writes them. Shared by the Windows relay proofs so each speaks the one encoding.
+// KRP1 launch, KGG1 grants, KGB1 open and KRC1 terminate, in the framing
+// `nativeRuntimeProcessBackend.ts` writes; the KGB1 run-id and policy-digest fields stay zero.
+// Shared by the Windows relay proofs so each speaks the one encoding.
 import { Buffer } from "node:buffer";
 
 export const GRANT_READ = 1;
