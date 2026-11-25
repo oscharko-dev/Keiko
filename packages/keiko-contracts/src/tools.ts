@@ -364,10 +364,24 @@ export const SANDBOX_BACKENDS: readonly SandboxBackend[] = Object.freeze([
   "none",
 ]);
 
+/**
+ * A drive letter naming one granted directory for one step (#4496). No capability Windows grants
+ * an AppContainer lists `C:\` or `C:\Users`, and Node.js and Java resolve a path by walking every
+ * parent of it; through `X:` the walk starts at the granted directory itself.
+ */
+export interface WindowsStepDrive {
+  /** The granted directory, as granted. */
+  readonly root: string;
+  /** Its letter, such as `"K:"`. */
+  readonly drive: string;
+}
+
 /** A private copy of the pinned Windows runtime supervisor for one step (#4496). */
 export interface WindowsStepSupervisorCopy {
   readonly path: string;
-  /** Removes the copy; called once, after the step settled or failed to start. */
+  /** The step's granted directories by drive letter; a step names them only so. */
+  readonly drives: readonly WindowsStepDrive[];
+  /** Removes the copy and the drive letters; called once, after the step settled or failed. */
   readonly release: () => void;
 }
 
@@ -377,8 +391,11 @@ export interface WindowsStepSupervisorCopy {
  * availability. keiko-tools frames each step to it and ends the step through it.
  */
 export interface WindowsStepSupervisor {
-  /** A fresh verified copy; throws when the supervisor no longer matches its pin. */
-  readonly acquire: () => WindowsStepSupervisorCopy;
+  /**
+   * A fresh verified copy with a drive letter for each of the step's granted directories; throws
+   * when the supervisor no longer matches its pin or no drive letter is free.
+   */
+  readonly acquire: (grantedRoots: readonly string[]) => WindowsStepSupervisorCopy;
   /** Absolute read-only directories a step's toolchains need besides its executable's own. */
   readonly readRoots: readonly string[];
 }

@@ -1,16 +1,18 @@
 // #4496 (ADR-0043 D21, step mode): end-to-end proof of a governed verification step on Windows. It
 // speaks keiko-tools' wire protocol (KRP1 launch and KGG1 grants on descriptor 3, KRS1 answers on
 // descriptor 4, KRC1 terminate) to the supervisor under test with `--step-supervised`, which needs no
-// installed service and no elevation. The step is Node.js in the run's AppContainer, started with
-// `--preserve-symlinks`, as keiko-tools starts a step's Node.js: no capability Windows grants an
-// AppContainer lists `C:\`. The proof holds only when the step writes its execution root, cannot read a sibling
-// folder, reaches neither the internet nor the host's loopback, ends with its own exit code, and a
-// step that never ends is ended by KRC1 with 137.
+// installed service and no elevation. The step is Node.js in the run's AppContainer, and it names
+// its execution root and its Node.js through `subst` drive letters, as keiko-server maps a step's
+// granted directories: no capability Windows grants an AppContainer lists `C:\`, and Node.js walks
+// every parent of its main module. The grants keep the real paths. The proof holds only when the
+// step writes its execution root, cannot read a sibling folder, reaches neither the internet nor
+// the host's loopback, ends with its own exit code, and a step that never ends is ended by KRC1
+// with 137.
 //
 //   node scripts/testing/test-windows-step-confinement.mjs --helper <keiko-runtime-supervisor.exe>
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -97,7 +99,20 @@ function copyStepNode(root) {
   copyFileSync(process.execPath, join(root, "node", "node.exe"));
 }
 
-function stage(helper, root, hostPort, argument) {
+// A free drive letter for `target` in this logon session, from the end of the alphabet.
+function subst(target) {
+  const command = join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", "subst.exe");
+  for (const letter of "ZYXWVUTSRQPONMLKJIHGFED") {
+    const drive = `${letter}:`;
+    if (existsSync(`${drive}\\`)) continue;
+    if (spawnSync(command, [drive, target], { stdio: "ignore" }).status === 0) {
+      return { drive, release: () => spawnSync(command, [drive, "/D"], { stdio: "ignore" }) };
+    }
+  }
+  throw new Error("no drive letter is free for the step");
+}
+
+function stage(helper, root, hostPort, drives, argument) {
   const execution = join(root, "execution");
   const outside = join(root, "outside");
   const supervisorDirectory = join(root, "supervisor");
@@ -116,16 +131,20 @@ function stage(helper, root, hostPort, argument) {
     ["TMP", execution],
   ].sort(([left], [right]) => left.localeCompare(right));
   // Step mode joins the arguments verbatim; these paths hold no quote or trailing backslash.
-  // Without list rights on `C:\` and `C:\Users` (#4496: no grantable capability gives an
-  // AppContainer those), Node.js resolves its main module through the path it was given.
-  const args = [
-    "--preserve-symlinks",
-    "--preserve-symlinks-main",
-    `"${join(execution, "step.js")}"`,
-    ...(argument === undefined ? [] : [argument]),
-  ];
+  const workDrive = subst(execution);
+  const nodeDrive = subst(dirname(stepNode(root)));
+  drives.push(workDrive, nodeDrive);
+  const args = [`"${workDrive.drive}\\step.js"`, ...(argument === undefined ? [] : [argument])];
   const frames = Buffer.concat([
-    launchFrame(randomBytes(16).toString("hex"), stepNode(root), execution, args, environment),
+    launchFrame(
+      randomBytes(16).toString("hex"),
+      `${nodeDrive.drive}\\node.exe`,
+      `${workDrive.drive}\\`,
+      args,
+      environment.map(([name, value]) =>
+        name === "TEMP" || name === "TMP" ? [name, `${workDrive.drive}\\`] : [name, value],
+      ),
+    ),
     grantsFrame([
       { access: GRANT_MODIFY, path: execution },
       { access: GRANT_READ, path: dirname(stepNode(root)) },
@@ -181,8 +200,8 @@ function reapedExit(received) {
   return reaped.payload.readUInt32LE(0);
 }
 
-async function boundaries(helper, root, hostPort) {
-  const { supervisor, frames, execution } = stage(helper, join(root, "a"), hostPort);
+async function boundaries(helper, root, hostPort, drives) {
+  const { supervisor, frames, execution } = stage(helper, join(root, "a"), hostPort, drives);
   const { code, stdout, received } = await run(supervisor, frames);
   const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith("STEP "));
   assert.notEqual(
@@ -208,24 +227,26 @@ async function main() {
   const helper = helperArgument();
   const root = mkdtempSync(join(tmpdir(), "keiko-step-confinement-"));
   const host = await startHostListener();
+  const drives = [];
   try {
     const hostPort = host.address().port;
     copyStepNode(root);
-    const answer = await boundaries(helper, root, hostPort);
-    const ended = await endedByControl(helper, root, hostPort);
+    const answer = await boundaries(helper, root, hostPort, drives);
+    const ended = await endedByControl(helper, root, hostPort, drives);
     assert.equal(ended, 137, "KRC1 ends the step's job with 137");
     console.log(
       `windows-step-confinement: PASS (outside=${answer.outside}, internet=${answer.internet}, loopback=${answer.loopback}, cancelled=${String(ended)})`,
     );
   } finally {
     host.close();
+    for (const drive of drives) drive.release();
     rmSync(root, { force: true, recursive: true, maxRetries: 5 });
   }
 }
 
 // A step that never ends: KRC1 after the launch, then the supervisor reports 137.
-async function endedByControl(helper, root, hostPort) {
-  const { supervisor, frames } = stage(helper, join(root, "b"), hostPort, "forever");
+async function endedByControl(helper, root, hostPort, drives) {
+  const { supervisor, frames } = stage(helper, join(root, "b"), hostPort, drives, "forever");
   const child = spawn(supervisor, ["--step-supervised"], {
     stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
   });

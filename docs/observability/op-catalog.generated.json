@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e0fc2f0289a878af462596cf71384bad96419fffda4287ff1ed16209308c15f1",
+    "catalogDigest": "3554f1fb6133a71408083552eee593bb8dec0d69ac89859766c07262d5408775",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22039,6 +22039,50 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "editor.verification.windows-step-drives",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "editor.windowsStepDrives.record",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["mapped", "no-free-letter", "released", "release-failed"]
+          },
+          "driveCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "refusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["runtime-confinement-unavailable"],
+        "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepDrives.ts:22",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepDrives.ts:137"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "editor.verification.windows-step-supervisor",
         "category": "process",
         "owner": "keiko-server",
@@ -22072,8 +22116,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:33",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:175"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:41",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:204"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -63292,6 +63336,7 @@
         "requiredLifecycleOperations": {
           "start": [],
           "state": [
+            "editor.verification.windows-step-drives",
             "editor.verification.windows-step-supervisor",
             "runtime.confinement.unavailable"
           ],
@@ -63300,16 +63345,19 @@
           "loss": []
         },
         "requiredCausalOperations": [
+          "editor.verification.windows-step-drives",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "editor.verification.windows-step-drives",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
+          "editor.verification.windows-step-drives",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
         ],
@@ -113050,6 +113098,7 @@
           "lifecycleOperations": {
             "start": [],
             "state": [
+              "editor.verification.windows-step-drives",
               "editor.verification.windows-step-supervisor",
               "runtime.confinement.unavailable"
             ],
@@ -113058,6 +113107,10 @@
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "editor.verification.windows-step-drives",
+              "mode": "correlation"
+            },
             {
               "op": "editor.verification.windows-step-supervisor",
               "mode": "correlation"
@@ -113069,11 +113122,48 @@
           ],
           "lossSignals": [],
           "resourceSignals": [
+            "editor.verification.windows-step-drives",
             "editor.verification.windows-step-supervisor",
             "runtime.confinement.unavailable"
           ],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "editor.verification.windows-step-drives",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "driveCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "editor.verification.windows-step-supervisor",
               "owner": "keiko-server",
@@ -121974,7 +122064,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 103,
+    "dynamicCount": 104,
     "unknownCategoryCount": 85,
     "authoritative": false
   },
@@ -124168,6 +124258,13 @@
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:152",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:155",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126734,15 +126831,28 @@
       "package": "keiko-server"
     },
     {
+      "op": "editor.verification.windows-step-drives",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:25",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.windows-step-drives.release-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:199",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "editor.verification.windows-step-supervisor",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:36",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:44",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor.copy-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:127",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:137",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129664,6 +129774,8 @@
     "editor.verification.subscriber",
     "editor.verification.windows-step-copy",
     "editor.verification.windows-step-copy.cleanup-failed",
+    "editor.verification.windows-step-drives",
+    "editor.verification.windows-step-drives.release-failed",
     "editor.verification.windows-step-supervisor",
     "editor.verification.windows-step-supervisor.copy-refused",
     "editor.verification.workspace",

@@ -74,7 +74,8 @@ without a container runtime runs governed verification steps in the pinned super
 AppContainer (`windows-appcontainer`, step mode), in a private copy of the workspace without
 credential-named entries; a host with a container runtime keeps its container path. The VM
 measurement of the same day replaced the planned isolatedWin32 capabilities, which `CreateProcessW`
-refuses an AppContainer, with path-preserving Node.js; Java steps stay open there.
+refuses an AppContainer, and the profile list entries with per-step `subst` drive letters, through
+which Node.js and Java steps run.
 
 ## Context
 
@@ -1299,20 +1300,23 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
     grants, and no grant may hold the whole user profile. The step's `TEMP`, `TMP` and npm cache
     stay inside the execution root.
-  - **The profile path (step mode only; a Coding run's tree is unchanged).** The supervisor writes
-    non-inherited list entries (list, traverse, read attributes, synchronize) for the tree's SID on
-    each profile folder between the user profile and a grant's parent. The grant revocation and the
-    sweep remove them with the grants. Such an entry reveals the names, sizes and timestamps of that
-    folder's entries, never their contents.
-  - **Real paths (measured 2026-11-25, ARM64 VM, standard user).** No capability Windows grants an
-    ordinary AppContainer lists `C:\` or `C:\Users`: `CreateProcessW` refuses a token that carries
-    `isolatedWin32-volumeRootMinimal` or `isolatedWin32-profilesRootMinimal` with
-    `ERROR_INVALID_PARAMETER`, also with the all-application-packages opt-out, while a capability
-    Keiko names is accepted. The step tree therefore carries neither, and its Node.js resolves
-    through the path it was given: the supervisor launch adds `--preserve-symlinks
-    --preserve-symlinks-main` before the run's own `NODE_OPTIONS`. Java's `toRealPath` (Maven's
-    start, `javac --release`) still walks from the drive root and fails inside the tree; a Java
-    step on the Windows step backend fails as its own step, which #4496 records as open.
+  - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows
+    grants an ordinary AppContainer lists `C:\` or `C:\Users` (measured 2026-11-25, ARM64 VM,
+    standard user: `CreateProcessW` refuses a token that carries `isolatedWin32-volumeRootMinimal`
+    or `isolatedWin32-profilesRootMinimal` with `ERROR_INVALID_PARAMETER`, also with the
+    all-application-packages opt-out), and Node.js's `realpath` and Java's `toRealPath` (Maven's
+    start, `javac --release`) walk every parent of a path. Before the supervisor starts, the server
+    therefore gives each granted directory a `subst` drive letter in the user's logon session
+    (`subst.exe` from System32, letters from `Z:` down, a refused letter skipped), and
+    keiko-tools names the image, the working directory, the arguments and every variable through
+    those letters; the grants keep the real paths, where the access entries live. The walk then
+    starts at the granted directory itself. The letters are removed when the step ends; a step
+    without free letters is refused as isolation unavailable, and
+    `editor.verification.windows-step-drives` records the counts. Measured the same day: Node.js
+    `require` and `realpath`, `npm -v`, `java -version`, `javac --release 21` and an offline
+    `mvn verify` run in the tree; the same build through the real paths fails. A letter of a
+    server that ended without its cleanup stays until the user signs out and names only a folder
+    the user may read anyway.
   - **Credential-named files.** An access entry cannot keep a credential-named file away from a
     tree that may modify the workspace (#4493 finding 5). The steps of one run therefore share a
     private copy of the workspace, made after the dependency bootstrap, that leaves out every entry
@@ -1320,8 +1324,8 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     the run removes it when it ends. The copy is shared with the assured pre-filter
     (`linkFreeCopy.ts`), and `editor.verification.windows-step-copy` records its counts.
   - **Closed refusals.** A grant the user may not write (a toolchain an administrator installed
-    outside `Program Files`), a protected environment and more than 32 profile folders to list
-    across the grants refuse the step with a closed reason. Windows PowerShell 5.1 and
+    outside `Program Files`), a protected environment and a step without free drive letters refuse
+    the step with a closed reason. Windows PowerShell 5.1 and
     PowerShell 7 fail inside the tree on registry access, and a Node.js child that opens pipes
     hangs until a Node.js release ships libuv 1.53 (#4493); both are recorded limitations, not
     silent failures.

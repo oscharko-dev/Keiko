@@ -23,6 +23,7 @@ import {
 import type {
   CommandTerminationEvidence,
   CommandTerminationReason,
+  WindowsStepDrive,
   WindowsStepSupervisor,
   WindowsTreeKillDisposition,
   WindowsTreeKillResult,
@@ -938,7 +939,12 @@ interface SpawnTarget {
   // A `windows-appcontainer` step (#4496): what the supervisor copy in `command` is sent, and the
   // removal of that copy. The run state takes it over.
   readonly windowsStep?:
-    { readonly launch: WindowsStepLaunch; readonly release: () => void } | undefined;
+    | {
+        readonly launch: WindowsStepLaunch;
+        readonly drives: readonly WindowsStepDrive[];
+        readonly release: () => void;
+      }
+    | undefined;
 }
 
 // Resolves what to spawn for an INHERITED-network run (deps.policy.network !== "none"): normally
@@ -1149,12 +1155,12 @@ function windowsStepTarget(
     input.command,
     environmentVariableValue(deps.processEnv, "USERPROFILE", "win32"),
   );
-  const copy = supervisor.acquire();
+  const copy = supervisor.acquire(launch.grants.map((grant) => grant.path));
   return {
     command: copy.path,
     args: decision.args,
     attestation: decision.attestation,
-    windowsStep: { launch, release: onceOnly(copy.release) },
+    windowsStep: { launch, drives: copy.drives, release: onceOnly(copy.release) },
   };
 }
 
@@ -1616,7 +1622,6 @@ const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
       "administrator installed outside Program Files",
   ],
   [12, "the user environment could not be closed to the step"],
-  [17, "the profile folders above the step's directories could not be prepared"],
 ]);
 
 function windowsStepRefusal(code: number): string {
@@ -1869,7 +1874,7 @@ function spawnChild(
     const frames =
       target.windowsStep === undefined
         ? undefined
-        : windowsStepFrames(target.windowsStep.launch, cwd, env);
+        : windowsStepFrames(target.windowsStep.launch, cwd, env, target.windowsStep.drives);
     const child = deps.spawn(target.command, target.args, {
       cwd,
       env,

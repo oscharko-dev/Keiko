@@ -9701,22 +9701,29 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["editor.verification.windows-step-supervisor", "runtime.confinement.unavailable"],
+      state: [
+        "editor.verification.windows-step-drives",
+        "editor.verification.windows-step-supervisor",
+        "runtime.confinement.unavailable",
+      ],
       end: [],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "editor.verification.windows-step-drives",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "editor.verification.windows-step-drives",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "editor.verification.windows-step-drives",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
     ],

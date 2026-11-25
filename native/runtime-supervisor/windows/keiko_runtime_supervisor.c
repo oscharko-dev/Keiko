@@ -50,10 +50,9 @@ enum error_code {
   /* #4068: the relayed tree's AppContainer profile could not be created. */
   ERROR_RELAY_PROFILE = 14,
   /* #4068: the host side of the relay (its pipes or listener) could not be created. */
-  ERROR_RELAY_START = 15,
-  /* #4496: the profile folders above the grants could not be planned (no profile, too many). 16
-   * named the isolatedWin32 capabilities, which CreateProcessW refuses an AppContainer; unused. */
-  ERROR_GRANTS_ANCESTORS = 17
+  ERROR_RELAY_START = 15
+  /* #4496: 16 and 17 named the isolatedWin32 capabilities and the profile list entries of an
+   * unreleased step design; both are unused. A step names its directories by drive letter. */
 };
 
 struct launch_request {
@@ -720,16 +719,6 @@ static int read_relay_open(const struct launch_request *request, USHORT *gateway
   return 0;
 }
 
-/* The signed-in user's profile folder, resolved here and never taken from a packet. */
-static int plan_profile_ancestors(struct keiko_gateway_grants *grants) {
-  wchar_t *profile = NULL;
-  int planned;
-  if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &profile))) return 0;
-  planned = keiko_gateway_ancestors_plan(grants, profile);
-  CoTaskMemFree(profile);
-  return planned;
-}
-
 struct relay_container {
   wchar_t profile[64];
   PSID sid;
@@ -840,12 +829,6 @@ int wmain(int argc, wchar_t **argv) {
    * must exist before the suspended root does; a refused grant refuses the launch. */
   if (confined && !keiko_gateway_grants_read(3, &grants)) {
     send_error(ERROR_GRANTS_FRAME);
-    goto cleanup;
-  }
-  /* #4496: a governed verification step only; a Coding run's tree is unchanged. Planned before
-   * the sweep, which also clears these folders of a crashed run's entries. */
-  if (stepped && !plan_profile_ancestors(&grants)) {
-    send_error(ERROR_GRANTS_ANCESTORS);
     goto cleanup;
   }
   if (relayed) {

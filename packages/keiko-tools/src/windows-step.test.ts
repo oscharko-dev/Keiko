@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { realpathSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import { CommandCancelledError, CommandDeniedError } from "./errors.js";
 import { runCommand, type RunCommandDeps, type SpawnOptions } from "./exec.js";
 import {
   quoteWindowsArgument,
+  throughWindowsStepDrives,
   windowsStepFrames,
   windowsStepGrants,
   WindowsStepResponses,
@@ -133,10 +135,12 @@ describe("windowsStepFrames", () => {
       grants: [{ path: String.raw`C:\work`, access: "modify", principal: "tree" }],
       recoveryHandle: "0123456789abcdef0123456789abcdef",
     };
-    const frames = windowsStepFrames(launch, String.raw`C:\work`, {
-      PATH: String.raw`C:\tools`,
-      "ProgramFiles(x86)": String.raw`C:\Program Files (x86)`,
-    });
+    const frames = windowsStepFrames(
+      launch,
+      String.raw`C:\work`,
+      { PATH: String.raw`C:\tools`, "ProgramFiles(x86)": String.raw`C:\Program Files (x86)` },
+      [],
+    );
     expect(frames.subarray(0, 4).toString("ascii")).toBe("KRP1");
     const grantsAt = 12 + frames.readUInt32LE(8);
     expect(frames.subarray(grantsAt, grantsAt + 4).toString("ascii")).toBe("KGG1");
@@ -145,18 +149,94 @@ describe("windowsStepFrames", () => {
     expect(launchText).not.toContain("ProgramFiles(x86)");
   });
 
-  it("lets Node.js resolve through the given path, before the run's own options", () => {
+  it("names every granted directory through its drive letter, never through C:\\", () => {
     const launch: WindowsStepLaunch = {
-      image: String.raw`C:\tools\node.exe`,
-      args: [],
+      image: String.raw`C:\Program Files\Java\jdk-21\bin\java.exe`,
+      args: ['"-Dout=C:\\work\\repo"', "-cp", String.raw`C:\work\repo\target;C:\work\repo2`],
       grants: [],
       recoveryHandle: "0123456789abcdef0123456789abcdef",
     };
-    const text = (env: Record<string, string>): string =>
-      windowsStepFrames(launch, String.raw`C:\work`, env).toString("utf8");
-    expect(text({})).toContain("--preserve-symlinks --preserve-symlinks-main");
-    expect(text({ NODE_OPTIONS: "--openssl-legacy-provider" })).toContain(
-      "--preserve-symlinks --preserve-symlinks-main --openssl-legacy-provider",
+    const text = windowsStepFrames(launch, String.raw`C:\work\repo`, DRIVE_ENV, DRIVES).toString(
+      "utf8",
+    );
+    expect(text).toContain(String.raw`J:\bin\java.exe`);
+    expect(text).toContain('"-Dout=K:\\."');
+    expect(text).toContain(String.raw`K:\target;C:\work\repo2`);
+    expect(text).not.toContain(String.raw`C:\Program Files`);
+    expect(text).not.toContain("program files");
+    expect(text).toContain(String.raw`J:\bin;C:\Windows\System32`);
+    expect(text).not.toContain("C:\\work\\repo\\");
+    expect(text).not.toContain("--preserve-symlinks");
+  });
+});
+
+const DRIVES = [
+  { root: String.raw`C:\work\repo`, drive: "K:" },
+  { root: String.raw`C:\Program Files\Java\jdk-21`, drive: "J:" },
+  { root: String.raw`C:\work\repo\node_modules\tool`, drive: "T:" },
+];
+
+const DRIVE_ENV = {
+  JAVA_HOME: String.raw`C:\Program Files\Java\jdk-21`,
+  PATH: String.raw`c:\program files\java\JDK-21\bin;C:\Windows\System32`,
+};
+
+describe("throughWindowsStepDrives", () => {
+  it("replaces a granted root at a path boundary, the longest root first", () => {
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo\src\a.js`, DRIVES)).toBe(
+      String.raw`K:\src\a.js`,
+    );
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo\node_modules\tool\x`, DRIVES)).toBe(
+      String.raw`T:\x`,
+    );
+    expect(throughWindowsStepDrives("C:/work/repo/src", DRIVES)).toBe("K:/src");
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo`, DRIVES)).toBe("K:\\");
+    expect(throughWindowsStepDrives(String.raw`\\?\C:\work\repo\a`, DRIVES)).toBe(
+      String.raw`\\?\K:\a`,
+    );
+  });
+
+  it("leaves a sibling, a longer name, a drive-letter suffix and an unmapped path alone", () => {
+    for (const value of [
+      String.raw`C:\work\repo2\a`,
+      String.raw`C:\work\repository`,
+      String.raw`XC:\work\repo\a`,
+      String.raw`D:\work\repo\a`,
+      "",
+      "plain text",
+    ]) {
+      expect(throughWindowsStepDrives(value, DRIVES)).toBe(value);
+    }
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo\a`, [])).toBe(
+      String.raw`C:\work\repo\a`,
+    );
+  });
+
+  it("reads a granted root with a trailing separator as its directory", () => {
+    const drives = [{ root: "D:\\tools\\", drive: "T:" }];
+    expect(throughWindowsStepDrives(String.raw`D:\tools\bin\x.exe`, drives)).toBe(
+      String.raw`T:\bin\x.exe`,
+    );
+    expect(throughWindowsStepDrives(String.raw`D:\tools`, drives)).toBe("T:\\");
+  });
+
+  it("ends a path at a list or redirection character, never inside a name", () => {
+    expect(throughWindowsStepDrives(String.raw`-cp C:\work\repo,lib`, DRIVES)).toBe(
+      String.raw`-cp K:\,lib`,
+    );
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo>out`, DRIVES)).toBe("K:\\>out");
+    expect(throughWindowsStepDrives(String.raw`C:\work\repo.bak\a`, DRIVES)).toBe(
+      String.raw`C:\work\repo.bak\a`,
+    );
+    expect(throughWindowsStepDrives(String.raw`-IC:\work\repo\a`, DRIVES)).toBe(
+      String.raw`-IC:\work\repo\a`,
+    );
+  });
+
+  it("keeps a quoted root's closing quote: the root before a quote ends in a dot", () => {
+    expect(throughWindowsStepDrives('"C:\\work\\repo"', DRIVES)).toBe('"K:\\."');
+    expect(throughWindowsStepDrives("a C:\\work\\repo;C:\\work\\repo b", DRIVES)).toBe(
+      "a K:\\;K:\\ b",
     );
   });
 });
@@ -228,6 +308,7 @@ interface Harness {
   readonly child: SupervisedChild;
   readonly spawned: { command: string; args: readonly string[]; options: SpawnOptions }[];
   readonly released: () => number;
+  readonly acquired: readonly (readonly string[])[];
   readonly treeKills: () => number;
   readonly written: () => Buffer;
 }
@@ -240,13 +321,18 @@ function harness(): Harness {
   control(child).on("data", (chunk: Buffer) => chunks.push(chunk));
   let released = 0;
   let treeKills = 0;
+  const acquired: (readonly string[])[] = [];
   const supervisor: WindowsStepSupervisor = {
-    acquire: () => ({
-      path: String.raw`C:\Temp\keiko-native-runtime-x\keiko-runtime-supervisor.exe`,
-      release: (): void => {
-        released++;
-      },
-    }),
+    acquire: (roots) => {
+      acquired.push(roots);
+      return {
+        path: String.raw`C:\Temp\keiko-native-runtime-x\keiko-runtime-supervisor.exe`,
+        drives: roots.map((root, index) => ({ root, drive: `${"KLMN".charAt(index)}:` })),
+        release: (): void => {
+          released++;
+        },
+      };
+    },
     readRoots: [],
   };
   const deps: RunCommandDeps = {
@@ -279,6 +365,7 @@ function harness(): Harness {
     child,
     spawned,
     released: () => released,
+    acquired,
     treeKills: () => treeKills,
     written: () => Buffer.concat(chunks),
   };
@@ -302,6 +389,10 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     expect(h.spawned[0]?.options.stdio).toEqual(["pipe", "pipe", "pipe", "pipe", "pipe"]);
     expect(h.written().subarray(0, 4).toString("ascii")).toBe("KRP1");
     expect(h.written().includes(Buffer.from("KGG1"))).toBe(true);
+    expect(h.acquired).toEqual([[realpathSync(h.deps.workspace.root), String.raw`C:\tools\node`]]);
+    const launch = h.written().subarray(0, h.written().indexOf("KGG1")).toString("utf8");
+    expect(launch).toContain(String.raw`L:\node.exe`);
+    expect(launch).not.toContain(String.raw`C:\tools\node`);
     answers(h.child).write(Buffer.concat([LAUNCHED, reaped(3)]));
     await settled();
     h.child.emit("close", 0, null);

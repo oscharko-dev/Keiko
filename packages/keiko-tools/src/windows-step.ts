@@ -5,7 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import { win32 } from "node:path";
-import type { WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
+import type { WindowsStepDrive, WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
 import {
   encodeControlPacket,
   encodeLaunchPacket,
@@ -118,38 +118,105 @@ export function windowsStepLaunch(
   };
 }
 
-// No capability Windows grants an ordinary AppContainer lists `C:\` or `C:\Users` (#4496: the
-// isolatedWin32 ones are refused by CreateProcessW), and Node.js resolves a module's real path by
-// listing every parent of it. A step's Node.js therefore resolves through the path it was given.
-const NODE_PATH_OPTIONS = "--preserve-symlinks --preserve-symlinks-main";
+// The characters that end a path inside an argument or a variable: a separator continues it into
+// the granted directory, anything else ends it there.
+const PATH_SEPARATORS = new Set(["\\", "/"]);
+const PATH_ENDINGS = new Set(['"', "'", ";", ",", "|", "<", ">", " ", "\t", "\r", "\n"]);
+// A root right after a letter or digit is part of another word (`XC:\work`), never the path; an
+// option glued to a path (`-IC:\work`) therefore keeps its real path and fails closed.
+const NAME_CHARACTER = /[\p{L}\p{N}_]/u;
 
-function withPathPreservingNode(
-  env: Readonly<Record<string, string>>,
-): Readonly<Record<string, string>> {
-  const own = env.NODE_OPTIONS;
-  return {
-    ...env,
-    NODE_OPTIONS:
-      own === undefined || own === "" ? NODE_PATH_OPTIONS : `${NODE_PATH_OPTIONS} ${own}`,
-  };
+function withoutTrailingSeparator(value: string): string {
+  let end = value.length;
+  while (end > 0 && PATH_SEPARATORS.has(value.charAt(end - 1))) end--;
+  return value.slice(0, end);
+}
+
+function sameCharacter(left: string, right: string): boolean {
+  const slash = (value: string): string => (value === "/" ? "\\" : value.toLowerCase());
+  return slash(left) === slash(right);
+}
+
+function rootAt(value: string, index: number, root: string): boolean {
+  if (index + root.length > value.length) return false;
+  for (let offset = 0; offset < root.length; offset++) {
+    if (!sameCharacter(value.charAt(index + offset), root.charAt(offset))) return false;
+  }
+  return true;
+}
+
+// The drive and how much of the value it replaces at `index`, or undefined for no granted root.
+function driveAt(
+  value: string,
+  index: number,
+  drives: readonly WindowsStepDrive[],
+): { readonly replacement: string; readonly length: number } | undefined {
+  if (index > 0 && NAME_CHARACTER.test(value.charAt(index - 1))) return undefined;
+  for (const { root, drive } of drives) {
+    if (!rootAt(value, index, root)) continue;
+    const next = value.charAt(index + root.length);
+    if (next === "" || PATH_ENDINGS.has(next)) {
+      // `"X:\"` would read back as an escaped quote; `X:\.` names the same directory.
+      return {
+        replacement: next === '"' ? `${drive}${win32.sep}.` : `${drive}${win32.sep}`,
+        length: root.length,
+      };
+    }
+    if (PATH_SEPARATORS.has(next)) return { replacement: drive, length: root.length };
+  }
+  return undefined;
 }
 
 /**
- * The launch and the grants, in the order the supervisor reads them. A variable whose name the
+ * `value` with each granted directory named through its drive letter (#4496), the longest root
+ * first; a sibling or a longer name that merely starts with a root is left alone.
+ */
+export function throughWindowsStepDrives(
+  value: string,
+  drives: readonly WindowsStepDrive[],
+): string {
+  if (drives.length === 0) return value;
+  const ordered = drives
+    .map(({ root, drive }) => ({ root: withoutTrailingSeparator(root), drive }))
+    .filter(({ root }) => root.length > 0)
+    .sort((left, right) => right.root.length - left.root.length);
+  let result = "";
+  let index = 0;
+  while (index < value.length) {
+    const found = driveAt(value, index, ordered);
+    if (found === undefined) {
+      result += value.charAt(index);
+      index++;
+      continue;
+    }
+    result += found.replacement;
+    index += found.length;
+  }
+  return result;
+}
+
+/**
+ * The launch and the grants, in the order the supervisor reads them. The image, the working
+ * directory, the arguments and every variable name a granted directory through its drive letter;
+ * the grants keep the real paths, where the access entries live. A variable whose name the
  * supervisor's packet cannot carry (such as `ProgramFiles(x86)`) is left out of the step.
  */
 export function windowsStepFrames(
   launch: WindowsStepLaunch,
   cwd: string,
   env: Readonly<Record<string, string>>,
+  drives: readonly WindowsStepDrive[],
 ): Buffer {
+  const through = (value: string): string => throughWindowsStepDrives(value, drives);
   const carried = Object.fromEntries(
-    Object.entries(withPathPreservingNode(env)).filter(([name]) => ENVIRONMENT_NAME.test(name)),
+    Object.entries(env)
+      .filter(([name]) => ENVIRONMENT_NAME.test(name))
+      .map(([name, value]) => [name, through(value)]),
   );
   return Buffer.concat([
     encodeLaunchPacket(
-      { recoveryHandle: launch.recoveryHandle, args: launch.args, env: carried },
-      { executable: launch.image, cwd },
+      { recoveryHandle: launch.recoveryHandle, args: launch.args.map(through), env: carried },
+      { executable: through(launch.image), cwd: through(cwd) },
     ),
     encodeWindowsGatewayGrants(launch.grants),
   ]);

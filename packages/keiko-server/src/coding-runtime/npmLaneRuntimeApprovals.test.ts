@@ -67,7 +67,7 @@ describe("npm-lane runtime approvals", () => {
         // windows-latest exactly as the release builds it.
         sha256: "b36fb8d141690374221e7b022e8f9888909b581de6d69a7bc54a7aa9ccf1e084",
         sizeBytes: 253_952,
-        sourceTreeSha256: "1cbd2384801f0d1e36e91b7ba0440593eb0df155080e3be4a9ebcf2cbe3a9847",
+        sourceTreeSha256: "224f46231e1a4b67fef2ec26986f52dcce39da5153327b9bc5102e20ca99cee1",
       },
     });
     const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];

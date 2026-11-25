@@ -2418,6 +2418,7 @@ export type {
   OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
+  WindowsStepDrive,
   WindowsStepSupervisor,
   WindowsStepSupervisorCopy,
   SandboxAttestation,

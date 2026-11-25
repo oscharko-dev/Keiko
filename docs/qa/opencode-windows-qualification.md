@@ -2661,15 +2661,17 @@ Findings:
    - Measured 2026-11-25 (#4496, same VM, standard user): `CreateProcessW` refuses an
      AppContainer token that carries either capability with `ERROR_INVALID_PARAMETER` (87), also
      with the all-application-packages opt-out; a capability Keiko names is accepted. So no
-     standard user can give a tree list rights on `C:\` or `C:\Users`. The step backend runs Node.js
-     with `--preserve-symlinks --preserve-symlinks-main` instead; Java stays refused by its real
-     path walk.
+     standard user can give a tree list rights on `C:\` or `C:\Users`.
    - Measured 2026-11-25 (#4496, second run): with every grant root reached through a `subst`
      drive letter (workspace, per-user JDK, Maven, repository and Node.js), Node.js `require` and
      `realpathSync` without `--preserve-symlinks`, `npm -v`, `java -version`, `javac --release 21`
      and an offline `mvn verify` (one test passing) all run in the tree, with and without the
      profile list entries. The same `javac` call with real paths still fails. A real-path walk from
      a substituted drive root starts at a granted folder and never reaches `C:\`.
+   - Consequence (#4496): the step backend gives each granted directory a `subst` drive letter
+     before the supervisor starts and names the image, the working directory, the arguments and
+     the environment through those letters; the grants keep the real paths. It sets neither
+     `--preserve-symlinks` nor profile list entries.
    - Expected, not measured (superseded by the measurement above): a tree whose token carries the two capabilities, and which holds
      non-inherited list entries for its own SID on the profile folders above its grants, needs no
      administrator. The user owns those profile folders. The experiment gave the same rights to

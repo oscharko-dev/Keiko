@@ -11,6 +11,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
+  WindowsStepDrive,
   WindowsStepSupervisor,
   WindowsStepSupervisorCopy,
 } from "@oscharko-dev/keiko-contracts";
@@ -29,6 +30,13 @@ import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import {
+  mapWindowsStepDrives,
+  nodeWindowsDriveHost,
+  unmapWindowsStepDrives,
+  type WindowsDriveHost,
+  type WindowsStepDriveScope,
+} from "./windowsStepDrives.js";
 
 const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -87,6 +95,8 @@ export interface WindowsStepSupervisorInput {
   readonly correlationId?: string | undefined;
   /** Injectable for tests; defaults to the installed or development runtime. */
   readonly runtime?: (() => ResolvedPortableOpenCodeRuntime | undefined) | undefined;
+  /** Injectable for tests; defaults to `subst.exe` in this logon session. */
+  readonly driveHost?: WindowsDriveHost | undefined;
 }
 
 type SupervisorBinary =
@@ -137,22 +147,41 @@ function verifiedCopy(
   }
 }
 
-/** Each step's private copy, written from the verified bytes and removed when the step ends. */
+function discardCopy(
+  copy: ReturnType<typeof verifiedHelperExecutionCopy>,
+  correlationId: string | undefined,
+): void {
+  void discardVerifiedHelperCopy(copy, {
+    operation: "editor.verification.windows-step-supervisor.cleanup",
+    source: "editor.verification.windows-step-supervisor",
+    correlationId,
+  });
+}
+
+/**
+ * Each step's private copy, written from the verified bytes, with a drive letter for each of the
+ * step's granted directories; both are removed when the step ends.
+ */
 function verifiedCopies(
   helperPath: string,
   pin: string,
-  correlationId: string | undefined,
+  drives: WindowsStepDriveScope,
 ): WindowsStepSupervisor["acquire"] {
-  return (): WindowsStepSupervisorCopy => {
-    const copy = verifiedCopy(helperPath, pin, correlationId);
+  return (grantedRoots): WindowsStepSupervisorCopy => {
+    const copy = verifiedCopy(helperPath, pin, drives.correlationId);
+    let mapped: readonly WindowsStepDrive[];
+    try {
+      mapped = mapWindowsStepDrives(grantedRoots, drives);
+    } catch (error) {
+      discardCopy(copy, drives.correlationId);
+      throw error;
+    }
     return {
       path: copy.path,
+      drives: mapped,
       release: (): void => {
-        void discardVerifiedHelperCopy(copy, {
-          operation: "editor.verification.windows-step-supervisor.cleanup",
-          source: "editor.verification.windows-step-supervisor",
-          correlationId,
-        });
+        unmapWindowsStepDrives(mapped, drives);
+        discardCopy(copy, drives.correlationId);
       },
     };
   };
@@ -179,5 +208,10 @@ export function resolveWindowsStepSupervisor(
     ),
   );
   if (binary.outcome !== "available") return undefined;
-  return { acquire: verifiedCopies(binary.helperPath, binary.pin, input.correlationId), readRoots };
+  const drives: WindowsStepDriveScope = {
+    host: input.driveHost ?? nodeWindowsDriveHost(env),
+    activityLog: input.activityLog,
+    correlationId: input.correlationId,
+  };
+  return { acquire: verifiedCopies(binary.helperPath, binary.pin, drives), readRoots };
 }

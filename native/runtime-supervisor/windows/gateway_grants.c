@@ -196,8 +196,7 @@ static void grants_unlock(HANDLE lock) {
   keiko_user_lock_drop(lock);
 }
 
-static DWORD change_entry_locked(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask,
-                                 DWORD inheritance) {
+static DWORD change_entry_locked(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask) {
   PACL before = NULL, after = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
   EXPLICIT_ACCESSW entry;
@@ -208,7 +207,7 @@ static DWORD change_entry_locked(wchar_t *path, PSID sid, ACCESS_MODE mode, DWOR
   if (result != ERROR_SUCCESS) return result;
   entry.grfAccessPermissions = mask;
   entry.grfAccessMode = mode;
-  entry.grfInheritance = mode == GRANT_ACCESS ? inheritance : NO_INHERITANCE;
+  entry.grfInheritance = mode == GRANT_ACCESS ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
   entry.Trustee.ptstrName = (LPWSTR)sid;
@@ -223,18 +222,13 @@ static DWORD change_entry_locked(wchar_t *path, PSID sid, ACCESS_MODE mode, DWOR
 
 /* A lock that cannot be taken fails the edit: a grant refuses the launch, and a revoke leaves the
  * tree's own entry for the next sweep rather than racing another run's write. */
-static DWORD change_entry_inheriting(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask,
-                                     DWORD inheritance) {
+static DWORD change_entry(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask) {
   HANDLE lock = grants_lock();
   DWORD result;
   if (lock == NULL) return ERROR_TIMEOUT;
-  result = change_entry_locked(path, sid, mode, mask, inheritance);
+  result = change_entry_locked(path, sid, mode, mask);
   grants_unlock(lock);
   return result;
-}
-
-static DWORD change_entry(wchar_t *path, PSID sid, ACCESS_MODE mode, DWORD mask) {
-  return change_entry_inheriting(path, sid, mode, mask, SUB_CONTAINERS_AND_OBJECTS_INHERIT);
 }
 
 static int inheritable_read_present(PACL dacl, PSID sid) {
@@ -378,90 +372,18 @@ static int apply_entry(struct keiko_gateway_grants *grants, struct keiko_gateway
   return KEIKO_GRANTS_APPLIED;
 }
 
-static int apply_ancestors(struct keiko_gateway_grants *grants, PSID tree) {
-  for (size_t index = 0; index < grants->ancestor_count; index++) {
-    struct keiko_gateway_ancestor *ancestor = &grants->ancestors[index];
-    if (!plain_directory(ancestor->path)) return KEIKO_GRANTS_REFUSED_DIRECTORY;
-    if (change_entry_inheriting(ancestor->path, tree, GRANT_ACCESS, KEIKO_GATEWAY_ANCESTOR_MASK,
-                                NO_INHERITANCE) != ERROR_SUCCESS)
-      return KEIKO_GRANTS_REFUSED_ACL;
-    ancestor->applied = 1;
-  }
-  return KEIKO_GRANTS_APPLIED;
-}
-
 int keiko_gateway_grants_apply(_Inout_ struct keiko_gateway_grants *grants, PSID tree) {
-  int refused = KEIKO_GRANTS_APPLIED;
   if (tree == NULL || !IsValidSid(tree)) return KEIKO_GRANTS_REFUSED_ACL;
   grants->capability_count = 0;
-  for (size_t index = 0; refused == KEIKO_GRANTS_APPLIED && index < grants->count; index++)
-    refused = apply_entry(grants, &grants->entries[index], tree);
-  if (refused == KEIKO_GRANTS_APPLIED) refused = apply_ancestors(grants, tree);
-  if (refused != KEIKO_GRANTS_APPLIED) {
-    keiko_gateway_grants_revoke(grants, tree);
-    grants->capability_count = 0;
-  }
-  return refused;
-}
-
-/* Whether `path` is `root` itself (`equal`) or lies below it, compared without case as NTFS does. */
-static int path_within(const wchar_t *path, const wchar_t *root, int equal) {
-  size_t path_length = wcslen(path), root_length = wcslen(root);
-  if (root_length == 0 || root_length > path_length || root_length > INT_MAX) return 0;
-  if (CompareStringOrdinal(path, (int)root_length, root, (int)root_length, TRUE) != CSTR_EQUAL)
-    return 0;
-  if (path_length == root_length) return equal;
-  return root[root_length - 1] == L'\\' || path[root_length] == L'\\';
-}
-
-/* A folder a grant already lets the tree list: the granted directory or one below it. */
-static int covered_by_grant(const struct keiko_gateway_grants *grants, const wchar_t *folder) {
-  for (size_t index = 0; index < grants->count; index++)
-    if (path_within(folder, grants->entries[index].path, 1)) return 1;
-  return 0;
-}
-
-static int ancestor_planned(const struct keiko_gateway_grants *grants, const wchar_t *folder) {
-  for (size_t index = 0; index < grants->ancestor_count; index++)
-    if (path_within(folder, grants->ancestors[index].path, 1) &&
-        path_within(grants->ancestors[index].path, folder, 1))
-      return 1;
-  return 0;
-}
-
-/* The folders from `profile` down to the grant's parent, each planned once. */
-static int plan_grant_ancestors(struct keiko_gateway_grants *grants, const wchar_t *path,
-                                const wchar_t *profile) {
-  size_t profile_length = wcslen(profile);
-  for (size_t end = profile_length; path[end] != L'\0'; end++) {
-    wchar_t *folder;
-    if (path[end] != L'\\') continue;
-    folder = calloc(end + 1, sizeof(*folder));
-    if (folder == NULL) return 0;
-    memcpy(folder, path, end * sizeof(*folder));
-    if (covered_by_grant(grants, folder) || ancestor_planned(grants, folder)) {
-      free(folder);
-      continue;
-    }
-    if (grants->ancestor_count == KEIKO_GATEWAY_ANCESTORS_MAX) {
-      free(folder);
-      return 0;
-    }
-    grants->ancestors[grants->ancestor_count].path = folder;
-    grants->ancestors[grants->ancestor_count++].applied = 0;
-  }
-  return 1;
-}
-
-int keiko_gateway_ancestors_plan(_Inout_ struct keiko_gateway_grants *grants,
-                                 _In_z_ const wchar_t *profile) {
-  if (!canonical_drive_path(profile) || profile[wcslen(profile) - 1] == L'\\') return 0;
   for (size_t index = 0; index < grants->count; index++) {
-    const wchar_t *path = grants->entries[index].path;
-    if (!path_within(path, profile, 0)) continue;
-    if (!plan_grant_ancestors(grants, path, profile)) return 0;
+    int refused = apply_entry(grants, &grants->entries[index], tree);
+    if (refused != KEIKO_GRANTS_APPLIED) {
+      keiko_gateway_grants_revoke(grants, tree);
+      grants->capability_count = 0;
+      return refused;
+    }
   }
-  return 1;
+  return KEIKO_GRANTS_APPLIED;
 }
 
 /* An AppContainer package SID: S-1-15-2 and seven sub-authorities. The well-known package groups
@@ -486,19 +408,12 @@ static int stale_tree_entry(const ACCESS_ALLOWED_ACE *ace) {
          package_sid((PSID)&ace->SidStart);
 }
 
-/* Exactly the entry apply_ancestors writes: explicit, not inherited, the list mask alone. */
-static int stale_ancestor_entry(const ACCESS_ALLOWED_ACE *ace) {
-  return ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
-         ace->Mask == KEIKO_GATEWAY_ANCESTOR_MASK && package_sid((PSID)&ace->SidStart);
-}
-
 static void sids_free(PSID *sids, DWORD count) {
   for (DWORD index = 0; index < count; index++) LocalFree(sids[index]);
 }
 
 /* Copies the stale entries' SIDs first: each revoke rewrites the DACL being read. */
-static DWORD stale_sids(const wchar_t *path, int (*stale)(const ACCESS_ALLOWED_ACE *),
-                        PSID sids[KEIKO_GATEWAY_SWEEP_MAX], DWORD *count) {
+static DWORD stale_sids(const wchar_t *path, PSID sids[KEIKO_GATEWAY_SWEEP_MAX], DWORD *count) {
   PACL dacl = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
   ACL_SIZE_INFORMATION size = {0};
@@ -518,7 +433,7 @@ static DWORD stale_sids(const wchar_t *path, int (*stale)(const ACCESS_ALLOWED_A
       result = GetLastError();
       break;
     }
-    if (!stale(ace)) continue;
+    if (!stale_tree_entry(ace)) continue;
     length = GetLengthSid((PSID)&ace->SidStart);
     sid = LocalAlloc(LMEM_FIXED, length);
     if (sid == NULL || !CopySid(length, sid, (PSID)&ace->SidStart)) {
@@ -536,34 +451,26 @@ static DWORD stale_sids(const wchar_t *path, int (*stale)(const ACCESS_ALLOWED_A
   return result;
 }
 
-static void sweep_directory(struct keiko_gateway_sweep *sweep, wchar_t *path,
-                            int (*stale)(const ACCESS_ALLOWED_ACE *)) {
-  PSID sids[KEIKO_GATEWAY_SWEEP_MAX] = {0};
-  DWORD count = 0;
-  if (!plain_directory(path)) return;
-  if (stale_sids(path, stale, sids, &count) != ERROR_SUCCESS) {
-    sweep->failed++;
-    return;
-  }
-  for (DWORD sid = 0; sid < count; sid++) {
-    if (change_entry(path, sids[sid], REVOKE_ACCESS, 0) == ERROR_SUCCESS)
-      sweep->removed++;
-    else
-      sweep->failed++;
-  }
-  sids_free(sids, count);
-}
-
 void keiko_gateway_grants_sweep(_Inout_ void *context) {
   struct keiko_gateway_sweep *sweep = context;
   const struct keiko_gateway_grants *grants = sweep->grants;
   for (size_t index = 0; grants != NULL && index < grants->count; index++) {
     const struct keiko_gateway_grant *grant = &grants->entries[index];
-    if (grant->principal == KEIKO_GRANT_TREE)
-      sweep_directory(sweep, grant->path, stale_tree_entry);
+    PSID sids[KEIKO_GATEWAY_SWEEP_MAX] = {0};
+    DWORD count = 0;
+    if (grant->principal != KEIKO_GRANT_TREE || !plain_directory(grant->path)) continue;
+    if (stale_sids(grant->path, sids, &count) != ERROR_SUCCESS) {
+      sweep->failed++;
+      continue;
+    }
+    for (DWORD sid = 0; sid < count; sid++) {
+      if (change_entry(grant->path, sids[sid], REVOKE_ACCESS, 0) == ERROR_SUCCESS)
+        sweep->removed++;
+      else
+        sweep->failed++;
+    }
+    sids_free(sids, count);
   }
-  for (size_t index = 0; grants != NULL && index < grants->ancestor_count; index++)
-    sweep_directory(sweep, grants->ancestors[index].path, stale_ancestor_entry);
 }
 
 void keiko_gateway_grants_revoke(_Inout_ struct keiko_gateway_grants *grants, PSID tree) {
@@ -574,13 +481,6 @@ void keiko_gateway_grants_revoke(_Inout_ struct keiko_gateway_grants *grants, PS
     if (change_entry(grant->path, tree, REVOKE_ACCESS, 0) != ERROR_SUCCESS)
       fputs("gateway grant revoke failed\n", stderr);
     grant->applied = 0;
-  }
-  for (size_t index = 0; index < grants->ancestor_count; index++) {
-    struct keiko_gateway_ancestor *ancestor = &grants->ancestors[index];
-    if (!ancestor->applied) continue;
-    if (change_entry(ancestor->path, tree, REVOKE_ACCESS, 0) != ERROR_SUCCESS)
-      fputs("gateway ancestor revoke failed\n", stderr);
-    ancestor->applied = 0;
   }
 }
 
@@ -596,9 +496,6 @@ void keiko_gateway_grants_clear(_Inout_ struct keiko_gateway_grants *grants) {
     if (grants->entries[index].capability_sid != NULL)
       LocalFree(grants->entries[index].capability_sid);
   }
-  for (size_t index = 0; index < grants->ancestor_count && index < KEIKO_GATEWAY_ANCESTORS_MAX;
-       index++)
-    free(grants->ancestors[index].path);
   memset(grants, 0, sizeof(*grants));
 }
 #pragma warning(pop)

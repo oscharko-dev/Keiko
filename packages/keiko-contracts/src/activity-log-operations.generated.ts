@@ -21177,6 +21177,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "editor.verification.windows-step-drives",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "editor.windowsStepDrives.record",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["mapped", "no-free-letter", "released", "release-failed"],
+      },
+      driveCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      refusedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["runtime-confinement-unavailable"],
+    proofIds: ["editor.verification.windows-step-drives.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "editor.verification.windows-step-supervisor",
     category: "process",
     owner: "keiko-server",

@@ -47292,12 +47292,20 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["editor.verification.windows-step-supervisor", "runtime.confinement.unavailable"],
+        "state": [
+          "editor.verification.windows-step-drives",
+          "editor.verification.windows-step-supervisor",
+          "runtime.confinement.unavailable"
+        ],
         "end": [],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "editor.verification.windows-step-drives",
+          "mode": "correlation"
+        },
         {
           "op": "editor.verification.windows-step-supervisor",
           "mode": "correlation"
@@ -47309,11 +47317,48 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "editor.verification.windows-step-drives",
         "editor.verification.windows-step-supervisor",
         "runtime.confinement.unavailable"
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "editor.verification.windows-step-drives",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "driveCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "refusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "editor.verification.windows-step-supervisor",
           "owner": "keiko-server",

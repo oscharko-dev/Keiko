@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e0fc2f0289a878af462596cf71384bad96419fffda4287ff1ed16209308c15f1"
+    "catalogDigest": "3554f1fb6133a71408083552eee593bb8dec0d69ac89859766c07262d5408775"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 727,
-    "proofCount": 751,
-    "resolvedProofCount": 751,
+    "operationCount": 728,
+    "proofCount": 752,
+    "resolvedProofCount": 752,
     "failureClassCount": 417,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -700,6 +700,7 @@
         "editor.verification.dependencies",
         "editor.verification.execute",
         "editor.verification.windows-step-copy",
+        "editor.verification.windows-step-drives",
         "editor.verification.windows-step-supervisor",
         "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
@@ -2220,6 +2221,9 @@
     ],
     "editor.verification.windows-step-copy.credentials-skipped": [
       "packages/keiko-server/src/editor/windowsStepWorkspace.test.ts"
+    ],
+    "editor.verification.windows-step-drives.emitted-line": [
+      "packages/keiko-server/src/editor/windowsStepDrives.test.ts"
     ],
     "editor.verification.windows-step-supervisor.emitted-line": [
       "packages/keiko-server/src/editor/windowsStepSupervisor.test.ts"

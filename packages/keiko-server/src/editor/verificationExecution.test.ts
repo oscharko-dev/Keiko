@@ -557,7 +557,11 @@ describe("planIsolationProbe (#4496)", () => {
   } as const;
   const cwd = String.raw`C:\work\repo`;
   const STEP_SUPERVISOR: WindowsStepSupervisor = {
-    acquire: () => ({ path: String.raw`C:\Temp\keiko-runtime-supervisor.exe`, release: () => 0 }),
+    acquire: () => ({
+      path: String.raw`C:\Temp\keiko-runtime-supervisor.exe`,
+      drives: [],
+      release: () => 0,
+    }),
     readRoots: [],
   };
 
