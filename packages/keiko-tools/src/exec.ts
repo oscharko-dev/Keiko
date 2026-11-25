@@ -58,7 +58,6 @@ import {
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
 import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
 import {
-  realWindowsSearchPathEntry,
   windowsStepFrames,
   windowsStepLaunch,
   windowsStepTerminateFrame,
@@ -1910,6 +1909,19 @@ function spawnChild(
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");
+  }
+}
+
+/**
+ * A search-path entry's real folder, resolved as the executable's granted folder was. A missing or
+ * unreadable entry is an ordinary PATH condition, not a failure: it has no real folder and stays as
+ * written (#4492).
+ */
+export function realWindowsSearchPathEntry(entry: string): string | undefined {
+  try {
+    return realpathSync(entry);
+  } catch {
+    return undefined;
   }
 }
 

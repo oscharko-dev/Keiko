@@ -2055,6 +2055,7 @@
     "keiko-server/embedding-provider-identity",
     "keiko-server/evidence",
     "keiko-server/evidence-retention-log",
+    "keiko-server/file-sha256",
     "keiko-server/files",
     "keiko-server/files-copy-log",
     "keiko-server/files-deny",

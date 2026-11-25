@@ -9,10 +9,14 @@ import type { WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { makeWorkspace } from "./_support.js";
 import { CommandCancelledError, CommandDeniedError } from "./errors.js";
-import { runCommand, type RunCommandDeps, type SpawnOptions } from "./exec.js";
+import {
+  realWindowsSearchPathEntry,
+  runCommand,
+  type RunCommandDeps,
+  type SpawnOptions,
+} from "./exec.js";
 import {
   quoteWindowsArgument,
-  realWindowsSearchPathEntry,
   throughWindowsStepDrives,
   windowsStepFrames,
   windowsStepGrants,

@@ -73,7 +73,14 @@ export function indexStatMatches(
   const absolute = resolveWithinWorkspace(root, path);
   if (!fs.exists(absolute)) return false;
   assertContainedRealPath(fs, root, dirname(absolute), "git-raw-parent");
-  const stat = fs.stat(absolute);
+  return statMatchesEntry(fs.stat(absolute), expected, platform);
+}
+
+function statMatchesEntry(
+  stat: WorkspaceStat,
+  expected: GitIndexStat,
+  platform: NodeJS.Platform,
+): boolean {
   return (
     stat.isFile &&
     stat.hardLinkCount === 1 &&

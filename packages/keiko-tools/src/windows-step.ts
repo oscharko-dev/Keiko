@@ -4,7 +4,6 @@
 // reads the answer; exec.ts keeps the single spawn boundary.
 
 import { randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { win32 } from "node:path";
 import type { WindowsStepDrive, WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
 import {
@@ -198,19 +197,6 @@ export function throughWindowsStepDrives(
 
 /** The real folder a search-path entry names (through a junction or link), or undefined. */
 export type WindowsStepRealPath = (entry: string) => string | undefined;
-
-/**
- * A search-path entry's real folder, resolved as the executable's granted folder was. A missing or
- * unreadable entry is an ordinary PATH condition, not a failure: it has no real folder and stays as
- * written (#4492).
- */
-export function realWindowsSearchPathEntry(entry: string): string | undefined {
-  try {
-    return realpathSync(entry);
-  } catch {
-    return undefined;
-  }
-}
 
 // Only a drive-absolute entry is resolved: a relative one would resolve against Keiko's own folder,
 // not the step's, and a share (`\\server\share`) can stall the server while it answers (#4492). A
