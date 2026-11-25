@@ -103,6 +103,22 @@ function nonHermeticEnvBlocks(source: string): number {
   ).length;
 }
 
+function e2eSources(dir: string = E2E_ROOT): readonly string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : e2eSources(path);
+    return /\.(mjs|mts|ts)$/u.test(entry.name) && !/\.test\.m?ts$/u.test(entry.name) ? [path] : [];
+  });
+}
+
+// An env key the harness sets itself (`env: …` or the `env,` shorthand), not `process.env`.
+const OWN_ENV_KEY = /(?<![.\w])env\s*[:,]/u;
+
+function isHermeticHarness(source: string): boolean {
+  if (!OWN_ENV_KEY.test(source)) return true;
+  return source.includes("...HERMETIC_OUTBOUND_ENV") || source.includes("...hermeticOutboundEnv");
+}
+
 function hermeticEnvBlocks(source: string): number {
   return source.split(/\benv:\s*\{/u).length - 1 - nonHermeticEnvBlocks(source);
 }
@@ -140,24 +156,17 @@ describe("every Playwright web server's outbound traffic", () => {
   });
 
   it("reaches a Keiko server whose harness replaces process.env", () => {
-    // A harness that builds Keiko's handler deps with an explicit env drops process.env, so it
-    // must forward the hermetic settings itself, by the names HERMETIC_OUTBOUND_ENV defines.
-    const harnesses = [join(E2E_ROOT, "support"), join(E2E_ROOT, "servers")].flatMap((dir) =>
-      readdirSync(dir)
-        .filter((name) => /\.(mjs|mts|ts)$/u.test(name))
-        .map((name) => join(dir, name)),
+    // A harness that builds Keiko's handler deps and sets their env itself drops process.env, so
+    // it must carry the hermetic settings itself. A harness that sets no env keeps process.env,
+    // which the web server env above makes hermetic.
+    const harnesses = e2eSources().filter((path) =>
+      readFileSync(path, "utf8").includes("buildUiHandlerDeps("),
     );
-    const explicitEnvHarnesses = harnesses.filter((path) =>
-      /buildUiHandlerDeps\(\{[\s\S]{0,400}?\benv:\s*\{/u.test(readFileSync(path, "utf8")),
-    );
-    expect(
-      explicitEnvHarnesses.map((path) => relative(E2E_ROOT, path).split("\\").join("/")),
-    ).toStrictEqual(["support/jira-chat-4081-server.mjs"]);
-    for (const path of explicitEnvHarnesses) {
-      const source = readFileSync(path, "utf8");
-      expect(source).toContain("...hermeticOutboundEnv,");
-      for (const name of Object.keys(HERMETIC_OUTBOUND_ENV)) expect(source).toContain(`"${name}"`);
-    }
+    expect(harnesses.length).toBeGreaterThan(2);
+    const offenders = harnesses
+      .filter((path) => !isHermeticHarness(readFileSync(path, "utf8")))
+      .map((path) => relative(E2E_ROOT, path).split("\\").join("/"));
+    expect(offenders).toStrictEqual([]);
   });
 
   it("flags a web server env block without the hermetic settings", () => {
@@ -179,5 +188,13 @@ describe("every Playwright web server's outbound traffic", () => {
       ),
     ).toBe(true);
     expect(isHermeticConfig("webServer: { command: 'a', env: { ...devServerEnv(1) } }")).toBe(true);
+    expect(isHermeticHarness("buildUiHandlerDeps({ ...options })")).toBe(true);
+    expect(isHermeticHarness("const env = scripted(); buildUiHandlerDeps({ env, store })")).toBe(
+      false,
+    );
+    expect(isHermeticHarness("buildUiHandlerDeps({ env: { KEIKO_STATE_DIR: dir } })")).toBe(false);
+    expect(
+      isHermeticHarness("const env = { ...HERMETIC_OUTBOUND_ENV }; buildUiHandlerDeps({ env })"),
+    ).toBe(true);
   });
 });

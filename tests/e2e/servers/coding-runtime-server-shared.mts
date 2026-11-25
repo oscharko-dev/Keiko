@@ -77,6 +77,7 @@ import { createCodingRuntimeSnapshotStore } from "../../../packages/keiko-server
 import { createCodingRuntimeDescriptionJobStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeDescriptionJobStore.js";
 import type { ProductionWorkbenchDescriptionDispatcher } from "../../../packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.js";
 import { runMigrations } from "../../../packages/keiko-server/src/store/schema.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/active-store.js";
 import { createWorkspaceLifecycleService } from "../../../packages/keiko-server/src/task-workspace/lifecycle.js";
 import { createWorkspaceMutexRegistry } from "../../../packages/keiko-server/src/task-workspace/mutex.js";
@@ -761,7 +762,10 @@ function scriptedEnvironment(
   config: CodingRuntimeJourneyServerConfig,
   bffStateRoot: string,
 ): NodeJS.ProcessEnv {
+  // This env replaces process.env for Keiko's deps, so it carries the hermetic outbound settings
+  // itself: without them the startup update preflight reaches the public registry.
   return {
+    ...HERMETIC_OUTBOUND_ENV,
     PATH: process.env.PATH ?? "",
     ...(config.delivery === true ? { HOME: join(dirname(bffStateRoot), "provider-home") } : {}),
     KEIKO_STATE_DIR: join(bffStateRoot, "state"),
