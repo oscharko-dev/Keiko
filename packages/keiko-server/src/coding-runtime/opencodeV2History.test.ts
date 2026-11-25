@@ -5,6 +5,7 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import {
+  OPENCODE_INVALID_ARGUMENTS_PREFIX,
   OPENCODE_NOT_UTF8_EDIT_REFUSAL,
   OPENCODE_V2_TEXT_PREFIX_INVALID,
   createOpenCodeV2HistoryProjection,
@@ -3367,6 +3368,7 @@ describe("OpenCode V2 history refusals (#4491 audit)", () => {
 // so in a closed word, and the projection line counts it.
 describe("a native edit the runtime refused because the file is not UTF-8", () => {
   const refusal = `Unable to edit PRIVATE_FILE: ${OPENCODE_NOT_UTF8_EDIT_REFUSAL}. It was left unchanged`;
+  const argumentRefusal = `${OPENCODE_INVALID_ARGUMENTS_PREFIX}"edit":\n- oldString: Missing key\n\nUpdate the arguments and call the tool again.`;
 
   function editHistory(
     state: Readonly<Record<string, unknown>>,
@@ -3430,5 +3432,51 @@ describe("a native edit the runtime refused because the file is not UTF-8", () =
     const { signals, line } = project(state);
     expect(signals[0]).not.toHaveProperty("presentation");
     expect(line).not.toHaveProperty("editRefusalCount");
+  });
+
+  // #4546: a failed native call reaches the log as a count, and one the runtime refused for its
+  // arguments (the model is asked to call the tool again) as a closed class of its own.
+  it.each([
+    ["the not-UTF-8 refusal", errored(refusal), 0],
+    ["a call the runtime refused for its arguments", errored(argumentRefusal), 1],
+    ["a message that is not text", errored(42), 0],
+  ])("counts %s as a failed native call", (_name, state, argumentErrors) => {
+    const { line } = project(state);
+    expect(line).toMatchObject({ toolErrorCount: 1 });
+    expect(line?.toolArgumentErrorCount).toBe(argumentErrors === 0 ? undefined : argumentErrors);
+    expect(JSON.stringify(line)).not.toContain("PRIVATE_FILE");
+  });
+
+  it("counts a failed call once, in the pass that first sees it, and never again", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-edit",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const first = editHistory(errored(argumentRefusal));
+    const events = projection.project("ses_edit", first, undefined);
+    const answer = {
+      id: "msg_answer",
+      type: "assistant",
+      time: { created: 3 },
+      content: [{ type: "text", text: "The edit is done." }],
+    };
+    projection.project("ses_edit", [...first, answer], events.at(-1)?.sequence);
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.extra).toMatchObject({ toolErrorCount: 1, toolArgumentErrorCount: 1 });
+    expect(lines[1]?.extra).not.toHaveProperty("toolErrorCount");
+    expect(lines[1]?.extra).not.toHaveProperty("toolArgumentErrorCount");
+  });
+
+  it("counts no failed call for a completed edit", () => {
+    const { line } = project({
+      status: "completed",
+      input: { path: "a.ts", oldString: "a", newString: "b" },
+      content: [],
+    });
+    expect(line).not.toHaveProperty("toolErrorCount");
+    expect(line).not.toHaveProperty("toolArgumentErrorCount");
   });
 });

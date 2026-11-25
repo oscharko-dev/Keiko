@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8b4dc7dbf3041d167bedd9712ba428c05962a35aeef7bce786fa8e1c32ece29d",
+    "catalogDigest": "fe98e37d8b73208e1b9ad88993b02486bb927ded2c65af5a0fe6d6a98ff6b076",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12174,6 +12174,16 @@
             "dataClass": "count",
             "required": false
           },
+          "toolErrorCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "toolArgumentErrorCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "readMode": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -12203,7 +12213,7 @@
         "proofIds": ["coding-runtime.history-projection.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:56",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1505"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1560"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13970,8 +13980,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.native-question.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:130",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1478"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:135",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:1533"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -85209,6 +85219,18 @@
                   "required": false
                 },
                 {
+                  "name": "toolArgumentErrorCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "toolErrorCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "windowTruncated",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -125536,7 +125558,7 @@
     {
       "op": "coding-runtime.native-question.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:133",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:138",
       "package": "keiko-server"
     },
     {

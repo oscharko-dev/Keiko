@@ -33,7 +33,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import { coalescedSyncHints, v2SyncHint } from "./opencodeRuntimeComposition.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OPENCODE_INVALID_ARGUMENTS_PREFIX,
+} from "./opencodeV2History.js";
 import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
@@ -718,6 +721,67 @@ const pause = (signal: AbortSignal): Promise<boolean> =>
 describe("pinned native OpenCode session tree: background subagents", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const CHILD_DELAY_MS = 4_000;
+
+  // #4546: a model that leaves out a required argument (the real-model lab: Gemma's first `subagent`
+  // call without `description`) is refused by the runtime before the tool runs and asked to call it
+  // again. The projection counts that refusal in a closed class, pinned on the runtime's own message.
+  it.skipIf(skip)(
+    "counts a subagent call the runtime refused for a missing argument, and the corrected call runs",
+    async () => {
+      await withRun(async (run) => {
+        let parentCalls = 0;
+        run.gateway.script = (context): ModelPlan => {
+          if (context.role !== "parent") return { kind: "text", text: "CHILD_DONE" };
+          parentCalls += 1;
+          if (parentCalls === 1) {
+            return {
+              kind: "tool",
+              name: "subagent",
+              arguments: { agent: "explore", prompt: "CHILD_TASK do the synthetic work." },
+            };
+          }
+          if (parentCalls === 2) {
+            return {
+              kind: "tool",
+              name: "subagent",
+              arguments: {
+                agent: "explore",
+                description: "Synthetic child",
+                prompt: "CHILD_TASK do the synthetic work.",
+              },
+            };
+          }
+          return { kind: "text", text: "The parent continued." };
+        };
+        await run.client.prompt(run.sessionId, "PARENT_TASK delegate to explore");
+        await expect
+          .poll(() => run.gateway.requests.some((request) => request.role === "child"), {
+            timeout: 60_000,
+          })
+          .toBe(true);
+        const messages = await run.client.messages(run.sessionId);
+        const refused = messages
+          .flatMap((message): readonly unknown[] =>
+            Array.isArray(message.content) ? (message.content as readonly unknown[]) : [],
+          )
+          .map(object)
+          .filter((part) => part?.name === "subagent" && object(part.state)?.status === "error")
+          .map((part) => object(object(part?.state)?.error)?.message);
+        expect(refused).toEqual([
+          expect.stringMatching(new RegExp(`^${OPENCODE_INVALID_ARGUMENTS_PREFIX}"subagent"`, "u")),
+        ]);
+        const sink = createBufferedServerLogSink();
+        createOpenCodeV2HistoryProjection({
+          toolProfile: "native",
+          runId: RUN_ID,
+          activityLog: sink,
+        }).project(run.sessionId, messages, undefined);
+        const line = sink.events.find((event) => event.op === "coding-runtime.history-projection");
+        expect(line?.extra).toMatchObject({ toolErrorCount: 1, toolArgumentErrorCount: 1 });
+      });
+    },
+    120_000,
+  );
 
   // #3903 AC1 (owner decision 2026-10-25): the orchestrating parent keeps the run's model and a
   // subagent configured with its own gateway model runs on it; both requests reach the gateway.

@@ -1082,7 +1082,11 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). It also
+counts the native tool calls of the pass that ended in an error (`toolErrorCount`) and, of those, the
+calls the runtime refused for their arguments before the tool ran and asked the model to repeat
+(`toolArgumentErrorCount`, matched on the runtime's own message and pinned on the real binary, #4546);
+never the message itself. A sync
 reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
 caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
 are carried over unchanged. The runtime completes a streamed part in place, so every message from the

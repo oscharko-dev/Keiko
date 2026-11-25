@@ -11709,6 +11709,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolErrorCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolArgumentErrorCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       readMode: {
         type: "string",
         dataClass: "closed-enum",

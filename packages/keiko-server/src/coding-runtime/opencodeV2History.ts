@@ -99,6 +99,11 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // The native edits of this pass the runtime refused because the file is not UTF-8 text; the
     // file was left unchanged and its tool row says so (#4546). A count, absent when none.
     editRefusalCount: OPTIONAL_COUNT_FIELD,
+    // The native tool calls of this pass that ended in an error, and of those the calls the runtime
+    // refused for their arguments before the tool ran, asking the model to call it again (#4546).
+    // Counts only, never the message; absent when none.
+    toolErrorCount: OPTIONAL_COUNT_FIELD,
+    toolArgumentErrorCount: OPTIONAL_COUNT_FIELD,
     // #4104: how the pass obtained the session's messages. `tail` read only the messages from the
     // last checkpoint's anchor on and carried the older ones over unchanged; `full` read the whole
     // window (the first pass, a catch-up after an event cap, a retry that holds an uncommitted page);
@@ -190,6 +195,8 @@ interface Candidate {
   readonly silentRelease?: true;
   // A held idle message that waits for a background shell command of the current prompt.
   readonly backgroundJobHold?: true;
+  // A tool call that ended in an error, and whether the runtime refused it for its arguments.
+  readonly toolError?: "invalid-arguments" | "other";
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -205,6 +212,8 @@ interface PendingProjection {
   readonly heldIdleCount: number;
   readonly silentReleaseCount: number;
   readonly backgroundJobHoldCount: number;
+  readonly toolErrorCount: number;
+  readonly toolArgumentErrorCount: number;
   /** The children launched and not reported by the end of the scanned messages. */
   readonly owedChildren: ReadonlySet<string>;
   /** The pass stopped at the event cap, so candidates it did not reach are still to be emitted. */
@@ -688,6 +697,26 @@ function toolState(
  */
 export const OPENCODE_NOT_UTF8_EDIT_REFUSAL = "file is not valid UTF-8";
 
+/**
+ * The pinned runtime refuses a call whose arguments do not match the tool's schema before the tool
+ * runs and asks the model to call it again. Its error type (`tool.execution`) is the one every tool
+ * failure carries, so the projection matches the start of the message (pinned on the real binary)
+ * and never shows it.
+ */
+export const OPENCODE_INVALID_ARGUMENTS_PREFIX = "Invalid arguments for tool ";
+
+function toolErrorClass(part: Readonly<Record<string, unknown>>): Pick<Candidate, "toolError"> {
+  const state = record(part.state);
+  if (state?.status !== "error") return {};
+  const message = record(state.error)?.message;
+  return {
+    toolError:
+      typeof message === "string" && message.startsWith(OPENCODE_INVALID_ARGUMENTS_PREFIX)
+        ? "invalid-arguments"
+        : "other",
+  };
+}
+
 function nativeEditNotUtf8(name: string, state: Readonly<Record<string, unknown>>): boolean {
   if (name !== "edit" || state.status !== "error") return false;
   const message = record(state.error)?.message;
@@ -885,12 +914,15 @@ function assistantPartCandidates(
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId, context.toolProfile);
   return [
-    candidate(
-      `${messageId}:tool:${String(index)}`,
-      "tool",
-      part,
-      toolOrPlanSignal(part, messageId, signal),
-    ),
+    {
+      ...candidate(
+        `${messageId}:tool:${String(index)}`,
+        "tool",
+        part,
+        toolOrPlanSignal(part, messageId, signal),
+      ),
+      ...toolErrorClass(part),
+    },
   ];
 }
 
@@ -1405,6 +1437,8 @@ type PassCounts = Pick<
   | "heldIdleCount"
   | "silentReleaseCount"
   | "backgroundJobHoldCount"
+  | "toolErrorCount"
+  | "toolArgumentErrorCount"
 >;
 
 const NO_PASS_COUNTS: PassCounts = {
@@ -1413,6 +1447,8 @@ const NO_PASS_COUNTS: PassCounts = {
   heldIdleCount: 0,
   silentReleaseCount: 0,
   backgroundJobHoldCount: 0,
+  toolErrorCount: 0,
+  toolArgumentErrorCount: 0,
 };
 
 function countPassCandidate(
@@ -1424,6 +1460,25 @@ function countPassCandidate(
   counts.heldIdleCount += Number(item.heldIdle === true);
   counts.silentReleaseCount += Number(item.silentRelease === true);
   counts.backgroundJobHoldCount += Number(item.backgroundJobHold === true);
+  counts.toolErrorCount += Number(item.toolError !== undefined);
+  counts.toolArgumentErrorCount += Number(item.toolError === "invalid-arguments");
+}
+
+/** The pass counts a line carries only when they are not zero. */
+const NON_ZERO_PASS_COUNTS = [
+  "heldIdleCount",
+  "silentReleaseCount",
+  "backgroundJobHoldCount",
+  "toolErrorCount",
+  "toolArgumentErrorCount",
+] as const satisfies readonly (keyof PassCounts)[];
+
+function nonZeroPassCounts(
+  pending: PendingProjection,
+): Partial<Record<(typeof NON_ZERO_PASS_COUNTS)[number], number>> {
+  return Object.fromEntries(
+    NON_ZERO_PASS_COUNTS.flatMap((key) => (pending[key] === 0 ? [] : [[key, pending[key]]])),
+  );
 }
 
 function editRefusalFields(signals: ReadonlyMap<string, CodingSafeActivitySignal>): {
@@ -1517,13 +1572,7 @@ function recordHistoryProjection(
         liveDeltaCount: counts.applied,
         liveDroppedCount: counts.dropped,
         liveDivergedCount: counts.diverged,
-        ...(pending.heldIdleCount === 0 ? {} : { heldIdleCount: pending.heldIdleCount }),
-        ...(pending.silentReleaseCount === 0
-          ? {}
-          : { silentReleaseCount: pending.silentReleaseCount }),
-        ...(pending.backgroundJobHoldCount === 0
-          ? {}
-          : { backgroundJobHoldCount: pending.backgroundJobHoldCount }),
+        ...nonZeroPassCounts(pending),
         ...editRefusalFields(pending.signals),
         ...pending.sync,
       },

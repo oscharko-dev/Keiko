@@ -2890,7 +2890,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     none (`opencodeNativeSessionResume.real.test.ts`). A resumed run accepts the same tree from the
     runtime's session list: one root, the retained session, unique ids, and descendants of it only.
     A fork removes its source together with the subagent sessions under it, so a forked run starts
-    with one session. Because the whole database crosses this
+    with one session. A run stopped while a subagent still works is not retained: the runtime leaves the child's
+    job `running` with a recovery record and both sessions suspended, and a resumed runtime could
+    restart that job without the person (`job-rows`, lab T24 on 2.4.1). Its next run starts fresh
+    from Coding History instead. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
     runtime's own migrations create for the session's runtime version, derived from genuine
