@@ -2439,6 +2439,7 @@
     "keiko-server/review/diff-package/types",
     "keiko-server/review/eventStream",
     "keiko-server/review/fixtureGit.test-support",
+    "keiko-server/review/objectFormat",
     "keiko-server/review/policy/activity-log",
     "keiko-server/review/policy/operator",
     "keiko-server/review/policy/policy",
