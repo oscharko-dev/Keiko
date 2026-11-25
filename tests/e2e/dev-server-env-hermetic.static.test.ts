@@ -103,12 +103,19 @@ function nonHermeticEnvBlocks(source: string): number {
   ).length;
 }
 
-function referencesHermeticEnv(source: string): boolean {
-  return (
-    source.includes("HERMETIC_OUTBOUND_ENV") ||
-    source.includes("devServerEnv(") ||
-    source.includes("baseConfig.webServer")
-  );
+function hermeticEnvBlocks(source: string): number {
+  return source.split(/\benv:\s*\{/u).length - 1 - nonHermeticEnvBlocks(source);
+}
+
+// Each server a config starts (a `command:`) needs its own hermetic env block: importing the
+// settings, or giving only one of several servers the env, leaves the rest on process.env. A
+// derived config starts no command of its own and inherits the base config's servers' env.
+function isHermeticConfig(source: string): boolean {
+  const servers = source.match(/\bcommand:/gu)?.length ?? 0;
+  if (nonHermeticEnvBlocks(source) > 0) return false;
+  if (servers === 0)
+    return source.includes("baseConfig.webServer") && hermeticEnvBlocks(source) > 0;
+  return hermeticEnvBlocks(source) >= servers;
 }
 
 describe("every Playwright web server's outbound traffic", () => {
@@ -126,8 +133,7 @@ describe("every Playwright web server's outbound traffic", () => {
     expect(configs.length).toBeGreaterThan(40);
     const offenders = configs
       .filter((path) => {
-        const source = readFileSync(path, "utf8");
-        return !referencesHermeticEnv(source) || nonHermeticEnvBlocks(source) > 0;
+        return !isHermeticConfig(readFileSync(path, "utf8"));
       })
       .map((path) => relative(E2E_ROOT, path).split("\\").join("/"));
     expect(offenders).toStrictEqual([]);
@@ -157,6 +163,21 @@ describe("every Playwright web server's outbound traffic", () => {
   it("flags a web server env block without the hermetic settings", () => {
     expect(nonHermeticEnvBlocks('webServer: { env: { KEIKO_OS_KEYCHAIN: "off" } }')).toBe(1);
     expect(nonHermeticEnvBlocks("webServer: { env: { ...HERMETIC_OUTBOUND_ENV, A: 1 } }")).toBe(0);
-    expect(referencesHermeticEnv("webServer: { command: 'node server.mjs' }")).toBe(false);
+    expect(isHermeticConfig("webServer: { command: 'node server.mjs' }")).toBe(false);
+    const importOnly = [
+      'import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";',
+      "webServer: { command: 'node server.mjs', url: 'http://127.0.0.1:1' }",
+    ].join("\n");
+    expect(isHermeticConfig(importOnly)).toBe(false);
+    const oneOfTwo =
+      "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV } }, { command: 'b' }]";
+    expect(isHermeticConfig(oneOfTwo)).toBe(false);
+    expect(
+      isHermeticConfig(
+        "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV } }, " +
+          "{ command: 'b', env: { ...HERMETIC_OUTBOUND_ENV } }]",
+      ),
+    ).toBe(true);
+    expect(isHermeticConfig("webServer: { command: 'a', env: { ...devServerEnv(1) } }")).toBe(true);
   });
 });
