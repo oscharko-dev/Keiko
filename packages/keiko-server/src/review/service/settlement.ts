@@ -74,13 +74,11 @@ function uncheckedCandidatesReason(
   return facts.uncheckedReason ?? "deadline-exceeded";
 }
 
-function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteReason> {
-  const reasons = new Set<ReviewIncompleteReason>();
-  // A fact that was never recorded is no evidence of a clean review: the pure rule fails closed
-  // instead of trusting every caller to have filled it.
-  if (facts.reviewer === undefined) reasons.add("model-failed");
-  else if (facts.reviewer.outcome === "failed") reasons.add(facts.reviewer.reason);
-  if (facts.coverage === undefined) reasons.add("files-unprocessed");
+/** The incomplete reasons the counter-checks' effects add. */
+function addCounterCheckReasons(
+  facts: ReviewSettlementFacts,
+  reasons: Set<ReviewIncompleteReason>,
+): void {
   for (const effect of facts.counterChecks) {
     if (
       effect === "model-failed" ||
@@ -90,6 +88,16 @@ function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteRe
       reasons.add(effect);
     }
   }
+}
+
+function incompleteReasons(facts: ReviewSettlementFacts): Set<ReviewIncompleteReason> {
+  const reasons = new Set<ReviewIncompleteReason>();
+  // A fact that was never recorded is no evidence of a clean review: the pure rule fails closed
+  // instead of trusting every caller to have filled it.
+  if (facts.reviewer === undefined) reasons.add("model-failed");
+  else if (facts.reviewer.outcome === "failed") reasons.add(facts.reviewer.reason);
+  if (facts.coverage === undefined) reasons.add("files-unprocessed");
+  addCounterCheckReasons(facts, reasons);
   const unchecked = uncheckedCandidatesReason(facts);
   if (unchecked !== undefined) reasons.add(unchecked);
   if (facts.coverage?.kind === "incomplete") reasons.add(facts.coverage.reason);
