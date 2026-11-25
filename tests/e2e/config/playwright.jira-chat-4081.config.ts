@@ -58,6 +58,7 @@ export default defineConfig({
       url: `http://127.0.0.1:${draftPort}/`,
       reuseExistingServer: false,
       timeout: 120_000,
+      env: { ...HERMETIC_OUTBOUND_ENV },
     },
   ],
 });
