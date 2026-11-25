@@ -1350,6 +1350,32 @@ function recordRuntimeStartFailure(
   });
 }
 
+/** Why a start could not resolve its workspace, principal or task history (#4492). */
+type StartScopeGap =
+  "no-active-workspace" | "no-principal" | "conversation-not-admitted" | "prior-run-missing";
+
+// The start refusal `authority-resolution-failed` covers four different gaps; the operator's log
+// names which one, so a customer report locates it without a reproduction (#4492: a recreated
+// repository had invalidated the active workspace, and nothing said so).
+function recordStartScopeGap(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  gap: StartScopeGap,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId:
+      correlationId !== undefined && isValidCorrelationId(correlationId)
+        ? correlationId
+        : UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.start",
+    source: "coding-runtime-orchestrator.start",
+    errorClass: "CodingRuntimeStartScopeUnresolved",
+    message: "runtime-start-failed",
+    code: `stage=start-scope:reason=${gap}`,
+  });
+}
+
 function recordRuntimeLifecycleFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -4378,7 +4404,10 @@ export class CodingRuntimeOrchestrator {
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
-    if (scope === undefined) return this.fail("authority-resolution-failed");
+    if ("gap" in scope) {
+      recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap);
+      return this.fail("authority-resolution-failed");
+    }
     const { active, principal } = scope;
     let { request } = scope;
     const runId = this.newRunId();
@@ -4567,16 +4596,19 @@ export class CodingRuntimeOrchestrator {
         readonly principal: string;
         readonly request: CodingWorkbenchRuntimeStartRequest;
       }
-    | undefined {
+    | { readonly gap: StartScopeGap } {
     const active = this.activeWorkspaceOrUndefined();
+    if (!active) return { gap: "no-active-workspace" };
     const principal = this.deps.serverPrincipal();
-    if (!active || !principal) return undefined;
+    if (!principal) return { gap: "no-principal" };
     if (request.conversationId === undefined) return { active, principal, request };
     // (a fork has no conversation id: it begins a new task, see `beginHistory`)
-    if (!this.deps.history?.admits(request.conversationId, active)) return undefined;
+    if (!this.deps.history?.admits(request.conversationId, active)) {
+      return { gap: "conversation-not-admitted" };
+    }
     const priorId = this.deps.history.previousRunId(request.conversationId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
-    if (prior === undefined) return undefined;
+    if (prior === undefined) return { gap: "prior-run-missing" };
     return { active, principal, request: this.continuedIssueRequest(request, prior) };
   }
 

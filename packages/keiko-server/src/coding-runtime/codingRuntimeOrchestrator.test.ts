@@ -3145,6 +3145,32 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // #4492: a recreated repository invalidated the active workspace, the start answered
+  // `authority-resolution-failed`, and the log named no cause. Each scope gap now has its reason.
+  it.each([
+    ["conversation-not-admitted", { admits: () => false, previousRunId: () => undefined }],
+    ["prior-run-missing", { admits: () => true, previousRunId: () => "run-unknown" }],
+  ] as const)("names the start scope gap %s in its diagnostic", async (gap, history) => {
+    const captured = captureDiagnostics();
+    const f = fixtureFrom({ diagnostics: captured.diagnostics, history: history as never });
+
+    expect(
+      await f.orchestrator.start(
+        { ...start, conversationId: "task-prior" },
+        "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b11",
+      ),
+    ).toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b11",
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start-scope:reason=${gap}`,
+      }),
+    );
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+  });
+
   it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {
     const f = fixture();
     f.launchResolver.resolve.mockImplementationOnce(() => {
