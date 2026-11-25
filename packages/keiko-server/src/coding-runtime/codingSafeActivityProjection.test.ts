@@ -1354,6 +1354,47 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(content)).not.toContain("tail");
   });
 
+  // #4546 (real-model lab F1): two answers of one turn ran into the output limit, so the turn went
+  // over its byte bound. Shedding the oldest content must not shed the turn's messages themselves:
+  // the turn's user message is the parent every later answer names, and a message whose text was
+  // shed still streams. Both kept arriving and were dropped as unknown, an internal failure each.
+  it("keeps a turn's messages when its byte bound sheds content, so later answers still arrive", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurnBytes: 600, maxTotalBytes: 100_000 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const accepted = [
+      message("msg_user", "user"),
+      text("msg_user", "Add the dependency."),
+      message("msg_loop", "assistant", "msg_user"),
+      text("msg_loop", "x".repeat(700)),
+      text("msg_loop", "y".repeat(700)),
+      message("msg_final", "assistant", "msg_user"),
+      text("msg_final", "FINAL answer"),
+    ].map((signal) => projection.ingest(RUN_ID, signal));
+
+    expect(accepted).toEqual(accepted.map(() => true));
+    const content = projection.currentContent();
+    expect(content?.feed).toMatchObject({ availability: "available", droppedEventCount: 0 });
+    if (content?.feed.availability !== "available") return;
+    expect(content.feed.turns).toHaveLength(1);
+    expect(content.feed.turns[0]).toMatchObject({ truncated: true });
+    expect(content.feed.turns[0]?.messages.map(({ messageId }) => messageId)).toEqual([
+      "msg_user",
+      "msg_loop",
+      "msg_final",
+    ]);
+    expect(JSON.stringify(content)).toContain("FINAL answer");
+    expect(JSON.stringify(content)).not.toContain("x".repeat(700));
+    expect(Buffer.byteLength(JSON.stringify(content.feed.turns[0]), "utf8")).toBeLessThan(600);
+  });
+
   it("ignores mismatched purge requests and can purge an existing feed process-wide", () => {
     const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
     projection.purgeAll("shutdown");

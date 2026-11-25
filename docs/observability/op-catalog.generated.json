@@ -125894,14 +125894,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1788",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1789",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1806",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1807",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

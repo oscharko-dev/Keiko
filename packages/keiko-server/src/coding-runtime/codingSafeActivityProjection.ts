@@ -1433,7 +1433,7 @@ function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimit
 function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
   if (entry.feed.availability !== "available") return;
   const feed = entry.feed;
-  for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
+  for (const turn of feed.turns) shrinkTurn(turn, limits.maxTurnBytes);
   shedSettledReasoning(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
     const removed = feed.turns.shift();
@@ -1459,16 +1459,17 @@ function shedSettledReasoning(turns: readonly MutableTurn[], over: () => boolean
   }
 }
 
-function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
+// #4546: a turn over its byte bound sheds its oldest content, never its messages. The turn's user
+// message is the parent every later answer names, and a message whose text was shed may still
+// stream; a message without content costs a few bytes, and `maxMessagesPerTurn` bounds how many.
+function shrinkTurn(turn: MutableTurn, maxBytes: number): void {
+  if (bytes(turn) <= maxBytes) return;
   shedSettledReasoning([turn], () => bytes(turn) > maxBytes);
-  while (bytes(turn) > maxBytes && turn.messages.length > 0) {
-    const message = turn.messages[0];
-    if (message !== undefined && message.segments.length > 0) message.segments.shift();
-    else {
-      const removed = turn.messages.shift();
-      if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
+  for (const message of turn.messages) {
+    while (message.segments.length > 0 && bytes(turn) > maxBytes) {
+      message.segments.shift();
+      turn.truncated = true;
     }
-    turn.truncated = true;
   }
   while (bytes(turn) > maxBytes && turn.tools.length > 0) {
     turn.tools.shift();
