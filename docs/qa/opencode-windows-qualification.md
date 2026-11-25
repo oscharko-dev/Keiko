@@ -2625,15 +2625,19 @@ Findings:
      one core. That covers `exec`, `execSync`, `spawn` with the default stdio and `fork`. A named
      pipe in the global namespace cannot be created; one under `\\.\pipe\LOCAL\` can, with a full
      round trip.
-   - Cause, read in the source: Node.js 26.13.1 ships libuv 1.52.1. That version names a child's
-     pipes `\\?\pipe\uv\…` in the global namespace. In `uv__pipe_server` it treats
-     `ERROR_ACCESS_DENIED` as a name collision and retries without end.
+   - Cause, from the source and the measurement, not instrumented: Node.js 26.13.1 ships libuv
+     1.52.1. That version names a child's pipes `\\?\pipe\uv\…` in the global namespace. In
+     `uv__pipe_server` it treats `ERROR_ACCESS_DENIED` as a name collision and retries in a loop
+     that has no retry limit.
    - The fix exists upstream. libuv 1.53.0 (libuv/libuv#5181) adds the `LOCAL\` prefix inside an
-     AppContainer. On 2026-11-25 no Node.js release carries it; nodejs/node#66282 is open.
-   - Consequence: with today's Node.js releases, test runners that use worker processes cannot run
-     in the tree. npm runs its foreground script with inherited handles, so `npm test` with a plain
-     script works. The probe's own runner hung the same way until it redirected output to files.
-     Because the hang never ends by itself, only a bounded run time stops it.
+     AppContainer. On 2026-11-25 neither Node.js 26.13.1 nor the 27 alpha carries it;
+     nodejs/node#66282 is open.
+   - Consequence: with these Node.js releases, a project command cannot run in the tree if it
+     starts child processes with pipes or IPC. That covers `fork` and `child_process` pools.
+     `worker_threads` do not use these pipes, and no test runner was run. npm runs its foreground
+     script with inherited handles, so `npm test` with a plain script works. The probe's own runner
+     hung the same way until it redirected output to files. The calls did not return within the
+     probe's timeout.
 2. **Node.js needs `--preserve-symlinks --preserve-symlinks-main` in the tree.** Without them,
    `realpath` stats the drive root, which the tree may not read. The product does not set these
    flags today; project commands would have to.
