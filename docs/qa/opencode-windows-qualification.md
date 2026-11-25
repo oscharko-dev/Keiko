@@ -2602,7 +2602,8 @@ hardware.
 | npm             | `npm install` of a registry package (with that option)                                                                                       | `ENOTFOUND`                                                                                                           | installs                              |
 | Child processes | Node.js `spawnSync` with default stdio pipes, `execSync`, `fork` with IPC                                                                    | never return; ended by the probe's timeout                                                                            | run                                   |
 | Child processes | Node.js `spawnSync` with inherited handles                                                                                                   | runs                                                                                                                  | runs                                  |
-| Child processes | Node.js named pipe server under `\\.\pipe\` and `\\.\pipe\LOCAL\`                                                                            | `EACCES`                                                                                                              | —                                     |
+| Child processes | a Node.js named pipe server and a client round trip under `\\.\pipe\`                                                                        | `EADDRINUSE` (libuv's code for access denied)                                                                         | works                                 |
+| Child processes | the same under `\\.\pipe\LOCAL\`, the AppContainer's own namespace                                                                           | works                                                                                                                 | works                                 |
 | Process tree    | a detached Node.js child that is alive before the tree ends                                                                                  | gone after the end                                                                                                    | still alive (the control ends it)     |
 | Git             | `git status`, `git diff`, `git log` in a clone and its linked worktree (Git 2.56.1 under `Program Files`)                                    | run                                                                                                                   | run                                   |
 | Git             | the same in a folder that is not a repository                                                                                                | `fatal: failed to stat '<parent>': Permission denied`                                                                 | `not a git repository`                |
@@ -2619,16 +2620,20 @@ hardware.
 
 Findings:
 
-1. **Node.js child processes with stdio or IPC pipes never start in the tree.**
-   - What was measured: the tree may not create a named pipe (`EACCES`), and every Node.js call
-     that gives a child pipes hangs. That covers `exec`, `execSync`, `spawn` with the default
-     stdio and `fork`. While hung, the process spins one core.
-   - The likely cause, not instrumented: libuv creates a child's pipes as named pipes under
-     `\\?\pipe\uv\`, and its source treats `ERROR_ACCESS_DENIED` there as a name collision and
-     tries a new name.
-   - Consequence: test runners with worker processes cannot run as they stand. npm runs its
-     foreground script with inherited handles, so `npm test` with a plain script works. The
-     probe's own runner hung the same way until it redirected output to files.
+1. **Node.js 26.13.1 cannot start a child process with stdio or IPC pipes in the tree.**
+   - What was measured: every Node.js call that gives a child pipes hangs, and while hung it spins
+     one core. That covers `exec`, `execSync`, `spawn` with the default stdio and `fork`. A named
+     pipe in the global namespace cannot be created; one under `\\.\pipe\LOCAL\` can, with a full
+     round trip.
+   - Cause, read in the source: Node.js 26.13.1 ships libuv 1.52.1. That version names a child's
+     pipes `\\?\pipe\uv\…` in the global namespace. In `uv__pipe_server` it treats
+     `ERROR_ACCESS_DENIED` as a name collision and retries without end.
+   - The fix exists upstream. libuv 1.53.0 (libuv/libuv#5181) adds the `LOCAL\` prefix inside an
+     AppContainer. On 2026-11-25 no Node.js release carries it; nodejs/node#66282 is open.
+   - Consequence: with today's Node.js releases, test runners that use worker processes cannot run
+     in the tree. npm runs its foreground script with inherited handles, so `npm test` with a plain
+     script works. The probe's own runner hung the same way until it redirected output to files.
+     Because the hang never ends by itself, only a bounded run time stops it.
 2. **Node.js needs `--preserve-symlinks --preserve-symlinks-main` in the tree.** Without them,
    `realpath` stats the drive root, which the tree may not read. The product does not set these
    flags today; project commands would have to.
