@@ -5210,6 +5210,9 @@ describe("CodingRuntimeOrchestrator", () => {
     ["runtime-supervisor-grants-capability", "runtime-supervisor-grants-capability"],
     ["runtime-supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
     ["runtime-supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    // #4495: started outside a signed-in desktop session, or from a path too long to relay.
+    ["runtime-supervisor-no-desktop", "runtime-supervisor-no-desktop"],
+    ["runtime-supervisor-image-path", "runtime-supervisor-image-path"],
     ["runtime-supervisor-refused", "runtime-supervisor-refused"],
   ] as const)(
     "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
