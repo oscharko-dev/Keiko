@@ -97,6 +97,15 @@ function response(overrides: Partial<NormalizedResponse> = {}): NormalizedRespon
   };
 }
 
+// A new installation ships no skill, so a test that needs one approves it explicitly.
+const REPO = {
+  skillId: "skl_repo-structure-summary@1",
+  implicitAllowed: true,
+  category: "repository-analysis",
+  capabilities: ["keiko.workspace.read"],
+  compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+} as const;
+
 interface PortsOptions {
   readonly emit?: ((event: unknown) => void) | undefined;
   readonly researchGrantRegistry?:
@@ -116,7 +125,7 @@ function ports(
   observed: string[] = [],
   options: PortsOptions = {},
 ): ReturnType<typeof createProductionAuxiliaryPorts> {
-  const catalog = options.catalog ?? createServerApprovedSkillCatalog();
+  const catalog = options.catalog ?? createServerApprovedSkillCatalog([REPO]);
   return createProductionAuxiliaryPorts({
     authority: {
       state: () => ({
@@ -541,14 +550,6 @@ describe("createProductionAuxiliaryPorts", () => {
 // #3417: discovery lists what the approved catalog holds and the run may invoke now; invocation
 // re-checks the same readiness and the run's discovery binding before any effect.
 describe("approved skill discovery through the production ports (#3417)", () => {
-  const REPO = {
-    skillId: "skl_repo-structure-summary@1",
-    implicitAllowed: true,
-    category: "repository-analysis",
-    capabilities: ["keiko.workspace.read"],
-    compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
-  } as const;
-
   function discoveryAction(): CodingToolActionOf<"skill-discover"> {
     return {
       action: "skill-discover",

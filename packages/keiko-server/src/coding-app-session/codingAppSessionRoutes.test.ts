@@ -924,19 +924,16 @@ describe("app-session answer pages", () => {
   });
 
   it.each([
-    ["no channel", undefined, "runId=run-answer&messageId=msg-answer&offset=0", false],
-    ["no session", "unpaired", "runId=run-answer&messageId=msg-answer&offset=0", false],
-    ["a malformed offset", "paired", "runId=run-answer&messageId=msg-answer&offset=01", true],
-    ["a negative offset", "paired", "runId=run-answer&messageId=msg-answer&offset=-1", true],
-    ["a missing message", "paired", "runId=run-answer&offset=0", true],
-    ["an extra key", "paired", "runId=run-answer&messageId=msg-answer&offset=0&raw=1", true],
-    [
-      "an unknown part",
-      "paired",
-      "runId=run-answer&messageId=msg-answer&part=prompt&offset=0",
-      true,
-    ],
-  ] as const)("serves the page-free response for %s", (_label, session, query, paired) => {
+    ["no channel", undefined, "runId=run-answer&messageId=msg-answer&offset=0"],
+    ["no session", "unpaired", "runId=run-answer&messageId=msg-answer&offset=0"],
+    ["a malformed offset", "paired", "runId=run-answer&messageId=msg-answer&offset=01"],
+    ["a negative offset", "paired", "runId=run-answer&messageId=msg-answer&offset=-1"],
+    ["a missing message", "paired", "runId=run-answer&offset=0"],
+    ["an extra key", "paired", "runId=run-answer&messageId=msg-answer&offset=0&raw=1"],
+    ["an unknown part", "paired", "runId=run-answer&messageId=msg-answer&part=prompt&offset=0"],
+    ["an unsafe run id", "paired", "runId=..%2Frun&messageId=msg-answer&offset=0"],
+    ["an overlong message id", "paired", `runId=run-answer&messageId=${"m".repeat(129)}&offset=0`],
+  ] as const)("serves the page-free response for %s", (_label, session, query) => {
     let asked = 0;
     const { channel, cookie } = answerChannel(() => {
       asked += 1;
@@ -949,11 +946,41 @@ describe("app-session answer pages", () => {
     );
     expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
     expect(asked).toBe(0);
-    expect(paired || session !== "paired").toBe(true);
     expect(events[0]).toMatchObject({
       correlationId: "answer-correlation",
       extra: { outcome: "unavailable", pageChars: 0 },
     });
+  });
+
+  it("records refused reads at their 1st, 2nd and 4th occurrence, never one line per request", () => {
+    const { deps: logDeps, events } = loggedDeps(undefined);
+    for (let index = 0; index < 7; index += 1) {
+      handleCodingAppSessionAnswerPage(
+        answerCtx("runId=run-answer&messageId=msg-answer&offset=0"),
+        logDeps,
+      );
+    }
+    expect(events.map((event) => event.extra?.occurrenceCount)).toEqual([1, 2, 4]);
+  });
+
+  it("writes one line when a read completes, none for the pages before it", () => {
+    const first = { ...PAGE, text: "Review", length: 10 } as const;
+    const { channel, cookie } = answerChannel(({ offset }) =>
+      offset === 0 ? first : { ...PAGE, offset: 6, text: " ok.", length: 10 },
+    );
+    const { deps: logDeps, events } = loggedDeps(channel);
+    handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      logDeps,
+    );
+    expect(events).toEqual([]);
+    handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=6", cookie),
+      logDeps,
+    );
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ outcome: "served", offset: 6, complete: true, answerChars: 10 }),
+    ]);
   });
 
   it("serves a reasoning page under the run's correlation", () => {

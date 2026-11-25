@@ -2,6 +2,7 @@ import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
   CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
   CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   type CodingSafeActivityAnswerPage,
   type CodingSafeActivityFullAnswer,
@@ -14,7 +15,8 @@ import {
 // complete text of every assistant answer and reasoning the feed lists is kept here, beside it. A
 // live update carries what each text gained since the previous one as an append-only delta, and a
 // reader that missed some reads it page by page. The only bound is the run's memory bound, and its
-// cut is shown on the message.
+// cut is shown on the message; reasoning may fill at most half of it, so it never crowds out an
+// answer.
 
 /** The complete text of one assistant answer or reasoning, as the model streamed it. */
 export interface RetainedText {
@@ -44,6 +46,8 @@ export interface RetainedTexts {
   readonly maxChars: number;
   /** UTF-16 code units held across all texts of the run. */
   chars: number;
+  /** UTF-16 code units held across the run's reasoning, which may use at most half the bound. */
+  reasoningChars: number;
   readonly counts: Record<CodingSafeActivityTextPart, RetainedTextCounts>;
 }
 
@@ -58,6 +62,7 @@ export function createRetainedTexts(maxChars: number): RetainedTexts {
     byKey: new Map(),
     maxChars,
     chars: 0,
+    reasoningChars: 0,
     counts: { answer: { named: 0, clipped: 0 }, reasoning: { named: 0, clipped: 0 } },
   };
 }
@@ -68,6 +73,7 @@ export function cloneRetainedTexts(store: RetainedTexts): RetainedTexts {
     byKey: new Map([...store.byKey].map(([key, text]) => [key, { ...text }])),
     maxChars: store.maxChars,
     chars: store.chars,
+    reasoningChars: store.reasoningChars,
     counts: { answer: { ...store.counts.answer }, reasoning: { ...store.counts.reasoning } },
   };
 }
@@ -77,6 +83,7 @@ export function restoreRetainedTexts(target: RetainedTexts, source: RetainedText
   target.byKey.clear();
   for (const [key, text] of source.byKey) target.byKey.set(key, text);
   target.chars = source.chars;
+  target.reasoningChars = source.reasoningChars;
   target.counts.answer = source.counts.answer;
   target.counts.reasoning = source.counts.reasoning;
 }
@@ -122,16 +129,25 @@ export function retainText(
   if (retained.truncated) return { retained, kept: "" };
   const { whole, pending } = splitPendingSurrogate(retained.pendingHighSurrogate + piece);
   retained.pendingHighSurrogate = pending;
-  const room = store.maxChars - store.chars;
+  const room = roomFor(store, part);
   const kept = whole.length <= room ? whole : whole.slice(0, wholeCharacterCut(whole, room));
   retained.text += kept;
   store.chars += kept.length;
+  if (part === "reasoning") store.reasoningChars += kept.length;
   if (kept.length < whole.length) {
     retained.truncated = true;
     retained.pendingHighSurrogate = "";
     store.counts[part].clipped += 1;
   }
   return { retained, kept };
+}
+
+// The room a text has left. Reasoning may take at most half the run's bound, so however long a model
+// thinks, half of the bound stays for its answers.
+function roomFor(store: RetainedTexts, part: CodingSafeActivityTextPart): number {
+  const room = store.maxChars - store.chars;
+  if (part === "answer") return room;
+  return Math.max(0, Math.min(room, Math.floor(store.maxChars / 2) - store.reasoningChars));
 }
 
 function splitPendingSurrogate(text: string): { readonly whole: string; readonly pending: string } {
@@ -149,6 +165,7 @@ export function releaseUnlistedTexts(
   for (const [key, retained] of store.byKey) {
     if (listed(retained.messageId)) continue;
     store.chars -= retained.text.length;
+    if (retained.part === "reasoning") store.reasoningChars -= retained.text.length;
     store.byKey.delete(key);
   }
 }
@@ -206,7 +223,8 @@ export function retainedTextPage(
 /**
  * What every listed text gained since the previous live update, within `budgetBytes` of serialized
  * deltas. Every text counts as announced afterwards: a gain left out — over the budget, over the
- * delta count, or longer than a page — reaches the reader as pages, never as a gap it cannot see.
+ * delta count, or longer than a delta may be — reaches the reader as pages, never as a gap it cannot
+ * see.
  */
 export function takeTextDeltas(
   store: RetainedTexts,
@@ -227,7 +245,7 @@ export function takeTextDeltas(
     };
     const cost = utf8.encode(JSON.stringify(delta)).length + 1;
     if (
-      delta.text.length > CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS ||
+      delta.text.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS ||
       deltas.length >= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS ||
       used + cost > budgetBytes
     ) {

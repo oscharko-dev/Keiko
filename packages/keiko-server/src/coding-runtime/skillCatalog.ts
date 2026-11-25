@@ -90,25 +90,6 @@ export interface SkillCatalog {
   readonly replace: (entries: readonly SkillCatalogEntryInput[]) => SkillCatalogChange;
 }
 
-// The default seed of read-only skills. It flows through the same canonicalization path as any
-// injected entry, so there is exactly one admission gate for the catalog.
-//
-// The seed lists ONLY categories the production skill port can actually execute — today just
-// `repository-analysis` (productionAuxiliaryPorts.executeApprovedSkill). Advertising a skill whose
-// category has no handler is worse than not advertising it: the model reads the catalog, invokes
-// it, and burns a turn on a `skill-handler-unavailable` outcome it cannot learn from. The
-// `public-research` and `documentation-lookup` categories stay defined in SKILL_CATEGORIES and are
-// re-seeded here by whichever child implements their handler.
-const DEFAULT_APPROVED_SKILLS: readonly SkillCatalogEntryInput[] = Object.freeze([
-  {
-    skillId: "skl_repo-structure-summary@1",
-    implicitAllowed: true,
-    category: "repository-analysis",
-    capabilities: ["keiko.workspace.read"],
-    compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
-  },
-]);
-
 type SkillDefinition = Omit<SkillCatalogEntry, "enabled" | "sourceDigest">;
 
 interface CatalogSnapshot {
@@ -192,12 +173,13 @@ function admit(candidates: readonly unknown[], revision: number): CatalogSnapsho
 }
 
 /**
- * Build a server-approved skill catalog. Entries default to the read-only seed; a caller may inject
- * a set instead. Invalid entries are dropped (fail closed) and the first admission of a skill wins,
- * so a later untrusted duplicate can never override it.
+ * Build a server-approved skill catalog. A new installation starts with an empty catalog: no skill is
+ * approved until a caller injects the set or `replace` admits one. Invalid entries are dropped (fail
+ * closed) and the first admission of a skill wins, so a later untrusted duplicate can never override
+ * it.
  */
 export function createServerApprovedSkillCatalog(
-  entries: readonly SkillCatalogEntryInput[] = DEFAULT_APPROVED_SKILLS,
+  entries: readonly SkillCatalogEntryInput[] = [],
 ): SkillCatalog {
   let current = admit(entries, 1);
   return {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -646,16 +647,18 @@ describe("coding safe-activity contract — full answer", () => {
   it("accepts a bounded page inside the answer and the empty page at its end", () => {
     expect(validateCodingSafeActivityAnswerPage(page({})).ok).toBe(true);
     const full = "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
-    expect(validateCodingSafeActivityAnswerPage(page({ text: full, length: 70_000 })).ok).toBe(
-      true,
-    );
+    const length = 2 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS;
+    expect(validateCodingSafeActivityAnswerPage(page({ text: full, length })).ok).toBe(true);
     expect(validateCodingSafeActivityAnswerPage(page({ offset: 100, text: "" })).ok).toBe(true);
   });
 
   it.each([
     [
       "longer than a page",
-      { text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1), length: 70_000 },
+      {
+        text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1),
+        length: 2 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+      },
     ],
     ["beyond the answer's end", { offset: 95, text: "0123456789" }],
     ["empty before the end", { offset: 10, text: "" }],
@@ -729,8 +732,8 @@ describe("coding safe-activity contract — text deltas", () => {
     ["of an unknown part", [{ ...delta, part: "prompt" }]],
     ["with empty text", [{ ...delta, text: "" }]],
     [
-      "longer than a page",
-      [{ ...delta, text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1) }],
+      "longer than a delta's bound",
+      [{ ...delta, text: "x".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS + 1) }],
     ],
     ["at a negative offset", [{ ...delta, offset: -1 }]],
     [

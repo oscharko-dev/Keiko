@@ -61,6 +61,7 @@ import type {
   ProductionRuntimeBackendInput,
 } from "../productionCodingRuntimeResolver.js";
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
+import { createServerApprovedSkillCatalog, type SkillCatalogEntryInput } from "../skillCatalog.js";
 import {
   H1_PROOF_SEARCH_CALL_ID,
   repositorySearchReadHandoff,
@@ -203,6 +204,18 @@ function isChildModelId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
+// A new installation approves no skill (the catalog starts empty), so the functional journeys that
+// invoke one admit it here, through the same canonicalization gate as any approved set.
+const FUNCTIONAL_APPROVED_SKILLS: readonly SkillCatalogEntryInput[] = Object.freeze([
+  {
+    skillId: "skl_repo-structure-summary@1",
+    implicitAllowed: true,
+    category: "repository-analysis",
+    capabilities: ["keiko.workspace.read"],
+    compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+  },
+]);
+
 /**
  * Composes the production OpenCode backend + resolver for the functional harness and attaches the
  * single gateway-readiness registry both to the backend (challenge wait side) and to the resolved
@@ -231,6 +244,7 @@ export function createFunctionalRuntimeResolver(
     ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
     ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
     backend: functionalBackend(input, readiness),
+    skillCatalog: createServerApprovedSkillCatalog(FUNCTIONAL_APPROVED_SKILLS),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
     editorAgentClient: functionalEditorAgentClient(activeRoot, input.runtimeMutationLeaseBroker),
     verificationRunner: input.verificationRunner,

@@ -4323,14 +4323,15 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     return createServerApprovedSkillCatalog([]);
   }
 
-  it("marks research and child-agent unavailable, and skill available from the server default catalog, when nothing else is wired", () => {
-    // No explicit skillCatalog falls back to `createServerApprovedSkillCatalog()` -- the same
-    // default `auxiliaryPorts` itself falls back to -- which is non-empty, so `keiko_skill` is
-    // available by default; research and child-agent have no such non-empty default.
+  it("marks research, child-agent and both skill tools unavailable when nothing else is wired", () => {
+    // No explicit skillCatalog falls back to `createServerApprovedSkillCatalog()`, which starts
+    // empty, so no skill is advertisable either.
     const unavailable = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
     });
-    expect(unavailable).toEqual(new Set(["keiko_research_fetch", "keiko_child_agent"]));
+    expect(unavailable).toEqual(
+      new Set(["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"]),
+    );
   });
 
   it("offers research only when its configured approval-capable handler is bound", () => {

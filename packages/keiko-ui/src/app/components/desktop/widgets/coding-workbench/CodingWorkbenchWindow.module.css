@@ -1598,9 +1598,147 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
+/* A failed row says who caused it. Only a Keiko refusal that blocks the work is red; a command or
+   a tool that failed is the agent's ordinary way forward and reads amber; a stopped step is muted.
+   The label always carries words and an icon, never colour alone. */
 .toolCard[data-tool-state="failed"] .toolIcon,
-.toolCard[data-tool-state="denied"] .toolIcon {
+.toolCard[data-tool-state="exited"] .toolIcon,
+.toolCard[data-failure-origin] .toolIcon {
+  color: var(--feedback-warning);
+}
+
+.toolCard[data-tool-state="denied"] .toolIcon,
+.toolCard[data-failure-origin="keiko-refused"] .toolIcon {
   color: var(--feedback-danger);
+}
+
+.toolCard[data-failure-origin="cancelled"] .toolIcon {
+  color: var(--text-tertiary);
+}
+
+.cmpToolCommandLine {
+  display: block;
+  max-width: 100%;
+  margin-top: var(--space-1);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpToolFailureLabels {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+.cmpToolFailureOrigin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--feedback-warning);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.cmpToolFailureOrigin[data-origin="keiko-refused"] {
+  color: var(--feedback-danger);
+}
+
+.cmpToolFailureOrigin[data-origin="cancelled"] {
+  color: var(--text-tertiary);
+}
+
+/* A triangle for a failure, a bar for Keiko's block, a square for a stop: shape, not only hue. */
+.cmpToolFailureIcon {
+  width: 0;
+  height: 0;
+  border-inline: 0.3rem solid transparent;
+  border-bottom: 0.55rem solid currentColor;
+}
+
+.cmpToolFailureOrigin[data-origin="keiko-refused"] .cmpToolFailureIcon {
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: linear-gradient(
+    135deg,
+    transparent 44%,
+    currentColor 44%,
+    currentColor 56%,
+    transparent 56%
+  );
+}
+
+.cmpToolFailureOrigin[data-origin="cancelled"] .cmpToolFailureIcon {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 0;
+  background: currentColor;
+}
+
+.cmpToolRepeated {
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+
+.cmpToolDuration {
+  margin-inline-start: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cmpToolFailure {
+  margin-top: var(--space-1);
+}
+
+.cmpToolHint {
+  margin: var(--space-1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+}
+
+.cmpToolBlock {
+  margin-top: var(--space-2);
+  min-width: 0;
+}
+
+.cmpToolBlockLabel {
+  margin: 0 0 var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+}
+
+.cmpToolText {
+  max-height: 20rem;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-2);
+  color: var(--text-primary);
+  background: var(--surface-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cmpToolHiddenLines {
+  margin: var(--space-1) 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  font-style: italic;
 }
 
 /* The facts an opened tool card states (bytes read, returned paths, the affected file, how long
@@ -2234,4 +2372,65 @@ details[open] > .cmpActivitySummary::after {
   border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent);
   color: var(--feedback-danger);
   background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+}
+
+/* The way back to the newest activity: pinned to the stream's lower edge while the reader is up in
+   the history, never covering the content it points to with more than the button itself. */
+.cmpJumpToLatest {
+  position: sticky;
+  bottom: var(--space-3);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.cmpJumpToLatest > .button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: auto;
+  box-shadow: 0 10px 24px -18px rgb(var(--shadow-ink-rgb) / 0.75);
+}
+
+.cmpJumpToLatestIcon {
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-inline-end: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+/* A run waiting for the model's first step: one muted line with a calm pulse. */
+.cmpFirstStepWait {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmpFirstStepPulse {
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  animation: cmpFirstStepPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cmpFirstStepPulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpFirstStepPulse {
+    animation: none;
+  }
 }

@@ -2209,7 +2209,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
-    expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
+    expect(screen.getByTestId("coding-runtime-elapsed")).toHaveTextContent(/^Elapsed /u);
     expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
     const readiness = screen.getByTestId("coding-runtime-readiness");
     expect(readiness).toHaveTextContent("Model source ready.");
@@ -4374,8 +4374,10 @@ describe("CodingWorkbenchWindow", () => {
 
     const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
     expect(timeline).toHaveTextContent("Review the repository");
-    expect(timeline).toHaveTextContent("Workspace Read");
-    expect(timeline).toHaveTextContent("workspace.read");
+    // An id Keiko has no name for reads "Tool"; the id is the row's tooltip only.
+    expect(timeline).toHaveTextContent("Tool");
+    expect(timeline).not.toHaveTextContent("workspace.read");
+    expect(timeline.querySelector('[title="workspace.read"]')).not.toBeNull();
     expect(timeline).toHaveTextContent("Succeeded");
     expect(timeline).toHaveTextContent("Current plan");
     expect(timeline).toHaveTextContent("Output truncated");

@@ -43,6 +43,27 @@ interface HeldText {
   reading: boolean;
   /** Reasoning is read only once someone opens it; an answer always. */
   wanted: boolean;
+  /** A feed listed the message: once it no longer does, the feed evicted it and the text is pruned. */
+  listed: boolean;
+}
+
+// What the feed carries is a true prefix of the text: it extends a shorter held text, and a named
+// whole text sets how far the reader has to read. A carried prefix that disagrees with the held
+// text is the server's truth (a restored, rolled-back or re-redacted text): it replaces the held
+// text instead of leaving a stale prefix.
+function absorbCarried(
+  held: HeldText,
+  carried: string,
+  full: CodingSafeActivityMessage["fullAnswer"],
+): void {
+  if (carried.length > held.text.length && carried.startsWith(held.text)) held.text = carried;
+  else if (!carried.startsWith(held.text) && !held.text.startsWith(carried)) {
+    held.text = carried;
+    held.target = 0;
+  }
+  held.target = Math.max(held.target, full?.length ?? carried.length);
+  held.named ||= full !== undefined;
+  held.truncated = full?.truncated ?? held.truncated;
 }
 
 function key(part: CodingSafeActivityTextPart, messageId: string): string {
@@ -73,18 +94,25 @@ export class CodingWorkbenchModelTextReader {
   public ingestDeltas(deltas: readonly CodingSafeActivityTextDelta[] | undefined): void {
     for (const delta of deltas ?? []) {
       const held = this.entry(delta.part, delta.messageId);
-      appendAt(held, delta.offset, delta.text);
+      if (appendAt(held, delta.offset, delta.text) === "restart") {
+        this.startRead(delta.part, delta.messageId);
+      }
     }
   }
 
   /** Takes a feed update: seeds the carried text, sets targets, reads what is behind, publishes. */
   public sync(feed: AvailableCodingSafeActivityFeed): void {
     if (feed.runId !== this.runId) return;
+    const present = new Set<string>();
     for (const turn of feed.turns) {
       for (const message of turn.messages) {
-        if (message.role === "assistant") this.syncMessage(message);
+        if (message.role !== "assistant") continue;
+        present.add(key("answer", message.messageId));
+        present.add(key("reasoning", message.messageId));
+        this.syncMessage(message);
       }
     }
+    this.prune(present);
     this.publish();
   }
 
@@ -124,12 +152,17 @@ export class CodingWorkbenchModelTextReader {
   ): void {
     if (carried.length === 0 && full === undefined && !this.held.has(key(part, messageId))) return;
     const held = this.entry(part, messageId);
-    // What the feed carries is a true prefix of the text: it extends a shorter held text.
-    if (carried.length > held.text.length && carried.startsWith(held.text)) held.text = carried;
-    held.target = Math.max(held.target, full?.length ?? carried.length);
-    held.named ||= full !== undefined;
-    held.truncated = full?.truncated ?? held.truncated;
+    held.listed = true;
+    absorbCarried(held, carried, full);
     this.startRead(part, messageId);
+  }
+
+  // Drops the text of every message a feed once listed and no longer does, so a long run does not
+  // grow without bound. A text only deltas have reached so far was never listed and stays.
+  private prune(present: ReadonlySet<string>): void {
+    for (const [k, held] of this.held) {
+      if (held.listed && !present.has(k)) this.held.delete(k);
+    }
   }
 
   private entry(part: CodingSafeActivityTextPart, messageId: string): HeldText {
@@ -144,6 +177,7 @@ export class CodingWorkbenchModelTextReader {
         failed: false,
         reading: false,
         wanted: part === "answer",
+        listed: false,
       };
       this.held.set(k, held);
     }
@@ -165,28 +199,48 @@ export class CodingWorkbenchModelTextReader {
     messageId: string,
     held: HeldText,
   ): Promise<void> {
-    while (!this.controller.signal.aborted && held.text.length < held.target) {
+    while (
+      !this.controller.signal.aborted &&
+      this.held.get(key(part, messageId)) === held &&
+      held.text.length < held.target
+    ) {
       const offset = held.text.length;
       try {
-        const { page } = await getCodingAppSessionAnswerPage(
-          { runId: this.runId, messageId, part, offset },
-          this.controller.signal,
-        );
-        if (this.controller.signal.aborted) return;
-        if (page === null || !appendAt(held, page.offset, page.text)) {
-          this.fail(held, undefined);
-          return;
-        }
-        held.target = Math.max(held.target, page.length);
-        held.truncated = page.truncated;
-        this.publish();
-        // A page that ends the text adds nothing more; the next read waits for the text to grow.
-        if (page.text.length === 0) return;
+        const next = await this.readPage(part, messageId, held, offset);
+        if (next === "stop") return;
       } catch (error) {
         if (!this.controller.signal.aborted) this.fail(held, error);
         return;
       }
     }
+  }
+
+  // Reads and absorbs one page; "stop" ends the read (failed, aborted or the text ended).
+  private async readPage(
+    part: CodingSafeActivityTextPart,
+    messageId: string,
+    held: HeldText,
+    offset: number,
+  ): Promise<"next" | "stop"> {
+    const { page } = await getCodingAppSessionAnswerPage(
+      { runId: this.runId, messageId, part, offset },
+      this.controller.signal,
+    );
+    if (this.controller.signal.aborted) return "stop";
+    // The held text shrank under the read (it was replaced): the page is stale, read again.
+    if (page !== null && held.text.length < offset) return "next";
+    const outcome = page === null ? "gap" : appendAt(held, page.offset, page.text);
+    if (page === null || outcome === "gap") {
+      this.fail(held, undefined);
+      return "stop";
+    }
+    // A mismatch dropped the held text under the read: read again from its end.
+    if (outcome === "restart") return "next";
+    held.target = Math.max(held.target, page.length);
+    held.truncated = page.truncated;
+    this.publish();
+    // A page that ends the text adds nothing more; the next read waits for the text to grow.
+    return page.text.length === 0 ? "stop" : "next";
   }
 
   private fail(held: HeldText, error: unknown): void {
@@ -218,11 +272,21 @@ export class CodingWorkbenchModelTextReader {
   }
 }
 
-// Appends what `text` starting at `offset` adds beyond the held text; false when it would leave a
-// gap, which the reader then reads as pages. Text the reader already holds adds nothing.
-function appendAt(held: HeldText, offset: number, text: string): boolean {
-  if (offset > held.text.length) return false;
+type AppendOutcome = "appended" | "gap" | "restart";
+
+// Appends what `text` starting at `offset` adds beyond the held text; "gap" when it would leave a
+// gap, which the reader then reads as pages. Text the reader already holds adds nothing. Where the
+// piece overlaps held text the overlap must match: on a mismatch the held text is stale. A piece
+// that starts at 0 replaces it; any other piece drops it and asks for a fresh read ("restart").
+function appendAt(held: HeldText, offset: number, text: string): AppendOutcome {
+  if (offset > held.text.length) return "gap";
+  const overlap = Math.min(held.text.length - offset, text.length);
+  if (held.text.slice(offset, offset + overlap) !== text.slice(0, overlap)) {
+    held.text = offset === 0 ? text : "";
+    if (offset === 0) held.target = text.length;
+    return offset === 0 ? "appended" : "restart";
+  }
   const end = offset + text.length;
   if (end > held.text.length) held.text += text.slice(held.text.length - offset);
-  return true;
+  return "appended";
 }

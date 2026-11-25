@@ -9,6 +9,8 @@ import {
   validateCodingSafeActivityFeed,
   validateCodingSafeActivityTextDeltas,
   type CodingSafeActivityTextPart,
+  type CodingSafeActivityTool,
+  type CodingSafeActivityToolPresentation,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -2427,7 +2429,8 @@ describe("live model-text deltas", () => {
       ["reasoning-retained", "feed-bound", undefined],
       ["reasoning-clipped", "retention-bound", "warn"],
     ]);
-    expect(projected(projection).fullReasoning).toEqual({ length: 9_000, truncated: true });
+    // Reasoning may fill at most half the run's bound; the other half stays for answers.
+    expect(projected(projection).fullReasoning).toEqual({ length: 4_500, truncated: true });
     // The cut is shown on the reasoning; the answer itself is whole.
     expect(projected(projection).reasoning?.truncated).toBe(true);
     expect(projected(projection).truncated).toBe(false);
@@ -2437,5 +2440,185 @@ describe("live model-text deltas", () => {
       });
     }
     expect(JSON.stringify(log.events)).not.toContain("s".repeat(50));
+  });
+});
+
+// A failed row says what failed and who caused it; the Activity Log keeps the closed facts alone.
+describe("failed tool rows", () => {
+  const PRIVATE_COMMAND = "npm test -- --grep private-case";
+
+  function shellCall(
+    callId: string,
+    state: "running" | "failed" | "succeeded" | "denied" | "cancelled",
+    presentation?: CodingSafeActivityToolPresentation,
+  ): CodingSafeActivitySignal {
+    return {
+      kind: "tool",
+      messageId: "msg_answer",
+      callId,
+      tool: "shell",
+      state,
+      occurredAt: "2026-07-18T17:00:00.002Z",
+      ...(presentation === undefined ? {} : { presentation }),
+    };
+  }
+
+  const failedShell = (callId: string): CodingSafeActivitySignal =>
+    shellCall(callId, "failed", {
+      exitCode: 1,
+      failureOrigin: "command-failed",
+      durationMs: 2_400,
+      command: { text: PRIVATE_COMMAND, truncated: false },
+      output: {
+        head: "FAIL private-case",
+        tail: "",
+        lineCount: 1,
+        hiddenLineCount: 0,
+        truncated: false,
+      },
+    });
+
+  function toolOf(projection: Projection, callId: string): CodingSafeActivityTool {
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new TypeError("expected an available feed");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    const found = feed.turns.flatMap((turn) => turn.tools).find((tool) => tool.callId === callId);
+    if (found === undefined) throw new TypeError(`missing ${callId}`);
+    return found;
+  }
+
+  const failedLines = (
+    log: ReturnType<typeof createBufferedServerLogSink>,
+  ): ReturnType<typeof createBufferedServerLogSink>["events"] =>
+    log.events.filter((event) => event.op === "coding-runtime.tool.failed");
+
+  it("keeps a running call's command when its failure settles it, and counts a repeat", () => {
+    const projection = assistantTurn();
+    projection.ingest(
+      RUN_ID,
+      shellCall("call_a", "running", { command: { text: PRIVATE_COMMAND, truncated: false } }),
+    );
+    projection.ingest(RUN_ID, shellCall("call_a", "failed", { exitCode: 1 }));
+    expect(toolOf(projection, "call_a").presentation).toMatchObject({
+      exitCode: 1,
+      failureOrigin: "command-failed",
+      failureCount: 1,
+      command: { text: PRIVATE_COMMAND },
+    });
+
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    expect(toolOf(projection, "call_b").presentation?.failureCount).toBe(2);
+  });
+
+  it("names no origin on a call that succeeded after all", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, shellCall("call_a", "running", { failureOrigin: "tool-error" }));
+    projection.ingest(RUN_ID, shellCall("call_a", "succeeded", { exitCode: 0 }));
+    expect(toolOf(projection, "call_a").presentation).toEqual({ exitCode: 0 });
+  });
+
+  it("names a stopped call's origin when Stop settles it, and counts no failure for it", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    projection.ingest(RUN_ID, shellCall("call_a", "running"));
+    projection.interrupt(RUN_ID, "stop");
+    expect(toolOf(projection, "call_a")).toMatchObject({
+      state: "cancelled",
+      presentation: { failureOrigin: "cancelled" },
+    });
+    expect(toolOf(projection, "call_a").presentation).not.toHaveProperty("failureCount");
+    projection.ingest(RUN_ID, shellCall("call_b", "cancelled", { failureOrigin: "cancelled" }));
+    expect(toolOf(projection, "call_b").presentation).not.toHaveProperty("failureCount");
+    // A stop is recorded once per run as the interruption, never as a failed call.
+    expect(failedLines(log)).toEqual([]);
+  });
+
+  it("writes the line of a failed call the full turn had no room for", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log, limits: { maxToolsPerTurn: 1 } });
+    projection.ingest(RUN_ID, shellCall("call_open", "running"));
+    projection.ingest(RUN_ID, failedShell("call_dropped"));
+    const feed = projection.currentContent()?.feed;
+    const listed =
+      feed?.availability === "available" ? feed.turns.flatMap((turn) => turn.tools) : [];
+    expect(listed.map((tool) => tool.callId)).toEqual(["call_open"]);
+    expect(failedLines(log).map((line) => line.extra)).toEqual([
+      expect.objectContaining({ failureOrigin: "command-failed", failedCallCount: 1 }),
+    ]);
+  });
+
+  it("writes one body-free line per failed call with the run's failure counts", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    projection.ingest(RUN_ID, failedShell("call_a"));
+    projection.ingest(RUN_ID, failedShell("call_a"));
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    projection.ingest(RUN_ID, shellCall("call_c", "succeeded", { exitCode: 0 }));
+    const lines = failedLines(log);
+    expect(lines.map((line) => line.extra)).toEqual([
+      {
+        tool: "shell",
+        failureOrigin: "command-failed",
+        exitCodeClass: "1",
+        commandFailureCount: 1,
+        failedCallCount: 1,
+        repeatedFailureCount: 0,
+        completeness: "complete",
+        loss: "none",
+      },
+      {
+        tool: "shell",
+        failureOrigin: "command-failed",
+        exitCodeClass: "1",
+        commandFailureCount: 2,
+        failedCallCount: 2,
+        repeatedFailureCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    ]);
+    const second = lines[1];
+    if (second === undefined) throw new Error("expected a tool.failed line");
+    const line = formatActivityLogProofLine(second);
+    expect(expectActivityLogProof("coding-runtime.tool.failed.emitted-line", line)).toMatchObject({
+      correlationId: RUN_ID,
+      failureOrigin: "command-failed",
+    });
+    // Neither the command, its output, an error text nor the call's id reach the log.
+    projection.ingest(
+      RUN_ID,
+      shellCall("call_err", "failed", {
+        failureOrigin: "tool-error",
+        errorText: { text: "private-error-text", truncated: false },
+      }),
+    );
+    expect(failedLines(log)).toHaveLength(3);
+    const logged = JSON.stringify(log.events);
+    for (const body of ["private-case", "FAIL private", "private-error-text", "call_a", "call_err"]) {
+      expect(logged).not.toContain(body);
+    }
+  });
+
+  it("sheds a success's text before a failure's under byte pressure and says so", () => {
+    const projection = assistantTurn({ limits: { maxTurnBytes: 2_200, maxTotalBytes: 4_096 } });
+    const bulky = (callId: string, state: "succeeded" | "failed"): CodingSafeActivitySignal =>
+      shellCall(callId, state, {
+        exitCode: state === "failed" ? 1 : 0,
+        command: { text: `${callId} ${"c".repeat(400)}`, truncated: false },
+        output: {
+          head: "o".repeat(500),
+          tail: "",
+          lineCount: 1,
+          hiddenLineCount: 0,
+          truncated: false,
+        },
+      });
+    projection.ingest(RUN_ID, bulky("call_ok", "succeeded"));
+    projection.ingest(RUN_ID, bulky("call_bad", "failed"));
+    projection.ingest(RUN_ID, bulky("call_ok2", "succeeded"));
+    expect(toolOf(projection, "call_ok").presentation).toMatchObject({ detailOmitted: true });
+    expect(toolOf(projection, "call_ok").presentation).not.toHaveProperty("command");
+    expect(toolOf(projection, "call_bad").presentation?.command?.text).toContain("call_bad");
   });
 });

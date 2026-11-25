@@ -5430,6 +5430,7 @@ function buildAssemblyCodingAppSessionChannel(
       codingSafeActivityContentSource(
         codingRuntimeControlPlane?.safeActivityProjection,
         () => args.runtimeConfig.current()?.codingReasoningDisplay !== "off",
+        () => runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
       ),
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE listener failures
     // (bare catch, backpressure `false`) surface as one redacted record per subscriber instead

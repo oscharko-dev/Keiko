@@ -4010,7 +4010,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-runtime.history-projection", "coding-runtime.native-question.observed"],
+      state: [
+        "coding-runtime.history-projection",
+        "coding-runtime.native-question.observed",
+        "coding-runtime.tool.failed",
+      ],
       end: [],
       failure: [],
       loss: ["coding-runtime.safe-activity"],
@@ -4019,17 +4023,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.history-projection",
       "coding-runtime.native-question.observed",
       "coding-runtime.safe-activity",
+      "coding-runtime.tool.failed",
     ],
     requiredLossOperations: ["coding-runtime.safe-activity"],
     requiredProofOperations: [
       "coding-runtime.history-projection",
       "coding-runtime.native-question.observed",
       "coding-runtime.safe-activity",
+      "coding-runtime.tool.failed",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-runtime.history-projection",
       "coding-runtime.native-question.observed",
+      "coding-runtime.tool.failed",
     ],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
     requiredFrameOperations: [],

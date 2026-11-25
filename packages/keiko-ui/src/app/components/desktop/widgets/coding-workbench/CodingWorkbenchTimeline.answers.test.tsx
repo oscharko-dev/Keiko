@@ -189,6 +189,18 @@ describe("CodingWorkbenchTimeline complete answers", () => {
     for (const [index, offset] of offsets.entries()) {
       expect(offset).toBe(16_000 + index * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
     }
+  });
+
+  // The same structure as the long answer above, a carried part completed by a read page, at a size
+  // the accessibility audit walks in well under a second; on 2,800 list items it took ten.
+  it("passes the accessibility audit once the rest of an answer is read", async () => {
+    const answer = LONG_ANSWER.slice(0, 2_000).concat("\nfinal-line-of-the-answer");
+    servePages(answer);
+    const { container } = render(<LiveTimeline feed={feedOf(namedMessage(answer, 600))} />);
+    await waitFor(() => {
+      expect(answerText(container)).toContain("final-line-of-the-answer");
+    });
+    expect(pageRequest).toHaveBeenCalled();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -229,6 +241,8 @@ describe("CodingWorkbenchTimeline complete answers", () => {
       expect(container.querySelector(`.${styles.truncationMark}`)).not.toBeNull();
     });
     expect(answerText(container)).toContain("Finding:");
+    // A prefix is never copied as if it were the model's whole answer.
+    expect(screen.queryByRole("button", { name: "Copy answer as Markdown" })).toBeNull();
     const report = reports.find(({ message }) => message.includes("rest of a long model text"));
     expect(report?.meta?.errorKind).toBe("unavailable");
     expect(JSON.stringify(report)).not.toContain("parser keeps");
@@ -244,6 +258,7 @@ describe("CodingWorkbenchTimeline complete answers", () => {
       expect(answerText(container)).toContain("kept-end");
     });
     expect(container.querySelectorAll(`.${styles.truncationMark}`)).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Copy answer as Markdown" })).toBeNull();
   });
 });
 

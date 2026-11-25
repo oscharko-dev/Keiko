@@ -8,6 +8,7 @@ import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeA
 import {
   codingSafeActivityContentSource,
   presentCodingReasoning,
+  presentCodingToolTexts,
 } from "./coding-reasoning-continuation.js";
 
 it("hides live reasoning without changing native transport content or answer text", () => {
@@ -117,12 +118,98 @@ it("serves no reasoning page while the deployment hides reasoning, and the answe
   const source = codingSafeActivityContentSource(projection, () => visible);
   const request = { runId: "run", messageId: "answer", offset: 0 } as const;
 
-  expect(source?.answerPageFor({ ...request, part: "reasoning" })).toBeNull();
-  expect(source?.answerPageFor({ ...request, part: "answer" })).toMatchObject({ text: "Answer" });
+  expect(source?.answerPageFor?.({ ...request, part: "reasoning" })).toBeNull();
+  expect(source?.answerPageFor?.({ ...request, part: "answer" })).toMatchObject({ text: "Answer" });
   visible = true;
-  expect(source?.answerPageFor({ ...request, part: "reasoning" })).toMatchObject({
+  expect(source?.answerPageFor?.({ ...request, part: "reasoning" })).toMatchObject({
     part: "reasoning",
     text: "Thought",
   });
   expect(codingSafeActivityContentSource(undefined, () => true)).toBeUndefined();
+});
+
+const SECRET = "Zq9wXy7kPm";
+
+function toolContent(
+  commands: readonly string[],
+  textDeltas?: CodingSafeActivityContent["textDeltas"],
+): CodingSafeActivityContent {
+  return {
+    kind: "safe-activity",
+    feed: {
+      schemaVersion: CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+      availability: "available",
+      runId: "run",
+      updatedAt: "2026-11-05T00:00:00Z",
+      truncated: false,
+      droppedEventCount: 0,
+      turns: [
+        {
+          turnId: "turn",
+          messages: [],
+          truncated: false,
+          tools: commands.map((text, index) => ({
+            callId: `call-${String(index)}`,
+            tool: "shell",
+            state: "succeeded" as const,
+            occurredAt: "2026-11-05T00:00:00Z",
+            presentation: { exitCode: 0, command: { text, truncated: false } },
+          })),
+        },
+      ],
+    },
+    ...(textDeltas === undefined ? {} : { textDeltas }),
+  };
+}
+
+function commandsOf(content: CodingSafeActivityContent | null): readonly unknown[] {
+  if (content?.feed.availability !== "available") return [];
+  return content.feed.turns.flatMap((turn) => turn.tools.map((tool) => tool.presentation));
+}
+
+it("removes a deployment secret from a tool text and keeps the update's deltas when it fits", () => {
+  const redacted = presentCodingToolTexts(toolContent([`echo ${SECRET}`]), [SECRET]);
+  expect(JSON.stringify(redacted)).not.toContain(SECRET);
+  expect(commandsOf(redacted)).toEqual([
+    { exitCode: 0, command: { text: "echo [REDACTED]", truncated: false } },
+  ]);
+});
+
+it("drops the text deltas of an update the redaction made longer, so it stays in budget", () => {
+  const deltas: CodingSafeActivityContent["textDeltas"] = [
+    { messageId: "message", part: "answer", offset: 0, text: "a long streamed answer text" },
+  ];
+  // "[REDACTED]" is longer than this secret, so the redacted rows outgrow the original feed.
+  const short = "Zq9wXy7k";
+  const redacted = presentCodingToolTexts(toolContent([`echo ${short}`], deltas), [short]);
+  expect(redacted?.textDeltas).toBeUndefined();
+  expect(commandsOf(redacted)).toEqual([
+    { exitCode: 0, command: { text: "echo [REDACTED]", truncated: false } },
+  ]);
+});
+
+it("keeps the changed rows without their texts when the redaction outgrows even the deltas", () => {
+  const short = "Zq9wXy7k";
+  const redacted = presentCodingToolTexts(
+    toolContent([`echo ${short} ${short} ${short}`, "npm test"]),
+    [short],
+  );
+  expect(JSON.stringify(redacted)).not.toContain(short);
+  expect(commandsOf(redacted)).toEqual([
+    { exitCode: 0, detailOmitted: true },
+    { exitCode: 0, command: { text: "npm test", truncated: false } },
+  ]);
+});
+
+it("measures the budget in UTF-8 bytes, not characters", () => {
+  // Nine characters but ten bytes: the redaction adds a character and not a single byte.
+  const wide = "Zq9wXy7kü";
+  const deltas: CodingSafeActivityContent["textDeltas"] = [
+    { messageId: "message", part: "answer", offset: 0, text: "answer" },
+  ];
+  const redacted = presentCodingToolTexts(toolContent([`echo ${wide}`], deltas), [wide]);
+  expect(redacted?.textDeltas).toEqual(deltas);
+  expect(commandsOf(redacted)).toEqual([
+    { exitCode: 0, command: { text: "echo [REDACTED]", truncated: false } },
+  ]);
 });

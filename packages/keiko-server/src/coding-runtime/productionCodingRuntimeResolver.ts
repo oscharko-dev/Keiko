@@ -243,6 +243,11 @@ export interface ProductionCodingRuntimeResolverInput {
    */
   readonly governedTaskBranches?: GovernedTaskBranches | undefined;
   readonly backend: ProductionRuntimeBackendResolver;
+  /**
+   * The server-approved skills every run composes its tools from (#3417). Absent, the catalog starts
+   * empty and neither skill tool is offered until a set is admitted.
+   */
+  readonly skillCatalog?: SkillCatalog | undefined;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
   readonly serverRuntimeChangeset?: ProductionManagedWorktreeToolInput["serverRuntimeChangeset"];
@@ -379,7 +384,7 @@ function sharedRunComposition(input: ProductionCodingRuntimeResolverInput): RunC
   return {
     toolProfile,
     research,
-    skillCatalog: createServerApprovedSkillCatalog(),
+    skillCatalog: input.skillCatalog ?? createServerApprovedSkillCatalog(),
     semanticSearch: { current: undefined },
     editOutcomes: { current: undefined },
     contextUsage: createCodingRuntimeContextUsageRegistry(),

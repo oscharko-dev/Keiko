@@ -27,8 +27,7 @@ import {
   type CodingWorkbenchRunPhase,
 } from "./codingWorkbenchRunFacts";
 import styles from "./CodingWorkbenchRunStatus.module.css";
-
-const ELAPSED_TICK_MS = 1_000;
+import { useSecondClock } from "./useSecondClock";
 
 interface RunElapsed {
   readonly milliseconds: number;
@@ -54,18 +53,6 @@ function useRunStart(
   }, [observed, remembered?.runId, runId]);
   if (observed !== null) return observed;
   return remembered !== null && remembered.runId === runId ? remembered.at : null;
-}
-
-// Ticks at most once per second, and only while `active`: a settled run's clock stops.
-function useSecondClock(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return undefined;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
-    return (): void => clearInterval(timer);
-  }, [active]);
-  return now;
 }
 
 function useRunElapsed(state: CodingWorkbenchRuntimeState): RunElapsed | null {
@@ -113,6 +100,23 @@ function RunPhase({
   return (
     <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-phase">
       {t(`codingWorkbench.runStatus.phase.${phase}`)}
+    </span>
+  );
+}
+
+function FailedCommands({
+  count,
+  t,
+}: {
+  readonly count: number;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (count === 0) return null;
+  return (
+    <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-failed-commands">
+      {count === 1
+        ? t("codingWorkbench.runStatus.failedCommands.one")
+        : t("codingWorkbench.runStatus.failedCommands", { count })}
     </span>
   );
 }
@@ -181,6 +185,8 @@ export interface CodingWorkbenchRunStatusProps {
   readonly state: CodingWorkbenchRuntimeState;
   readonly researchGrant: CodingWorkbenchRuntimeResearchGrant | null;
   readonly phase: CodingWorkbenchRunPhase | null;
+  /** The run's commands that did not finish successfully, from its live feed. */
+  readonly failedCommandCount?: number;
 }
 
 /**
@@ -201,6 +207,7 @@ export function CodingWorkbenchRunStatus({
   state,
   researchGrant,
   phase,
+  failedCommandCount = 0,
 }: CodingWorkbenchRunStatusProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const elapsed = useRunElapsed(state);
@@ -219,6 +226,7 @@ export function CodingWorkbenchRunStatus({
         <ElapsedTime elapsed={elapsed} t={t} />
         <ActiveAgent state={state} t={t} />
         <RunPhase phase={phase} t={t} />
+        <FailedCommands count={failedCommandCount} t={t} />
         <NativeRetry state={state} t={t} />
       </p>
       <ReadinessDetails state={state} t={t} />

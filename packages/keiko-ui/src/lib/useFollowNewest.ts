@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, type RefCallback, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefCallback,
+  type RefObject,
+} from "react";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
@@ -26,6 +34,8 @@ export interface FollowNewest {
   readonly regionRef: RefCallback<HTMLElement>;
   /** Follow again and scroll to the end now, regardless of the current position. */
   readonly resume: () => void;
+  /** True while the reader scrolled up and growth no longer follows: a way back can be offered. */
+  readonly paused: boolean;
 }
 
 const NEAR_BOTTOM_PX = 64;
@@ -50,12 +60,14 @@ function navigateTranscript(
   event: KeyboardEvent,
   element: HTMLElement,
   stickRef: FollowNewest["stickRef"],
+  setPaused: (paused: boolean) => void,
 ): void {
   if (event.target !== element || event.defaultPrevented) return;
   if (event.isComposing || hasNavigationModifier(event)) return;
   if (event.key !== "Home" && event.key !== "End") return;
   event.preventDefault();
   stickRef.current = event.key === "End";
+  setPaused(!stickRef.current);
   element.scrollTo({
     top: stickRef.current ? element.scrollHeight : 0,
     behavior: "instant",
@@ -66,20 +78,21 @@ function navigateTranscript(
 function useRegionKeyboard(
   scrollRef: RefObject<HTMLElement | null>,
   stickRef: FollowNewest["stickRef"],
+  setPaused: (paused: boolean) => void,
 ): RefCallback<HTMLElement> {
   return useCallback(
     (element: HTMLElement | null): (() => void) | undefined => {
       scrollRef.current = element;
       if (element === null) return undefined;
       const onKeyDown = (event: KeyboardEvent): void =>
-        navigateTranscript(event, element, stickRef);
+        navigateTranscript(event, element, stickRef, setPaused);
       element.addEventListener("keydown", onKeyDown);
       return (): void => {
         element.removeEventListener("keydown", onKeyDown);
         if (scrollRef.current === element) scrollRef.current = null;
       };
     },
-    [scrollRef, stickRef],
+    [scrollRef, stickRef, setPaused],
   );
 }
 
@@ -88,7 +101,9 @@ export function useFollowNewest(
   growthKey: string | number,
 ): FollowNewest {
   const stickRef = useRef(true);
-  const regionRef = useRegionKeyboard(scrollRef, stickRef);
+  // A state copy of the ref, set only when it changes, so a scroll re-renders nothing on its own.
+  const [paused, setPaused] = useState(false);
+  const regionRef = useRegionKeyboard(scrollRef, stickRef, setPaused);
 
   const scrollToEnd = useCallback((): void => {
     const element = scrollRef.current;
@@ -100,10 +115,12 @@ export function useFollowNewest(
     if (element === null) return;
     stickRef.current =
       element.scrollHeight - element.scrollTop - element.clientHeight <= NEAR_BOTTOM_PX;
+    setPaused(!stickRef.current);
   }, [scrollRef]);
 
   const resume = useCallback((): void => {
     stickRef.current = true;
+    setPaused(false);
     scrollToEnd();
   }, [scrollToEnd]);
 
@@ -111,5 +128,8 @@ export function useFollowNewest(
     scrollToEnd();
   }, [growthKey, scrollToEnd]);
 
-  return useMemo(() => ({ stickRef, onScroll, regionRef, resume }), [onScroll, regionRef, resume]);
+  return useMemo(
+    () => ({ stickRef, onScroll, regionRef, resume, paused }),
+    [onScroll, regionRef, resume, paused],
+  );
 }

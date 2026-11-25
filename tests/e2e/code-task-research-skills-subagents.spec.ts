@@ -223,8 +223,9 @@ async function expectAuxiliaryTimelineActivity(page: Page): Promise<void> {
 
 // #3417: the operator sees which approved skills the run may use, beside the research grant, from
 // the run's own authenticated channel. The listing is body-free by contract: the pinned id@version,
-// the closed category and the readiness, never a skill body, path, prompt or output. The seeded
-// catalog holds exactly one approved skill, so the disclosure names that one.
+// the closed category and the readiness, never a skill body, path, prompt or output. A new
+// installation approves no skill; the functional harness admits exactly one, so the disclosure
+// names that one.
 async function expectApprovedSkillsDisclosure(page: Page): Promise<void> {
   await expect(page.getByText("Approved skills (1)", { exact: true })).toBeVisible({
     timeout: 90_000,

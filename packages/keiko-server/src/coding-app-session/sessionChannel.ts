@@ -587,9 +587,8 @@ export function createCodingAppSessionChannel(
     browserApproval: deps.browserApproval,
     pair: (attestation: unknown, presentedProof?: string): CodingAppSessionPairResult =>
       pairSession(registry, pairingPort, attestation, presentedProof),
-    ensureLocalSession: (cookieToken, observation): CodingAppSessionEnsureResult => {
-      return ensureLocalSession(registry, cookieToken, observation);
-    },
+    ensureLocalSession: (cookieToken, observation): CodingAppSessionEnsureResult =>
+      ensureLocalSession(registry, cookieToken, observation),
     snapshot: (cookieToken, observation): CodingAppSessionChannelSnapshot => {
       const session = registry.verify(cookieToken, observation);
       if (session === undefined) return contentFreeCodingAppSessionChannelSnapshot();

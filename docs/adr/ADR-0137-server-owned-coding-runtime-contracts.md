@@ -277,6 +277,9 @@ invocation still charges its one delegated read at the existing boundary. The se
 catalog is the single authority for which skills a run may invoke: it changes only by admitting a
 whole next set as one snapshot with a new revision and digest, and a run's skill invocation is
 refused once the catalog it discovered is no longer the one in force.
+A new installation's catalog starts empty: Keiko ships no default skill (owner decision, "less is
+more"), so the Workbench shows no approved-skill disclosure and `keiko_skill` and
+`keiko_skill_discover` stay absent until a set is admitted.
 
 ### D3 — Runtime state and failures are closed
 
@@ -875,9 +878,10 @@ A model's answer is never cut to a display bound (owner decision "Work-ending li
 The live projection keeps every listed assistant answer's complete text beside its bounded feed,
 under a per-run memory bound of 16 Mi UTF-16 code units; the feed message carries a prefix and names
 the whole length (`fullAnswer`), and segment shedding for such a message loses nothing. The
-Workbench reads the rest page by page (32 Ki characters) through the authenticated app-session
+Workbench reads the rest page by page (256 Ki characters) through the authenticated app-session
 channel, `GET /api/coding-workbench/app-session/channel/answer`, which fails closed to a page-free reply
-for an unpaired session, an unknown run, message or offset. Only the memory bound or a failed read
+for an unpaired session, an unknown run, message or offset, or a run or message id that is not a safe
+identifier. Only the memory bound or a failed read
 marks an answer as cut. History detail joins the store's chunks of one answer back into one message
 by their binding source id, and the restored timeline shows that answer whole. The display
 projection's History capture stores the complete answer, not the feed's prefix, and a later capture
@@ -885,10 +889,35 @@ extends the chunks an earlier one stored (upsert); a chunk joins only the start 
 by digest. The model's reasoning follows the same rule: it is never cut to a display bound, the
 feed carries a prefix and names the whole (`fullReasoning`), its pages are read through the same
 route with `part=reasoning`, and only once someone opens it. A deployment that hides reasoning
-serves neither its snapshot, its deltas nor its pages. Memory protection is append-only: a live
-update carries what each listed text gained since the previous update as `textDeltas` (at most 64,
-inside the snapshot's 64 KiB budget beside the feed); a gain left out reaches the reader as pages,
-never as a silent gap. A restored answer above the memory bound names the bound and is marked cut.
+serves neither its snapshot, its deltas nor its pages. Reasoning holds at most half of the per-run
+memory bound, so it never pushes an answer out of it. Memory protection is append-only: a live
+update carries what each listed text gained since the previous update as `textDeltas` (at most 64
+of at most 32 Ki characters each, inside the snapshot's 64 KiB budget beside the feed); a gain left
+out reaches the reader as pages, never as a silent gap, and the reader checks that a delta continues
+the text it holds before it appends one. A redaction of the deployment's secrets that makes an
+update larger than it was first drops its deltas and then the changed rows' texts (`detailOmitted`),
+measured in UTF-8 bytes, so the channel never refuses a whole update over it. A restored answer above the memory bound names the bound and is marked cut.
+
+A tool row says what happened and who caused it. The OpenCode history projection carries, beside a
+call's closed state, a shell call's command (1 000 characters), the first 5 and last 20 lines of
+what the call printed with the lines between counted (each part 2 000 characters), the error message
+the tool handed the model (1 000 characters), the call's duration and a closed `failureOrigin`:
+`keiko-refused` (Keiko's permission decision, with the closed `refusalCause` when a person declined
+or let an approval expire), `command-failed` (the process ran and exited non-zero), `tool-error`,
+`timed-out` or `cancelled`. A command a signal killed is `command-failed`; `cancelled` is only the
+display state of a call an explicit Stop or takeover settled, which is no failure: it is not counted
+and the Activity Log's per-call failure line is not written for it. The origin is derived from the runtime's status facts and the governed
+facade's decision, never from prose, and a verification or Git step keeps its own outcome vocabulary
+instead. These texts are the person's own workspace output: they keep only the credential floor
+(owner decision 2026-11-04) at the source, the deployment's own secret values are removed again when
+a live update is presented (a text the source cut also loses a trailing start of such a secret), they are rendered as text, and they never reach the Activity Log, Coding
+History or any evidence. The provider's response body and the call's working directory are never
+carried. A call that failed before counts how often the same command failed in the run
+(`failureCount`). Under byte pressure a settled call's texts are shed before any message, a success's
+before a failure's, and the row says so (`detailOmitted`). The Workbench opens a failed row with its
+origin, exit code, the message to the agent and the output's ends; a success stays one line with its
+command and duration, and a group of finished steps is summarised in verbs ("Read 3 files · Ran 2
+commands"). Amber marks a command or tool failure, red only Keiko's refusal, each with an icon.
 
 A task's History can also leave the machine's UI store, and only by the human's own action (#3904).
 Export JSON and Export Markdown in Coding History call `GET /api/coding-workbench/history/:id/export`

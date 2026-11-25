@@ -736,6 +736,7 @@ second registry, index or policy path exists.
   revision described above.
 - **Availability.** Both skill tools are absent together (#3414-AC9) unless an approved skill is
   enabled, compatible and handled for the run.
+  A new installation's catalog starts empty, so both tools are absent until a set is admitted.
 - **Evidence.** Each discovery writes one `coding-runtime.skill-discovery` line: the run, the
   catalog revision and digest, the approved and listed counts, the unavailable counts per closed
   reason and the duration — never a skill body, path, prompt, argument, output or credential.

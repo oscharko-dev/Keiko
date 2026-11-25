@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   validateCodingSafeActivityTextDeltas,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -46,12 +47,27 @@ describe("retained model texts", () => {
 
   it("cuts at the memory bound on a whole character and takes nothing after the cut", () => {
     const store = createRetainedTexts(3);
-    const { retained, kept } = retainText(store, "reasoning", "m", `ab${EMOJI}`);
+    const { retained, kept } = retainText(store, "answer", "m", `ab${EMOJI}`);
     expect(kept).toBe("ab");
     expect(retained).toMatchObject({ text: "ab", truncated: true });
-    expect(retainText(store, "reasoning", "m", "c").kept).toBe("");
-    expect(store.counts.reasoning).toEqual({ named: 0, clipped: 1 });
-    expect(store.counts.answer).toEqual({ named: 0, clipped: 0 });
+    expect(retainText(store, "answer", "m", "c").kept).toBe("");
+    expect(store.counts.answer).toEqual({ named: 0, clipped: 1 });
+    expect(store.counts.reasoning).toEqual({ named: 0, clipped: 0 });
+  });
+
+  it("lets reasoning fill at most half the bound, so a later answer still fits whole", () => {
+    const store = createRetainedTexts(1_000);
+    const thought = retainText(store, "reasoning", "m1", "t".repeat(900));
+    expect(thought.kept).toHaveLength(500);
+    expect(thought.retained.truncated).toBe(true);
+    expect(store.counts.reasoning.clipped).toBe(1);
+    const answer = retainText(store, "answer", "m2", "a".repeat(500));
+    expect(answer.kept).toHaveLength(500);
+    expect(answer.retained.truncated).toBe(false);
+    // Released reasoning gives its half back.
+    releaseUnlistedTexts(store, (messageId) => messageId !== "m1");
+    expect(store.reasoningChars).toBe(0);
+    expect(retainText(store, "reasoning", "m3", "t".repeat(400)).kept).toHaveLength(400);
   });
 
   it("keeps answer and reasoning of one message apart", () => {
@@ -108,10 +124,10 @@ describe("live text deltas", () => {
     expect(validDeltas(first) && validDeltas(second)).toBe(true);
   });
 
-  it("leaves out a gain over the byte budget or a page, and never announces it later", () => {
+  it("leaves out a gain over the byte budget or a delta's bound, and never announces it later", () => {
     const store = createRetainedTexts(10 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
     retainText(store, "answer", "small", "x".repeat(100));
-    retainText(store, "answer", "big", "y".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1));
+    retainText(store, "answer", "big", "y".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS + 1));
     retainText(store, "reasoning", "small", "z".repeat(5_000));
     const deltas = takeTextDeltas(store, ALL, 1_000);
     expect(deltas.map((delta) => [delta.messageId, delta.part])).toEqual([["small", "answer"]]);

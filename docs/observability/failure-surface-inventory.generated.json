@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3d71160eeaedd392ba182c7b65162e5f836ba85fb8135eac8596ea1275d7d3e2"
+    "catalogDigest": "38c6dd3246c2555bed54df1edeca75a8d7fe2178c9996b0d8ee0546c4cfbbe93"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 728,
-    "proofCount": 752,
-    "resolvedProofCount": 752,
+    "operationCount": 729,
+    "proofCount": 753,
+    "resolvedProofCount": 753,
     "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -502,6 +502,7 @@
         "coding-runtime.tool-availability.failed",
         "coding-runtime.tool-result",
         "coding-runtime.tool-result-rendered",
+        "coding-runtime.tool.failed",
         "coding-runtime.undo-window",
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
@@ -2115,6 +2116,9 @@
     "coding-runtime.tool-result-rendered.emitted-line": [
       "packages/keiko-server/src/coding-runtime/governedToolModelContent.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
+    "coding-runtime.tool.failed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
     ],
     "coding-runtime.undo-window.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeUndoWindow.test.ts"

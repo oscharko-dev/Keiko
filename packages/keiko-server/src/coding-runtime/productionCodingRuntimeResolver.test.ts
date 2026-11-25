@@ -365,10 +365,8 @@ describe("production coding runtime resolver", () => {
     expect(composed === undefined ? undefined : validateSkillDiscoveryResultV1(composed).ok).toBe(
       true,
     );
-    expect(composed?.skills.map((skill) => skill.skillId)).toEqual([
-      "skl_repo-structure-summary@1",
-    ]);
-    expect(composed?.skills[0]?.readiness).toEqual({ state: "ready" });
+    // A new installation approves no skill: the shared catalog answers an empty, valid listing.
+    expect(composed?.skills).toEqual([]);
 
     const request = launchRequest(fixture.workspace);
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));

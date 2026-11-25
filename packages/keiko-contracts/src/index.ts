@@ -1610,7 +1610,11 @@ export type {
   CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
+  CodingSafeActivityToolFailureOrigin,
+  CodingSafeActivityToolOutput,
+  CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolState,
+  CodingSafeActivityToolText,
   CodingSafeActivityTurn,
   UnavailableCodingSafeActivityFeed,
 } from "./coding-safe-activity.js";

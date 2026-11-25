@@ -34,6 +34,7 @@ import {
 } from "../correlation.js";
 import {
   CODING_SAFE_ACTIVITY_TEXT_PARTS,
+  isCodingSafeActivityIdentifier,
   type CodingSafeActivityTextPart,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -85,8 +86,10 @@ const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// One read of a retained answer's page (the feed's `fullAnswer`), body-free: whether a page was
-// served, where it starts and how long it and the answer are, in UTF-16 code units, never its text.
+// The end of one read of a retained answer (the feed's `fullAnswer`), body-free: the page that
+// completed it, where it starts and how long it and the answer are, in UTF-16 code units, never its
+// text. The pages before it write no line of their own. A refused or unknown read is recorded at
+// its 1st, 2nd, 4th, 8th … occurrence with the count, so no caller can flood the log.
 const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -114,6 +117,8 @@ const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
     complete: { type: "boolean", dataClass: "closed-enum", required: false },
     answerTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
     messageIdSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Refused or unknown reads so far in this server process.
+    occurrenceCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -619,6 +624,9 @@ function answerRequest(url: URL): CodingAppSessionAnswerRequest | undefined {
   const offset = params.get("offset");
   const part = params.get("part") ?? "answer";
   if (runId === null || messageId === null || offset === null) return undefined;
+  if (!isCodingSafeActivityIdentifier(runId) || !isCodingSafeActivityIdentifier(messageId)) {
+    return undefined;
+  }
   if (!ANSWER_OFFSET.test(offset) || !isTextPart(part)) return undefined;
   return { runId, messageId, part, offset: Number(offset) };
 }
@@ -652,28 +660,56 @@ export function handleCodingAppSessionAnswerPage(
 ): RouteResult {
   const request = answerRequest(ctx.url);
   const response = answerResponse(deps, ctx.req, request);
-  const page = response.page;
+  writeAnswerPageLine(deps, response.page, request, ctx.correlationId);
+  return { status: 200, body: response };
+}
+
+// Refused or unknown reads per server, so a flood writes a line only at each doubling.
+const unavailableAnswerReads = new WeakMap<UiHandlerDeps, { count: number }>();
+
+function writeAnswerPageLine(
+  deps: UiHandlerDeps,
+  page: CodingAppSessionAnswerResponse["page"],
+  request: CodingAppSessionAnswerRequest | undefined,
+  correlationId: string | undefined,
+): void {
+  if (page === null) {
+    const counter = unavailableAnswerReads.get(deps) ?? { count: 0 };
+    unavailableAnswerReads.set(deps, counter);
+    counter.count += 1;
+    if ((counter.count & (counter.count - 1)) !== 0) return;
+    appSessionActivity(deps).write(
+      activityLogEvent(
+        CODING_APP_SESSION_ANSWER_PAGE_OPERATION,
+        { correlationId: correlationIdOrUnknown(correlationId) },
+        {
+          outcome: "unavailable",
+          offset: request?.offset ?? 0,
+          pageChars: 0,
+          occurrenceCount: counter.count,
+        },
+      ),
+    );
+    return;
+  }
+  const complete = page.offset + page.text.length >= page.length;
+  if (!complete) return;
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_ANSWER_PAGE_OPERATION,
+      { correlationId: correlationIdOrUnknown(page.runId) },
       {
-        correlationId: correlationIdOrUnknown(page?.runId ?? ctx.correlationId),
+        outcome: "served",
+        textPart: page.part,
+        offset: page.offset,
+        pageChars: page.text.length,
+        answerChars: page.length,
+        complete,
+        answerTruncated: page.truncated,
+        messageIdSha256: createHash("sha256").update(page.messageId).digest("hex"),
       },
-      page === null
-        ? { outcome: "unavailable", offset: request?.offset ?? 0, pageChars: 0 }
-        : {
-            outcome: "served",
-            textPart: page.part,
-            offset: page.offset,
-            pageChars: page.text.length,
-            answerChars: page.length,
-            complete: page.offset + page.text.length >= page.length,
-            answerTruncated: page.truncated,
-            messageIdSha256: createHash("sha256").update(page.messageId).digest("hex"),
-          },
     ),
   );
-  return { status: 200, body: response };
 }
 
 /** GET /channel/stream — authenticated fetch-streamed read. Never the content-free EventSource union. */

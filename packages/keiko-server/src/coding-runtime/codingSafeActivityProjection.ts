@@ -9,6 +9,15 @@ import type {
   UnavailableCodingSafeActivityFeed,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
+import { stateFailureOrigin } from "./codingSafeActivityToolDetail.js";
+import {
+  countFailedCall,
+  createToolFailureLedger,
+  EXIT_CODE_CLASSES,
+  exitCodeClass,
+  takeUnloggedFailure,
+  type ToolFailureLedger,
+} from "./codingSafeActivityToolFailures.js";
 import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
@@ -26,6 +35,7 @@ import {
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
+  CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   isCodingSafeActivityToolPresentation,
@@ -249,6 +259,56 @@ const CODING_RUNTIME_NATIVE_TOOL_DENIED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * A tool call that did not succeed, one line per call: where it failed (Keiko refused it, its
+ * command failed, the tool failed, it timed out or was stopped), the tool's closed class and, for a
+ * shell, the class of its exit status. Running counts make the run's pattern readable from its last
+ * line ("12 command failures, 0 Keiko refusals"). Body-free: never a command, an output or a message.
+ */
+const CODING_RUNTIME_TOOL_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.tool.failed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingSafeActivityProjection.toolFailed",
+  fields: {
+    tool: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...NATIVE_TOOL_DENIED_TOOLS, "keiko", "other"],
+    },
+    failureOrigin: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS],
+    },
+    exitCodeClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...EXIT_CODE_CLASSES],
+    },
+    commandFailureCount: { type: "integer", dataClass: "count", required: true },
+    failedCallCount: { type: "integer", dataClass: "count", required: true },
+    repeatedFailureCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.tool.failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// A native tool keeps its closed name, Keiko's governed tools are `keiko`, anything else `other`.
+function toolLogClass(tool: string): string {
+  if (NATIVE_TOOL_DENIED_TOOL_SET.has(tool)) return tool;
+  return tool.startsWith("keiko_") ? "keiko" : "other";
+}
+
 interface SignalBase {
   readonly occurredAt: string;
   /** Optional upstream identity used to make replayed history idempotent. */
@@ -460,6 +520,16 @@ interface PriorState {
   readonly texts: RetainedTexts | undefined;
 }
 
+const NO_ROLLBACK: PriorState = { feed: undefined, messageTurns: undefined, texts: undefined };
+
+function rollbackSnapshot(entry: ProjectionEntry): PriorState {
+  return {
+    feed: structuredClone(entry.feed),
+    messageTurns: new Map(entry.messageTurns),
+    texts: cloneRetainedTexts(entry.texts),
+  };
+}
+
 const TEXT_PARTS: readonly CodingSafeActivityTextPart[] = ["answer", "reasoning"];
 type TextCounts = Record<
   CodingSafeActivityTextPart,
@@ -483,6 +553,8 @@ interface ProjectionEntry {
   readonly messageTurns: Map<string, string>;
   /** The complete text of every assistant answer and reasoning the feed lists, beside the feed. */
   readonly texts: RetainedTexts;
+  /** The run's failed tool calls: repeated-failure counts and which failures were logged. */
+  readonly toolFailures: ToolFailureLedger;
   feed: StoredFeed;
   /** An explicit Stop or takeover settled the open calls; no new open call is admitted after it. */
   interrupted: boolean;
@@ -571,6 +643,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signalIds: new Set(),
       messageTurns: new Map(),
       texts: createRetainedTexts(this.limits.maxRetainedAnswerChars),
+      toolFailures: createToolFailureLedger(),
       feed: emptyFeed(input.runId, instant(now)),
       interrupted: false,
     };
@@ -598,14 +671,16 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     // run) and never trips validate; skipping the structuredClone on that path replaces per-
     // signal deep-clone allocation with a cheap 3-field integer comparison. Validate is still
     // run every time, so a bug in enforceFeedBounds cannot slip past silently.
-    const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
-    const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
-    const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
-    const priorTexts = rollbackNeeded ? cloneRetainedTexts(entry.texts) : undefined;
+    const prior = isFeedNearProjectionLimit(entry, this.limits)
+      ? rollbackSnapshot(entry)
+      : NO_ROLLBACK;
     const countsBefore = textCounts(entry.texts);
     const application = this.applyRecordingDenial(runId, entry, signal);
     const ended = this.endedApplication(runId, entry, signal, application);
-    if (ended !== undefined) return ended;
+    if (ended !== undefined) {
+      this.recordToolFailure(runId, entry);
+      return ended;
+    }
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -617,15 +692,34 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signal.occurredAt,
     );
     enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(runId, entry, {
-      feed: priorFeed,
-      messageTurns: priorMessageTurns,
-      texts: priorTexts,
-      capacityDrop,
-    });
+    const finalized = this.finalizeCapacityDrop(runId, entry, { ...prior, capacityDrop });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
     if (finalized) this.recordTextFacts(runId, entry, countsBefore);
+    // A call that failed gets its line even when the feed dropped, displaced or refused it.
+    this.recordToolFailure(runId, entry);
     return finalized;
+  }
+
+  // One body-free line per failed call: where it failed, the tool's closed class, the shell's exit
+  // status class and how often its command failed in the run — never the command or any output.
+  // The facts come from the signal the ledger counted, never from the bounded feed.
+  private recordToolFailure(runId: string, entry: ProjectionEntry): void {
+    const failure = takeUnloggedFailure(entry.toolFailures);
+    if (failure === undefined) return;
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_TOOL_FAILED_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          tool: toolLogClass(failure.tool),
+          failureOrigin: failure.origin,
+          exitCodeClass: exitCodeClass(failure.exitCode),
+          commandFailureCount: failure.failureCount,
+          failedCallCount: entry.toolFailures.failedCalls,
+          repeatedFailureCount: entry.toolFailures.repeatedFailures,
+        },
+      ),
+    );
   }
 
   // Body-free facts of the retained texts: one line the first time an answer or a reasoning outgrows
@@ -774,6 +868,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signalIds: new Set(),
       messageTurns: new Map(),
       texts: createRetainedTexts(0),
+      toolFailures: createToolFailureLedger(),
       feed,
       interrupted: false,
     };
@@ -1436,21 +1531,38 @@ function applyTool(
   if (existing !== undefined) {
     if (staleOpenCodeRestatement(existing.state, signal)) return "restatement-superseded";
     if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
+    const presentation = withFailureCount(
+      entry.toolFailures,
+      { callId: signal.callId, tool: existing.tool },
+      settledPresentation(signal.state, existing.presentation, signal.presentation),
+    );
     located.turn.tools[existingIndex] = {
-      ...existing,
+      callId: existing.callId,
+      tool: existing.tool,
       state: signal.state,
       occurredAt: signal.occurredAt,
-      ...(signal.presentation === undefined
-        ? {}
-        : {
-            presentation: Object.freeze({ ...signal.presentation }),
-          }),
+      ...(presentation === undefined ? {} : { presentation }),
     };
     return "accepted";
   }
   if (signal.tool === undefined) return "tool-name-missing";
   if (opensAfterInterrupt(entry, signal)) return "tool-transition-refused";
-  return insertTool(located.turn, signal, signal.tool, limits);
+  return insertTool(entry, located.turn, signal, signal.tool, limits);
+}
+
+/** A failed call's presentation names how often its command has failed in this run. */
+function withFailureCount(
+  ledger: ToolFailureLedger,
+  call: { readonly callId: string; readonly tool: string },
+  presentation: CodingSafeActivityToolPresentation | undefined,
+): CodingSafeActivityToolPresentation | undefined {
+  const failureCount = countFailedCall(ledger, call, {
+    origin: presentation?.failureOrigin,
+    exitCode: presentation?.exitCode,
+    command: presentation?.command?.text,
+  });
+  if (presentation === undefined || failureCount === undefined) return presentation;
+  return Object.freeze({ ...presentation, failureCount });
 }
 
 /**
@@ -1465,11 +1577,19 @@ function opensAfterInterrupt(
 }
 
 function insertTool(
+  entry: ProjectionEntry,
   turn: MutableTurn,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
   tool: string,
   limits: ResolvedLimits,
 ): SignalApplication {
+  // Counted before the turn's bound decides, so a failed call the full turn drops still gets its
+  // Activity Log line.
+  const presentation = withFailureCount(
+    entry.toolFailures,
+    { callId: signal.callId, tool },
+    settledPresentation(signal.state, undefined, signal.presentation),
+  );
   const saturated = turn.tools.length >= limits.maxToolsPerTurn;
   if (saturated) {
     turn.truncated = true;
@@ -1480,13 +1600,54 @@ function insertTool(
     tool,
     state: signal.state,
     occurredAt: signal.occurredAt,
-    ...(signal.presentation === undefined
-      ? {}
-      : {
-          presentation: Object.freeze({ ...signal.presentation }),
-        }),
+    ...(presentation === undefined ? {} : { presentation }),
   });
   return saturated ? "capacity-dropped" : "accepted";
+}
+
+/**
+ * A call's presentation after a state signal: what the newer signal says wins, and what only the
+ * earlier one knew (a shell's command and output, the facade's refusal cause) stays. A call that did
+ * not succeed always names where it failed; one that runs again or succeeds names no failure.
+ */
+function settledPresentation(
+  state: CodingSafeActivityToolState,
+  earlier: CodingSafeActivityToolPresentation | undefined,
+  newer: CodingSafeActivityToolPresentation | undefined,
+): CodingSafeActivityToolPresentation | undefined {
+  const merged: CodingSafeActivityToolPresentation = { ...earlier, ...newer };
+  const { failureOrigin, refusalCause, command, output, errorText, detailOmitted, ...facts } =
+    merged;
+  const failed = state === "failed" || state === "denied" || state === "cancelled";
+  const origin =
+    failed && !hasOwnOutcome(facts)
+      ? (failureOrigin ?? stateFailureOrigin(state, facts.exitCode))
+      : undefined;
+  const presentation: CodingSafeActivityToolPresentation = {
+    ...facts,
+    ...(origin === undefined ? {} : { failureOrigin: origin }),
+    ...(origin === undefined || refusalCause === undefined ? {} : { refusalCause }),
+    ...(detailOmitted === true ? { detailOmitted } : toolText(command, output, errorText)),
+  };
+  return Object.keys(presentation).length === 0 ? undefined : Object.freeze(presentation);
+}
+
+// A verification or Git step reports its own closed outcome (a red check, a refused push, a check
+// that never ran); its row speaks in that vocabulary, not in a failure origin.
+function hasOwnOutcome(facts: CodingSafeActivityToolPresentation): boolean {
+  return facts.verificationOutcome !== undefined || facts.gitOutcome !== undefined;
+}
+
+function toolText(
+  command: CodingSafeActivityToolPresentation["command"],
+  output: CodingSafeActivityToolPresentation["output"],
+  errorText: CodingSafeActivityToolPresentation["errorText"],
+): Pick<CodingSafeActivityToolPresentation, "command" | "output" | "errorText"> {
+  return {
+    ...(command === undefined ? {} : { command }),
+    ...(output === undefined ? {} : { output }),
+    ...(errorText === undefined ? {} : { errorText }),
+  };
 }
 
 /**
@@ -1503,7 +1664,14 @@ function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): num
     turn.tools = turn.tools.map((tool) => {
       if (tool.state !== "pending" && tool.state !== "running") return tool;
       cancelled += 1;
-      return { ...tool, state: "cancelled", occurredAt };
+      const presentation = settledPresentation("cancelled", tool.presentation, undefined);
+      return {
+        callId: tool.callId,
+        tool: tool.tool,
+        state: "cancelled",
+        occurredAt,
+        ...(presentation === undefined ? {} : { presentation }),
+      };
     });
   }
   return cancelled;
@@ -1649,6 +1817,7 @@ function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void
   const feed = entry.feed;
   for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
   shedRetainedSegments(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
+  shedToolDetail(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   shedSettledReasoning(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
     const removed = feed.turns.shift();
@@ -1685,6 +1854,47 @@ function shedSettledReasoning(
   }
 }
 
+// Under byte pressure a settled call's command, output and error text go before any message, tool
+// or turn: oldest first, a call that succeeded before one that failed, so the failures a person has
+// to read stay longest. The row says its detail left the live view (`detailOmitted`).
+function shedToolDetail(turns: readonly MutableTurn[], over: () => boolean): void {
+  for (const keepFailures of [true, false]) {
+    for (const turn of turns) {
+      for (let index = 0; index < turn.tools.length; index += 1) {
+        if (!over()) return;
+        const tool = turn.tools[index];
+        if (tool !== undefined && sheddable(tool, keepFailures)) {
+          turn.tools[index] = withoutToolDetail(tool);
+        }
+      }
+    }
+  }
+}
+
+function sheddable(tool: CodingSafeActivityTool, keepFailures: boolean): boolean {
+  if (tool.state === "running" || !hasToolDetail(tool)) return false;
+  return !keepFailures || tool.presentation?.failureOrigin === undefined;
+}
+
+function hasToolDetail(tool: CodingSafeActivityTool): boolean {
+  const presentation = tool.presentation;
+  return (
+    presentation?.command !== undefined ||
+    presentation?.output !== undefined ||
+    presentation?.errorText !== undefined
+  );
+}
+
+function withoutToolDetail(tool: CodingSafeActivityTool): CodingSafeActivityTool {
+  const {
+    command: _command,
+    output: _output,
+    errorText: _error,
+    ...rest
+  } = tool.presentation ?? {};
+  return { ...tool, presentation: Object.freeze({ ...rest, detailOmitted: true as const }) };
+}
+
 // Under byte pressure an answer the projection retains gives up its feed text first, oldest first:
 // that costs nothing, because the feed then names the answer and its pages carry it whole. Only then
 // does anything that would be lost — reasoning, text, a tool or a turn — yield.
@@ -1717,6 +1927,7 @@ function shedAnswerSegments(
 
 function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
   shedRetainedSegments(entry, [turn], () => bytes(turn) > maxBytes);
+  shedToolDetail([turn], () => bytes(turn) > maxBytes);
   shedSettledReasoning(entry, [turn], () => bytes(turn) > maxBytes);
   while (bytes(turn) > maxBytes && turn.messages.length > 0) {
     const message = turn.messages[0];

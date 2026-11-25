@@ -59,8 +59,13 @@ export const CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES = 8 * 1_024;
  * produces, and a cut it makes is shown on the message and recorded, never silent.
  */
 export const CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS = 16 * 1_024 * 1_024;
-/** One page of a retained answer, in UTF-16 code units; a page never splits a surrogate pair. */
-export const CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS = 32 * 1_024;
+/**
+ * One page of a retained answer, in UTF-16 code units; a page never splits a surrogate pair. Large
+ * enough that the longest answer a run retains is read in at most 64 requests.
+ */
+export const CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS = 256 * 1_024;
+/** One live text delta, in UTF-16 code units; a longer gain reaches the reader as pages. */
+export const CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS = 32 * 1_024;
 /**
  * The two kinds of model text the projection retains whole beside the feed: the answer and the
  * model's reasoning. Neither is cut to fit the feed; both are read page by page and streamed as
@@ -136,6 +141,42 @@ export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
 export type CodingSafeActivityGitOutcome = (typeof CODING_SAFE_ACTIVITY_GIT_OUTCOMES)[number];
 
 /**
+ * Where a tool call that did not succeed failed, so a person sees at a glance whether Keiko caused
+ * it: `keiko-refused` Keiko's governance (a policy rule, a refused step or a declined approval)
+ * blocked the call; `command-failed` a command ran and ended with a non-zero exit status;
+ * `tool-error` the tool itself failed (a bad argument from the model, a missing file);
+ * `timed-out` the command ran out of its time; `cancelled` the call was stopped. Closed vocabulary,
+ * derived from the governed facade's state and the runtime's own status facts, never from prose.
+ */
+export const CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS = [
+  "keiko-refused",
+  "command-failed",
+  "tool-error",
+  "timed-out",
+  "cancelled",
+] as const;
+export type CodingSafeActivityToolFailureOrigin =
+  (typeof CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)[number];
+
+/** Why Keiko refused a call, where the governed facade knows it: a person declined, or nobody decided in time. */
+export const CODING_SAFE_ACTIVITY_TOOL_REFUSAL_CAUSES = [
+  "approval-declined",
+  "approval-expired",
+] as const;
+export type CodingSafeActivityToolRefusalCause =
+  (typeof CODING_SAFE_ACTIVITY_TOOL_REFUSAL_CAUSES)[number];
+
+/** A shell call's command line, up to this many characters (the opened row shows all of it). */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS = 1_000;
+/** The error message a failed tool returned to the model, up to this many characters. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS = 1_000;
+/** Output lines a tool row shows from the start and from the end; the lines between are counted. */
+export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES = 5;
+export const CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES = 20;
+/** Characters each of the output's head and tail holds at most. */
+export const CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS = 2_000;
+
+/**
  * Canonical server facts only. Live authenticated presentation. Paths and byte counts never enter
  * Activity Log evidence; the closed `verificationOutcome` and `gitOutcome` alone are also recorded, body-free, on
  * `coding-runtime.tool-result-rendered`.
@@ -160,6 +201,44 @@ export interface CodingSafeActivityToolPresentation {
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
   readonly exitCode?: number;
+  /** Where a call that did not succeed failed; absent while running and on success. */
+  readonly failureOrigin?: CodingSafeActivityToolFailureOrigin;
+  /** Why Keiko refused the call, where the governed facade knows it. */
+  readonly refusalCause?: CodingSafeActivityToolRefusalCause;
+  /** Wall time the runtime ran the call, from its start to its end. */
+  readonly durationMs?: number;
+  /** How many times this call's command has failed in the run, this call included. */
+  readonly failureCount?: number;
+  /**
+   * The shell command line, as the model wrote it. Untrusted content with the credential floor
+   * applied; rendered as text only and never part of the Activity Log or any evidence.
+   */
+  readonly command?: CodingSafeActivityToolText;
+  /** What the call printed (a shell call's output), as its first and last lines. Same rules. */
+  readonly output?: CodingSafeActivityToolOutput;
+  /** The error message the tool returned to the model when it failed. Same rules. */
+  readonly errorText?: CodingSafeActivityToolText;
+  /** The live feed shed this call's command, output and error text to stay inside its budget. */
+  readonly detailOmitted?: true;
+}
+
+/** Untrusted tool text with the credential floor applied; `truncated` when cut to its bound. */
+export interface CodingSafeActivityToolText {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/**
+ * A tool's output as its first lines (`head`) and its last lines (`tail`), with the lines between
+ * them counted (`hiddenLineCount`). A short output is all `head` and an empty `tail`. `truncated` is
+ * true when a line was cut to the part's character bound.
+ */
+export interface CodingSafeActivityToolOutput {
+  readonly head: string;
+  readonly tail: string;
+  readonly lineCount: number;
+  readonly hiddenLineCount: number;
+  readonly truncated: boolean;
 }
 
 export type CodingSafeActivityMessageRole = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ROLES)[number];
@@ -527,9 +606,7 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   }
   validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
   validateSegments(value.segments, path, errors);
-  if ("reasoning" in value) validateReasoning(value, path, errors);
-  if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
-  if ("fullReasoning" in value) validateFullText(value, "fullReasoning", path, errors);
+  validateMessageTexts(value, path, errors);
   if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
@@ -541,6 +618,16 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   ) {
     errors.push(`${path} exceeds the message UTF-8 byte budget`);
   }
+}
+
+function validateMessageTexts(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if ("reasoning" in value) validateReasoning(value, path, errors);
+  if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
+  if ("fullReasoning" in value) validateFullText(value, "fullReasoning", path, errors);
 }
 
 function validateMessageOrigin(
@@ -661,6 +748,13 @@ const ANSWER_PAGE_KEYS = [
 ] as const;
 
 /** Validates one retained-answer page: exact keys, a bounded page that lies inside the answer. */
+/** A run or message identifier as the feed carries it: a bounded safe identifier. */
+export function isCodingSafeActivityIdentifier(value: string): boolean {
+  const errors: string[] = [];
+  validateSafeId(value, "identifier", errors, 128);
+  return errors.length === 0;
+}
+
 export function validateCodingSafeActivityAnswerPage(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingSafeActivityAnswerPage> {
@@ -684,7 +778,7 @@ function validateAnswerPageText(value: Record<string, unknown>, errors: string[]
     errors.push("answerPage.length is invalid");
     return;
   }
-  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+  if (!isTextOffset(offset)) {
     errors.push("answerPage.offset is invalid");
     return;
   }
@@ -695,9 +789,18 @@ function validateAnswerPageText(value: Record<string, unknown>, errors: string[]
     (text.length === 0 && offset < length)
   ) {
     errors.push("answerPage.text must be a bounded page inside the answer");
-  } else if (stripUnsafeFormatChars(text) !== text) {
-    errors.push("answerPage.text contains unsafe format characters");
+    return;
   }
+  validateSafeText(text, "answerPage.text", errors);
+}
+
+function isTextOffset(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function validateSafeText(text: string, path: string, errors: string[]): void {
+  if (stripUnsafeFormatChars(text) !== text)
+    errors.push(`${path} contains unsafe format characters`);
 }
 
 /** Validates one channel update's text deltas: a bounded list of non-empty, safe pieces. */
@@ -724,23 +827,18 @@ function validateTextDelta(value: unknown, path: string, errors: string[]): void
   validateSafeId(value.messageId, `${path}.messageId`, errors, 128);
   if (!isOneOf(value.part, CODING_SAFE_ACTIVITY_TEXT_PARTS)) errors.push(`${path}.part is invalid`);
   const { offset, text } = value;
-  if (
-    typeof offset !== "number" ||
-    !Number.isSafeInteger(offset) ||
-    offset < 0 ||
-    offset >= CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS
-  ) {
+  if (!isTextOffset(offset) || offset >= CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS) {
     errors.push(`${path}.offset is invalid`);
   }
   if (
     typeof text !== "string" ||
     text.length === 0 ||
-    text.length > CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS
+    text.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS
   ) {
     errors.push(`${path}.text must be a bounded non-empty piece`);
-  } else if (stripUnsafeFormatChars(text) !== text) {
-    errors.push(`${path}.text contains unsafe format characters`);
+    return;
   }
+  validateSafeText(text, `${path}.text`, errors);
 }
 
 function utf8Bytes(value: string): number {
@@ -806,11 +904,30 @@ export function isCodingSafeActivityToolPresentation(
     "gitOutcome",
     "bridgeDurationMs",
     "exitCode",
+    "failureOrigin",
+    "refusalCause",
+    "durationMs",
+    "failureCount",
+    "command",
+    "output",
+    "errorText",
+    "detailOmitted",
   ];
   if (exactKeys(value, allowed, "presentation").length > 0) return false;
-  if (!validPresentationPaths(value) || !validPresentationCounts(value)) return false;
-  if (value.exitCode !== undefined && !Number.isSafeInteger(value.exitCode)) return false;
-  return validPresentationVocabulary(value);
+  return (
+    validPresentationPaths(value) &&
+    validPresentationCounts(value) &&
+    validPresentationScalars(value) &&
+    validPresentationVocabulary(value) &&
+    validPresentationText(value)
+  );
+}
+
+function validPresentationScalars(value: Record<string, unknown>): boolean {
+  return (
+    (value.exitCode === undefined || Number.isSafeInteger(value.exitCode)) &&
+    (value.detailOmitted === undefined || value.detailOmitted === true)
+  );
 }
 
 function validPresentationVocabulary(value: Record<string, unknown>): boolean {
@@ -819,8 +936,70 @@ function validPresentationVocabulary(value: Record<string, unknown>): boolean {
       isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)) &&
     (value.verificationOutcome === undefined ||
       isOneOf(value.verificationOutcome, CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)) &&
-    (value.gitOutcome === undefined || isOneOf(value.gitOutcome, CODING_SAFE_ACTIVITY_GIT_OUTCOMES))
+    (value.gitOutcome === undefined ||
+      isOneOf(value.gitOutcome, CODING_SAFE_ACTIVITY_GIT_OUTCOMES)) &&
+    (value.failureOrigin === undefined ||
+      isOneOf(value.failureOrigin, CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)) &&
+    (value.refusalCause === undefined ||
+      isOneOf(value.refusalCause, CODING_SAFE_ACTIVITY_TOOL_REFUSAL_CAUSES))
   );
+}
+
+// A tool's text is bounded, free of unsafe format characters, and never carried beside a shed one.
+function validPresentationText(value: Record<string, unknown>): boolean {
+  if (value.detailOmitted === true && [value.command, value.output, value.errorText].some(Boolean))
+    return false;
+  return (
+    (value.command === undefined ||
+      isToolText(value.command, CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS)) &&
+    (value.errorText === undefined ||
+      isToolText(value.errorText, CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS)) &&
+    (value.output === undefined || isToolOutput(value.output))
+  );
+}
+
+function isToolText(value: unknown, maxChars: number): boolean {
+  return (
+    isRecord(value) &&
+    exactKeys(value, ["text", "truncated"], "text").length === 0 &&
+    isBoundedSafeText(value.text, maxChars) &&
+    value.text !== "" &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+function isToolOutput(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = ["head", "tail", "lineCount", "hiddenLineCount", "truncated"];
+  if (exactKeys(value, keys, "output").length > 0) return false;
+  const { head, tail } = value;
+  return (
+    isBoundedSafeText(head, CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS) &&
+    isBoundedSafeText(tail, CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS) &&
+    head !== "" &&
+    validOutputLines(value.lineCount, value.hiddenLineCount, tail) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+// Lines are hidden only between a head and a tail, and never all of them.
+function validOutputLines(lineCount: unknown, hiddenLineCount: unknown, tail: string): boolean {
+  return (
+    isCount(lineCount) &&
+    isCount(hiddenLineCount) &&
+    hiddenLineCount < lineCount &&
+    (tail !== "" || hiddenLineCount === 0)
+  );
+}
+
+function isBoundedSafeText(value: unknown, maxChars: number): value is string {
+  return (
+    typeof value === "string" && value.length <= maxChars && stripUnsafeFormatChars(value) === value
+  );
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function validPresentationPaths(value: Record<string, unknown>): boolean {
@@ -830,15 +1009,20 @@ function validPresentationPaths(value: Record<string, unknown>): boolean {
 }
 
 function validPresentationCounts(value: Record<string, unknown>): boolean {
-  return ["readByteCount", "totalFileLines", "returnedPathCount", "bridgeDurationMs"].every(
-    (key) => {
-      const count = value[key];
-      return (
-        count === undefined ||
-        (typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
-      );
-    },
-  );
+  return [
+    "readByteCount",
+    "totalFileLines",
+    "returnedPathCount",
+    "bridgeDurationMs",
+    "durationMs",
+    "failureCount",
+  ].every((key) => {
+    const count = value[key];
+    return (
+      count === undefined ||
+      (typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
+    );
+  });
 }
 
 /** Reuses the workspace path contract and excludes deceptive/control characters from UI labels. */

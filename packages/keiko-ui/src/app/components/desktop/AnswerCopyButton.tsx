@@ -26,6 +26,11 @@ export interface AnswerCopyButtonProps {
   readonly labels: AnswerCopyButtonLabels;
   /** Called once per attempt: without an error when copied, with the error when refused. */
   readonly onOutcome?: (error?: unknown) => void;
+  /**
+   * The text is a cut or failed-to-read prefix of the answer. A prefix is never offered for copy
+   * without saying so and the button has no wording for that, so it renders nothing.
+   */
+  readonly partial?: boolean;
 }
 
 /**
@@ -34,32 +39,56 @@ export interface AnswerCopyButtonProps {
  * visible feedback, and announces the outcome in a status region (WCAG 4.1.3), since a changed
  * accessible name alone is not re-announced.
  */
-export function AnswerCopyButton({ text, labels, onOutcome }: AnswerCopyButtonProps): ReactNode {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+type CopyState = "idle" | "copied" | "failed";
+
+// Shows an outcome and returns to idle after the feedback time, for "copied" and "failed" alike.
+function useCopyFeedback(): {
+  readonly copyState: CopyState;
+  readonly status: string;
+  readonly flash: (state: CopyState, status: string) => void;
+} {
+  const [copyState, setCopyState] = useState<CopyState>("idle");
   const [status, setStatus] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => (): void => {
+      clearTimeout(timer.current);
+    },
+    [],
+  );
+  const flash = useCallback((state: CopyState, message: string): void => {
+    setCopyState(state);
+    setStatus(message);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      setCopyState("idle");
+      setStatus("");
+    }, COPIED_FEEDBACK_MS);
+  }, []);
+  return { copyState, status, flash };
+}
 
+export function AnswerCopyButton({
+  text,
+  labels,
+  onOutcome,
+  partial = false,
+}: AnswerCopyButtonProps): ReactNode {
+  const { copyState, status, flash } = useCopyFeedback();
   const handleCopy = useCallback(() => {
     void copyTextToClipboard(text).then(
       () => {
         onOutcome?.();
-        setCopyState("copied");
-        setStatus(labels.copiedStatus);
-        clearTimeout(timer.current);
-        timer.current = setTimeout(() => {
-          setCopyState("idle");
-          setStatus("");
-        }, COPIED_FEEDBACK_MS);
+        flash("copied", labels.copiedStatus);
       },
       (error: unknown) => {
         onOutcome?.(error);
-        setCopyState("failed");
-        setStatus(labels.failedStatus);
+        flash("failed", labels.failedStatus);
       },
     );
-  }, [labels.copiedStatus, labels.failedStatus, onOutcome, text]);
+  }, [flash, labels.copiedStatus, labels.failedStatus, onOutcome, text]);
 
+  if (partial) return null;
   const copied = copyState === "copied";
   const label = copied ? labels.copied : labels.copy;
   return (

@@ -1,4 +1,4 @@
-import { fireEvent, render, renderHook } from "@testing-library/react";
+import { act, fireEvent, render, renderHook } from "@testing-library/react";
 import { createElement, useLayoutEffect, useRef, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { useFollowNewest } from "./useFollowNewest";
@@ -161,6 +161,52 @@ describe("useFollowNewest", () => {
     result.current.onScroll();
     result.current.resume();
     expect(region.scrollTop).toBe(1720);
+  });
+
+  it("says it paused while the reader is up the history and clears that on resume", () => {
+    const region = fakeRegion(1720, 292);
+    const { result } = renderFollow(region);
+    expect(result.current.paused).toBe(false);
+    region.scrollTop = 100;
+    act(() => {
+      result.current.onScroll();
+    });
+    expect(result.current.paused).toBe(true);
+    act(() => {
+      result.current.resume();
+    });
+    expect(result.current.paused).toBe(false);
+  });
+
+  it("clears the pause when the reader scrolls back near the bottom", () => {
+    const region = fakeRegion(1720, 292);
+    const { result } = renderFollow(region);
+    region.scrollTop = 100;
+    act(() => {
+      result.current.onScroll();
+    });
+    region.scrollTop = 1720 - 292;
+    act(() => {
+      result.current.onScroll();
+    });
+    expect(result.current.paused).toBe(false);
+  });
+
+  it("pauses on Home and resumes on End, the keys a keyboard reader uses", () => {
+    const seen: boolean[] = [];
+    function Probe(): ReactNode {
+      const ref = useRef<HTMLDivElement>(null);
+      const follow = useFollowNewest(ref, "a");
+      seen.push(follow.paused);
+      return createElement("div", { ref: follow.regionRef, role: "log", tabIndex: 0 });
+    }
+    const view = render(createElement(Probe));
+    const region = view.getByRole("log");
+    Object.defineProperty(region, "scrollTo", { value: (): void => undefined });
+    fireEvent.keyDown(region, { key: "Home" });
+    expect(seen.at(-1)).toBe(true);
+    fireEvent.keyDown(region, { key: "End" });
+    expect(seen.at(-1)).toBe(false);
   });
 
   it("does nothing without a region", () => {

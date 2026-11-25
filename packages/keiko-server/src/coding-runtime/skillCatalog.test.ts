@@ -32,29 +32,24 @@ function seed(entries: readonly unknown[]): readonly SkillCatalogEntryInput[] {
 }
 
 describe("createServerApprovedSkillCatalog", () => {
-  it("seeds the default read-only set with exact id@version lookup", () => {
+  it("a new installation starts with an empty catalog", () => {
     const catalog = createServerApprovedSkillCatalog();
-    expect(catalog.has("skl_repo-structure-summary@1")).toBe(true);
-    expect(catalog.isImplicitAllowed("skl_repo-structure-summary@1")).toBe(true);
-    expect(catalog.get("skl_repo-structure-summary@1")?.category).toBe("repository-analysis");
-    expect(catalog.get("skl_repo-structure-summary@1")?.enabled).toBe(true);
-    expect(catalog.list().length).toBeGreaterThanOrEqual(1);
+    expect(catalog.list()).toEqual([]);
+    expect(catalog.revision()).toBe(1);
+    expect(catalog.has("skl_repo-structure-summary@1")).toBe(false);
   });
 
-  it("#2387: seeds only categories the production skill port can execute", () => {
-    // A seeded skill whose category has no handler always answers `skill-handler-unavailable`, so
-    // the catalog would advertise capability the product does not have. Guard the seed, not just
-    // the handler: re-adding a category here without its handler must fail this test.
-    const executable = new Set(["repository-analysis"]);
-
-    for (const entry of createServerApprovedSkillCatalog().list()) {
-      expect(executable.has(entry.category)).toBe(true);
-    }
+  it("looks an injected skill up by exact id@version", () => {
+    const catalog = createServerApprovedSkillCatalog([skill("skl_a@1")]);
+    expect(catalog.has("skl_a@1")).toBe(true);
+    expect(catalog.isImplicitAllowed("skl_a@1")).toBe(true);
+    expect(catalog.get("skl_a@1")?.category).toBe("repository-analysis");
+    expect(catalog.get("skl_a@1")?.enabled).toBe(true);
   });
 
-  it("#3417: seeds skills compatible with the bound OpenCode profile", () => {
+  it("#3417: an injected skill carries the bound OpenCode profile compatibility", () => {
     expect(OPENCODE_SKILL_PROFILE).toEqual({ id: "opencode", version: 1 });
-    for (const entry of createServerApprovedSkillCatalog().list()) {
+    for (const entry of createServerApprovedSkillCatalog([skill("skl_a@1")]).list()) {
       expect(entry.compatibility.profile).toBe(OPENCODE_SKILL_PROFILE.id);
       expect(entry.compatibility.minVersion).toBeLessThanOrEqual(OPENCODE_SKILL_PROFILE.version);
       expect(entry.compatibility.maxVersion).toBeGreaterThanOrEqual(OPENCODE_SKILL_PROFILE.version);
@@ -62,9 +57,9 @@ describe("createServerApprovedSkillCatalog", () => {
   });
 
   it("fails closed for an unknown id, an unknown version, and malformed lookups", () => {
-    const catalog = createServerApprovedSkillCatalog();
-    expect(catalog.has("skl_repo-structure-summary@2")).toBe(false);
-    expect(catalog.get("skl_repo-structure-summary@2")).toBeUndefined();
+    const catalog = createServerApprovedSkillCatalog([skill("skl_a@1")]);
+    expect(catalog.has("skl_a@2")).toBe(false);
+    expect(catalog.get("skl_a@2")).toBeUndefined();
     expect(catalog.get("skl_unknown-skill@1")).toBeUndefined();
     expect(catalog.isImplicitAllowed("skl_unknown-skill@1")).toBe(false);
     expect(catalog.has("garbage")).toBe(false);
@@ -83,10 +78,9 @@ describe("createServerApprovedSkillCatalog", () => {
     expect(catalog.get("skl_public-docs-lookup@1")?.category).toBe("public-research");
   });
 
-  it("injected entries replace the default seed", () => {
+  it("an injected set is the whole catalog", () => {
     const catalog = createServerApprovedSkillCatalog([skill("skl_only@1")]);
     expect(catalog.has("skl_only@1")).toBe(true);
-    expect(catalog.has("skl_repo-structure-summary@1")).toBe(false);
     expect(catalog.list()).toHaveLength(1);
   });
 
@@ -183,7 +177,7 @@ describe("createServerApprovedSkillCatalog", () => {
   });
 
   it("exposes an immutable snapshot from list()", () => {
-    const catalog = createServerApprovedSkillCatalog();
+    const catalog = createServerApprovedSkillCatalog([skill("skl_a@1")]);
     const list = catalog.list();
     expect(Object.isFrozen(list)).toBe(true);
     expect(list.every((entry) => Object.isFrozen(entry))).toBe(true);

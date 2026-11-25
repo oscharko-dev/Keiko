@@ -50,7 +50,7 @@ export function useCodingWorkbenchModelTexts(
       setPublished({ runId, texts });
     });
     readerRef.current = reader;
-    return () => {
+    return (): void => {
       reader.dispose();
       if (readerRef.current === reader) readerRef.current = undefined;
     };

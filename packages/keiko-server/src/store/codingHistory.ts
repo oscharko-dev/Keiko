@@ -676,6 +676,21 @@ function scheduledIntentMessageIds(db: DatabaseSync, chatId: string): ReadonlySe
   return new Set(rows.map((row) => String(row.message_id)));
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+// A Keiko note's type wins over a scheduled continuation's, as the stored bindings name it.
+function messageTaskType(
+  messageId: string,
+  scheduled: ReadonlySet<string>,
+  keikoNotes: ReadonlySet<string>,
+): { readonly taskType?: string } {
+  if (keikoNotes.has(messageId)) return { taskType: CODING_HISTORY_KEIKO_TASK_TYPE };
+  if (scheduled.has(messageId)) return { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE };
+  return {};
+}
+
 function readDetail(
   db: DatabaseSync,
   store: UiStore,
@@ -697,15 +712,14 @@ function readDetail(
   for (const message of listed) {
     if (repeated.has(message.id)) continue;
     const row = binding.get(message.id);
-    const runId = typeof row?.run_id === "string" ? row.run_id : undefined;
+    const runId = optionalString(row?.run_id);
     const continuation = chunkContinuation(row?.source_id);
     if (joinContinuation(messages, message, { runId, continuation, lastSourceId })) continue;
-    lastSourceId = typeof row?.source_id === "string" ? row.source_id : undefined;
+    lastSourceId = optionalString(row?.source_id);
     messages.push({
       ...message,
       ...(runId === undefined ? {} : { runId }),
-      ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
-      ...(keikoNotes.has(message.id) ? { taskType: CODING_HISTORY_KEIKO_TASK_TYPE } : {}),
+      ...messageTaskType(message.id, scheduled, keikoNotes),
     });
   }
   return { task, messages, truncated: store.countMessages(id) > listed.length };

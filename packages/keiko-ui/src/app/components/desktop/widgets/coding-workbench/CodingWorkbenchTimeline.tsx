@@ -6,6 +6,7 @@ import {
   memo,
   useCallback,
   useContext,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -22,6 +23,7 @@ import type {
   CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
   CodingSafeActivityTool,
+  CodingSafeActivityToolFailureOrigin,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -45,6 +47,7 @@ import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { AnswerCopyButton, type AnswerCopyButtonLabels } from "../../AnswerCopyButton";
+import { ListFollowContext } from "./CodingWorkbenchJumpToLatest";
 import { SupportReportButton } from "../../SupportReportButton";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -58,13 +61,30 @@ import {
   eventOffersRunCheck,
   eventTitle,
 } from "./codingWorkbenchLabels";
-import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
+import {
+  formatRunDuration,
+  modelGatewayRetrying,
+  settledRunState,
+} from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingWorkbenchWindow.module.css";
+import { useSecondClock } from "./useSecondClock";
+import {
+  moveRowFocus,
+  opensWithFailure,
+  ToolCommandPreview,
+  ToolDuration,
+  ToolFailureExplanation,
+  ToolFailureLabel,
+  ToolTextDetail,
+  toolFailureOrigin,
+  toolGroupSummary,
+} from "./CodingWorkbenchToolDetail";
 
-const VIRTUAL_THRESHOLD = 100;
+// A long run's timeline windows its rows from about one screen and a half of them on.
+const VIRTUAL_THRESHOLD = 60;
 const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
 // Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
@@ -103,7 +123,9 @@ const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>>
   skill: "codingWorkbench.timeline.tool.skill",
   subagent: "codingWorkbench.timeline.tool.subagent",
   todo: "codingWorkbench.timeline.tool.todo",
+  todowrite: "codingWorkbench.timeline.tool.todo",
   question: "codingWorkbench.timeline.tool.question",
+  execute: "codingWorkbench.timeline.tool.execute",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -266,6 +288,7 @@ export function Timeline({
             t={t}
           />
           <QuestionSummary questions={questions} />
+          <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
           <TimelineContent
             items={items}
             timeline={timeline}
@@ -276,6 +299,53 @@ export function Timeline({
         </section>
       </ModelTextsContext.Provider>
     </RunCheckContext.Provider>
+  );
+}
+
+/** After this long without the model's first step, the wait says the model is slow. */
+const SLOW_FIRST_STEP_MS = 10_000;
+
+// The turn whose first step the run still waits for: a generating run whose newest turn holds no
+// answer and no tool call yet. Undefined once the model did something, or when nothing generates.
+function awaitedFirstStep(
+  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  generating: boolean,
+): string | undefined {
+  if (!generating) return undefined;
+  const turn = feed?.turns.at(-1);
+  if (turn === undefined) return "run-start";
+  const answered =
+    turn.tools.length > 0 || turn.messages.some((message) => message.role === "assistant");
+  return answered ? undefined : turn.turnId;
+}
+
+// A run between the person's request and the model's first step says it waits, and after ten
+// seconds that the model is slow, so a quiet stream never reads as a stuck Workbench.
+function FirstStepWait({
+  waitKey,
+  t,
+}: {
+  readonly waitKey: string | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const [slowKey, setSlowKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (waitKey === undefined) return undefined;
+    const timer = setTimeout(() => {
+      setSlowKey(waitKey);
+    }, SLOW_FIRST_STEP_MS);
+    return (): void => {
+      clearTimeout(timer);
+    };
+  }, [waitKey]);
+  if (waitKey === undefined) return null;
+  return (
+    <p className={styles.cmpFirstStepWait} role="status">
+      <span className={styles.cmpFirstStepPulse} aria-hidden="true" />
+      {slowKey === waitKey
+        ? t("codingWorkbench.activity.firstStep.slow")
+        : t("codingWorkbench.activity.firstStep.waiting")}
+    </p>
   );
 }
 
@@ -664,12 +734,24 @@ function useVirtualListFollow(
     ? `${String(items.length)}:${items.at(-1)?.id ?? ""}:${String(totalHeight)}:${questionKey}`
     : "short";
   const follow = useFollowNewest(scrollRef, growthKey);
-  const { resume } = follow;
+  const { resume, paused } = follow;
   // A question is a decision the run waits for: a new one brings the list to its end even when the
   // reader had scrolled up, as the stream itself does for the run's own prompts.
   useEffect(() => {
     if (virtual && questionKey !== "") resume();
   }, [virtual, questionKey, resume]);
+  // The stream's way back to the newest row shows while this list stopped following, and resumes it.
+  const reportList = useContext(ListFollowContext);
+  const listPaused = virtual && paused;
+  useEffect(() => {
+    reportList?.({ paused: listPaused, resume });
+  }, [reportList, listPaused, resume]);
+  useEffect(
+    () => (): void => {
+      reportList?.({ paused: false, resume: () => undefined });
+    },
+    [reportList],
+  );
   return { listRef: follow.regionRef, onScroll: follow.onScroll };
 }
 
@@ -876,6 +958,7 @@ function TimelineList({
       aria-describedby={virtual ? "coding-workbench-timeline-instructions" : undefined}
       tabIndex={virtual ? 0 : undefined}
       onScroll={onScroll}
+      data-timeline-rows=""
     >
       {virtual && spacerBefore > 0 ? <TimelineSpacer size={spacerBefore} /> : null}
       <TimelineRows timeline={timeline} total={total} t={t} />
@@ -1026,7 +1109,7 @@ function MessageRow({
           </p>
           {item.message.reasoning === undefined &&
           item.message.fullReasoning === undefined ? null : (
-            <ModelReasoning message={item.message} t={t} />
+            <ModelReasoning message={item.message} live={item.live} t={t} />
           )}
           <div className={styles.messageText}>
             <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -1076,9 +1159,11 @@ function KeikoNote({
 // it whole, and the part the feed does not carry is read only once the reader opens it.
 function ModelReasoning({
   message,
+  live,
   t,
 }: {
   readonly message: CodingSafeActivityMessage;
+  readonly live: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
@@ -1106,7 +1191,7 @@ function ModelReasoning({
         className={styles.cmpActivitySummary}
         onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
       >
-        <span>{t("codingWorkbench.activity.reasoning.title")}</span>
+        <span>{t(reasoningTitle(message, live))}</span>
       </summary>
       <p className={styles.cmpReasoningText}>
         {shown.source}
@@ -1118,6 +1203,19 @@ function ModelReasoning({
       </p>
     </details>
   );
+}
+
+// "Thinking…" while the model still thinks: its message is live and no answer text arrived yet;
+// "Thought" once it answers or moves on. The feed carries no reasoning timestamps, so the summary
+// names no duration it could not prove.
+function reasoningTitle(
+  message: CodingSafeActivityMessage,
+  live: boolean,
+): "codingWorkbench.activity.reasoning.thinking" | "codingWorkbench.activity.reasoning.title" {
+  const answering = message.segments.some((segment) => segment.text.trim() !== "");
+  return live && !answering
+    ? "codingWorkbench.activity.reasoning.thinking"
+    : "codingWorkbench.activity.reasoning.title";
 }
 
 function MessageContent({
@@ -1193,13 +1291,18 @@ function AssistantAnswer({
 }): ReactNode {
   const texts = useContext(ModelTextsContext);
   const shown = shownAnswer(message, texts.answers.get(message.messageId));
+  // A streaming answer re-renders as a whole on every delta. Parsing is linear (about 18 ms per
+  // 100 KB), but a long answer's deltas can arrive faster than it renders: the deferred source lets
+  // React skip the stale ones and keep the window responsive, and always settles on the newest.
+  const deferredSource = useDeferredValue(shown.source);
+  const source = live ? deferredSource : shown.source;
   // While the answer still streams, SafeMarkdown renders its code without highlighting or list
   // evidence on every update; the finished answer renders in full as soon as it is finished — also
   // while the run waits for the operator's decision.
   return (
     <>
       <SafeMarkdownBoundary
-        source={shown.source}
+        source={source}
         streaming={live}
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
@@ -1214,9 +1317,14 @@ function AssistantAnswer({
         }
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
-      {live || shown.state === "loading" || shown.source.trim().length === 0 ? null : (
+      {live || shown.source.trim().length === 0 ? null : (
         <div className={styles.messageActions}>
-          <WorkbenchAnswerCopyButton text={shown.source} runId={runId} t={t} />
+          <WorkbenchAnswerCopyButton
+            text={shown.source}
+            partial={shown.state !== "whole"}
+            runId={runId}
+            t={t}
+          />
         </div>
       )}
     </>
@@ -1254,10 +1362,13 @@ function TextTrailing({
 // outcome is recorded body-free under the run's correlation: never the copied text.
 function WorkbenchAnswerCopyButton({
   text,
+  partial,
   runId,
   t,
 }: {
   readonly text: string;
+  /** A cut, failed or still loading answer is never copied as if it were the model's full text. */
+  readonly partial: boolean;
   readonly runId: string;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
@@ -1276,7 +1387,7 @@ function WorkbenchAnswerCopyButton({
     },
     [runId],
   );
-  return <AnswerCopyButton text={text} labels={labels} onOutcome={onOutcome} />;
+  return <AnswerCopyButton text={text} labels={labels} onOutcome={onOutcome} partial={partial} />;
 }
 
 function reportWorkbenchAnswerCopy(runId: string, error?: unknown): void {
@@ -1317,43 +1428,165 @@ function ToolRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
-  const shownState = shownToolState(item.tool);
+  const { tool } = item;
+  const shownState = shownToolState(tool);
+  const origin = toolFailureOrigin(tool);
   return (
     <li
       ref={rowRef}
       className={styles.timelineItem}
       aria-posinset={position}
       aria-setsize={total}
+      aria-busy={tool.state === "running" || tool.state === "pending"}
       data-timeline-kind="tool"
     >
       <details
         className={styles.toolCard}
         data-tool-state={shownState}
-        open={OPEN_WITH_REASON_STATES.has(shownState)}
+        {...(origin === undefined ? {} : { "data-failure-origin": origin })}
+        open={opensWithFailure(origin) || OPEN_WITH_REASON_STATES.has(shownState)}
       >
         <summary
           className={styles.cmpActivitySummary}
+          data-timeline-row=""
+          onKeyDown={moveRowFocus}
           onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
         >
           <span className={styles.toolIcon} aria-hidden="true" />
-          <div className={styles.toolMeta}>
-            <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
-            {item.tool.presentation?.relativePath === undefined ? null : (
-              <code className={styles.toolName}>{item.tool.presentation.relativePath}</code>
-            )}
-          </div>
+          <ToolRowTitle tool={tool} t={t} />
           {item.count > 1 ? (
             <span className={styles.toolCount}>
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
             </span>
           ) : null}
-          <ToolStateBadge tool={item.tool} state={shownState} t={t} />
+          <ToolSummaryEnd tool={tool} state={shownState} origin={origin} t={t} />
         </summary>
-        <ToolOutcome tool={item.tool} t={t} />
-        <code className={styles.toolName}>{item.tool.tool}</code>
-        <ToolPresentationDetails tool={item.tool} t={t} />
+        <ToolRowBody tool={tool} origin={origin} t={t} />
       </details>
     </li>
+  );
+}
+
+// The row's name in words, with the raw tool id only as a tooltip, and what it is about.
+function ToolRowTitle({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <div className={styles.toolMeta}>
+      <p className={styles.timelineTitle} title={tool.tool}>
+        {humanizeToolName(tool.tool, t)}
+      </p>
+      <ToolSubject tool={tool} />
+    </div>
+  );
+}
+
+// An opened row: a failure's plain explanation and duration first, then the call's own text.
+function ToolRowBody({
+  tool,
+  origin,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      {origin === undefined ? (
+        <ToolOutcome tool={tool} t={t} />
+      ) : (
+        <>
+          <ToolFailureExplanation tool={tool} origin={origin} t={t} />
+          <ToolRowDuration tool={tool} t={t} />
+        </>
+      )}
+      <ToolTextDetail tool={tool} t={t} />
+      <ToolPresentationDetails tool={tool} t={t} />
+    </>
+  );
+}
+
+// What the row is about: a shell call's command line, else the file a read returned.
+function ToolSubject({ tool }: { readonly tool: CodingSafeActivityTool }): ReactNode {
+  const command = tool.presentation?.command;
+  if (command !== undefined) return <ToolCommandPreview command={command} />;
+  const path = tool.presentation?.relativePath;
+  return path === undefined ? null : <code className={styles.toolName}>{path}</code>;
+}
+
+function ToolRowDuration({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const locale = useLocale();
+  return (
+    <ToolDuration
+      durationMs={tool.presentation?.durationMs ?? tool.presentation?.bridgeDurationMs}
+      t={t}
+      format={(durationMs) =>
+        durationMs < 60_000
+          ? formatDurationMs(durationMs, locale)
+          : formatRunDuration(durationMs, t)
+      }
+    />
+  );
+}
+
+// The row's end: who caused a failure; a quiet check and the duration for a success, no word; the
+// state badge for anything still open or unfinished.
+function ToolSummaryEnd({
+  tool,
+  state,
+  origin,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly state: ShownToolState;
+  readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (origin !== undefined) return <ToolFailureLabel tool={tool} origin={origin} t={t} />;
+  if (state === "succeeded") {
+    return (
+      <>
+        <span className="sr-only">{t("codingWorkbench.activity.toolState.succeeded")}</span>
+        <ToolRowDuration tool={tool} t={t} />
+      </>
+    );
+  }
+  return (
+    <>
+      <ToolStateBadge tool={tool} state={state} t={t} />
+      {state === "running" ? <RunningFor since={tool.occurredAt} t={t} /> : null}
+    </>
+  );
+}
+
+// How long a call has been running, from one second on. It ticks silently: a timer is no live
+// region, so a screen reader is never interrupted once a second.
+function RunningFor({
+  since,
+  t,
+}: {
+  readonly since: string;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const now = useSecondClock(true);
+  const started = Date.parse(since);
+  const elapsed = Number.isNaN(started) ? 0 : now - started;
+  if (elapsed < 1_000) return null;
+  return (
+    <span className={styles.cmpToolDuration} role="timer">
+      {formatRunDuration(elapsed, t)}
+    </span>
   );
 }
 
@@ -1457,14 +1690,6 @@ function ToolOutcome({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const exitCode = tool.presentation?.exitCode;
-  if (exitCode !== undefined) {
-    return (
-      <p className={styles.cmpToolOutcome}>
-        {t("codingWorkbench.activity.exitCode", { code: exitCode })}
-      </p>
-    );
-  }
   const verificationOutcome = tool.presentation?.verificationOutcome;
   if (verificationOutcome !== undefined) {
     return (
@@ -1480,9 +1705,7 @@ function ToolOutcome({
       <p className={styles.cmpToolOutcome}>{t(`codingWorkbench.activity.git.${gitOutcome}`)}</p>
     );
   }
-  return tool.state === "failed" ? (
-    <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
-  ) : null;
+  return null;
 }
 
 function ToolPresentationDetails({
@@ -1492,7 +1715,6 @@ function ToolPresentationDetails({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const locale = useLocale();
   const facts = tool.presentation;
   if (facts === undefined) return null;
   return (
@@ -1511,17 +1733,10 @@ function ToolPresentationDetails({
         <p>{t("codingWorkbench.activity.returnedPaths", { count: facts.returnedPathCount })}</p>
       )}
       {facts.refusalReason === undefined ? null : (
-        <p>{t("codingWorkbench.activity.editRefusal", { reason: facts.refusalReason })}</p>
+        <p>{t(`codingWorkbench.activity.editRefusal.${facts.refusalReason}`)}</p>
       )}
       {facts.affectedRelativePath === undefined ? null : (
         <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
-      )}
-      {facts.bridgeDurationMs === undefined ? null : (
-        <p>
-          {t("codingWorkbench.activity.serviceDuration", {
-            duration: formatDurationMs(facts.bridgeDurationMs, locale),
-          })}
-        </p>
       )}
     </div>
   );
@@ -1537,7 +1752,9 @@ function ToolGroupRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "group" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
-  const count = item.tools.reduce((sum, tool) => sum + tool.count, 0);
+  // A closed group renders no rows: they mount the first time a reader opens it and stay mounted,
+  // so a long run's folded work costs nothing until someone looks at it.
+  const [opened, setOpened] = useState(false);
   return (
     <li
       ref={rowRef}
@@ -1546,45 +1763,69 @@ function ToolGroupRow({
       aria-setsize={total}
       data-timeline-kind="group"
     >
-      <details className={styles.cmpToolGroup}>
+      <details
+        className={styles.cmpToolGroup}
+        onToggle={(event) => {
+          if (event.currentTarget.open) setOpened(true);
+        }}
+      >
         <summary
           className={styles.cmpActivitySummary}
-          onClick={(event) => reportCodingWorkbenchSummaryActivated("activity-group", event)}
+          data-timeline-row=""
+          onKeyDown={moveRowFocus}
+          onClick={(event) => {
+            setOpened(true);
+            reportCodingWorkbenchSummaryActivated("activity-group", event);
+          }}
         >
-          {t("codingWorkbench.activity.groupCount", { count })}
+          {toolGroupSummary(item.tools, t)}
         </summary>
-        <ol className={styles.cmpGroupedTools}>
-          {item.tools.map((tool, index) => (
-            <ToolRow
-              grouped
-              key={tool.id}
-              item={tool}
-              position={index + 1}
-              total={item.tools.length}
-              t={t}
-              measureRow={measureRow}
-              hasMeasured={hasMeasured}
-              measure={false}
-            />
-          ))}
-        </ol>
+        {opened ? (
+          <GroupedTools item={item} t={t} measureRow={measureRow} hasMeasured={hasMeasured} />
+        ) : null}
       </details>
     </li>
   );
 }
 
-function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
+function GroupedTools({
+  item,
+  t,
+  measureRow,
+  hasMeasured,
+}: Pick<
+  RowProps<Extract<TimelineItem, { kind: "group" }>>,
+  "item" | "t" | "measureRow" | "hasMeasured"
+>): ReactNode {
+  return (
+    <ol className={styles.cmpGroupedTools}>
+      {item.tools.map((tool, index) => (
+        <ToolRow
+          grouped
+          key={tool.id}
+          item={tool}
+          position={index + 1}
+          total={item.tools.length}
+          t={t}
+          measureRow={measureRow}
+          hasMeasured={hasMeasured}
+          measure={false}
+        />
+      ))}
+    </ol>
+  );
+}
+
+/** The catalog key of a tool's name in words; undefined for a tool Keiko has no name for. */
+export function toolLabelKey(tool: string): CodingWorkbenchMessageKey | undefined {
   // The id is runtime text: `constructor` must not resolve to a member inherited from Object.
-  const knownKey = Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool)
-    ? KNOWN_TOOL_LABEL_KEYS[tool]
-    : undefined;
-  if (knownKey !== undefined) return t(knownKey);
-  return tool
-    .replace(/^keiko[_-]/u, "")
-    .split(/[_\-.]+/u)
-    .filter((part) => part.length > 0)
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
+  return Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool) ? KNOWN_TOOL_LABEL_KEYS[tool] : undefined;
+}
+
+// A tool Keiko has no name for (an MCP server's, a newer runtime's) is a "Tool"; its raw id stays
+// in the row's tooltip, never in the row's text.
+function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
+  return t(toolLabelKey(tool) ?? "codingWorkbench.timeline.tool.unknown");
 }
 
 function PlanRow({

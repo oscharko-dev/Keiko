@@ -717,18 +717,39 @@ feed, under a per-run memory bound, and the feed message names the answer's whol
 `event=answer-clipped reason=retention-bound` at `warn` when the memory bound cut one, which the
 message then shows as cut; `occurrenceCount` is the run's running count of each. The Workbench reads
 the rest of a named answer page by page through the authenticated app-session channel:
-`coding-app-session.answer-page.read` records each page read under the run's id with `outcome`
-`served` or `unavailable` (no such run, message, offset or session), the page's `offset`,
-`pageChars` and `answerChars`, whether the page reached the answer's end (`complete`), whether the
-memory bound cut the answer (`answerTruncated`) and the message id only as `messageIdSha256`. The
+pages of at most 256 Ki characters. `coding-app-session.answer-page.read` writes one summary line
+per answer read, under the run's id: `outcome=served` once the page that reaches the answer's end
+is served, with its `offset`, `pageChars` and `answerChars`, `complete`, whether the memory bound
+cut the answer (`answerTruncated`) and the message id only as `messageIdSha256`. A refused read
+(`outcome=unavailable`: no such run, message, offset or session, or an id that is not a safe
+identifier) is written at its 1st, 2nd, 4th, 8th … occurrence on that server, with that running
+`occurrenceCount`, so a client retrying a gone answer cannot flood the log. The
 browser reports a failed read of the rest under the run's correlation (`errorKind=unavailable`) and
 keeps the carried part marked as cut. Restored runs join Coding History's stored chunks of one
-answer back into one message and show it whole. Copying an answer as Markdown is recorded as the
-closed `answerCopy` outcome, never the copied text. The model's reasoning is kept the same way:
+answer back into one message and show it whole. Copying an answer as Markdown is offered only for a whole answer,
+never a cut, failed or loading one, and is recorded as the closed `answerCopy` outcome, never the
+copied text. The model's reasoning is kept the same way:
 `event=reasoning-retained reason=feed-bound` the first time it outgrows the feed,
 `event=reasoning-clipped reason=retention-bound` at `warn` on a memory-bound cut, and page reads of
-it carry `textPart=reasoning` (an answer page `textPart=answer`). A live update's append-only
-`textDeltas` are never logged: they carry model text.
+it carry `textPart=reasoning` (an answer page `textPart=answer`). Reasoning may hold at most half
+of the run's retention bound, so a long chain of thought never pushes an answer out. A live
+update's append-only `textDeltas` (at most 32 Ki characters each; a larger growth is read as pages)
+are never logged: they carry model text.
+
+`coding-runtime.tool.failed` records one line per tool call that failed, under the run's id, also
+for a call the bounded feed had no room for; a call an explicit Stop or takeover cancelled is not a
+failure and writes no line (the `interrupted` event above counts those). The line carries the closed `failureOrigin` (`keiko-refused`, `command-failed`, `tool-error`, `timed-out`,
+`cancelled` only as a display state, never logged), the tool's closed class (a native tool's name, `keiko` for Keiko's governed tools,
+`other`), a shell's `exitCodeClass` (`none`, `0`, `1`, `2`, `126`, `127`, `signal`, `other`; a command a
+signal killed is `command-failed`, not a stop), how often
+that command has failed in the run (`commandFailureCount`) and the run's running totals of failed
+calls and of repeated failures. The origin comes from the runtime's own status facts — Keiko's
+permission decision, the shell's timeout, kill signal or exit status, or the tool's structured
+error — never from parsing a message. The command, its output, the tool's error message and the call
+id never reach the log; the Workbench row shows them, after the credential floor, and commands are
+told apart by a digest held in memory only. A verification or Git step keeps its own outcome
+operations and has no failure origin. `keiko support analyze` therefore shows a run's pattern, for
+example twelve command failures and no Keiko refusal.
 
 `coding-runtime.history` also records a refused history request as `event=refused` under the
 request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or

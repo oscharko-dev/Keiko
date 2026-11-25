@@ -169,8 +169,8 @@ describe("CodingWorkbenchModelTextReader", () => {
     let resolvePage: (() => void) | undefined;
     pageRequest.mockImplementation(
       () =>
-        new Promise((resolve) => {
-          resolvePage = () => {
+        new Promise((resolve): void => {
+          resolvePage = (): void => {
             resolve({ schemaVersion: "1", page: null });
           };
         }),
@@ -190,5 +190,73 @@ describe("CodingWorkbenchModelTextReader", () => {
     reader.sync({ ...feed(message(16_000, ANSWER.length)), runId: "run-2" });
     expect(pageRequest).not.toHaveBeenCalled();
     expect(latest).toBeUndefined();
+  });
+
+  it("keeps a matching overlap as it is and appends only the new tail", () => {
+    reader.sync(feed(message(100, 100)));
+    reader.ingestDeltas([
+      { messageId: "m-1", part: "answer", offset: 80, text: ANSWER.slice(80, 150) },
+    ]);
+    reader.sync(feed(message(100, 150)));
+    expect(latest?.answers.get("m-1")?.text).toBe(ANSWER.slice(0, 150));
+  });
+
+  it("replaces a stale held text when a delta from offset 0 disagrees with it", () => {
+    reader.sync(feed(message(100, 100)));
+    reader.ingestDeltas([{ messageId: "m-1", part: "answer", offset: 0, text: "rewritten" }]);
+    reader.sync(feed(message(0, 9)));
+    expect(latest?.answers.get("m-1")?.text).toBe("rewritten");
+    expect(pageRequest).not.toHaveBeenCalled();
+  });
+
+  it("drops a stale held text and reads again from 0 when a later piece disagrees", async () => {
+    const REWRITTEN = "b".repeat(300);
+    serve({ answer: REWRITTEN, reasoning: "" });
+    reader.sync(feed(message(100, 100)));
+    reader.ingestDeltas([{ messageId: "m-1", part: "answer", offset: 50, text: "b".repeat(100) }]);
+    reader.sync(feed(message(100, 300)));
+    await vi.waitFor(() => {
+      expect(latest?.answers.get("m-1")?.complete).toBe(true);
+    });
+    expect(latest?.answers.get("m-1")?.text).toBe(REWRITTEN);
+    expect(pageRequest.mock.calls[0]?.[0]).toMatchObject({ offset: 0 });
+  });
+
+  it("takes a carried prefix that disagrees with the held text as the truth", () => {
+    reader.sync(feed(message(100, 100)));
+    const other = message(100, 100);
+    reader.sync(
+      feed({
+        ...other,
+        fullAnswer: { length: 100, truncated: false },
+        segments: [{ kind: "text", text: "x".repeat(100), truncated: false }],
+      }),
+    );
+    expect(latest?.answers.get("m-1")?.text).toBe("x".repeat(100));
+  });
+
+  it("prunes the text of a message the feed no longer lists, and keeps the listed ones", () => {
+    const named = { fullAnswer: { length: 100, truncated: false } };
+    const first = { ...message(100, 100), ...named, messageId: "m-old" };
+    const second = { ...message(100, 100), ...named, messageId: "m-new" };
+    reader.sync(feed(first, second));
+    expect([...(latest?.answers.keys() ?? [])].sort()).toEqual(["m-new", "m-old"]);
+    reader.sync(feed(second));
+    expect([...(latest?.answers.keys() ?? [])]).toEqual(["m-new"]);
+    expect(latest?.answers.get("m-new")?.text).toBe(ANSWER.slice(0, 100));
+  });
+
+  it("keeps a delta text whose message no feed has listed yet", () => {
+    reader.sync(feed(message(100, 100)));
+    reader.ingestDeltas([{ messageId: "m-next", part: "answer", offset: 0, text: "early" }]);
+    reader.sync(feed(message(100, 100)));
+    reader.sync(
+      feed(message(100, 100), {
+        ...message(0, 5),
+        messageId: "m-next",
+        fullAnswer: { length: 5, truncated: false },
+      }),
+    );
+    expect(latest?.answers.get("m-next")?.text).toBe("early");
   });
 });
