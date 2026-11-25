@@ -173,6 +173,22 @@ describe("an output's preview", () => {
     });
   });
 
+  it("drops every terminal sequence form, also one cut off at the end", () => {
+    const esc = "\u001B";
+    const link = `${esc}]8;;https://example.invalid${esc}\\docs${esc}]8;;${esc}\\`;
+    const raw = [
+      `${esc}[1;31mred${esc}[0m and ${esc}[?25lhidden cursor`,
+      `title ${esc}]0;window\u0007done`,
+      `link ${link}`,
+      `${esc}7saved${esc}8 ${esc}Mup`,
+      `cut ${esc}[38;5`,
+      `open ${esc}]0;never closed`,
+    ].join("\n");
+    expect(toolOutputPreview(raw)?.head).toBe(
+      ["red and hidden cursor", "title done", "link docs", "saved up", "cut ", "open "].join("\n"),
+    );
+  });
+
   it("keeps what a line said before a trailing carriage return", () => {
     expect(toolOutputPreview("Downloading...\r\nDone\r")).toMatchObject({
       head: "Downloading...\nDone",

@@ -182,13 +182,60 @@ export function boundedToolText(
 
 function cleanToolText(raw: string): string {
   // ANSI colour and cursor sequences carry no text a reader needs; the redactor then sees plain text.
-  const plain = raw.replaceAll(ANSI_ESCAPE, "");
+  const plain = stripTerminalSequences(raw);
   return stripUnsafeFormatChars(redactContent(plain, "preserve"));
 }
 
-const ANSI_ESCAPE =
-  // eslint-disable-next-line no-control-regex -- matches the ESC introducer of terminal sequences.
-  /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)|[@-Z\\-_])/gu;
+const ESC = "\u001b";
+const BEL = "\u0007";
+
+/**
+ * Removes terminal escape sequences (ECMA-48) in one forward scan, without a regex: CSI (`ESC [`,
+ * its parameter and intermediate bytes and its final byte), OSC (`ESC ]` up to BEL or `ESC \\`) and
+ * the two-character `ESC` forms. A sequence cut off early ends at the first byte that cannot belong
+ * to it, so it never swallows the next line.
+ */
+function stripTerminalSequences(text: string): string {
+  if (!text.includes(ESC)) return text;
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const start = text.indexOf(ESC, index);
+    if (start === -1) return out + text.slice(index);
+    out += text.slice(index, start);
+    index = terminalSequenceEnd(text, start);
+  }
+  return out;
+}
+
+// The index just past the escape sequence that starts at `start`.
+function terminalSequenceEnd(text: string, start: number): number {
+  const kind = text.charAt(start + 1);
+  if (kind === "[") return csiEnd(text, start + 2);
+  if (kind === "]") return oscEnd(text, start + 2);
+  const code = text.codePointAt(start + 1) ?? 0;
+  return code >= 0x30 && code <= 0x7e ? start + 2 : start + 1;
+}
+
+// Parameter bytes are 0x30–0x3F, intermediate bytes 0x20–0x2F and the final byte 0x40–0x7E.
+function csiEnd(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    const code = text.codePointAt(index) ?? 0;
+    if (code >= 0x40 && code <= 0x7e) return index + 1;
+    if (code < 0x20 || code > 0x3f) return index;
+  }
+  return text.length;
+}
+
+function oscEnd(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (char === BEL) return index + 1;
+    if (char === "\n") return index;
+    if (char === ESC) return text.charAt(index + 1) === "\\" ? index + 2 : index;
+  }
+  return text.length;
+}
 
 function wholeCharacterPrefix(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
