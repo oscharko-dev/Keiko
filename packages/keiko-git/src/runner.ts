@@ -750,8 +750,15 @@ export function createLocalGitProcessRunner(
       return await localGitProcessRunner(args, options);
     const reopening = nestedRepositoryReopeningFlag(args);
     if (reopening !== undefined) return refusedOptionResult(reopening, "config-override");
+    const startedAt = Date.now();
     const lineEndings = await resolveLineEndingArgs(hostEnv, args, options);
-    return await runFilterNeutralized(withNestedRepositoriesIsolated(args), options, lineEndings);
+    // The query spends the read's own deadline: the read never outlives what its caller allowed.
+    const timeoutMs = Math.max(1, options.timeoutMs - (Date.now() - startedAt));
+    return await runFilterNeutralized(
+      withNestedRepositoriesIsolated(args),
+      { ...options, timeoutMs },
+      lineEndings,
+    );
   };
 }
 

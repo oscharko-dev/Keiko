@@ -90,7 +90,7 @@
       }
     },
     "keiko-git": {
-      "files": 9,
+      "files": 10,
       "uncoveredFiles": 0,
       "uncoveredLines": 8,
       "totalLines": 376,
@@ -306,7 +306,7 @@
       }
     },
     "keiko-verification": {
-      "files": 18,
+      "files": 19,
       "uncoveredFiles": 0,
       "uncoveredLines": 31,
       "totalLines": 1168,
