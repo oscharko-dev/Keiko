@@ -186,6 +186,29 @@ describe("pull request targets", () => {
     await review.dispose();
   });
 
+  it("keeps the refs of a running review through a sweep even after its pull request closed", async () => {
+    // reviewServices() lists no open pull request, so #7 counts as closed for the sweep.
+    const review = reviewServices(() => ({ availability: "available", pullRequest: detail() }));
+    const resolution = await review.resolveTarget({
+      repositoryRoot: repo,
+      runId: "run-live",
+      request: { kind: "pull-request", number: 7 },
+    });
+    if (!resolution.ok) throw new Error(resolution.reason);
+    const created = await review.worktrees.create({
+      runId: "run-live",
+      repositoryRoot: repo,
+      headSha,
+    });
+    if (!created.ok) throw new Error(created.reason);
+    expect(await review.sweepRefs("daily")).toEqual({ deleted: 0, retained: 1, failed: 0 });
+    expect(privateRefs()).toEqual([`refs/keiko-review/${review.namespace}/7/${headSha}`]);
+    expect(await review.worktrees.remove("run-live", "settled")).toBe(true);
+    expect(await review.sweepRefs("daily")).toEqual({ deleted: 1, retained: 0, failed: 0 });
+    expect(privateRefs()).toEqual([]);
+    await review.dispose();
+  });
+
   it("refuses a head that moved between the read and the fetch and leaves no ref or worktree (AC3)", async () => {
     const moved = commitFile(author, "change.txt", "moved\n", "moved");
     git(author, "push", "-q", "-f", bare, `${moved}:refs/pull/7/head`);
