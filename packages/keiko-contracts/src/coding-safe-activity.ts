@@ -317,25 +317,6 @@ export interface CodingSafeActivityMessage {
 }
 
 /**
- * One page of a retained assistant answer, read through the authenticated app-session channel.
- * Untrusted model text with the same rendering rules as a feed segment.
- */
-export interface CodingSafeActivityAnswerPage {
-  readonly schemaVersion: typeof CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
-  readonly runId: string;
-  readonly messageId: string;
-  /** Which of the message's texts the page is of. */
-  readonly part: CodingSafeActivityTextPart;
-  /** Where `text` starts in the answer, in UTF-16 code units. */
-  readonly offset: number;
-  readonly text: string;
-  /** The answer's whole length when the page was read. */
-  readonly length: number;
-  /** The retention bound's cut, as on `CodingSafeActivityFullAnswer`. */
-  readonly truncated: boolean;
-}
-
-/**
  * Text appended to a retained answer or reasoning since the previous channel update, starting at
  * `offset`. Append-only: a reader that holds exactly `offset` characters appends it; any other
  * reader reads the missing part as pages. A delta never splits a surrogate pair.
@@ -345,6 +326,18 @@ export interface CodingSafeActivityTextDelta {
   readonly part: CodingSafeActivityTextPart;
   readonly offset: number;
   readonly text: string;
+}
+
+/**
+ * One page of a retained assistant answer, read through the authenticated app-session channel.
+ * Untrusted model text with the same rendering rules as a feed segment. `offset` is where `text`
+ * starts in the answer, `length` the answer's whole length when the page was read, and `truncated`
+ * the retention bound's cut, as on `CodingSafeActivityFullAnswer`.
+ */
+export interface CodingSafeActivityAnswerPage
+  extends CodingSafeActivityTextDelta, CodingSafeActivityFullAnswer {
+  readonly schemaVersion: typeof CODING_SAFE_ACTIVITY_CONTRACT_VERSION;
+  readonly runId: string;
 }
 
 export interface CodingSafeActivityTool {

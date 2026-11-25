@@ -70,6 +70,15 @@ function key(part: CodingSafeActivityTextPart, messageId: string): string {
   return `${part}\u0000${messageId}`;
 }
 
+// Body-free: the run joins it to the server's page lines; never a message id or any text.
+function reportTextReadFailure(runId: string, error: unknown): void {
+  reportClientDiagnostic("Keiko Coding Workbench could not read the rest of a long model text.", {
+    correlationId: isActivityLogCorrelationId(runId) ? runId : undefined,
+    errorKind: "unavailable",
+    ...(error === undefined ? {} : { errorEvidence: clientErrorEvidence(error) }),
+  });
+}
+
 /**
  * Holds one run's model texts. Deltas are appended the moment they arrive, before any render
  * batching can drop the update that carried them; a feed update seeds what the feed carries, sets
@@ -209,7 +218,9 @@ export class CodingWorkbenchModelTextReader {
         const next = await this.readPage(part, messageId, held, offset);
         if (next === "stop") return;
       } catch (error) {
-        if (!this.controller.signal.aborted) this.fail(held, error);
+        if (this.controller.signal.aborted) return;
+        this.markFailed(held);
+        reportTextReadFailure(this.runId, error);
         return;
       }
     }
@@ -231,7 +242,8 @@ export class CodingWorkbenchModelTextReader {
     if (page !== null && held.text.length < offset) return "next";
     const outcome = page === null ? "gap" : appendAt(held, page.offset, page.text);
     if (page === null || outcome === "gap") {
-      this.fail(held, undefined);
+      this.markFailed(held);
+      reportTextReadFailure(this.runId, undefined);
       return "stop";
     }
     // A mismatch dropped the held text under the read: read again from its end.
@@ -243,15 +255,9 @@ export class CodingWorkbenchModelTextReader {
     return page.text.length === 0 ? "stop" : "next";
   }
 
-  private fail(held: HeldText, error: unknown): void {
+  private markFailed(held: HeldText): void {
     held.failed = true;
     this.publish();
-    // Body-free: the run joins it to the server's page lines; never a message id or any text.
-    reportClientDiagnostic("Keiko Coding Workbench could not read the rest of a long model text.", {
-      correlationId: isActivityLogCorrelationId(this.runId) ? this.runId : undefined,
-      errorKind: "unavailable",
-      ...(error === undefined ? {} : { errorEvidence: clientErrorEvidence(error) }),
-    });
   }
 
   private publish(): void {
