@@ -126020,7 +126020,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6594",
+      "site": "packages/keiko-server/src/deps.ts:6614",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127486,6 +127486,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "gateway.config.load",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/deps.ts:1684",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "gateway.context-window",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/gateway-setup.ts:9513",
@@ -127556,7 +127563,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1739",
+      "site": "packages/keiko-server/src/deps.ts:1755",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128641,7 +128648,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2580",
+      "site": "packages/keiko-server/src/deps.ts:2596",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129263,7 +129270,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4938",
+      "site": "packages/keiko-server/src/deps.ts:4958",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129429,7 +129436,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3483",
+      "site": "packages/keiko-server/src/deps.ts:3499",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -130339,6 +130346,7 @@
     "gateway.circuit.opened",
     "gateway.circuit.rejected",
     "gateway.circuit.wait",
+    "gateway.config.load",
     "gateway.config.resolved",
     "gateway.context-window",
     "gateway.context-window.adoption",

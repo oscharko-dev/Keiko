@@ -2429,6 +2429,49 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  // #4492 finding 7: an unreadable KEIKO_CONFIG_FILE became "no gateway configured" without a
+  // line, and the person only saw the setup screen.
+  it("records a configuration file it cannot load, without its path or contents", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const configDir = tmp("config-unreadable-");
+    const configPath = join(configDir, "keiko.config.json");
+    writeFileSync(configPath, "{ not json", "utf8");
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir: tmp("config-unreadable-evidence-"),
+      env: isolatedMemoryEnv({}),
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("config-unreadable-ui-"), "keiko-ui.db"),
+    });
+    try {
+      const failures = diagnostics.filter((record) => record.operation === "gateway.config.load");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ source: "server.deps.resolveConfig" });
+      expect(JSON.stringify(failures)).not.toContain(configDir);
+      expect(JSON.stringify(failures)).not.toContain("not json");
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("records nothing when the local configuration file simply does not exist", async () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("config-absent-evidence-"),
+      env: isolatedMemoryEnv({}),
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("config-absent-ui-"), "keiko-ui.db"),
+    });
+    try {
+      expect(diagnostics.filter((record) => record.operation === "gateway.config.load")).toEqual(
+        [],
+      );
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
   it("resolves the DB path via KEIKO_UI_DATA_DIR when no explicit path is supplied", () => {
     const uiDir = tmp("ui-env-");
     const evidenceDir = tmp("ev-");

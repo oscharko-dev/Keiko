@@ -191,7 +191,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { basename, delimiter, dirname, join } from "node:path";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
 import {
@@ -1667,35 +1667,51 @@ function localGatewayConfigPath(uiDbPath: string): string {
   return join(dirname(uiDbPath), "keiko.config.json");
 }
 
+// #4492 finding 7: a configuration file that exists but cannot be loaded is a failure the operator
+// must be able to find, not a silent "no gateway configured". The line names neither the path nor
+// the file's contents; the error's closed code and class say why.
+function recordConfigLoadFailure(
+  error: GatewayError,
+  failure: {
+    readonly correlationId: string;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
+): void {
+  emitServerDiagnostic(
+    failure.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: failure.correlationId,
+      operation: "gateway.config.load",
+      source: "server.deps.resolveConfig",
+      error,
+      redact: () => "The gateway configuration file could not be loaded; Keiko runs without it.",
+    }),
+  );
+}
+
 // Loads the config without leaking the path or any secret on failure: a missing/invalid config file
 // falls back to KEIKO_MODEL_* env wiring when present, otherwise it is a normal "no config" state.
+// Only a missing local file is that normal state; every other load failure is recorded.
 function resolveConfig(
   configPath: string | undefined,
   env: EnvSource,
   localConfigPath: string,
   secretResolver: ProviderSecretResolver,
+  failure: {
+    readonly correlationId: string;
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+  },
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
-  if (configPath === undefined) {
-    let config: GatewayConfig | undefined;
-    try {
-      config = loadConfigFromFile(localConfigPath, env, { secretResolver });
-    } catch (error) {
-      if (error instanceof GatewayError) {
-        config = resolveEnvOnlyConfig(env);
-      } else {
-        throw error;
-      }
-    }
-    return { config, configPresent: config !== undefined };
-  }
+  const path = configPath ?? localConfigPath;
   try {
-    return { config: loadConfigFromFile(configPath, env, { secretResolver }), configPresent: true };
+    return { config: loadConfigFromFile(path, env, { secretResolver }), configPresent: true };
   } catch (error) {
-    if (error instanceof GatewayError) {
-      const config = resolveEnvOnlyConfig(env);
-      return { config, configPresent: config !== undefined };
+    if (!(error instanceof GatewayError)) throw error;
+    if (configPath !== undefined || existsSync(localConfigPath)) {
+      recordConfigLoadFailure(error, failure);
     }
-    throw error;
+    const config = resolveEnvOnlyConfig(env);
+    return { config, configPresent: config !== undefined };
   }
 }
 
@@ -4318,6 +4334,10 @@ function loadRuntimeGatewayConfig(
     options.env,
     runtimeConfigPath,
     secretResolver,
+    {
+      correlationId: bootstrapCorrelationId,
+      diagnostics: options.diagnostics,
+    },
   );
   return { ...resolved, storagePath: effectiveConfigPath };
 }
