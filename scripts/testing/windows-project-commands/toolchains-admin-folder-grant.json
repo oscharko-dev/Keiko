@@ -1,0 +1,17 @@
+{
+  "note": "A read grant on a Node.js the administrator placed outside Program Files.",
+  "path": ["C:\\Program Files\\nodejs", "C:\\Program Files\\Git\\cmd"],
+  "grants": [
+    {
+      "access": "read",
+      "path": "C:\\tools\\node-x64"
+    }
+  ],
+  "steps": [
+    {
+      "id": "node-admin-folder",
+      "file": "C:\\tools\\node-x64\\node.exe",
+      "args": ["-v"]
+    }
+  ]
+}

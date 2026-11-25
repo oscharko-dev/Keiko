@@ -1,0 +1,87 @@
+{
+  "note": "The workspace plan with Node.js told to keep symlinked paths, as the product starts its runtime; an AppContainer may not read the drive root that realpath walks.",
+  "path": ["C:\\Program Files\\nodejs", "C:\\Program Files\\Git\\cmd"],
+  "cwd": "${home}\\keiko-4493\\ws",
+  "grants": [
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\ws"
+    },
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\ws-worktree"
+    }
+  ],
+  "env": {
+    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main"
+  },
+  "steps": [
+    {
+      "id": "npm-version",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npm.cmd -v"]
+    },
+    {
+      "id": "npm-test",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npm.cmd test"]
+    },
+    {
+      "id": "test-output-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\out.txt"
+    },
+    {
+      "id": "npm-install-registry",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": [
+        "/d",
+        "/s",
+        "/c",
+        "npm.cmd install is-number@7.0.0 --no-audit --no-fund --fetch-retries=0 --fetch-timeout=10000"
+      ],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "npx-version",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npx.cmd --version"]
+    },
+    {
+      "id": "fork-with-ipc",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "-e",
+        "const c=require('child_process').fork('-e',[],{execArgv:['-e','process.send(1)']});c.on('message',()=>{console.log('ipc-ok');process.exit(0)})"
+      ],
+      "timeoutMs": 30000
+    },
+    {
+      "id": "exec-sync-with-pipes",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["-e", "console.log(String(require('child_process').execSync('ver')).trim())"],
+      "timeoutMs": 30000
+    },
+    {
+      "id": "spawn-sync-inherit",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "-e",
+        "process.exitCode=require('child_process').spawnSync(process.env.ComSpec,['/d','/c','ver'],{stdio:'inherit'}).status"
+      ],
+      "timeoutMs": 30000
+    },
+    {
+      "id": "cmd-anonymous-pipe",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "ver | findstr Windows"],
+      "timeoutMs": 30000
+    },
+    {
+      "id": "git-log-through-cmd-pipe",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "git log --oneline | findstr Baseline"],
+      "timeoutMs": 30000
+    }
+  ]
+}
