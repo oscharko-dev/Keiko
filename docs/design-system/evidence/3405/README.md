@@ -923,3 +923,11 @@ Linux arm64 gates image with an init process, Node 26.13.1 and `KEIKO_WRITE_TRAC
 `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed there. Only
 the three producer records were kept; the fourteen committed captures, updater assertions and
 harness inputs retain their existing values.
+
+The forced-colours repair of the startup update notice (#4103) gave `.update-notice` and the `.upd-*`
+buttons system colours under `forced-colors: active` in `globals.css`. On 2026-11-25 (UTC) the
+original nine Chromium cases passed in 1.6 minutes in the Linux gates image with an init process
+and Node 26.13.1, and `npm run check:update-ui-evidence` passes. The three records changed only in
+the `globals.css` digest. The forced-colours capture differed from the committed one only in font
+rendering, so only the three producer records were kept; the fourteen committed captures, updater
+assertions and harness inputs retain their existing values.

@@ -3,7 +3,7 @@
   "epic": 3403,
   "verdict": "PASS",
   "tool": "axe-core 4.12.1",
-  "cssSha256": "8c87b542e9bec5595c12185faf87cca939a98c416d727591d078c7a7388b2b2d",
+  "cssSha256": "ae4b6d98edc677aa9036170f848919ef10ef871f29d6427df20bbc8440b5a8e0",
   "sourceProvenanceVersion": 2,
   "sourceFiles": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "8c87b542e9bec5595c12185faf87cca939a98c416d727591d078c7a7388b2b2d"
+      "sha256": "ae4b6d98edc677aa9036170f848919ef10ef871f29d6427df20bbc8440b5a8e0"
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",

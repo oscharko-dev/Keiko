@@ -181,6 +181,32 @@ const openLauncher: SurfaceOpener = async (page, _request, theme) => {
   return "body";
 };
 
+// The startup notice appears only when the preflight reports a newer release, which the hermetic
+// smoke server never does (dev-server-env.ts). The page's own preflight answer is kept and only
+// its availability is raised, so the notice renders exactly as a person on an older release sees it.
+const UPDATE_AVAILABLE = {
+  updateAvailable: true,
+  status: "update-available",
+  availabilityState: "update-available",
+  registryStatus: "ok",
+  severity: "normal",
+  targetVersion: "999.0.0",
+  userActionRequired: true,
+  manualUpdateRequired: false,
+  blockers: [],
+} as const;
+
+const openUpdateNotice: SurfaceOpener = async (page, _request, theme) => {
+  await page.route("**/api/update/preflight", async (route) => {
+    const response = await route.fetch();
+    const report = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...report, ...UPDATE_AVAILABLE } });
+  });
+  await shellReady(page, theme);
+  await expect(page.getByRole("status", { name: "Keiko update notification" })).toBeVisible();
+  return ".update-notice";
+};
+
 const openChatWindow: SurfaceOpener = async (page, request, theme) => {
   const chat = await createChat(request);
   await seedShell(page, theme);
@@ -320,6 +346,7 @@ const OPENERS: Readonly<Record<string, SurfaceOpener>> = {
   editor: openEditorWindow,
   "git-window": openGitWindow,
   "delete-confirm": openDeleteConfirm,
+  "update-notice": openUpdateNotice,
 };
 
 /**
@@ -381,6 +408,19 @@ for (const theme of A11Y_THEMES) {
       await applyContrastMode(page, mode);
       await expect(connect).toBeVisible();
       await expectNoViolations(page, "body", `launcher shell (${theme}, ${mode})`);
+    }
+  });
+}
+
+for (const theme of A11Y_THEMES) {
+  test(`startup update notice holds up across contrast modes — ${theme} theme @smoke`, async ({
+    page,
+    request,
+  }) => {
+    const selector = await openUpdateNotice(page, request, theme);
+    for (const mode of A11Y_CONTRAST_MODES) {
+      await applyContrastMode(page, mode);
+      await expectNoViolations(page, selector, `startup update notice (${theme}, ${mode})`);
     }
   });
 }

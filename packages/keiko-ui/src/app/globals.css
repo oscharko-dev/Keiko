@@ -3469,6 +3469,37 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   cursor: not-allowed;
 }
 
+/* Forced colours: the notice's gradient and the buttons' mixed tints are authored colours the UA
+   only partly replaces. In a dark theme the button and the notice text kept their light colour over
+   a forced white face (1.08:1). Defer the whole notice and every update button to system colours. */
+@media (forced-colors: active) {
+  .update-notice {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .update-notice-icon,
+  .update-notice-body strong,
+  .update-notice-body span {
+    color: CanvasText;
+  }
+  .update-notice-primary,
+  .update-notice-dismiss,
+  .upd-primary-btn,
+  .upd-secondary-btn,
+  .upd-ghost-btn {
+    border-color: ButtonText;
+    background: ButtonFace;
+    color: ButtonText;
+  }
+  .upd-primary-btn:disabled,
+  .upd-secondary-btn:disabled,
+  .upd-ghost-btn:disabled {
+    border-color: GrayText;
+    color: GrayText;
+  }
+}
+
 .upd {
   display: flex;
   flex-direction: column;

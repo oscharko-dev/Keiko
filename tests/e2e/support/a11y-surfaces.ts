@@ -50,7 +50,8 @@ export interface A11ySurfaceContract {
  * Every surface the axe smoke scans, in both themes. These are the surfaces a local human actually
  * operates: the launcher they land on, the palette they drive the shell from, and the three bound
  * work surfaces (Coding Workbench, Editor, Git) — plus one open destructive confirm, because a
- * modal that is never opened is a modal that is never measured.
+ * modal that is never opened is a modal that is never measured. The startup update notice is listed
+ * because a person on an older release sees it over the shell, in whichever theme they chose.
  */
 export const A11Y_SURFACES: readonly A11ySurfaceContract[] = [
   { id: "launcher", label: "desktop launcher shell", modal: false, destructive: false },
@@ -60,4 +61,5 @@ export const A11Y_SURFACES: readonly A11ySurfaceContract[] = [
   { id: "editor", label: "Editor window", modal: false, destructive: false },
   { id: "git-window", label: "Git window", modal: false, destructive: false },
   { id: "delete-confirm", label: "destructive delete confirm", modal: true, destructive: true },
+  { id: "update-notice", label: "startup update notice", modal: false, destructive: false },
 ];
