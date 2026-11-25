@@ -1010,7 +1010,11 @@ describe("workspace widget renderer registry", () => {
       openFiles: ["src/app.ts"],
     });
     fireEvent.click(screen.getByRole("button", { name: "Open Git" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
+    // #4103 F2: the Files hand-off is explicit, so the Git window connects a never-connected folder.
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      connectRepository: true,
+    });
 
     const unboundCtx = { ...makeCtx(), linkedRoot: null, linkedRoots: [] };
     view.rerender(<>{WIN_TYPES.files.render({}, unboundCtx)}</>);

@@ -3,7 +3,7 @@
 // and serves the static export from a contained root.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, join } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
 import { type Duplex, Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 import {
@@ -297,6 +297,22 @@ async function dispatchApi(
   writeJson(req, res, outcome.status, outcome.body, outcome.headers);
 }
 
+// The Next.js build namespace holds content-hashed assets only, never a client route. A miss there
+// is a retired build's chunk asked for by a tab that outlived a server upgrade (#4103 F1): answer it
+// with a real 404 so the loader fails as a load failure instead of parsing the HTML shell.
+const BUILD_ASSET_PREFIX = "/_next/";
+const BUILD_ASSET_DIRECTORY = "_next";
+
+// The namespace is judged on the decoded, contained path the static lookup itself uses, so an
+// encoded spelling such as `/%5Fnext/...` is a build-asset miss as well. A path that cannot be
+// decoded resolves to nothing and keeps the shell fallback unless its raw form names the namespace.
+function isBuildAssetRequest(staticRoot: string, pathname: string): boolean {
+  if (pathname.startsWith(BUILD_ASSET_PREFIX)) return true;
+  const resolved = resolveContainedPath(staticRoot, pathname);
+  const buildRoot = resolve(staticRoot, BUILD_ASSET_DIRECTORY);
+  return resolved?.startsWith(buildRoot + sep) === true;
+}
+
 function resolveStaticTargets(pathname: string): readonly string[] {
   if (pathname === "/") {
     return ["/index.html"];
@@ -325,9 +341,11 @@ async function serveStatic(
       return;
     }
   }
-  const indexPath = join(staticRoot, "index.html");
-  if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
-    return;
+  if (!isBuildAssetRequest(staticRoot, pathname)) {
+    const indexPath = join(staticRoot, "index.html");
+    if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
+      return;
+    }
   }
   writeJson(req, res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
 }

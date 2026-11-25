@@ -315,6 +315,9 @@ export const DE_MESSAGES = {
     "Die gespeicherten Tastenkürzel konnten nicht zurückgesetzt werden. Lade neu, um es erneut zu versuchen, oder bearbeite die gespeicherten Einstellungen außerhalb von Keiko.",
   "window.error.title": "Fenster konnte nicht geladen werden.",
   "window.error.body": "Bitte erneut versuchen.",
+  "window.error.chunkTitle": "Ein Teil von Keiko konnte nicht geladen werden",
+  "window.error.chunkBody":
+    "Keiko wurde wahrscheinlich aktualisiert, während diese Seite offen war. Lade Keiko neu, um die aktuelle Version zu laden; deine Fenster werden danach wiederhergestellt.",
   "window.tooSmall.title": "Zu klein für {label}",
   "window.tooSmall.body": "Vergrößere das Fenster oder zoome den Inhalt heraus",
   "window.connectPort.title": "Mit einem anderen Fenster verbinden",

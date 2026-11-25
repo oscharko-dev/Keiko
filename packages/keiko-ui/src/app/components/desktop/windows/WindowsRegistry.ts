@@ -154,6 +154,8 @@ export type WindowCfgByType = {
   };
   readonly governedGit: ProjectRootWindowCfg & {
     readonly rootBinding?: "coding-repository";
+    /** One-shot: `projectPath` was handed off by the Files window's Git button (#4103 F2). */
+    readonly connectRepository?: boolean;
     readonly gitChangeBaseRef?: string;
     readonly gitChangeHeadRef?: string;
   };

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d1566b0c4f02b57a367861f1adbc8a3ef2d4d6584ab21ce970d9e517af1246f4",
+    "catalogDigest": "7bc3337c1d2905d907eb1ce08baccdbf8d2bb119ff9c1c880b5722d08eeb43e0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -42684,8 +42684,8 @@
         "failureClasses": ["http-request"],
         "proofIds": ["request.close-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/server.ts:484",
-        "emitterSites": ["packages/keiko-server/src/server.ts:585"]
+        "registrationSite": "packages/keiko-server/src/server.ts:502",
+        "emitterSites": ["packages/keiko-server/src/server.ts:603"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -128173,7 +128173,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:487",
+      "site": "packages/keiko-server/src/server.ts:505",
       "package": "keiko-server"
     },
     {
@@ -128392,7 +128392,7 @@
     {
       "op": "server.request",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/server.ts:617",
+      "site": "packages/keiko-server/src/server.ts:635",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
