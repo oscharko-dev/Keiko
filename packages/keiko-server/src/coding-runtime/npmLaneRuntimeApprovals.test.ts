@@ -65,8 +65,8 @@ describe("npm-lane runtime approvals", () => {
       runtimeSupervisor: {
         // #4068: the pipe-relay supervisor (no installed service), built by MSVC 14.51 on
         // windows-latest exactly as the release builds it.
-        sha256: "a984196207f66e367484d3e2dfed7c75738f248d6a20d00b95349d735da3b442",
-        sizeBytes: 255_488,
+        sha256: "b36fb8d141690374221e7b022e8f9888909b581de6d69a7bc54a7aa9ccf1e084",
+        sizeBytes: 253_952,
         sourceTreeSha256: "1cbd2384801f0d1e36e91b7ba0440593eb0df155080e3be4a9ebcf2cbe3a9847",
       },
     });
