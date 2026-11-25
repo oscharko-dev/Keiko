@@ -1305,6 +1305,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko could not start the coding run on this Windows computer because the Windows service it needs for coding runs did not answer. Select Repair at the top of the Coding Workbench if it is offered, then start the task again. If that does not help, ask your administrator.",
   "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
     "Keiko could not start the coding run on this Windows computer because the Windows service it needs for coding runs did not accept it. Select Repair at the top of the Coding Workbench if it is offered, then start the task again. If that does not help, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-no-desktop":
+    "Keiko could not start the coding run on this Windows computer because Keiko was not started in a signed-in desktop session, for example over a remote shell or as a service. Start Keiko on the desktop of a signed-in Windows user, then start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-image-path":
+    "Keiko could not start the coding run on this Windows computer because the path of Keiko's folder is too long. Move the Keiko folder to a shorter path, for example directly below your user folder, then start Keiko and the task again.",
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko could not start the coding run on this Windows computer because Windows refused the start. Start the task again. If it happens again, ask your administrator.",
   "codingWorkbench.event.failure.generic":

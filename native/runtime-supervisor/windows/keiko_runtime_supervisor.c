@@ -3,6 +3,7 @@
 #include "gateway_environment.h"
 #include "gateway_grants.h"
 #include "gateway_install.h"
+#include "gateway_profiles.h"
 #include "gateway_service.h"
 #include <shlobj.h>
 #include <bcrypt.h>
@@ -50,9 +51,14 @@ enum error_code {
   /* #4068: the relayed tree's AppContainer profile could not be created. */
   ERROR_RELAY_PROFILE = 14,
   /* #4068: the host side of the relay (its pipes or listener) could not be created. */
-  ERROR_RELAY_START = 15
+  ERROR_RELAY_START = 15,
   /* #4496: 16 and 17 named the isolatedWin32 capabilities and the profile list entries of an
    * unreleased step design; both are unused. A step names its directories by drive letter. */
+  /* #4495: the process runs without the interactive window station (an SSH or service session),
+   * where no AppContainer process can start. */
+  ERROR_NO_DESKTOP = 18,
+  /* #4495: this image's own path is longer than a relayed tree's root may be started from. */
+  ERROR_IMAGE_PATH = 19
 };
 
 struct launch_request {
@@ -458,8 +464,9 @@ struct confinement {
   /* NULL for a relayed launch: the tree holds no network capability at all. */
   PSID network_capability;
   struct keiko_gateway_connection *gateway;
-  /* Non-NULL for a relayed launch: the relay root's plan argument. */
+  /* Non-NULL for a relayed launch: the relay root's plan argument and this image, its root. */
   const wchar_t *relay_plan;
+  const wchar_t *relay_self;
   /* Non-zero for a verification step: its arguments are already quoted (command_line). */
   int verbatim_arguments;
 };
@@ -472,7 +479,6 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   /* Retained through CreateProcessW, like the attribute list that points at it. */
   SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1] = {0};
   wchar_t *appdata = NULL;
-  wchar_t self[MAX_PATH + 1];
   struct keiko_gateway_connection *gateway = confined ? confined->gateway : NULL;
   if (confined) {
     capabilities.AppContainerSid = confined->sid;
@@ -507,14 +513,11 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   CoTaskMemFree(appdata);
   /* A relayed tree's root is this image, which starts the runtime as its child. */
   if (confined && confined->relay_plan != NULL && line != NULL) {
-    DWORD self_length = GetModuleFileNameW(NULL, self, MAX_PATH + 1);
-    wchar_t *relayed = self_length == 0 || self_length > MAX_PATH
-                           ? NULL
-                           : relay_command_line(self, confined->relay_plan, line);
+    wchar_t *relayed = relay_command_line(confined->relay_self, confined->relay_plan, line);
     SecureZeroMemory(line, wcslen(line) * sizeof(wchar_t));
     free(line);
     line = relayed;
-    image = self;
+    image = confined->relay_self;
   }
   DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP |
                 EXTENDED_STARTUPINFO_PRESENT;
@@ -720,24 +723,19 @@ static int read_relay_open(const struct launch_request *request, USHORT *gateway
 }
 
 struct relay_container {
-  wchar_t profile[64];
+  wchar_t profile[KEIKO_PROFILE_NAME_CHARS];
   PSID sid;
 };
 
-/* A fresh per-run AppContainer with no capability at all; a standard user may create it. */
-static int relay_profile_create(struct relay_container *container, const wchar_t *prefix) {
-  static const wchar_t hex[] = L"0123456789abcdef";
-  BYTE random[16];
-  size_t offset;
+/* A fresh per-run AppContainer with no capability at all; a standard user may create it. Its name
+ * states this supervisor, so a later launch can remove it once this supervisor is gone (#4495). */
+static int relay_profile_create(struct relay_container *container, const wchar_t *prefix,
+                                const struct keiko_environment_holder *owner) {
+  BYTE random[KEIKO_PROFILE_RANDOM_BYTES];
   HRESULT result;
-  if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return 0;
-  wcscpy_s(container->profile, 64, prefix);
-  offset = wcslen(container->profile);
-  for (size_t i = 0; i < sizeof(random); i++) {
-    container->profile[offset++] = hex[random[i] >> 4];
-    container->profile[offset++] = hex[random[i] & 15];
-  }
-  container->profile[offset] = 0;
+  if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0 ||
+      !keiko_profile_name(prefix, owner, random, container->profile))
+    return 0;
   result = CreateAppContainerProfile(container->profile, container->profile,
                                      L"Keiko supervised runtime", NULL, 0, &container->sid);
   if (FAILED(result)) {
@@ -760,9 +758,10 @@ static void relay_profile_delete(struct relay_container *container) {
 int wmain(int argc, wchar_t **argv) {
   struct keiko_gateway_connection gateway = {0};
   struct keiko_gateway_grants grants = {0};
-  struct keiko_environment_holder holder;
+  struct keiko_environment_holder holder = {0};
   struct keiko_gateway_sweep sweep = {0};
-  unsigned char launched[8];
+  struct keiko_profile_sweep profiles = {0};
+  unsigned char launched[16];
   int environment_closed = 0;
   int brokered = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
   /* #4068 (ADR-0043 D21): the same confinement without an installed broker or elevation. */
@@ -774,6 +773,7 @@ int wmain(int argc, wchar_t **argv) {
   struct keiko_relay_plan plan = {0};
   wchar_t plan_text[KEIKO_RELAY_PLAN_CHARS];
   struct confinement confinement = {0};
+  wchar_t self[MAX_PATH + 1];
   PSID tree_sid = NULL;
   struct launch_request request;
   PROCESS_INFORMATION process;
@@ -815,15 +815,37 @@ int wmain(int argc, wchar_t **argv) {
     send_error(ERROR_PROTOCOL);
     return 1;
   }
+  /* #4495: an AppContainer process cannot start without the interactive window station; say so
+   * before anything is created rather than let the tree's root die in its DLL initialization. */
+  if (confined && !keiko_session_interactive()) {
+    send_error(ERROR_NO_DESKTOP);
+    goto cleanup;
+  }
+  /* The run is the holder of the environment guard and the owner its profile name states. */
+  if (confined && !keiko_environment_holder_self(&holder)) {
+    send_error(ERROR_ENVIRONMENT_GUARD);
+    goto cleanup;
+  }
+  if (relayed) {
+    DWORD self_length = GetModuleFileNameW(NULL, self, MAX_PATH + 1);
+    if (self_length == 0 || self_length > MAX_PATH) {
+      send_error(ERROR_IMAGE_PATH);
+      goto cleanup;
+    }
+    confinement.relay_self = self;
+  }
   if (brokered && !keiko_gateway_connect(&gateway)) {
     send_error(ERROR_GATEWAY_CONNECT);
     goto cleanup;
   }
   if ((relayed || stepped) &&
-      !relay_profile_create(&relay, stepped ? L"Keiko.Step." : L"Keiko.Relay.")) {
+      !relay_profile_create(&relay, stepped ? KEIKO_PROFILE_PREFIX_STEP : KEIKO_PROFILE_PREFIX_RELAY,
+                            &holder)) {
     send_error(ERROR_RELAY_PROFILE);
     goto cleanup;
   }
+  /* #4495: the profiles of runs whose supervisor is gone; this run's own supervisor lives. */
+  if (confined) keiko_profiles_sweep(&profiles);
   tree_sid = brokered ? gateway.sid : relay.sid;
   /* #4068: the tree's filesystem grants follow the launch packet. They need the tree's SID and
    * must exist before the suspended root does; a refused grant refuses the launch. */
@@ -860,8 +882,7 @@ int wmain(int argc, wchar_t **argv) {
     /* Before the suspended root exists: a value stored with setx stays out of the tree. The run
      * becomes a recorded holder before it grants anything, so a run that finds no live holder may
      * remove the tree entries a crashed supervisor left (#4068, ADR-0043 D18). */
-    if (!keiko_environment_holder_self(&holder) ||
-        keiko_environment_close_alone(&KEIKO_ENVIRONMENT_USER, &holder,
+    if (keiko_environment_close_alone(&KEIKO_ENVIRONMENT_USER, &holder,
                                       keiko_gateway_grants_sweep, &sweep) != ERROR_SUCCESS) {
       send_error(ERROR_ENVIRONMENT_GUARD);
       goto cleanup;
@@ -886,10 +907,13 @@ int wmain(int argc, wchar_t **argv) {
     send_error(admission_refused ? ERROR_GATEWAY_ADMIT : ERROR_PROCESS_CREATE);
     goto cleanup;
   }
-  /* A confined launch reports its sweep as two counts: stale tree entries removed, and directories
-   * or entries the sweep could not clean (#4068). An unconfined launch keeps the empty response. */
+  /* A confined launch reports its sweeps as four counts: stale tree entries removed, and directories
+   * or entries the sweep could not clean (#4068); stale run profiles removed, and those Windows
+   * refused to remove (#4495). An unconfined launch keeps the empty response. */
   write_u32(launched, sweep.removed);
   write_u32(launched + 4, sweep.failed);
+  write_u32(launched + 8, profiles.removed);
+  write_u32(launched + 12, profiles.failed);
   if (!send_response(RESPONSE_LAUNCHED, confined ? launched : NULL, confined ? sizeof(launched) : 0))
     goto cleanup;
   if (!wait_for_zero_active(job, completion_port, &active_processes)) {

@@ -20,6 +20,7 @@ export const windowsGatewaySources = [
   "gateway_service",
   "gateway_loopback",
   "gateway_peer",
+  "gateway_profiles",
   "gateway_relay",
   "gateway_request",
   "gateway_wfp",

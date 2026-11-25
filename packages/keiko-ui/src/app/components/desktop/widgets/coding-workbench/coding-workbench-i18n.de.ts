@@ -1351,6 +1351,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, nicht geantwortet hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, ihn nicht angenommen hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
+  "codingWorkbench.event.failure.runtime-supervisor-no-desktop":
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Keiko nicht in einer angemeldeten Desktop-Sitzung gestartet wurde, zum Beispiel über eine Remote-Shell oder als Dienst. Starte Keiko auf dem Desktop eines angemeldeten Windows-Benutzers und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-image-path":
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Pfad des Keiko-Ordners zu lang ist. Verschiebe den Keiko-Ordner an einen kürzeren Pfad, zum Beispiel direkt unter deinen Benutzerordner, und starte Keiko und die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows den Start verweigert hat. Starte die Aufgabe erneut. Tritt es wieder auf, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.generic":

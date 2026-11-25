@@ -62,8 +62,15 @@ wchar_t *keiko_relay_rewrite_port(const wchar_t *value, USHORT from, USHORT to);
 int keiko_relay_host_start(struct keiko_relay_plan *plan, PSID container);
 void keiko_relay_host_stop(void);
 
+/* #4495: the relay root's own failures, as exit codes no runtime returns (the NTSTATUS customer
+ * range, facility 'K'): its plan, sockets, routes or pipes could not be set up, or the runtime
+ * itself could not be created. The host records the reap proof's exit code as it is. */
+#define KEIKO_RELAY_EXIT_START 0xE04B0001u
+#define KEIKO_RELAY_EXIT_SPAWN 0xE04B0002u
+
 /* Container side: argv is "<image> --container-relay <plan> <executable> [arguments...]". Returns
- * the runtime's exit code, or 126 when the relay could not start it. */
+ * the runtime's exit code, KEIKO_RELAY_EXIT_START or KEIKO_RELAY_EXIT_SPAWN when the relay could not
+ * start it, or 126 when its exit could not be observed. */
 int keiko_relay_container_main(int argc, wchar_t **argv);
 
 #endif

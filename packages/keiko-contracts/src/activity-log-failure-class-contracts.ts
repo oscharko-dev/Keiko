@@ -9689,7 +9689,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: ["runtime.confinement.spawned"],
       state: ["runtime.confinement.stale-grants-swept"],
-      end: [],
+      end: ["runtime.confinement.tree-reaped"],
       failure: ["runtime.confinement.failed"],
       loss: [],
     },
@@ -9697,17 +9697,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "runtime.confinement.failed",
       "runtime.confinement.spawned",
       "runtime.confinement.stale-grants-swept",
+      "runtime.confinement.tree-reaped",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "runtime.confinement.failed",
       "runtime.confinement.spawned",
       "runtime.confinement.stale-grants-swept",
+      "runtime.confinement.tree-reaped",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "runtime.confinement.spawned",
       "runtime.confinement.stale-grants-swept",
+      "runtime.confinement.tree-reaped",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

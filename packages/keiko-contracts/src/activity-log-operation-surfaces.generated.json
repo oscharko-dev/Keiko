@@ -595,6 +595,7 @@
   "runtime.confinement.failed": "tools-workflows",
   "runtime.confinement.spawned": "tools-workflows",
   "runtime.confinement.stale-grants-swept": "tools-workflows",
+  "runtime.confinement.tree-reaped": "tools-workflows",
   "runtime.confinement.unavailable": "tools-workflows",
   "search.answer.assessed": "memory-knowledge",
   "search.citations.reconciled": "memory-knowledge",

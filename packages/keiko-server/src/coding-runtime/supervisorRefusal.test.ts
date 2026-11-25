@@ -15,6 +15,8 @@ describe("supervisorRefusalFailureCode", () => {
     ["supervisor-grants-capability", "runtime-supervisor-grants-capability"],
     ["supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
     ["supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    ["supervisor-no-desktop", "runtime-supervisor-no-desktop"],
+    ["supervisor-image-path", "runtime-supervisor-image-path"],
     ["supervisor-protocol", "runtime-supervisor-refused"],
     ["supervisor-job-create", "runtime-supervisor-refused"],
     ["supervisor-process-create", "runtime-supervisor-refused"],

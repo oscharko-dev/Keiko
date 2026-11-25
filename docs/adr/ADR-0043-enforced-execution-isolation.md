@@ -77,6 +77,12 @@ measurement of the same day replaced the planned isolatedWin32 capabilities, whi
 refuses an AppContainer, and the profile list entries with per-step `subst` drive letters, through
 which Node.js and Java steps run.
 
+1.14 — #4495 amends D21 (2026-11-25): a run's profile names the supervisor that created it, and a
+later launch removes the profiles of runs whose supervisor is gone; a launch without an interactive
+desktop and a supervisor path that is too long are refused with closed reasons; the reap proof's
+root exit code reaches the Activity Log, and the relay root's own failures take exit codes of their
+own.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1257,7 +1263,7 @@ every helper change and its loopback exemption each need an administrator.
 Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervised`):
 
 - **No network capability.** The pinned supervisor creates a per-run AppContainer profile
-  (`Keiko.Relay.<32 hex>`) that holds no network capability at all, so Windows itself refuses every
+  (`Keiko.Relay.<owner>-<16 hex>`, below) that holds no network capability at all, so Windows itself refuses every
   connection out of the tree, loopback included. A standard user can create such a profile; no
   service, filter, firewall rule or loopback exemption is installed, and nothing elevates.
 - **The only way out.** For every attested loopback port of the launch (the gateway, the governed
@@ -1292,7 +1298,7 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
 - **Step mode (#4496, Gate G1 of #4493, owner approval of 2026-11-25).** The same supervisor runs
   one governed verification step with `--step-supervised`. keiko-tools frames it a KRP1 launch and
   KGG1 grants on descriptor 3 and reads KRS1 answers on descriptor 4. The supervisor creates a
-  per-run profile (`Keiko.Step.<32 hex>`) without a network capability, so the step reaches neither
+  per-run profile (`Keiko.Step.<owner>-<16 hex>`) without a network capability, so the step reaches neither
   the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
   kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
@@ -1332,4 +1338,25 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
     Windows Coding run and hands each step a private copy written from those bytes;
     `editor.verification.windows-step-supervisor` records whether it is available.
+- **Session, profiles and exit (#4495).**
+  - **Interactive desktop.** An AppContainer process needs the interactive window station: started
+    from an SSH or service session, its root ends with `STATUS_DLL_INIT_FAILED` before it runs a
+    line. A confined launch outside `WinSta0` is therefore refused before anything is created
+    (refusal 18, `runtime-supervisor-no-desktop`). A root that still ends with that status is not
+    read as this cause: the status also follows other DLL initialization failures. Refusal 19 (`runtime-supervisor-image-path`) names a supervisor whose own
+    path is longer than a relayed root may be started from.
+  - **Profile owner.** A profile's name states the supervisor that created it:
+    `<prefix><pid as 8 hex>-<creation time as 16 hex>-<16 random hex>`. Every confined launch
+    removes the Keiko profiles whose supervisor no longer runs, judged as the environment guard
+    judges a holder (an unopenable process counts as alive); the supervisor's kill-on-close Job
+    Object took that run's tree with it. A live run's profile, also another Keiko installation's,
+    and every name outside the grammar (an older Keiko's random name, any other program's profile)
+    are never touched. The launch response carries the counts beside the grant sweep's, and
+    `runtime.confinement.stale-grants-swept` records them.
+  - **Root exit.** The reap proof's first word is the tree root's exit code; the host records it as
+    `runtime.confinement.tree-reaped` for every reaped tree, a number only. The relay root's own
+    failures use the NTSTATUS customer range, which no runtime returns: `0xE04B0001` when its plan,
+    sockets, routes or pipes could not be set up and `0xE04B0002` when the runtime could not be
+    created. The number on `runtime.confinement.tree-reaped` is the closed value that names them;
+    the run settles with the supervisor's generic refusal.
 - **Scope.** D13 still holds.

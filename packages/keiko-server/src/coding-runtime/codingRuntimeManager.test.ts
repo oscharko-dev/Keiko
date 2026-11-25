@@ -4610,6 +4610,9 @@ describe("coding runtime manager", () => {
     ["supervisor-grants-capability", "runtime-supervisor-grants-capability"],
     ["supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
     ["supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    // #4495: started without an interactive desktop (an SSH or service session).
+    ["supervisor-no-desktop", "runtime-supervisor-no-desktop"],
+    ["supervisor-image-path", "runtime-supervisor-image-path"],
     ["supervisor-grants-frame", "runtime-supervisor-refused"],
     ["supervisor-unknown", "runtime-supervisor-refused"],
   ] as const)("names the %s refusal instead of the failed handshake", async (refusal, code) => {

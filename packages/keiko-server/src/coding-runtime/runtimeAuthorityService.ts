@@ -444,6 +444,8 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "runtime-supervisor-grants-capability",
         "runtime-supervisor-gateway-connect",
         "runtime-supervisor-gateway-admit",
+        "runtime-supervisor-no-desktop",
+        "runtime-supervisor-image-path",
         "runtime-supervisor-refused",
       ],
     },

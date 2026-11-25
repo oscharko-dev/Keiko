@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3494b133fc2c2beb5f98f57ce3e80c4062a8bbc28622bcc1b51b06e2d4468aef"
+    "catalogDigest": "d67da9e8ce5b6bc9205a7037bf43804d33d2f747955f050a84bb37812824ac5b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 730,
-    "proofCount": 754,
-    "resolvedProofCount": 754,
+    "operationCount": 731,
+    "proofCount": 755,
+    "resolvedProofCount": 755,
     "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -533,6 +533,7 @@
         "runtime.confinement.failed",
         "runtime.confinement.spawned",
         "runtime.confinement.stale-grants-swept",
+        "runtime.confinement.tree-reaped",
         "runtime.confinement.unavailable",
         "task-workspace.identity.creation-time-probe",
         "task-workspace.lifecycle",
@@ -3107,6 +3108,9 @@
       "packages/keiko-server/src/coding-runtime/runtimeGatewayProcessSandbox.egress.test.ts"
     ],
     "runtime.confinement.stale-grants-swept.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.windows-grants.test.ts"
+    ],
+    "runtime.confinement.tree-reaped.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.windows-grants.test.ts"
     ],
     "runtime.confinement.unavailable.emitted-line": [

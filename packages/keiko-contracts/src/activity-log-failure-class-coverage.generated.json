@@ -47128,11 +47128,11 @@
       "failureClass": "runtime-confinement",
       "requirementContract": "runtime-confinement",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["failure", "start", "state"],
+      "lifecycleTransitions": ["end", "failure", "start", "state"],
       "lifecycleOperations": {
         "start": ["runtime.confinement.spawned"],
         "state": ["runtime.confinement.stale-grants-swept"],
-        "end": [],
+        "end": ["runtime.confinement.tree-reaped"],
         "failure": ["runtime.confinement.failed"],
         "loss": []
       },
@@ -47148,10 +47148,18 @@
         {
           "op": "runtime.confinement.stale-grants-swept",
           "mode": "correlation"
+        },
+        {
+          "op": "runtime.confinement.tree-reaped",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["runtime.confinement.spawned", "runtime.confinement.stale-grants-swept"],
+      "resourceSignals": [
+        "runtime.confinement.spawned",
+        "runtime.confinement.stale-grants-swept",
+        "runtime.confinement.tree-reaped"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -47362,7 +47370,19 @@
               "required": true
             },
             {
+              "name": "failedProfileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "removedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "removedProfileCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
@@ -47374,6 +47394,36 @@
             "causeChain": false
           },
           "proofIds": ["runtime.confinement.stale-grants-swept.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "runtime.confinement.tree-reaped",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "process-lifecycle",
+          "safeContextFields": [
+            {
+              "name": "backend",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "rootExitCode",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["runtime.confinement.tree-reaped.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

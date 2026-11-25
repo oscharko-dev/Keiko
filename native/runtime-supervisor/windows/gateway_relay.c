@@ -782,12 +782,13 @@ int keiko_relay_container_main(int argc, wchar_t **argv) {
   SIZE_T attribute_size = 0;
   wchar_t *line = NULL, *environment = NULL;
   USHORT inbound_host_port = 0;
-  DWORD exit_code = 126;
+  DWORD exit_code = KEIKO_RELAY_EXIT_START;
   BOOL created = FALSE;
   memset(&startup, 0, sizeof(startup));
   memset(&child, 0, sizeof(child));
-  if (argc < 4 || !keiko_relay_plan_parse(argv[2], &plan) || !winsock_ready()) return 126;
-  if (!start_routes(&plan, &inbound_host_port)) return 126;
+  if (argc < 4 || !keiko_relay_plan_parse(argv[2], &plan) || !winsock_ready() ||
+      !start_routes(&plan, &inbound_host_port))
+    return (int)KEIKO_RELAY_EXIT_START;
   line = child_command_line(argc, argv);
   environment = child_environment(&plan);
   if (line == NULL || environment == NULL || !CreatePipe(&output_read, &output_write, &inheritable, 0) ||
@@ -814,6 +815,7 @@ int keiko_relay_container_main(int argc, wchar_t **argv) {
   DeleteProcThreadAttributeList(startup.lpAttributeList);
   if (!created) {
     fprintf(stderr, "relay runtime spawn failed: %lu\n", GetLastError());
+    exit_code = KEIKO_RELAY_EXIT_SPAWN;
     goto done;
   }
   CloseHandle(child.hThread);
@@ -825,7 +827,7 @@ int keiko_relay_container_main(int argc, wchar_t **argv) {
     scan.host_port = inbound_host_port;
     output_read = NULL;
     if (!start_thread(output_relay, &scan)) {
-      TerminateProcess(child.hProcess, 126);
+      TerminateProcess(child.hProcess, KEIKO_RELAY_EXIT_START);
     }
   }
   if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0 ||
