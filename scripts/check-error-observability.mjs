@@ -191,8 +191,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "Pure KSS3 frame validation becomes protocol-invalid, and response bytes are wiped. The guarded native primitive owner records the closed refusal on the existing coding-runtime.workspace-read line before returning it.",
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:nativeListResult":
       "Pure directory payload validation becomes protocol-invalid with no partial entries, and bytes are wiped. The same guarded native primitive owner records the closed refusal through coding-runtime.workspace-read.",
-    "packages/keiko-tools/src/exec.ts:realSearchPathEntry":
-      "A Windows step's PATH entry that is missing or unreadable has no real folder and stays as written: no grant changes, and the step's launch outcome is recorded on editor.verification.windows-step-refused or its verification line (#4492).",
+    "packages/keiko-tools/src/windows-step.ts:realWindowsSearchPathEntry":
+      "A missing or unreadable PATH entry is an ordinary search-path condition, not a failure: it has no real folder, stays as written and changes no grant (#4492).",
     "packages/keiko-contracts/src/observability.ts:activityLogEvent":
       "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
     "packages/keiko-model-gateway/src/http.ts:logEndpointClass":

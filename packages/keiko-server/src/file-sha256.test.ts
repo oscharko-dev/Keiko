@@ -19,7 +19,7 @@ function fileWith(bytes: Buffer): string {
   return path;
 }
 
-describe("sha256FileSync (#4492)", () => {
+describe("sha256FileSync (#4495)", () => {
   it.each([
     ["an empty file", 0],
     ["a file below one chunk", 17],

@@ -83,6 +83,11 @@ desktop and a supervisor path that is too long are refused with closed reasons; 
 root exit code reaches the Activity Log, and the relay root's own failures take exit codes of their
 own.
 
+1.15 — #4492 amends D20 (2026-11-25): the step supervisor starts with an empty environment and the
+step's environment travels in its launch frame only; a refusal reaches the Activity Log with its
+closed code; a search-path entry that reaches a granted folder through a junction is named by that
+folder's drive letter.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1246,6 +1251,14 @@ boundary (D9). On Windows the verifier selects it in this order:
   ran unsuccessfully. Historical summaries without that subset retain their original facts. The
   existing `coding-runtime.verification` not-run Activity Log evidence records the closed denial
   reason; neither presentation nor counts grant verification authority.
+- **The step's environment (#4492).** The server starts the step supervisor with an empty
+  environment, as every native helper starts. The step's own environment, with its ephemeral home,
+  travels in the launch frame only: Windows expands the per-user LocalAppData folder, where the
+  supervisor's environment-guard lock lives, through the process's `USERPROFILE`, and the step's
+  home there refused every step. A refusal is recorded as `editor.verification.windows-step-refused`
+  (`phase`, `refusalCode`) on the step's correlation. A drive-absolute `PATH` entry that no granted
+  folder names lexically, such as Scoop's `current` junction, is named through its real folder's
+  drive letter; the grants do not change, and relative entries and shares are never resolved.
 - **Scope.** This decides repository verification only. It does not decide the Windows tool profile
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the

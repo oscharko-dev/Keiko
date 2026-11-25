@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 
-/** One read's size: a payload of any admitted size is hashed in this much memory (#4492). */
+/** One read's size: a payload of any admitted size is hashed in this much memory (#4495). */
 export const FILE_SHA256_CHUNK_BYTES = 1024 * 1024;
 
 /**

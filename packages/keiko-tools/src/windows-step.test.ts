@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
@@ -10,6 +12,7 @@ import { CommandCancelledError, CommandDeniedError } from "./errors.js";
 import { runCommand, type RunCommandDeps, type SpawnOptions } from "./exec.js";
 import {
   quoteWindowsArgument,
+  realWindowsSearchPathEntry,
   throughWindowsStepDrives,
   windowsStepFrames,
   windowsStepGrants,
@@ -207,6 +210,43 @@ describe("windowsStepFrames", () => {
       String.raw`C:\Windows\System32`,
     ]);
     expect(text).toContain(String.raw`N:\npm.cmd`);
+  });
+
+  // #4492: only PATH (in any case Windows writes it) is resolved, and a real folder no grant
+  // covers leaves the entry exactly as written.
+  it("resolves only the search path, in any case, and keeps an ungranted real folder as written", () => {
+    const launch: WindowsStepLaunch = {
+      image: String.raw`C:\work\repo\run.cmd`,
+      args: [],
+      grants: [],
+      recoveryHandle: "0123456789abcdef0123456789abcdef",
+    };
+    const asked: string[] = [];
+    const text = windowsStepFrames(
+      launch,
+      String.raw`C:\work\repo`,
+      { Path: String.raw`C:\tools\link`, TOOL_HOME: String.raw`C:\tools\home` },
+      DRIVES,
+      (entry) => {
+        asked.push(entry);
+        return String.raw`D:\elsewhere\real`;
+      },
+    ).toString("utf8");
+    expect(asked).toEqual([String.raw`C:\tools\link`]);
+    expect(text).toContain(String.raw`C:\tools\link`);
+    expect(text).not.toContain("elsewhere");
+  });
+});
+
+describe("realWindowsSearchPathEntry (#4492)", () => {
+  it("names an existing folder's real path and has none for a missing one", () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-search-path-")));
+    try {
+      expect(realWindowsSearchPathEntry(folder)).toBe(folder);
+      expect(realWindowsSearchPathEntry(join(folder, "missing"))).toBeUndefined();
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
 

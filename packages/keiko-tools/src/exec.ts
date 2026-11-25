@@ -58,6 +58,7 @@ import {
 import type { CommandResult, CommandRule, SandboxAttestation, SandboxPolicy } from "./types.js";
 import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-shell.js";
 import {
+  realWindowsSearchPathEntry,
   windowsStepFrames,
   windowsStepLaunch,
   windowsStepTerminateFrame,
@@ -1889,7 +1890,7 @@ function spawnChild(
             cwd,
             env,
             target.windowsStep.drives,
-            realSearchPathEntry,
+            realWindowsSearchPathEntry,
           );
     // The step's environment travels in its launch frame. The supervisor itself starts empty, as
     // every native helper does: Windows expands the user's LocalAppData, where its per-user lock
@@ -1909,16 +1910,6 @@ function spawnChild(
   } catch (error) {
     cleanup(state, input.signal);
     throw asError(error, "spawn failed");
-  }
-}
-
-// A search-path entry's real folder, resolved as the executable's granted folder was; an entry
-// that is missing or unreadable has none and stays as written (#4492).
-function realSearchPathEntry(entry: string): string | undefined {
-  try {
-    return realpathSync(entry);
-  } catch {
-    return undefined;
   }
 }
 

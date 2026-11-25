@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { afterEach, describe, expect, it } from "vitest";
@@ -151,6 +151,21 @@ describe("indexStatMatches", () => {
     expect(
       indexStatMatches(root, "windows.ts", written, undefined, nodeWorkspaceFs, "darwin"),
     ).toBe(true);
+  });
+
+  it("reads a Windows entry on a volume without a creation time by its content", () => {
+    const { root } = makeWorkspace();
+    const written = writeAndStat(root, "nobirth.ts", "no creation time here");
+    const withoutBirthtime: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      stat: (path) => {
+        const { birthtimeNs: _birthtimeNs, ...rest } = nodeWorkspaceFs.stat(path);
+        return rest;
+      },
+    };
+    expect(
+      indexStatMatches(root, "nobirth.ts", written, undefined, withoutBirthtime, "win32"),
+    ).toBe(false);
   });
 
   it("refuses a path outside the workspace root", () => {
