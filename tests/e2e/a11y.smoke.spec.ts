@@ -189,23 +189,34 @@ const UPDATE_AVAILABLE = {
   status: "update-available",
   availabilityState: "update-available",
   registryStatus: "ok",
-  severity: "normal",
   targetVersion: "999.0.0",
   userActionRequired: true,
   manualUpdateRequired: false,
   blockers: [],
 } as const;
 
-const openUpdateNotice: SurfaceOpener = async (page, _request, theme) => {
-  await page.route("**/api/update/preflight", async (route) => {
-    const response = await route.fetch();
-    const report = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({ response, json: { ...report, ...UPDATE_AVAILABLE } });
-  });
-  await shellReady(page, theme);
-  await expect(page.getByRole("status", { name: "Keiko update notification" })).toBeVisible();
-  return ".update-notice";
-};
+type UpdateNoticeSeverity = "normal" | "critical";
+const UPDATE_NOTICE_SEVERITIES: readonly UpdateNoticeSeverity[] = ["normal", "critical"];
+
+/** A critical notice is an alert with its own warning tint, so both severities are measured. */
+function updateNoticeOpener(severity: UpdateNoticeSeverity): SurfaceOpener {
+  return async (page, _request, theme) => {
+    await page.route("**/api/update/preflight", async (route) => {
+      const response = await route.fetch();
+      const report = (await response.json()) as Record<string, unknown>;
+      await route.fulfill({ response, json: { ...report, ...UPDATE_AVAILABLE, severity } });
+    });
+    await shellReady(page, theme);
+    const role = severity === "critical" ? "alert" : "status";
+    const notice = page.getByRole(role, { name: "Keiko update notification" });
+    await expect(notice).toBeVisible();
+    // The notice fades in from opacity 0; a scan during that fade measures a blend, not its colours.
+    await notice.evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map(async (animation) => animation.finished));
+    });
+    return ".update-notice";
+  };
+}
 
 const openChatWindow: SurfaceOpener = async (page, request, theme) => {
   const chat = await createChat(request);
@@ -346,7 +357,7 @@ const OPENERS: Readonly<Record<string, SurfaceOpener>> = {
   editor: openEditorWindow,
   "git-window": openGitWindow,
   "delete-confirm": openDeleteConfirm,
-  "update-notice": openUpdateNotice,
+  "update-notice": updateNoticeOpener("normal"),
 };
 
 /**
@@ -413,14 +424,20 @@ for (const theme of A11Y_THEMES) {
 }
 
 for (const theme of A11Y_THEMES) {
-  test(`startup update notice holds up across contrast modes — ${theme} theme @smoke`, async ({
-    page,
-    request,
-  }) => {
-    const selector = await openUpdateNotice(page, request, theme);
-    for (const mode of A11Y_CONTRAST_MODES) {
-      await applyContrastMode(page, mode);
-      await expectNoViolations(page, selector, `startup update notice (${theme}, ${mode})`);
-    }
-  });
+  for (const severity of UPDATE_NOTICE_SEVERITIES) {
+    test(`startup update notice holds up across contrast modes — ${severity}, ${theme} theme @smoke`, async ({
+      page,
+      request,
+    }) => {
+      const selector = await updateNoticeOpener(severity)(page, request, theme);
+      for (const mode of A11Y_CONTRAST_MODES) {
+        await applyContrastMode(page, mode);
+        await expectNoViolations(
+          page,
+          selector,
+          `startup update notice (${severity}, ${theme}, ${mode})`,
+        );
+      }
+    });
+  }
 }

@@ -519,20 +519,3 @@ As for 1.5.7, the release changes only the version fields of `package.json`, `pa
 and `packages/keiko-ui/package.json` (#4491). Only those three input digests were updated in the
 four proofs; the other 26 digests, the Linux captures, the rendered CSS digest, the measurements,
 the tolerances and the accessibility records are unchanged, and no producer was rerun.
-
-## Update notice forced-colours repair — 2026-11-25
-
-The repair gives the startup update notice and the update buttons system colours under
-`forced-colors: active` in `globals.css` (#4103), one of the declared shared inputs. All four
-original producers were rerun from `938dca6f7435429a473a7717b3ebc833c626ee15` in the isolated Linux
-arm64 gates container with Node 26.13.1, npm 11.20.0 and the locked Playwright 1.64.1 Chromium.
-
-Component fidelity passed with zero gated differences, no missing selectors and the bounded-row
-smoke. Editor fidelity passed its 0-diff token gate and all 14 reference captures with no capture
-errors; its previously documented accent and reference-only differences remain recorded. The seven
-accessibility modes reported zero serious or critical violations and zero unresolved incomplete
-findings. All 108 browser captures were written without page errors. The 18 Files and Editor
-captures now record 48 more characters of page text (685 to 733 and 691 to 739) and look the same.
-A stylesheet adds no text, so the likely source is a UI change that reached `dev` after the previous
-run on 2026-11-22. The 56 recaptured PNGs were committed as produced. These remain synthetic
-fixture proofs.

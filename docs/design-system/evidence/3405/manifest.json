@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-11-25T11:18:34.835Z",
+  "generatedAt": "2026-11-25T12:06:02.820Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -33,7 +33,7 @@
   "sourceFiles": [
     {
       "path": "scripts/lib/update-ui-evidence-sources.json",
-      "sha256": "03f2dee4e8c4109fdcb7e5327e88c3f15d4039f4d10a7f376d6bd26e6b77b351"
+      "sha256": "1d50979b9b914972782cd99b83958a2a418a074baa880722d0b1f3338c325f17"
     },
     {
       "path": "design-system/product-token-bindings.json",
@@ -85,11 +85,15 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
-      "sha256": "f871071c366e4caa1c9f73d678a5072c152141e1bbcad1e870e6dc1a563e6084"
+      "sha256": "5850f786fb5b342726ca1034d19d24c4d43bea9ed700856080e23cdea5033b75"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.module.css",
+      "sha256": "3984275d8213a9b079cd6147f3c6be998e14b0ca276d3548c90279acdc399439"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
-      "sha256": "0410efe9f457242e33f4cb9aa4eee52e79fec2654b6c32160863a91cf16c7d49"
+      "sha256": "79fe9ffce965dbe2a83498f2d7026b8be6a7b9646a21907ab54b95e7fcdb0c43"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
@@ -105,7 +109,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "ae4b6d98edc677aa9036170f848919ef10ef871f29d6427df20bbc8440b5a8e0"
+      "sha256": "8c87b542e9bec5595c12185faf87cca939a98c416d727591d078c7a7388b2b2d"
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",

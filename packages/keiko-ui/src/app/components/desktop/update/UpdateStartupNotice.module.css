@@ -1,0 +1,23 @@
+/* Forced colours: the notice's gradient and its buttons' mixed tints are authored colours the UA
+   only partly replaces. In a dark theme the buttons and the notice text kept their light colour over
+   a forced white face (1.08:1). Defer the notice, its text and its buttons to system colours. The
+   [data-severity] forms match the critical notice's own selectors, so they hold in both severities. */
+@media (forced-colors: active) {
+  .cmpNotice,
+  .cmpNotice[data-severity] {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  .cmpNotice .cmpNoticeText,
+  .cmpNotice[data-severity] .cmpNoticeText {
+    color: CanvasText;
+  }
+
+  .cmpNotice .cmpNoticeAction {
+    border-color: ButtonText;
+    background: ButtonFace;
+    color: ButtonText;
+  }
+}
