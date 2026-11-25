@@ -79,6 +79,7 @@ import {
   currentGateway,
   currentGatewayConfig,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   type RuntimeGatewayConfig,
   type UiHandlerDeps,
 } from "./deps.js";
@@ -5010,12 +5011,29 @@ function passiveCodingProfile(
   modelId: string | undefined,
 ): CodingWorkbenchSidecarGatewayResult {
   const result = withModelVerification(deps, usableCodingProfile(deps, modelId));
-  if (result.status !== "available" || result.verification === "verified") return result;
+  if (result.status !== "available") return unverifiedWithoutActivation(deps, result);
+  if (result.verification === "verified") return result;
   if (isConversationReadinessCheckRunning(deps, result.modelAlias))
     return { status: "unavailable", reason: "model-verification-pending" };
   return deps.gatewayConfig === undefined
     ? result
     : { status: "unavailable", reason: "conversation-not-ready" };
+}
+
+// #4492 finding 8: tool calling can only be checked on a model the person activated, so while no
+// configured model is activated the Workbench names the activation (Settings > Models), not a
+// "Check tool calling" button it cannot offer.
+function unverifiedWithoutActivation(
+  deps: UiHandlerDeps,
+  result: Extract<CodingWorkbenchSidecarGatewayResult, { readonly status: "unavailable" }>,
+): CodingWorkbenchSidecarGatewayResult {
+  if (result.reason !== "tool-calling-unverified" || deps.gatewayConfig === undefined) {
+    return result;
+  }
+  const activated = currentGatewayConfig(deps)?.providers.some(
+    (provider) => currentConversationReadinessPresentation(deps, provider.modelId) === true,
+  );
+  return activated === false ? { status: "unavailable", reason: "conversation-not-ready" } : result;
 }
 
 /**
