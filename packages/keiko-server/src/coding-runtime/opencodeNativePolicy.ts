@@ -1098,8 +1098,10 @@ function classifySchedule(request: OpenCodeNativePolicyRequest): Classified {
       reason: "unsupported-action",
       message: "Keiko refused this action: it is not a schedule change Keiko knows.",
     };
-  const refusal = rest.find((resource) => resource.startsWith("refused:"));
-  if (refusal !== undefined) {
+  // The plugin names a refusal alone, right after the operation; a later resource is a line of the
+  // prompt the schedule would send, which is text to decide, never a refusal marker.
+  const [refusal] = rest;
+  if (refusal?.startsWith("refused:") === true) {
     return {
       reason: "unsupported-action",
       message:

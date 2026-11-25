@@ -262,11 +262,11 @@ function scheduleSource(): readonly string[] {
     '  if (trigger.type !== "at" && trigger.type !== "every" && trigger.type !== "cron") return [operation, "refused:trigger"];',
     '  if (action.type !== "prompt") return [operation, "refused:action"];',
     '  if (action.to !== undefined) return [operation, "refused:target"];',
-    '  if (!onlyKeys(value, SCHEDULE_SHAPE.request) || !onlyKeys(trigger, SCHEDULE_SHAPE[trigger.type]) || !onlyKeys(action, SCHEDULE_SHAPE.prompt)) return [operation, "refused:shape"];',
+    '  if (!onlyKeys(value, SCHEDULE_SHAPE.request) || !onlyKeys(trigger, SCHEDULE_SHAPE[trigger.type]) || !onlyKeys(action, SCHEDULE_SHAPE.prompt) || typeof action.prompt !== "string") return [operation, "refused:shape"];',
     '  const timing = ["when:" + JSON.stringify(trigger)];',
     '  if (value.expires !== undefined) timing.push("expires:" + JSON.stringify(value.expires));',
     '  if (typeof value.name === "string") timing.push("name:" + value.name);',
-    '  return [operation, ...timing, ...programResources({ code: typeof action.prompt === "string" ? action.prompt : "" })];',
+    "  return [operation, ...timing, ...programResources({ code: action.prompt })];",
     "}",
   ];
 }

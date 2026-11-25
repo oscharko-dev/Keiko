@@ -429,11 +429,13 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
       { name: "n", trigger: { type: "every", every: "1 hour", at: "x" }, action: prompt },
       { name: "n", trigger: at, action: { ...prompt, session: "ses_other" } },
       { name: "n", trigger: at, action: { ...prompt, agent: "build" } },
+      { name: "n", trigger: at, action: { type: "prompt", prompt: 42 } },
     ];
     for (const input of inputs) await harness.toolBefore({ ...nested("automation_create"), input });
 
     expect(harness.requests.map((request) => request.resources[1])).toEqual([
       'when:{"type":"cron","cron":"0 9 * * 1-5","tz":"Europe/Berlin"}',
+      "refused:shape",
       "refused:shape",
       "refused:shape",
       "refused:shape",

@@ -595,6 +595,14 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
         );
   });
 
+  // #4546 (policy audit): only the plugin's marker right after the operation is a refusal; a prompt
+  // line that happens to start like one is text the schedule would send, decided as any other.
+  it("decides a schedule whose prompt has a line that looks like a refusal marker", () => {
+    const resources = ["create", 'when:{"type":"at","at":"in 1m"}', "refused:shape"];
+    expect(effectOf("supervised-coding", "opencode_schedule", resources)).toBe("ask");
+    expect(effectOf("autonomous-delivery", "opencode_schedule", resources)).toBe("allow");
+  });
+
   it("names why an automation is refused, without echoing the request", () => {
     const messages = ["trigger", "action", "target", "shape", "other"].map((kind) => {
       const decision = decide("autonomous-delivery", "opencode_schedule", [
