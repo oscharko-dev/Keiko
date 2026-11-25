@@ -1077,7 +1077,8 @@ describe("GitClientWindow — repository list", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This repository is not currently connected to a workspace.",
     );
-    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
     expect(client.listBranches).not.toHaveBeenCalled();
     expect(client.getSummary).not.toHaveBeenCalled();
     expect(client.getRemotes).not.toHaveBeenCalled();
@@ -1097,7 +1098,8 @@ describe("GitClientWindow — repository list", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This local repository is unavailable.",
     );
-    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
     expect(client.getStatus).not.toHaveBeenCalled();
     // A configured path that was not handed off never registers itself (#4103 F2).
     expect(client.registerRepository).not.toHaveBeenCalled();
@@ -1684,6 +1686,57 @@ describe("GitClientWindow — repository list", () => {
     );
     expect(client.registerRepository).not.toHaveBeenCalled();
     expect(client.getStatus).not.toHaveBeenCalled();
+  });
+
+  // #4103: a restored window whose configured repository is refused used to clear its path, so the
+  // desktop re-keyed it onto the globally selected repository and the notice vanished silently.
+  it("keeps a refused restored repository visible in the desktop's keyed window", async () => {
+    const legacy = makeRepo("/repos/legacy", "legacy", { available: false });
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, legacy] })),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: legacy.path }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("This local repository is unavailable."),
+    );
+    expect(client.getStatus).not.toHaveBeenCalled();
+    expect(client.registerRepository).not.toHaveBeenCalled();
+  });
+
+  it("retries a refused restored repository and shows it once it is available again", async () => {
+    const user = userEvent.setup();
+    let listed = 0;
+    const client = makeClient({
+      listRepositories: vi.fn(async () => {
+        listed += 1;
+        return {
+          projects: [REPO_A, makeRepo("/repos/legacy", "legacy", { available: listed > 1 })],
+        };
+      }),
+    });
+    render(
+      <DesktopKeyedGitWindow
+        client={client}
+        selectedRoot={REPO_A.path}
+        initialCfg={{ projectPath: "/repos/legacy" }}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("This local repository is unavailable."),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith("/repos/legacy"));
+    expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("retries a failed hand-off by running the hand-off again", async () => {
@@ -5260,7 +5313,8 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This local repository is unavailable. Choose another repository.",
     );
-    expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
+    // #4103: the refused folder stays configured, so the desktop's keyed window keeps its notice.
+    expect(updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ projectPath: "" }));
     expect(client.getStatus).not.toHaveBeenCalled();
   });
 });
