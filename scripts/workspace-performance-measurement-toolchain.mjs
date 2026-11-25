@@ -22,6 +22,7 @@ export const WORKSPACE_PERFORMANCE_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   "tests/e2e/config/playwright.workspace-performance.config.ts",
   "tests/e2e/fixtures/keiko.e2e.config.json",
   "tests/e2e/workspace-performance.spec.ts",
+  "tests/e2e/support/dev-server-env.ts",
   "tests/e2e/support/workspace-storage.ts",
   "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
 ]);
