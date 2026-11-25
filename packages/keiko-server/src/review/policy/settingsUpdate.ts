@@ -13,6 +13,7 @@ import type {
 import { validateReviewSettingsUpdateRequest } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 
 import { preflightRoles } from "../../modelRolePolicy/preflight.js";
+import { resolveReviewRulesPath } from "../runtime/rulesFile.js";
 import {
   isAllowedReviewModel,
   resolveReviewPolicy,
@@ -46,9 +47,17 @@ function refuse(reason: ReviewModelPolicyRefusalReason, role: Refusal["role"] = 
   return { kind: "refused", reason, role };
 }
 
+/**
+ * A shape-valid request whose rules path every run would refuse (a denied sensitive path) is
+ * refused when it is saved, not at each run.
+ */
 function validated(body: unknown): ReviewSettingsUpdateRequest | Refusal {
   const result = validateReviewSettingsUpdateRequest(body);
-  if (result.ok) return result.value;
+  if (result.ok) {
+    const path = result.value.rulesFilePath;
+    const refusedPath = typeof path === "string" && resolveReviewRulesPath(path) === undefined;
+    return refusedPath ? refuse("rules-path-invalid") : result.value;
+  }
   const rulesPath = result.issues.some((issue) => issue.path === "rulesFilePath");
   return refuse(rulesPath ? "rules-path-invalid" : "request-invalid");
 }

@@ -178,6 +178,17 @@ describe("GET/PUT /api/git-review/settings (AC7)", () => {
     record.mockRestore();
   });
 
+  it("refuses a denied sensitive path on save, as every run would", async () => {
+    const f = fixture({ enabled: true });
+    for (const rulesFilePath of [".env", "config/id_rsa", ".keiko/team-rules.md"]) {
+      const result = await put(f, { rulesFilePath });
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({ reason: "rules-path-invalid" });
+    }
+    expect((await put(f, { rulesFilePath: ".keiko/review-rules.md" })).status).toBe(200);
+    expect((await put(f, { rulesFilePath: "docs/qa/review-standards.md" })).status).toBe(200);
+  });
+
   it("refuses a path outside the repository or with .. segments", async () => {
     const f = fixture({ enabled: true });
     for (const rulesFilePath of ["../rules.md", "docs/../../rules.md", "/etc/rules.md"]) {
