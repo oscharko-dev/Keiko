@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 
 import { ISSUE_INTAKE_PORT, issueIntakeStateDir } from "../support/coding-issue-intake.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #3385: actual mounted preview/provision/run routes, real temporary Git worktrees,
 // deterministic provider boundary, and browser visual/accessibility evidence.
@@ -57,6 +58,7 @@ export default defineConfig({
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 
 import { HANDOFF_PORT, handoffStateDir } from "../support/coding-issue-handoff.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #3389: read-only journey observation/reconciliation route, mounted Workbench card, and
 // production-composed evidence that the coding runtime never gains a merge or issue-close effect.
@@ -57,6 +58,7 @@ export default defineConfig({
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

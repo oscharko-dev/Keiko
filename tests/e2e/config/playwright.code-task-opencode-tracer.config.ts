@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 
 import { TRACER_DEFAULT_UI_PORT, tracerStateDir } from "../support/coding-runtime-2385-tracer.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #2385 — Code Task OpenCode tracer. Boots the dedicated TEST-ONLY server entry
 // (tests/e2e/servers/coding-runtime-2385-server.mts): the REAL buildUiHandlerDeps/createUiServer
@@ -64,6 +65,7 @@ export default defineConfig({
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

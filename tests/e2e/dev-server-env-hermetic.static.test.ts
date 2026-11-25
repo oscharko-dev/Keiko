@@ -1,11 +1,18 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { resolveOutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { describe, expect, it } from "vitest";
 
-import { devServerEnv, HERMETIC_DEAD_PROXY } from "./support/dev-server-env.js";
+import {
+  devServerEnv,
+  HERMETIC_DEAD_PROXY,
+  HERMETIC_OUTBOUND_ENV,
+} from "./support/dev-server-env.js";
 
 // Smoke journeys failed on an unrelated click whenever a Keiko release newer than the checkout
 // existed: the server's startup update preflight read the public npm registry, and the update
@@ -66,5 +73,69 @@ describe("the smoke dev server's outbound traffic", () => {
         });
       });
     }
+  });
+});
+
+// The smoke config was hermetic first; the other suites started their Keiko servers with the
+// registry reachable and failed the same way once a newer release existed (jira-chat-4081 on the
+// epic #4130 branch). Every Playwright config that starts a web server must give each server's env
+// the hermetic outbound settings: a derived config inherits them from the base config's servers.
+const E2E_ROOT = dirname(fileURLToPath(import.meta.url));
+const HERMETIC_ENV_SPREADS = ["...HERMETIC_OUTBOUND_ENV", "...devServerEnv(", "...server.env"];
+
+function playwrightConfigs(): readonly string[] {
+  const configDir = join(E2E_ROOT, "config");
+  const nested = readdirSync(configDir)
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => join(configDir, name));
+  const topLevel = readdirSync(E2E_ROOT)
+    .filter((name) => name.endsWith(".config.ts"))
+    .map((name) => join(E2E_ROOT, name));
+  return [...nested, ...topLevel].filter((path) =>
+    readFileSync(path, "utf8").includes("webServer"),
+  );
+}
+
+function nonHermeticEnvBlocks(source: string): number {
+  const blocks = source.split(/\benv:\s*\{/u).slice(1);
+  return blocks.filter(
+    (block) => !HERMETIC_ENV_SPREADS.some((spread) => block.trimStart().startsWith(spread)),
+  ).length;
+}
+
+function referencesHermeticEnv(source: string): boolean {
+  return (
+    source.includes("HERMETIC_OUTBOUND_ENV") ||
+    source.includes("devServerEnv(") ||
+    source.includes("baseConfig.webServer")
+  );
+}
+
+describe("every Playwright web server's outbound traffic", () => {
+  it("exposes the hermetic settings the smoke server uses", () => {
+    expect(HERMETIC_OUTBOUND_ENV).toStrictEqual({
+      KEIKO_HTTP_PROXY: HERMETIC_DEAD_PROXY,
+      KEIKO_HTTPS_PROXY: HERMETIC_DEAD_PROXY,
+      KEIKO_NO_PROXY: "127.0.0.1,localhost,::1",
+    });
+    expect(env).toMatchObject(HERMETIC_OUTBOUND_ENV);
+  });
+
+  it("is hermetic in every config that starts a web server", () => {
+    const configs = playwrightConfigs();
+    expect(configs.length).toBeGreaterThan(40);
+    const offenders = configs
+      .filter((path) => {
+        const source = readFileSync(path, "utf8");
+        return !referencesHermeticEnv(source) || nonHermeticEnvBlocks(source) > 0;
+      })
+      .map((path) => relative(E2E_ROOT, path).split("\\").join("/"));
+    expect(offenders).toStrictEqual([]);
+  });
+
+  it("flags a web server env block without the hermetic settings", () => {
+    expect(nonHermeticEnvBlocks('webServer: { env: { KEIKO_OS_KEYCHAIN: "off" } }')).toBe(1);
+    expect(nonHermeticEnvBlocks("webServer: { env: { ...HERMETIC_OUTBOUND_ENV, A: 1 } }")).toBe(0);
+    expect(referencesHermeticEnv("webServer: { command: 'node server.mjs' }")).toBe(false);
   });
 });

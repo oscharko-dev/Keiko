@@ -5,6 +5,7 @@ import {
   RESEARCH_DEFAULT_UI_PORT,
   researchStateDir,
 } from "../support/coding-runtime-2387-research.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #2387 — governed research / skills / read-only subagents journey. Boots the dedicated
 // TEST-ONLY server entry (tests/e2e/servers/coding-runtime-2387-server.mts): the REAL
@@ -67,6 +68,7 @@ export default defineConfig({
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

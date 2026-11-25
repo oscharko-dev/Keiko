@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #446 (Epic #443) — browser evidence that the active task-workspace binding retargets a bound
 // surface in the REAL packaged app, and that an operator switch re-targets it without leaving the
@@ -56,6 +57,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),

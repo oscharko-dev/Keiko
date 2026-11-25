@@ -5,6 +5,7 @@ import {
   AUTHORITY_DEFAULT_UI_PORT,
   authorityStateDir,
 } from "../support/coding-runtime-2386-authority.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #2386 — Code Task real-authority journey. Boots the dedicated TEST-ONLY server entry
 // (tests/e2e/servers/coding-runtime-2386-server.mts): the REAL buildUiHandlerDeps/createUiServer
@@ -71,6 +72,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

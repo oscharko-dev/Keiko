@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 const root = process.cwd();
 // The UI listens on `port`, the Jira and model fixtures on the two ports above it. Like every other
@@ -45,6 +46,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 240_000,
       env: {
+        ...HERMETIC_OUTBOUND_ENV,
         KEIKO_OS_KEYCHAIN: "off",
         KEIKO_E2E_JIRA_STATE: directory,
         KEIKO_E2E_UI_PORT: String(port),

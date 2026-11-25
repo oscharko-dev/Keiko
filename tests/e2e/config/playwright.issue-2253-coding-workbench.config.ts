@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #2253 - isolated unavailable-Codex browser evidence. The three ports deliberately do
 // not overlap the #1990/#1991/#1992/#1994 Coding Workbench plans.
@@ -50,6 +51,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 180_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_DEV_UI_PORT: String(publicPort),
       KEIKO_DEV_BFF_PORT: String(bffPort),

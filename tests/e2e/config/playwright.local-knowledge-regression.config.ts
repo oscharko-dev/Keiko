@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "../support/file-history-2531.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_LK_E2E_UI_PORT ?? "42183");
@@ -71,6 +72,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 180_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       NODE_ENV: "test",
       KEIKO_DEV_UI_PORT: String(publicPort),

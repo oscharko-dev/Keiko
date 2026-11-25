@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32300");
@@ -46,6 +47,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_DEV_UI_PORT: String(publicPort),
       KEIKO_DEV_BFF_PORT: String(bffPort),
