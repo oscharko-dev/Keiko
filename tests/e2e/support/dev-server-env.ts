@@ -11,6 +11,22 @@ export interface DevServerEnvOptions {
 /** Port 9 (discard) on loopback: nothing listens there, so a proxied request is refused at once. */
 export const HERMETIC_DEAD_PROXY = "http://127.0.0.1:9";
 
+/**
+ * Hermetic outbound traffic for every Keiko server a Playwright suite starts. The startup update
+ * preflight asks the public npm registry for the latest release, so whenever a release newer than
+ * the checkout existed, the update notice covered controls and journeys failed on an unrelated click
+ * (`update-notice ... intercepts pointer events`). Every non-loopback request goes to a closed
+ * loopback proxy and fails at once; the preflight then reports the registry unavailable and shows no
+ * notice. Loopback stays direct, so model mocks and the servers themselves are unaffected. Every
+ * Playwright config spreads this into each web server's env (pinned by
+ * dev-server-env-hermetic.static.test.ts).
+ */
+export const HERMETIC_OUTBOUND_ENV: Readonly<Record<string, string>> = Object.freeze({
+  KEIKO_HTTP_PROXY: HERMETIC_DEAD_PROXY,
+  KEIKO_HTTPS_PROXY: HERMETIC_DEAD_PROXY,
+  KEIKO_NO_PROXY: "127.0.0.1,localhost,::1",
+});
+
 /** The environment every Playwright suite gives the dev runner it starts on a prebuilt graph. */
 export function devServerEnv(options: DevServerEnvOptions): Record<string, string> {
   return {
@@ -36,14 +52,6 @@ export function devServerEnv(options: DevServerEnvOptions): Record<string, strin
     // #4213: a journey learns right after its turn instead of after the product's pause.
     KEIKO_MEMORY_LEARNING_IDLE_MS: "0",
     KEIKO_CONFIG_FILE: options.runtimeConfigPath,
-    // Hermetic outbound traffic. The startup update preflight asks the public npm registry for the
-    // latest release, so whenever a release newer than the checkout existed, the update notice
-    // covered controls and smoke journeys failed on an unrelated click (`update-notice ...
-    // intercepts pointer events`). Every non-loopback request goes to a closed loopback proxy and
-    // fails at once; the preflight then reports the registry unavailable and shows no notice.
-    // Loopback stays direct, so the deterministic model mock and the dev runner are unaffected.
-    KEIKO_HTTP_PROXY: HERMETIC_DEAD_PROXY,
-    KEIKO_HTTPS_PROXY: HERMETIC_DEAD_PROXY,
-    KEIKO_NO_PROXY: "127.0.0.1,localhost,::1",
+    ...HERMETIC_OUTBOUND_ENV,
   };
 }
