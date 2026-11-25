@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -11,6 +11,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   fetchGitStatus: vi.fn(),
+  fetchProjects: vi.fn(),
   selectLocalCheckout: vi.fn(),
   selectFolderWorkspace: vi.fn(),
   bindVerifiedTaskWorkspace: vi.fn(),
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   fetchGitStatus: mocks.fetchGitStatus,
+  fetchProjects: mocks.fetchProjects,
 }));
 vi.mock("@/lib/task-workspace-api", () => ({
   selectLocalCheckout: mocks.selectLocalCheckout,
@@ -34,6 +36,10 @@ const managed = {
   baseBranch: "main",
   executionLocation: "worktree",
 } as WorkspaceInstance;
+
+beforeEach(() => {
+  mocks.fetchProjects.mockResolvedValue({ projects: [] });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -488,5 +494,52 @@ describe("a checkout failure the server named as a refusal", () => {
     );
     expect(result.current.error).toBe(true);
     expect(result.current.denied).toBe(false);
+  });
+});
+
+// A folder deleted and re-created under the same path: the server dropped the binding, the held
+// instance still names the folder, and the registered project reports no workspace.
+describe("a selection whose folder lost its workspace behind a still-held binding", () => {
+  const held = { ...managed, executionLocation: "local", taskBranch: "main" } as WorkspaceInstance;
+  const input = {
+    root: "/repo",
+    branch: "main",
+    location: "local" as const,
+    activeInstance: held as WorkspaceInstance | null,
+    workspaceLoading: false,
+    workspaceError: false,
+    branchLoading: false,
+    branchError: false,
+    branchDenied: false,
+    runIsActive: false,
+    folderMode: false,
+    refresh,
+  };
+  const project = (workspaceAvailable: boolean): { projects: unknown[] } => ({
+    projects: [{ path: "/repo", available: true, workspaceAvailable, readable: true }],
+  });
+
+  it("binds the checkout again by itself and is ready once the folder reports a workspace", async () => {
+    mocks.fetchProjects.mockResolvedValueOnce(project(false)).mockResolvedValue(project(true));
+    mocks.selectLocalCheckout.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(mocks.selectLocalCheckout).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(result.current.ready).toBe(true);
+    });
+    expect(result.current.error).toBe(false);
+  });
+
+  it("stays not ready with an error when the folder cannot be bound", async () => {
+    mocks.fetchProjects.mockResolvedValue(project(false));
+    mocks.selectLocalCheckout.mockRejectedValue(new Error("refused"));
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.ready).toBe(false);
+    expect(mocks.selectLocalCheckout).toHaveBeenCalledTimes(1);
   });
 });
