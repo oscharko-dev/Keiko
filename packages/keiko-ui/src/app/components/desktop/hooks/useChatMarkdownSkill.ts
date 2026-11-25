@@ -102,6 +102,18 @@ async function recordSelectionReadFailure(
   }
 }
 
+// A first read that failed is no longer loading: the composer names the failure, never an endless
+// "Loading skills…".
+function selectionBusy(
+  chatId: string | undefined,
+  state: SelectionState,
+  view: MarkdownSkillSelectionView | undefined,
+  requireNoSkill: boolean,
+): boolean {
+  if (chatId === undefined || requireNoSkill) return false;
+  return state.busy || (view === undefined && !(state.chatId === chatId && state.failed));
+}
+
 export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSkill {
   const redemptions = useCodingAppSessionRedemptions();
   const [state, setState] = useState<SelectionState>({ busy: false, failed: false });
@@ -142,7 +154,7 @@ export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSk
       view,
       select,
       refresh,
-      busy: chatId !== undefined && !requireNoSkill && (view === undefined || state.busy),
+      busy: selectionBusy(chatId, state, view, requireNoSkill),
       failed: state.chatId === chatId && state.failed,
       requireNoSkill,
       connectionRequired: state.chatId === chatId && state.connectionRequired === true,
