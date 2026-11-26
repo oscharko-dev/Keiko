@@ -107,6 +107,25 @@ describe("planIsolatedRun", () => {
     });
   });
 
+  it("frames a Windows execution-root step to the pinned supervisor (#4496)", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, filesystem: "execution-root" },
+      { ...NONE, windowsAppContainer: true },
+      "win32",
+    );
+    expect(decision).toEqual({
+      kind: "wrapped",
+      command: "keiko-runtime-supervisor.exe",
+      args: ["--step-supervised"],
+      attestation: {
+        backend: "windows-appcontainer",
+        networkEnforced: true,
+        filesystemEnforced: true,
+        platform: "win32",
+      },
+    });
+  });
+
   it("enforces execution-root writes even when network inheritance is allowed", () => {
     const decision = planIsolatedRun(
       { ...basePlan, network: "inherit", filesystem: "execution-root" },

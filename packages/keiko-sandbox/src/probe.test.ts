@@ -148,7 +148,20 @@ describe("probeBackends", () => {
       seatbelt: false,
       docker: false,
       podman: false,
+      windowsAppContainer: false,
     });
+  });
+
+  it("never reports the Windows backend from PATH, even where a supervisor image is on it (#4496)", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-probe-supervisor-"));
+    try {
+      writeFileSync(join(directory, "keiko-runtime-supervisor.exe"), "");
+      expect(probeBackends({ PATH: directory, PATHEXT: ".EXE" }, "win32").windowsAppContainer).toBe(
+        false,
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("reflects the real host PATH without throwing", () => {

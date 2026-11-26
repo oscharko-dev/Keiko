@@ -1123,6 +1123,28 @@ describe("verified Code-task commit service", () => {
     expect(await service.propose("feat: revoked")).toBeUndefined();
     expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
   });
+  // Lab T17 on OpenCode 2.4.1 (#4546): a signing failure reached the model as execution-uncertain,
+  // so it retried the same commit until the run's deadline. Git refuses the commit before it moves
+  // HEAD, so the result is a plain failure that names the cause the person has to fix.
+  it("names a signing failure instead of an uncertain commit", async () => {
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    const head = git(["rev-parse", "HEAD"]);
+    git(["config", "user.signingkey", join(signingRoot, "missing-signing-key.pub")]);
+    await expect(service.execute(id, approval)).resolves.toMatchObject({
+      status: "failed",
+      reason: "signing-failed",
+    });
+    expect(git(["rev-parse", "HEAD"])).toBe(head);
+    expect(
+      events.some(
+        (event) =>
+          event.extra?.phase === "result" &&
+          event.extra.state === "failed" &&
+          event.extra.reason === "signing-failed",
+      ),
+    ).toBe(true);
+  });
   it("reconciles an interrupted receipt from live commit objects without replaying its approval", async () => {
     const id = await verifiedProposal();
     const approval = await claim(id);

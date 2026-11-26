@@ -401,6 +401,10 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
   ];
 }
 
+/** The supervisor image a `windows-appcontainer` step is framed to, and its step mode (#4496). */
+export const WINDOWS_STEP_SUPERVISOR_COMMAND = "keiko-runtime-supervisor.exe";
+export const WINDOWS_STEP_SUPERVISOR_MODE = "--step-supervised";
+
 function unsupportedBackend(backend: never): never {
   throw new Error(`Unsupported sandbox backend: ${String(backend)}`);
 }
@@ -431,6 +435,9 @@ export function buildWrappedCommand(
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "container-podman":
       return { command: "podman", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
+    case "windows-appcontainer":
+      // keiko-tools frames the step itself to the pinned supervisor it was given (#4496).
+      return { command: WINDOWS_STEP_SUPERVISOR_COMMAND, args: [WINDOWS_STEP_SUPERVISOR_MODE] };
     case "none":
       return undefined;
     default:

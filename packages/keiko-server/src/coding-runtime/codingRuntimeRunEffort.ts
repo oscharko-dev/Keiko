@@ -30,6 +30,7 @@ import type {
 const MAX_RETAINED_RUNS = 16;
 const MAX_OPEN_MODEL_CALLS = 64;
 const MAX_TRACKED_RUNS = 8;
+const MAX_SETTLED_DEBTS = 64;
 
 /** The run host's share of a run's effort. */
 export interface CodingRuntimeHostRunEffort {
@@ -234,6 +235,8 @@ interface OrchestratorEffortRecord {
   verificationCount: number;
   appliedEditCount: number;
   verificationRequired: boolean;
+  /** The task's last change had no passing check when this run began (#4492). */
+  inheritedVerificationDebt: boolean;
   editRevision: number;
   readonly verificationTargets: Map<string, VerificationTargetState>;
   verificationBlocker: CodingVerificationBlockedReason | undefined;
@@ -276,10 +279,30 @@ export function elapsedMs(fromIso: string, toIso: string): number {
  */
 export class CodingRuntimeRunEffortLedger {
   private readonly runs = new Map<string, OrchestratorEffortRecord>();
+  // Settled runs that handed an inherited verification debt on (#4492), kept past `forget` so the
+  // task's next follow-up still owes the check; bounded like every record this process keeps.
+  private readonly settledDebts = new Map<string, true>();
 
   begin(runId: string): void {
     this.runs.delete(runId);
     retained(this.runs, runId, newOrchestratorRecord, MAX_TRACKED_RUNS);
+  }
+
+  /**
+   * A run that continues a task whose last change was left without a passing check (#4492)
+   * inherits that debt. A check it runs must pass, or the run cannot settle as succeeded; a run
+   * that runs no check (a question, a summary) is not failed for it, but hands the debt on.
+   */
+  inheritVerificationDebt(runId: string, unverifiedPredecessor: boolean): void {
+    const run = this.runs.get(runId);
+    if (run !== undefined && unverifiedPredecessor) run.inheritedVerificationDebt = true;
+  }
+
+  /** Whether the run inherited a verification debt and ended without a passing check for it. */
+  carriesVerificationDebt(runId: string): boolean {
+    const run = this.runs.get(runId);
+    if (run === undefined) return this.settledDebts.has(runId);
+    return run.inheritedVerificationDebt && !everySelectedPassed(run);
   }
 
   /**
@@ -395,12 +418,9 @@ export class CodingRuntimeRunEffortLedger {
 
   needsVerification(runId: string): boolean {
     const run = this.runs.get(runId);
-    return (
-      run !== undefined &&
-      run.verificationRequired &&
-      (!hasSelectedTargets(run) ||
-        [...run.verificationTargets.values()].some((state) => state.selected && !state.passed))
-    );
+    if (run === undefined) return false;
+    if (run.verificationRequired) return !everySelectedPassed(run);
+    return run.inheritedVerificationDebt && hasSelectedTargets(run) && !everySelectedPassed(run);
   }
 
   decision(runId: string): void {
@@ -440,6 +460,9 @@ export class CodingRuntimeRunEffortLedger {
   }
 
   forget(runId: string): void {
+    if (this.carriesVerificationDebt(runId)) {
+      retained(this.settledDebts, runId, () => true as const, MAX_SETTLED_DEBTS);
+    }
     this.runs.delete(runId);
   }
 }
@@ -507,11 +530,20 @@ function hasSelectedTargets(run: OrchestratorEffortRecord): boolean {
   return [...run.verificationTargets.values()].some((state) => state.selected);
 }
 
+/** At least one check was selected and every selected check passed. */
+function everySelectedPassed(run: OrchestratorEffortRecord): boolean {
+  return (
+    hasSelectedTargets(run) &&
+    [...run.verificationTargets.values()].every((state) => !state.selected || state.passed)
+  );
+}
+
 function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
     appliedEditCount: 0,
     verificationRequired: false,
+    inheritedVerificationDebt: false,
     editRevision: 0,
     verificationTargets: new Map(),
     verificationBlocker: undefined,

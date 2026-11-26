@@ -14,6 +14,7 @@
 import {
   currentPlatform,
   planIsolatedRun,
+  type BackendAvailability,
   probeBackends,
   resolveLocalDockerEndpoint,
   LocalDockerEndpointUnavailableError,
@@ -32,7 +33,10 @@ import {
   type VerificationStepOutput,
   type VerificationDeps,
 } from "@oscharko-dev/keiko-verification";
-import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
+import type {
+  CommandTerminationEvidence,
+  WindowsStepSupervisor,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
@@ -45,6 +49,8 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
 
 import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
+import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
+import { privateStepWorkspace, type PrivateStepWorkspace } from "./windowsStepWorkspace.js";
 
 const verificationWorkspaces = createWorkspaceMutexRegistry();
 const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
@@ -184,44 +190,106 @@ export function localDockerEngineAnswer(
 // Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
 // `cwd`, with writes confined to that execution root. No untrusted command is
 // spawned during the probe.
+// The host's backends: the probed ones, and on Windows the verified supervisor, never a PATH entry.
+function isolationAvailability(
+  platform: NodeJS.Platform,
+  correlationId: string | undefined,
+): BackendAvailability {
+  return {
+    ...probeBackends(),
+    windowsAppContainer:
+      platform === "win32" &&
+      resolveWindowsStepSupervisor({ activityLog: processServerLogSink(), correlationId }) !==
+        undefined,
+  };
+}
+
+/**
+ * The execution-root backend a verification run gets on this host, and whether it can enforce. A
+ * Docker that is installed but not served is no backend; on Windows the supervisor's step backend
+ * then takes the run, as on a host without a container runtime (#4496, ADR-0043 D20).
+ */
+export function planIsolationProbe(
+  cwd: string,
+  availability: BackendAvailability,
+  platform: NodeJS.Platform,
+  dockerServed: () => boolean,
+): NetworkIsolationProbe {
+  const decision = planIsolatedRun(
+    { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
+    availability,
+    platform,
+  );
+  const enforced =
+    decision.kind === "wrapped" &&
+    decision.attestation.networkEnforced &&
+    decision.attestation.filesystemEnforced;
+  const backend = decision.attestation.backend;
+  if (backend !== "container-docker") return { available: enforced, backend };
+  if (enforced && dockerServed()) return { available: true, backend };
+  return availability.windowsAppContainer === true
+    ? planIsolationProbe(cwd, { ...availability, docker: false }, platform, dockerServed)
+    : { available: false, backend };
+}
+
 export function probeNetworkIsolation(
   cwd: string,
   diagnostics?: ServerDiagnosticSink,
   correlationId?: string,
 ): NetworkIsolationProbe {
-  const decision = planIsolatedRun(
-    { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
-    probeBackends(),
-    currentPlatform(),
+  const platform = currentPlatform();
+  return planIsolationProbe(
+    cwd,
+    isolationAvailability(platform, correlationId),
+    platform,
+    () => localDockerHost(cwd, diagnostics, correlationId) !== undefined,
   );
-  return {
-    available:
-      decision.kind === "wrapped" &&
-      decision.attestation.networkEnforced &&
-      decision.attestation.filesystemEnforced &&
-      (decision.attestation.backend !== "container-docker" ||
-        localDockerHost(cwd, diagnostics, correlationId) !== undefined),
-    backend: decision.attestation.backend,
-  };
 }
 
 /**
  * The probe a verification run executes under: `probeNetworkIsolation`, and for a local Docker
  * engine also whether that engine answers its ping (#4519). A Docker that is installed and not running is no
  * enforcing backend, so its steps are refused as isolation unavailable instead of failing inside the
- * Docker client as if the project's own check had failed.
+ * Docker client as if the project's own check had failed; on Windows the supervisor's step backend
+ * takes such a run instead (#4496).
  */
 export async function probeNetworkIsolationServed(
   cwd: string,
   diagnostics?: ServerDiagnosticSink,
   correlationId?: string,
 ): Promise<NetworkIsolationProbe> {
-  const probe = probeNetworkIsolation(cwd, diagnostics, correlationId);
+  const platform = currentPlatform();
+  const availability = isolationAvailability(platform, correlationId);
+  const served = (): boolean => localDockerHost(cwd, diagnostics, correlationId) !== undefined;
+  const probe = planIsolationProbe(cwd, availability, platform, served);
   if (!probe.available || probe.backend !== "container-docker") return probe;
   const host = localDockerHost(cwd, diagnostics, correlationId);
   if (host === undefined) return { ...probe, available: false };
   const engine = await localDockerEngineAnswer(host);
-  return { ...probe, available: engine === "answered", engine };
+  if (engine === "answered") return { ...probe, engine };
+  return availability.windowsAppContainer === true
+    ? planIsolationProbe(cwd, { ...availability, docker: false }, platform, served)
+    : { ...probe, available: false, engine };
+}
+
+/**
+ * The backends a verification run's steps select from. A run the probe gave the Windows step
+ * backend runs its steps with exactly the backends the probe planned with: a Docker that is
+ * installed but not served must not take the steps back (#4496). A supervisor that is gone when the
+ * steps start leaves the run without an enforcing backend, a closed refusal.
+ */
+export function windowsStepRunDeps(
+  probe: NetworkIsolationProbe,
+  supervisor: WindowsStepSupervisor | undefined,
+  installed: BackendAvailability = probeBackends(),
+): Pick<VerificationDeps, "enforcedNetworkAvailable" | "sandboxAvailability"> {
+  if (probe.backend !== "windows-appcontainer")
+    return { enforcedNetworkAvailable: probe.available };
+  if (supervisor === undefined) return { enforcedNetworkAvailable: false };
+  return {
+    enforcedNetworkAvailable: probe.available,
+    sandboxAvailability: { ...installed, docker: false, podman: false, windowsAppContainer: true },
+  };
 }
 
 /** An isolation probe and its own wall time, in whole milliseconds. */
@@ -347,6 +415,7 @@ function targetedProjectFailureHandler(
 
 function verificationRuntimeTargetResolver(
   args: ExecuteVerificationArgs,
+  windowsStepSupervisor: VerificationDeps["windowsStepSupervisor"],
 ): NonNullable<VerificationDeps["resolveDependencyInstallTarget"]> {
   return async () => {
     try {
@@ -354,6 +423,7 @@ function verificationRuntimeTargetResolver(
         workspace: args.workspace,
         signal: args.signal,
         ...(args.fs === undefined ? {} : { fs: args.fs }),
+        ...(windowsStepSupervisor === undefined ? {} : { windowsStepSupervisor }),
         onTerminated: verificationTerminationHandler(
           args.activityLog ?? processServerLogSink(),
           args.correlationId,
@@ -395,13 +465,47 @@ async function executeExclusiveVerification(
       args.correlationId,
     ));
   const activityLog = args.activityLog ?? processServerLogSink();
-  const report = await runVerification(args.plan, {
+  // #4496: only a run the probe gave the Windows backend frames its steps to the supervisor, in a
+  // private copy of the workspace that the run removes when it ends.
+  const windowsStepSupervisor =
+    probe.available && probe.backend === "windows-appcontainer"
+      ? resolveWindowsStepSupervisor({ activityLog, correlationId: args.correlationId })
+      : undefined;
+  const stepCopy =
+    windowsStepSupervisor === undefined
+      ? undefined
+      : privateStepWorkspace(args.workspace, activityLog, args.correlationId);
+  try {
+    return {
+      report: await runVerification(
+        args.plan,
+        verificationDeps(args, activityLog, probe, windowsStepSupervisor, stepCopy),
+      ),
+      probe,
+      probeDurationMs,
+      networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
+    };
+  } finally {
+    stepCopy?.dispose();
+  }
+}
+
+function verificationDeps(
+  args: ExecuteVerificationArgs,
+  activityLog: ServerLogSink,
+  probe: NetworkIsolationProbe,
+  windowsStepSupervisor: WindowsStepSupervisor | undefined,
+  stepCopy: PrivateStepWorkspace | undefined,
+): VerificationDeps {
+  return {
     workspace: args.workspace,
-    resolveDependencyInstallTarget: verificationRuntimeTargetResolver(args),
+    resolveDependencyInstallTarget: verificationRuntimeTargetResolver(args, windowsStepSupervisor),
+    ...(windowsStepSupervisor === undefined ? {} : { windowsStepSupervisor }),
+    ...(stepCopy === undefined ? {} : { stepWorkspace: stepCopy.workspace }),
     ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
     networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
-    enforcedNetworkAvailable: probe.available,
+    ...windowsStepRunDeps(probe, windowsStepSupervisor),
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
@@ -417,11 +521,5 @@ async function executeExclusiveVerification(
       ? {}
       : { sharedHostPlatform: args.sharedHostPlatform }),
     ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
-  });
-  return {
-    report,
-    probe,
-    probeDurationMs,
-    networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
   };
 }

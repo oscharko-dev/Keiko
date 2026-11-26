@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   createGeneratedOpenCodeNativePolicyPlugin,
+  OPENCODE_CODE_MODE_GOVERNED_TOOLS,
+  OPENCODE_CODE_MODE_PROGRAM,
   OPENCODE_NATIVE_NPM_RELAY_ENV,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
@@ -60,7 +62,14 @@ interface Harness {
   readonly evaluate: (event: PermissionEvent) => Promise<void>;
   readonly shell: (event: ShellEvent) => void;
   readonly toolBefore: (event: ToolEvent) => Promise<void>;
-  readonly requests: unknown[];
+  readonly requests: PolicyRequest[];
+}
+
+/** What the generated hook sends the facade, as far as these tests read it. */
+interface PolicyRequest {
+  readonly permission: string;
+  readonly resources: readonly string[];
+  readonly [field: string]: unknown;
 }
 
 /** Runs the generated plugin against a fetch stub that answers `allow` to every request it sees. */
@@ -68,13 +77,13 @@ async function pluginHarness(
   mode = "supervised-coding",
   answer: { readonly effect: "allow" | "deny"; readonly message?: string } = { effect: "allow" },
   extraEnv: Readonly<Record<string, string>> = {},
+  source: string = createGeneratedOpenCodeNativePolicyPlugin(),
 ): Promise<Harness> {
-  const requests: unknown[] = [];
+  const requests: PolicyRequest[] = [];
   const fetch = (_url: string, init: { body: string }): Promise<Response> => {
-    requests.push(JSON.parse(init.body));
+    requests.push(JSON.parse(init.body) as PolicyRequest);
     return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
   };
-  const source = createGeneratedOpenCodeNativePolicyPlugin();
   const value: unknown = new Script(
     source.replace("export default", "const plugin =") + "\nplugin;",
   ).runInNewContext({
@@ -334,43 +343,130 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     ]);
   });
 
-  // #4271: the producer's schedule tools assert no permission, so the hook asks for one.
-  it("asks policy for every schedule change and names a check alone", async () => {
+  // #4271, #4546: the producer's automation tools assert no permission, so the hook asks for one.
+  it("asks policy for every automation change and names a refusal alone", async () => {
     const harness = await pluginHarness("supervised-coding", { effect: "allow" });
     await harness.toolBefore({
-      ...nested("schedule_create"),
-      input: { when: { type: "in", in: "30m" }, name: "Build", prompt: "run the build" },
+      ...nested("automation_create"),
+      input: {
+        name: "Build",
+        trigger: { type: "every", every: "30 minutes" },
+        action: { type: "prompt", prompt: "run the build" },
+        expires: "in 8 hours",
+      },
     });
-    await harness.toolBefore({
-      ...nested("opencode_schedule_create"),
-      input: { when: { type: "in", in: "1m" }, if: { shell: "test -f x" }, prompt: "p" },
-    });
-    await harness.toolBefore({ ...nested("schedule_delete"), input: { id: "sch_1" } });
-    await harness.toolBefore({ ...nested("schedule_list"), input: {} });
+    const refusedInputs = [
+      {
+        trigger: { type: "in", in: "1m" },
+        action: { type: "prompt", prompt: "p" },
+      },
+      {
+        trigger: { type: "event", server: "ci", event: "done" },
+        action: { type: "prompt", prompt: "p" },
+      },
+      { trigger: { type: "at", at: "in 1m" }, action: { type: "shell", command: "id" } },
+      { trigger: { type: "at", at: "in 1m" }, action: { type: "code", code: "return" } },
+      {
+        trigger: { type: "at", at: "in 1m" },
+        action: { type: "prompt", prompt: "p", to: { subagent: "build" } },
+      },
+      {
+        trigger: { type: "at", at: "in 1m" },
+        action: { type: "prompt", prompt: "p", to: { session: "ses_other" } },
+      },
+      { trigger: "at", action: "prompt" },
+      {},
+    ];
+    for (const input of refusedInputs)
+      await harness.toolBefore({ ...nested("automation_create"), input });
+    await harness.toolBefore({ ...nested("automation_delete"), input: { id: "aut_1" } });
+    await harness.toolBefore({ ...nested("automation_list"), input: {} });
+    // The 2.2.5 schedule tools are gone: their names are no governed management tools any more.
+    await harness.toolBefore({ ...nested("schedule_create"), input: {} });
 
-    expect(harness.requests).toHaveLength(3);
+    expect(harness.requests).toHaveLength(1 + refusedInputs.length + 1);
     expect(harness.requests[0]).toMatchObject({
       permission: "opencode_schedule",
       resources: expect.arrayContaining([
         "create",
-        'when:{"type":"in","in":"30m"}',
+        'when:{"type":"every","every":"30 minutes"}',
+        'expires:"in 8 hours"',
         "name:Build",
       ]) as unknown,
     });
-    expect(harness.requests.slice(1)).toMatchObject([
-      { permission: "opencode_schedule", resources: ["create", "condition:if"] },
-      { permission: "opencode_schedule", resources: ["delete", "sch_1"] },
+    expect(harness.requests.slice(1, -1).map((request) => request.resources)).toEqual([
+      ["create", "refused:trigger"],
+      ["create", "refused:trigger"],
+      ["create", "refused:action"],
+      ["create", "refused:action"],
+      ["create", "refused:target"],
+      ["create", "refused:target"],
+      ["create", "refused:trigger"],
+      ["create", "refused:trigger"],
+    ]);
+    expect(harness.requests.at(-1)).toMatchObject({
+      permission: "opencode_schedule",
+      resources: ["delete", "aut_1"],
+    });
+  });
+
+  // The producer drops keys its schema does not name, but a later pin may read one (another
+  // recipient, a working folder): only the 2.4.1 request keys pass, each trigger with its own value
+  // and `tz`, the prompt with `prompt` and the refused `to` (#4546 review).
+  it("refuses an automation creation that carries a key outside the reviewed request shape", async () => {
+    const harness = await pluginHarness("supervised-coding");
+    const at = { type: "at", at: "in 1m" };
+    const prompt = { type: "prompt", prompt: "p" };
+    const inputs = [
+      {
+        name: "n",
+        trigger: { type: "cron", cron: "0 9 * * 1-5", tz: "Europe/Berlin" },
+        action: prompt,
+      },
+      { name: "n", trigger: at, action: prompt, directory: "/elsewhere" },
+      { name: "n", trigger: at, action: prompt, sessionID: "ses_other" },
+      { name: "n", trigger: { ...at, server: "ci" }, action: prompt },
+      { name: "n", trigger: { type: "every", every: "1 hour", at: "x" }, action: prompt },
+      { name: "n", trigger: at, action: { ...prompt, session: "ses_other" } },
+      { name: "n", trigger: at, action: { ...prompt, agent: "build" } },
+      { name: "n", trigger: at, action: { type: "prompt", prompt: 42 } },
+    ];
+    for (const input of inputs) await harness.toolBefore({ ...nested("automation_create"), input });
+
+    expect(harness.requests.map((request) => request.resources[1])).toEqual([
+      'when:{"type":"cron","cron":"0 9 * * 1-5","tz":"Europe/Berlin"}',
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
+      "refused:shape",
     ]);
   });
 
-  it("blocks a schedule change the policy refuses", async () => {
+  // An automation tool a later pin adds (an update, a run-now) is refused until it is reviewed,
+  // rather than passing undecided; the listing only reads.
+  it("refuses an automation tool it does not know, and leaves the listing undecided", async () => {
+    const harness = await pluginHarness("autonomous-delivery");
+    await harness.toolBefore({ ...nested("automation_list"), input: {} });
+    await harness.toolBefore({ ...nested("automation_update"), input: { id: "aut_1" } });
+    await harness.toolBefore({ ...nested("automation_run"), input: { id: "aut_1" } });
+
+    expect(harness.requests.map((request) => [request.permission, request.resources])).toEqual([
+      ["opencode_schedule", ["update", "aut_1"]],
+      ["opencode_schedule", ["run", "aut_1"]],
+    ]);
+  });
+
+  it("blocks an automation change the policy refuses", async () => {
     const refused = await pluginHarness("governed-assist", {
       effect: "deny",
       message: "no schedule",
     });
 
     await expect(
-      refused.toolBefore({ ...nested("schedule_pause"), input: { id: "sch_1" } }),
+      refused.toolBefore({ ...nested("automation_pause"), input: { id: "aut_1" } }),
     ).rejects.toThrow("no schedule");
   });
 
@@ -461,4 +557,93 @@ it("forwards MCP input only for the server-owned configured namespace", async ()
   expect(harness.requests[0]).toMatchObject({ mcpInput: input });
   await harness.evaluate({ ...event([]), metadata: { input } });
   expect(harness.requests[1]).not.toHaveProperty("mcpInput");
+});
+
+// 2.4.1 runs the tool a hook renames a nested Code Mode call to, and fires no before hook for it
+// (#4546). The boundary therefore holds only while the policy plugin never writes the hook event's
+// tool, by any spelling: every write to the event is recorded through a proxy, whatever its path.
+describe("the generated native policy plugin never renames a tool call (#4546)", () => {
+  interface EventWrites {
+    readonly event: ToolEvent;
+    readonly writes: string[];
+  }
+
+  function recorded(tool: string): EventWrites {
+    const writes: string[] = [];
+    const target: ToolEvent = {
+      tool,
+      sessionID: "ses_plugin",
+      agent: "build",
+      messageID: "msg_code_mode",
+      id: "call_nested",
+      input: { name: "feature", title: "t", directory: "/w/src", code: "return 1;" },
+    };
+    const event = new Proxy(target, {
+      set: (object, key, value: unknown): boolean => {
+        writes.push(`set ${String(key)}`);
+        return Reflect.set(object, key, value);
+      },
+      defineProperty: (object, key, descriptor): boolean => {
+        writes.push(`define ${String(key)}`);
+        return Reflect.defineProperty(object, key, descriptor);
+      },
+      deleteProperty: (object, key): boolean => {
+        writes.push(`delete ${String(key)}`);
+        return Reflect.deleteProperty(object, key);
+      },
+      setPrototypeOf: (object, prototype: object | null): boolean => {
+        writes.push("prototype");
+        return Reflect.setPrototypeOf(object, prototype);
+      },
+    });
+    return { event, writes };
+  }
+
+  it("records an indirect rename and leaves a plugin's own objects alone (controls)", () => {
+    const renamed = recorded("read");
+    const key = ["to", "ol"].join("");
+    Reflect.set(renamed.event, key, "bash");
+    Object.assign(renamed.event, { [key]: "bash" });
+    expect(renamed.writes).toEqual(["set tool", "set tool"]);
+    const owned = recorded("read");
+    const copy = { ...owned.event };
+    copy.tool = "bash";
+    expect(owned.writes).toEqual([]);
+    expect(owned.event.tool).toBe("read");
+  });
+
+  it("writes nothing to the event of any tool, in every mode, allowed or refused", async () => {
+    const tools = [
+      OPENCODE_CODE_MODE_PROGRAM,
+      ...OPENCODE_CODE_MODE_GOVERNED_TOOLS,
+      "automation_create",
+      "automation_pause",
+      "automation_list",
+      "automation_unknown",
+      "opencode_worktree_list",
+      "read",
+      "bash",
+    ];
+    for (const programReviewed of [true, false])
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+        for (const effect of ["allow", "deny"] as const) {
+          const harness = await pluginHarness(
+            mode,
+            { effect },
+            {},
+            createGeneratedOpenCodeNativePolicyPlugin({ programReviewed }),
+          );
+          for (const tool of tools) {
+            const { event, writes } = recorded(tool);
+            // A refused call throws by design; either outcome must leave the event unwritten.
+            const outcome = await harness.toolBefore(event).then(
+              () => "passed",
+              () => "refused",
+            );
+            expect(["passed", "refused"]).toContain(outcome);
+            expect(writes, `${tool} ${mode} ${effect}`).toEqual([]);
+            expect(event.tool).toBe(tool);
+          }
+        }
+  });
 });

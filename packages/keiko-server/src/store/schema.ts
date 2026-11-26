@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 83;
+export const SCHEMA_VERSION = 84;
 
 interface Migration {
   readonly version: number;
@@ -1645,6 +1645,30 @@ const V83_SQL = `
 ALTER TABLE coding_runtime_snapshots ADD COLUMN verification_gap TEXT
   CHECK (verification_gap IS NULL OR verification_gap IN ('no-check-run','check-failed','check-not-started','budget-exhausted'));
 `;
+
+// V84 (#4495, Windows): admits `runtime-supervisor-no-desktop` (Keiko runs without a signed-in
+// desktop session) and `runtime-supervisor-image-path` (Keiko's folder path is too long). V82's
+// rebuild again (SQLite cannot ALTER a table-level CHECK), carrying V83's `verification_gap` column
+// with its own CHECK; the indexes are recreated and no column is added or removed.
+const VERIFICATION_GAP_COLUMN =
+  "verification_gap TEXT CHECK (verification_gap IS NULL OR verification_gap IN ('no-check-run','check-failed','check-not-started','budget-exhausted')),";
+const V84_SQL = V82_SQL.replaceAll("coding_runtime_snapshots_v82", "coding_runtime_snapshots_v84")
+  .replace(
+    "'runtime-supervisor-gateway-admit','runtime-supervisor-refused'",
+    "'runtime-supervisor-gateway-admit','runtime-supervisor-no-desktop','runtime-supervisor-image-path','runtime-supervisor-refused'",
+  )
+  .replace(
+    "\n  CHECK (\n    schema_version = '1'",
+    `\n  ${VERIFICATION_GAP_COLUMN}\n  CHECK (\n    schema_version = '1'`,
+  )
+  .replace(
+    "  pause_reason, issue_purpose\n)\nSELECT",
+    "  pause_reason, issue_purpose, verification_gap\n)\nSELECT",
+  )
+  .replace(
+    "  pause_reason, issue_purpose\nFROM",
+    "  pause_reason, issue_purpose, verification_gap\nFROM",
+  );
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
@@ -3630,6 +3654,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 81, sql: V81_SQL, rebuildsReferencedTable: true },
   { version: 82, sql: V82_SQL, rebuildsReferencedTable: true },
   { version: 83, sql: V83_SQL },
+  { version: 84, sql: V84_SQL, rebuildsReferencedTable: true },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

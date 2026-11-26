@@ -10573,6 +10573,20 @@ describe("configuration-bound chat serving for new coding tasks", () => {
     );
   }
 
+  // #4492 finding 8: with models configured but none activated the Workbench said "Choose Check
+  // tool calling" while it hides that button until an activated model is chosen.
+  it("names an unproven model nobody activated as not activated, not as unverified tool calling", async () => {
+    const { toolCallingVerification: _verification, ...unverified } = capability();
+    const config = configValue(provider(), unverified);
+    const deps = { ...depsValue(config), gatewayConfig: probeVerifiedGatewayConfig(config) };
+    const notActivated = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+    expect(notActivated.body).toEqual({ status: "unavailable", reason: "conversation-not-ready" });
+
+    await observeChat(deps, true);
+    const activated = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+    expect(activated.body).toEqual({ status: "unavailable", reason: "tool-calling-unverified" });
+  });
+
   it("refuses an actually failed legacy alias despite a fresh configured tool proof", async () => {
     const sink = captureServerLog("warn");
     const deps = servingDeps();

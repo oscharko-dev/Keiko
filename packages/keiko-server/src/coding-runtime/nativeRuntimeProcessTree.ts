@@ -52,6 +52,10 @@ const WINDOWS_REFUSALS: RefusalWords = {
   13: "supervisor-relay-frame",
   14: "supervisor-relay-profile",
   15: "supervisor-relay-start",
+  // #4495: no interactive window station (an SSH or service session), and an image path too long
+  // for a relayed tree's root. 16 and 17 are unused (#4496).
+  18: "supervisor-no-desktop",
+  19: "supervisor-image-path",
 };
 
 const MACOS_REFUSALS: RefusalWords = {
@@ -109,16 +113,30 @@ const REFUSED_BEFORE_TREE_EXISTED: ReadonlySet<string> = new Set([
   "supervisor-relay-frame",
   "supervisor-relay-profile",
   "supervisor-relay-start",
+  "supervisor-no-desktop",
+  "supervisor-image-path",
 ]);
 
-/** What a confined Windows supervisor's launch response states about its stale-grant sweep (#4068). */
+/**
+ * What a confined Windows supervisor's launch response states about its sweeps: the stale tree
+ * entries (#4068) and the profiles of runs whose supervisor is gone (#4495).
+ */
 export interface NativeRuntimeLaunchSweep {
   readonly removed: number;
   readonly failed: number;
+  readonly profilesRemoved: number;
+  readonly profilesFailed: number;
 }
 
-// A confined Windows launch response carries the sweep's two counts; every other launch is empty.
-const LAUNCH_SWEEP_BYTES = 8;
+/** What the supervisor of a tree reports about it, as it reports it. */
+export interface NativeRuntimeTreeObserver {
+  readonly launchSweep?: (sweep: NativeRuntimeLaunchSweep) => void;
+  /** The tree's root exit code from the reap proof (#4495); a number, never text. */
+  readonly reaped?: (rootExitCode: number) => void;
+}
+
+// A confined Windows launch response carries the sweeps' four counts; every other launch is empty.
+const LAUNCH_SWEEP_BYTES = 16;
 
 export class NativeRuntimeTree implements RuntimeProcessTree {
   public readonly treeId: string;
@@ -133,6 +151,7 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   private launched = false;
   private ended = false;
   private refusal: string | undefined;
+  private rootExit: number | undefined;
   // The helper exited but its control pipe has not closed yet: a proof may still arrive.
   private draining = false;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -142,7 +161,7 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
     private readonly child: NativeRuntimeHelperProcess,
     // Named by every caller: a refusal number means something else for each supervisor.
     private readonly supervisor: NativeRuntimeSupervisorPlatform,
-    private readonly onLaunchSweep?: (sweep: NativeRuntimeLaunchSweep) => void,
+    private readonly observer: NativeRuntimeTreeObserver = {},
   ) {
     this.treeId = recoveryHandle;
     this.stdin = child.stdin;
@@ -234,6 +253,7 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
       return;
     }
     if (kind === 2 && packet.length === RESPONSE_HEADER_BYTES + 8) {
+      this.acceptRootExit(packet.readUInt32LE(RESPONSE_HEADER_BYTES));
       this.proved = packet.readUInt32LE(RESPONSE_HEADER_BYTES + 4) === 0;
       if (this.proved) this.resolveProofWaiters(true);
       return;
@@ -251,16 +271,32 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
     if (!this.launched && REFUSED_BEFORE_TREE_EXISTED.has(this.refusal)) this.proved = true;
   }
 
+  // Only the Windows supervisor's reap proof carries the root's exit code (#4495), and only the
+  // first proof counts. The code is recorded as the number it is: the relay root's own failures are
+  // values no runtime returns (gateway_relay.h), so the number itself names them.
+  private acceptRootExit(code: number): void {
+    if (this.supervisor !== "win32" || this.rootExit !== undefined) return;
+    this.rootExit = code;
+    this.observer.reaped?.(code);
+  }
+
   // A launch response is the bare header or, on a confined Windows launch, the header and the
-  // stale-grant sweep's two counts. Any other length is malformed and ends the tree.
+  // sweeps' four counts. Any other length is malformed and ends the tree.
   private acceptLaunchPacket(packet: Buffer): boolean {
     if (packet.length === RESPONSE_HEADER_BYTES) return true;
     if (packet.length !== RESPONSE_HEADER_BYTES + LAUNCH_SWEEP_BYTES) return false;
-    this.onLaunchSweep?.({
+    this.observer.launchSweep?.({
       removed: packet.readUInt32LE(RESPONSE_HEADER_BYTES),
       failed: packet.readUInt32LE(RESPONSE_HEADER_BYTES + 4),
+      profilesRemoved: packet.readUInt32LE(RESPONSE_HEADER_BYTES + 8),
+      profilesFailed: packet.readUInt32LE(RESPONSE_HEADER_BYTES + 12),
     });
     return true;
+  }
+
+  /** The root's exit code from the Windows supervisor's reap proof, once it arrived (#4495). */
+  public rootExitCode(): number | undefined {
+    return this.rootExit;
   }
 
   /** The closed step at which the supervisor refused the tree, when it said so (#4068). */

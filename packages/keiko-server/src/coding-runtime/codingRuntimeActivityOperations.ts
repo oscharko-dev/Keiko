@@ -336,8 +336,9 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
 });
 
 // #4068 B1 crash rule: a confined Windows launch that found no other live run removed the tree
-// entries crashed supervisors left on its granted directories. Counts only; recorded when the
-// sweep removed or failed to remove something (ADR-0043 D18).
+// entries crashed supervisors left on its granted directories; since #4495 it also removes the
+// per-run profiles of runs whose supervisor is gone. Counts only; recorded when a sweep removed or
+// failed to remove something (ADR-0043 D18).
 export const RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -354,13 +355,44 @@ export const RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION = defineActivityLo
     },
     removedEntryCount: { type: "integer", dataClass: "count", required: true },
     failedCount: { type: "integer", dataClass: "count", required: true },
+    removedProfileCount: { type: "integer", dataClass: "count", required: true },
+    failedProfileCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "process-lifecycle",
-  diagnosticWhen: [{ field: "failedCount", positive: true }],
+  diagnosticWhen: [
+    { field: "failedCount", positive: true },
+    { field: "failedProfileCount", positive: true },
+  ],
   failureClasses: ["runtime-confinement"],
   proofIds: ["runtime.confinement.stale-grants-swept.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #4495: the root exit code of a confined Windows tree, from the supervisor's reap proof, for a
+// normal and an abnormal end alike. A number only: never a message, a path or a command line.
+export const RUNTIME_CONFINEMENT_TREE_REAPED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "runtime.confinement.tree-reaped",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.shared.runtimeConfinementTreeReaped",
+  fields: {
+    backend: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["windows-wfp", "windows-appcontainer"],
+    },
+    rootExitCode: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["runtime-confinement"],
+  proofIds: ["runtime.confinement.tree-reaped.emitted-line"],
   releaseImpact: "patch",
 });
 

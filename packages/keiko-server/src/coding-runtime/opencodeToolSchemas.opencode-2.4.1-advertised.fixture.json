@@ -358,7 +358,6 @@
         },
         "offset": {
           "type": "integer",
-          "minimum": 0,
           "description": "The line or directory entry to start reading from (1-based)"
         },
         "limit": {
@@ -387,7 +386,7 @@
         "timeout": {
           "type": "integer",
           "minimum": 0,
-          "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default."
+          "description": "Optional timeout in milliseconds (default 120000). When it expires, a foreground command moves to the background and a background command is stopped."
         },
         "background": {
           "type": "boolean",
@@ -437,10 +436,6 @@
           "type": "string",
           "pattern": "^ses",
           "description": "Send a follow-up to an existing subagent, running or finished. Omit to start a new one."
-        },
-        "background": {
-          "type": "boolean",
-          "description": "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress."
         }
       },
       "required": ["agent", "description", "prompt"],

@@ -263,6 +263,13 @@ function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
       occurredAt: AT,
       presentation: { exitCode: 1 },
     },
+    {
+      callId: "edit-legacy",
+      tool: "edit",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { refusalReason: "FILE_NOT_UTF8" as const },
+    },
   ];
   return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
 }
@@ -388,8 +395,14 @@ describe("CodingWorkbenchTimeline", () => {
     const failed = [
       ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
     ];
-    expect(failed).toHaveLength(1);
-    const [execute] = failed;
+    expect(failed).toHaveLength(2);
+    const [execute, legacy] = failed;
+    // #4546: an edit the runtime refused because the file is not UTF-8 says so in one sentence.
+    expect(legacy).toHaveTextContent(
+      "The file was left unchanged because it is not saved as UTF-8 text.",
+    );
+    expect(legacy).not.toHaveTextContent("reported an error");
+    expect(legacy).not.toHaveTextContent("FILE_NOT_UTF8");
     // A call the tool itself could not complete says so, names its origin and what happens next;
     // it never blames the model with "reported an error to the model".
     expect(execute?.open).toBe(true);
@@ -457,7 +470,7 @@ describe("CodingWorkbenchTimeline", () => {
       "Cannot run here",
     );
     expect(noIsolation).toHaveTextContent(
-      "container runtime (Docker or Podman), and none is running",
+      "or, on Windows, inside its own verified isolation, and neither is available here",
     );
     expect(noIsolation).toHaveTextContent("The change is kept");
     expect(noIsolation).toHaveTextContent("run the check again, or check the change yourself");
@@ -662,7 +675,7 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("succeeded")).toContain("bestanden");
       expect(text("isolation-unavailable")).toContain("Hier nicht möglich");
       expect(text("isolation-unavailable")).toContain(
-        "Container-Laufzeit (Docker oder Podman) aus, und keine läuft",
+        "unter Windows in seiner eigenen geprüften Isolation aus, und beides ist hier nicht verfügbar",
       );
       expect(text("isolation-unavailable")).toContain("Deine Änderung bleibt erhalten");
       expect(text("dependencies-unavailable")).toContain("Abhängigkeiten fehlen");

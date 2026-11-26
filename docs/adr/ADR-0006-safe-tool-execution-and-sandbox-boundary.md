@@ -37,6 +37,8 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > `signature-failed` when the user's signing key, SSH agent, verifier, or local Git signing
 > configuration cannot produce a verifiable commit. The product must not suppress signing, silently
 > fall back to unsigned commits, or report success for a commit GitHub branch protection will reject.
+> Git refuses such a commit before HEAD moves, so the verified commit reports it as
+> `failed / signing-failed`, never as an uncertain outcome the model would retry (#4546).
 
 ## Context
 

@@ -379,7 +379,7 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_relay", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_profiles", "gateway_relay", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
   & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib bcrypt.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
@@ -426,6 +426,17 @@ process.exit(41);
   if ($LASTEXITCODE -ne 0) { throw "MSVC gateway environment test analysis failed" }
   & $environmentTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway environment rules failed" }
+
+  # #4495: per-run profile names, the stale-profile sweep (on profiles this test creates for this
+  # user and deletes) and the window-station check. Needs no administrator rights.
+  $profilesTest = Join-Path (Split-Path $supervisor) "gateway_profiles.test.c"
+  $profilesTestOut = Join-Path $scratch "gateway-profiles-test.exe"
+  $profilesScratch = Join-Path $scratch "profiles-test"
+  New-Item -ItemType Directory -Force -Path $profilesScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$profilesScratch\" "/Fe:$profilesTestOut" (Join-Path (Split-Path $supervisor) "gateway_profiles.c") (Join-Path (Split-Path $supervisor) "gateway_environment.c") $profilesTest /link advapi32.lib userenv.lib bcrypt.lib user32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway profiles test analysis failed" }
+  & $profilesTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway profiles rules failed" }
 
   # #4068 W1/W11: the loopback-exemption list rules (keep foreign entries, never duplicate, remove
   # only the run's SID, no rewrite of an unchanged list) against an in-memory configuration list.

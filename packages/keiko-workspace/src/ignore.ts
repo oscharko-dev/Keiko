@@ -248,6 +248,25 @@ const PRECOMPILED_DENY_MATCHERS: readonly DenyMatcher[] = DEFAULT_DENY_PATTERNS.
   regex: globToRegExp(pattern.toLowerCase(), false),
 }));
 
+const PRECOMPILED_CREDENTIAL_MATCHERS: readonly RegExp[] = CREDENTIAL_PATH_DENY_PATTERNS.map(
+  (pattern) => globToRegExp(pattern.toLowerCase(), false),
+);
+
+/**
+ * Whether one path segment names a credential by convention: the kernel-enforced subset of the
+ * deny list, without the tool state a toolchain needs (`.git`, `node_modules`). A private copy of a
+ * workspace leaves such an entry out (#4496). Case-insensitive, with the Windows alias spelling;
+ * `.env.example` stays the one exception.
+ */
+export function isCredentialNamedSegment(segment: string): boolean {
+  const lower = segment.toLowerCase();
+  if (lower === EXAMPLE_ENV) return false;
+  const spelling = windowsAliasSpelling(lower);
+  return PRECOMPILED_CREDENTIAL_MATCHERS.some(
+    (regex) => regex.test(lower) || (spelling !== lower && regex.test(spelling)),
+  );
+}
+
 // Matches the path that names the directory itself (no nested suffix), used so a `dir/` rule
 // can distinguish a real subdirectory from a same-named file at another depth.
 function globToDirEntryRegExp(glob: string, anchored: boolean, flags: string): RegExp {

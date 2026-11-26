@@ -227,8 +227,13 @@ it, because a **local read** and a **network sync** have opposite credential req
   `XDG_CONFIG_HOME` are pointed at `/nonexistent`, `GIT_CONFIG_GLOBAL` at the null device, and
   `GIT_CONFIG_NOSYSTEM=1`. A `status`/`diff`/`branches`/`summary`/`history`/`remote` read never
   authenticates to a remote, so it must not be able to load a user `~/.gitconfig`, a credential
-  helper, or an SSH identity. This is the correct, unchanged behavior for every read route and for
-  the sync preview and the post-op ahead/behind re-read.
+  helper, or an SSH identity. This is the correct behavior for every read route and for
+  the sync preview and the post-op ahead/behind re-read. One exception is data, not code: the
+  effective `core.autocrlf` and `core.eol` (Git for Windows sets `autocrlf=true` in its system
+  scope) are read back with a config-only query, checked against the closed values
+  `true|false|input` and `lf|crlf|native`, and forwarded as `-c` for `status`/`diff`-family reads,
+  so a CRLF checkout the user's own Git calls clean is not shown as modified. Any other key or
+  value is dropped (`line-ending-config.ts`).
 - **`networkGitEnv` (the fetch/pull command only — `defaultGitNetworkProcessRunner`).** A fetch or
   pull against a private or SSH remote *must* be able to authenticate, so this env preserves an
   allowlist of account and SSH-agent state, including Windows credential-store profile paths.

@@ -85,6 +85,8 @@ export function probeBackends(
     seatbelt: isExecutableOnPath("sandbox-exec", env, platform),
     docker: isExecutableOnPath("docker", env, platform),
     podman: isExecutableOnPath("podman", env, platform),
+    // The Windows backend is the pinned supervisor, which no PATH lookup can prove (#4496).
+    windowsAppContainer: false,
   };
 }
 

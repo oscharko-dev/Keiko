@@ -79,6 +79,7 @@ import {
   resolveWindowsGenerationLayout,
   type PortablePackageLayout,
 } from "../update-portable-windows-generation.js";
+import { sha256FileSync } from "../file-sha256.js";
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
 const QUALIFICATION_RECEIPT_PATH = ".portable/runtime-qualification.json";
@@ -484,7 +485,7 @@ function portableRuntimeCandidate(
     ...selectedRoots,
     target,
     activation: bound.activation,
-    activationSha256: sha256File(bound.activationPath),
+    activationSha256: sha256FileSync(bound.activationPath),
     sourceCommitSha: bound.sourceCommitSha,
     ...bindings,
     platformAssurance,
@@ -1353,7 +1354,7 @@ function boundRuntimeComponents(
 
 function installedFileDigest(root: string, relativePath: string): string | undefined {
   const path = safeRealFile(join(root, ...relativePath.split("/")));
-  return statSync(path).size > 0 ? sha256File(path) : undefined;
+  return statSync(path).size > 0 ? sha256FileSync(path) : undefined;
 }
 
 function boundUsearchDigest(root: string, activation: Record<string, unknown>): string | undefined {
@@ -1366,7 +1367,7 @@ function boundUsearchDigest(root: string, activation: Record<string, unknown>): 
   if (!usearchBindingIsValid(addon, expectedSize, expectedDigest)) return undefined;
   const path = safeRealFile(join(root, "runtime", "native", "usearch.node"));
   const entry = statSync(path);
-  return entry.size === expectedSize && sha256File(path) === expectedDigest
+  return entry.size === expectedSize && sha256FileSync(path) === expectedDigest
     ? expectedDigest
     : undefined;
 }
@@ -1405,7 +1406,7 @@ function boundHelperDigest(
     return undefined;
   const path = safeRealFile(join(root, ...expectedPath.split("/")));
   const entry = statSync(path);
-  return entry.size === expectedSize && sha256File(path) === expectedDigest
+  return entry.size === expectedSize && sha256FileSync(path) === expectedDigest
     ? expectedDigest
     : undefined;
 }
@@ -1475,10 +1476,6 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function sha256Text(value: string): string {

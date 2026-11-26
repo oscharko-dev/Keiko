@@ -55,19 +55,19 @@ describe("npm-lane runtime approvals", () => {
       helperSizeBytes: 128_512,
       helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
       helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
-      upstreamVersion: "2.2.5",
+      upstreamVersion: "2.4.1",
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "2",
-      executableTreeSha256: "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
+      executableTreeSha256: "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
       licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
       protocolSchemaSha256: approvedRuntime().protocolSchema.sha256,
-      sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
+      sbomSha256: "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0",
       runtimeSupervisor: {
         // #4068: the pipe-relay supervisor (no installed service), built by MSVC 14.51 on
         // windows-latest exactly as the release builds it.
-        sha256: "8966ba374943d8b0f7dce4bdee296084802783cda0e4a191666a0c4cd16616fb",
-        sizeBytes: 252_416,
-        sourceTreeSha256: "718efc73bdf3327c5db2eb9e294d10cfdc91a2afedeadab3db9560b535419f86",
+        sha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+        sizeBytes: 255_488,
+        sourceTreeSha256: "57054c1e9614341b41b66146c4f2ba08b13bff0979f1db920c6d17e29f57060b",
       },
     });
     const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];
@@ -151,10 +151,17 @@ describe("npm-lane runtime approvals", () => {
     },
   );
 
-  it("names the two retired 1.1.4 executable trees and nothing else", () => {
+  // #4546: an installation still holding a 2.2.5 runtime package is told to update, never that its
+  // payload was tampered with.
+  it("names the retired 2.1.4 and 2.2.5 executable trees and nothing else", () => {
     expect([...NPM_LANE_RETIRED_EXECUTABLE_TREES].sort()).toEqual([
+      "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
       "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
+      "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
       "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
+      "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
     ]);
+    for (const approval of Object.values(NPM_LANE_RUNTIME_APPROVALS))
+      expect(NPM_LANE_RETIRED_EXECUTABLE_TREES.has(approval.executableTreeSha256)).toBe(false);
   });
 });

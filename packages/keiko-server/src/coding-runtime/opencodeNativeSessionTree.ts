@@ -7,6 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { OpenCodeNativeSessionRelation } from "./opencodeNativePolicy.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { OpenCodeV2HistoryProjection, OpenCodeV2HistoryWindow } from "./opencodeV2History.js";
 import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 /**
@@ -434,4 +436,59 @@ function recordNativeSessionTree(
       },
     ),
   );
+}
+
+/**
+ * The children a parent still owes a report for that will never send one (#4546): each no longer
+ * runs, and its newest message is an assistant step that ended in an error, so its round ended
+ * without the idle message after which the runtime reports (2.4.1 ends a child's round this way,
+ * with `finish: "error"`, when the human dismisses its question). A child that runs, that has no
+ * message yet, whose newest message is an idle message (its report follows), or whose newest step
+ * ended normally (the runtime may stop listing it a moment before it appends that idle message) is
+ * not silent. Read only once the parent's newest message is an idle message, so a working parent
+ * costs nothing; a failed read throws, as an unproven state is not a silent one.
+ */
+export async function silentNativeChildren(
+  client: Pick<OpenCodeV2HttpClient, "active" | "recentMessages">,
+  owed: ReadonlySet<string>,
+  parentMessages: readonly Readonly<Record<string, unknown>>[],
+  signal: AbortSignal | undefined,
+): Promise<ReadonlySet<string>> {
+  if (owed.size === 0 || parentMessages.at(-1)?.type !== "idle") return new Set();
+  const active = await client.active(signal);
+  const ended = [...owed].filter((child) => !Object.hasOwn(active, child));
+  const reads = await Promise.all(ended.map((child) => client.recentMessages(child, signal)));
+  return new Set(ended.filter((_child, index) => interruptedStep(reads[index]?.messages.at(-1))));
+}
+
+function interruptedStep(newest: Readonly<Record<string, unknown>> | undefined): boolean {
+  return newest?.type === "assistant" && newest.finish === "error";
+}
+
+/**
+ * One history sync of a native parent session: the children it owes a report for that went silent
+ * are named to the projection, so a held idle message is released only when none can still report.
+ */
+export async function projectNativeParentHistory(
+  input: {
+    readonly client: Pick<OpenCodeV2HttpClient, "active" | "recentMessages">;
+    readonly history: Pick<OpenCodeV2HistoryProjection, "owedChildren" | "project">;
+    readonly sessionId: string;
+    readonly messages: readonly Readonly<Record<string, unknown>>[];
+    readonly checkpoint: number | undefined;
+    readonly window?: Omit<OpenCodeV2HistoryWindow, "silentChildren"> | undefined;
+  },
+  signal: AbortSignal | undefined,
+): Promise<readonly OpenCodeReconciliationEvent[]> {
+  const { client, history, sessionId, messages, checkpoint, window } = input;
+  const silentChildren = await silentNativeChildren(
+    client,
+    history.owedChildren(messages, checkpoint, window),
+    messages,
+    signal,
+  );
+  return history.project(sessionId, messages, checkpoint, {
+    ...window,
+    ...(silentChildren.size === 0 ? {} : { silentChildren }),
+  });
 }

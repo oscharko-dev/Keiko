@@ -38,6 +38,8 @@ describe("CODING_WORKBENCH_RUNTIME_FAILURE_CODES", () => {
     "runtime-supervisor-grants-capability",
     "runtime-supervisor-gateway-connect",
     "runtime-supervisor-gateway-admit",
+    "runtime-supervisor-no-desktop",
+    "runtime-supervisor-image-path",
     "runtime-supervisor-refused",
   ] as const)("carries the %s supervisor refusal", (failureCode) => {
     expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain(failureCode);

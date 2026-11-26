@@ -139,6 +139,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "runtime-supervisor-grants-capability",
   "runtime-supervisor-gateway-connect",
   "runtime-supervisor-gateway-admit",
+  "runtime-supervisor-no-desktop",
+  "runtime-supervisor-image-path",
   "runtime-supervisor-refused",
   "payload-too-large",
 ] as const satisfies readonly RuntimeMutationRefusalReason[];

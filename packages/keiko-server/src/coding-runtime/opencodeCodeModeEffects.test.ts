@@ -148,7 +148,7 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
       ["execute", ["return 1;"]],
       ["opencode_session_rename", ["A title"]],
       ["opencode_worktree_create", ["feature-x"]],
-      ["opencode_schedule", ["create", 'when:{"in":"5m"}']],
+      ["opencode_schedule", ["create", 'when:{"type":"at","at":"in 5 minutes"}']],
       ["edit", [join(workspace, "sub")]],
     ];
     for (const [permission, resources] of probes) {
@@ -253,11 +253,9 @@ describe("every effect of a Code Mode program reaches the native policy", () => 
   });
 
   it("decides a schedule change that starts later work: ask, ask, allow", () => {
-    expect(decisions("opencode_schedule", ["create", 'when:{"in":"5m"}'])).toEqual([
-      "ask",
-      "ask",
-      "allow",
-    ]);
+    expect(
+      decisions("opencode_schedule", ["create", 'when:{"type":"at","at":"in 5 minutes"}']),
+    ).toEqual(["ask", "ask", "allow"]);
   });
 
   it("decides a fetch inside a program as the web permission, and a search as unconfigured", () => {

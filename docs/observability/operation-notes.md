@@ -886,6 +886,17 @@ recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`,
 at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
 and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
+A confined Windows run (#4068, #4495; ADR-0043 D21) records what its supervisor reports about the
+tree, as counts and numbers only. `runtime.confinement.stale-grants-swept` carries the launch's two
+sweeps: stale tree entries (`removedEntryCount`, `failedCount`) and the profiles of runs whose
+supervisor is gone (`removedProfileCount`, `failedProfileCount`); it is written only when a sweep
+removed or failed to remove something, and a failed count is a diagnostic.
+`runtime.confinement.tree-reaped` carries the tree root's exit code (`rootExitCode`) for every
+reaped tree; `0xE04B0001` (3763011585) and `0xE04B0002` (3763011586) are the relay root's own
+failures (its routes could not be set up, the runtime could not be created). A refused start names
+its step on the `coding-runtime.exit` diagnostic, for example `supervisor-no-desktop` (started from
+an SSH or service session).
+
 ## Coding Workbench request deadlines, Editor and window binding
 
 `client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
@@ -1163,7 +1174,11 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). It also
+counts the native tool calls of the pass that ended in an error (`toolErrorCount`) and, of those, the
+calls the runtime refused for their arguments before the tool ran and asked the model to repeat
+(`toolArgumentErrorCount`, matched on the runtime's own message and pinned on the real binary, #4546);
+never the message itself. A sync
 reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
 caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
 are carried over unchanged. The runtime completes a streamed part in place, so every message from the

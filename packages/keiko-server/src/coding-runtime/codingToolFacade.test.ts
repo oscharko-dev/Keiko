@@ -908,6 +908,51 @@ describe("CodingToolFacade", () => {
     expect(other).not.toHaveProperty("guidance");
   });
 
+  // Lab T17 on OpenCode 2.4.1 (#4546): a commit Git could not sign was repeated until the deadline.
+  // The result now tells the model that nothing was committed and that only the person can repair
+  // the signing setup; the plain execution failure keeps its bare code.
+  it("tells the model not to retry a commit Git could not sign (#4546)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-unsigned",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "failed",
+      reason: "signing-failed",
+      recordedAt: "2026-11-24T19:41:53.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const propose = (): ReturnType<typeof subject.execute> =>
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+        capability,
+      });
+
+    const result = await propose();
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "failed", reason: "signing-failed" },
+      guidance: expect.stringContaining("Do not retry this commit") as string,
+    });
+    expect((result as { readonly guidance?: string }).guidance).toContain("nothing was committed");
+
+    verifiedCommit.reason = "execution-failed";
+    expect(await propose()).not.toHaveProperty("guidance");
+  });
+
   // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier
   // could not run on this host and named the shell instead, and the model, reading only
   // `verification-missing` on each commit, restaged and re-proposed until the deadline. The refusal

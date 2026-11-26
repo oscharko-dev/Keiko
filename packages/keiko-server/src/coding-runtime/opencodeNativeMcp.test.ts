@@ -62,6 +62,7 @@ describe("the MCP servers a native run admits (#3903)", () => {
         servers: {
           docs: {
             type: "local",
+            pool: false,
             command: [
               "/usr/bin/env",
               "-i",
@@ -106,6 +107,7 @@ describe("the MCP servers a native run admits (#3903)", () => {
     expect(admission.refusedLocalServerCount).toBe(0);
     expect(admission.config.servers.tracker).toEqual({
       type: "remote",
+      pool: false,
       url: "https://tracker.example.test/mcp",
       oauth: false,
     });
@@ -126,6 +128,7 @@ describe("the MCP servers a native run admits (#3903)", () => {
     });
     expect(full.config.servers.tracker).toEqual({
       type: "remote",
+      pool: false,
       url: "https://tracker.example.test/mcp",
       oauth: false,
     });
@@ -143,6 +146,7 @@ describe("the MCP servers a native run admits (#3903)", () => {
     });
     expect(admission.config.servers.issues).toEqual({
       type: "remote",
+      pool: false,
       url: "https://issues.example.test/mcp",
       oauth: {
         auth_server_metadata_url: VALIDATED.metadataUrl,
@@ -214,6 +218,7 @@ describe("the MCP servers a native run admits (#3903)", () => {
     expect(relayed.config.servers).toEqual({
       wiki: {
         type: "remote",
+        pool: false,
         url: relay.url,
         oauth: false,
         headers: { "X-Keiko-CSRF": "1", "X-Keiko-Mcp-Relay": "relay-capability" },

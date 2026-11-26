@@ -69,3 +69,14 @@ it("loads browser approval validation only after a concealed private skill read"
   expect(hook.result.current.view).toEqual(empty);
   expect(hook.result.current.connectionRequired).toBe(true);
 });
+
+// #4492 review: Enter waits while the selection loads, so a failed first read must end the loading
+// state, or the person would wait on "Loading skills…" for a read that already failed.
+it("ends the loading state when the first selection read fails", async () => {
+  skills.read.mockRejectedValueOnce(new ApiError("UNAVAILABLE", "Unavailable", 503));
+  const hook = renderHook(() => useChatMarkdownSkill("failed-first-read"));
+  expect(hook.result.current.busy).toBe(true);
+  await waitFor(() => expect(hook.result.current.failed).toBe(true));
+  expect(hook.result.current.busy).toBe(false);
+  expect(hook.result.current.view).toBeUndefined();
+});

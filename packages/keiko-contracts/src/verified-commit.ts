@@ -42,6 +42,9 @@ export const VERIFIED_COMMIT_REASONS = [
   "policy-block",
   "preflight-block",
   "execution-failed",
+  // #4546 (lab T17): Git could not sign the commit, so it refused it before HEAD moved. Only the
+  // person can repair the signing setup; repeating the commit cannot.
+  "signing-failed",
   "execution-uncertain",
   "restart-reconciliation",
   "completed",
@@ -119,7 +122,7 @@ const STATUS_REASONS: Readonly<Record<VerifiedCommitStatus, readonly VerifiedCom
     "preflight-block",
     "buffers-dirty",
   ],
-  failed: ["execution-failed"],
+  failed: ["execution-failed", "signing-failed"],
   "recovery-required": ["execution-uncertain", "restart-reconciliation"],
   "verification-failed": ["verification-missing", "candidate-not-staged", "verification-failed"],
   drift: ["verification-stale", "candidate-drift", "repository-drift"],

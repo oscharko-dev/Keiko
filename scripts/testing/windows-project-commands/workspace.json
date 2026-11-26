@@ -1,0 +1,119 @@
+{
+  "note": "The workspace and its linked worktree writable for the tree; no network.",
+  "path": ["C:\\Program Files\\nodejs", "C:\\Program Files\\Git\\cmd"],
+  "cwd": "${home}\\keiko-4493\\ws",
+  "grants": [
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\ws"
+    },
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\ws-worktree"
+    }
+  ],
+  "steps": [
+    {
+      "id": "npm-test",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npm.cmd test"]
+    },
+    {
+      "id": "test-output-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\out.txt"
+    },
+    {
+      "id": "git-status",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["status", "--porcelain"]
+    },
+    {
+      "id": "git-diff",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["diff", "--stat"]
+    },
+    {
+      "id": "git-log",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["log", "--oneline", "-1"]
+    },
+    {
+      "id": "git-worktree-status",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["status", "--porcelain"],
+      "cwd": "${home}\\keiko-4493\\ws-worktree"
+    },
+    {
+      "id": "git-worktree-log",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["log", "--oneline", "-1"],
+      "cwd": "${home}\\keiko-4493\\ws-worktree"
+    },
+    {
+      "id": "npm-install-registry",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": [
+        "/d",
+        "/s",
+        "/c",
+        "npm.cmd install is-number@7.0.0 --no-audit --no-fund --fetch-retries=0 --fetch-timeout=10000"
+      ],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "env-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\.env"
+    },
+    {
+      "id": "env-denied-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\.env.denied"
+    },
+    {
+      "id": "env-denied-write",
+      "kind": "write",
+      "path": "${home}\\keiko-4493\\ws\\.env.denied"
+    },
+    {
+      "id": "env-created-after-launch-write",
+      "kind": "write",
+      "path": "${home}\\keiko-4493\\ws\\.env.later"
+    },
+    {
+      "id": "env-created-after-launch-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\.env.later"
+    },
+    {
+      "id": "env-denied-rename",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["-e", "require('fs').renameSync('.env.denied','renamed.txt')"]
+    },
+    {
+      "id": "env-denied-renamed-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\renamed.txt"
+    },
+    {
+      "id": "plain-file-renamed-to-env",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "-e",
+        "require('fs').writeFileSync('plain.txt','x');require('fs').renameSync('plain.txt','.env.renamed');console.log(require('fs').readFileSync('.env.renamed','utf8'))"
+      ]
+    },
+    {
+      "id": "detached-child",
+      "kind": "detached",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["-e", "setInterval(()=>{},1000)", "${marker}"]
+    },
+    {
+      "id": "outside-workspace-write",
+      "kind": "write",
+      "path": "${home}\\keiko-4493\\outside.txt"
+    }
+  ]
+}

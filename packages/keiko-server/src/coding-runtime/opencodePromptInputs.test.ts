@@ -869,7 +869,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
   it("names a built-in command in the log and any other command by the digest of its name", () => {
     const sink = createBufferedServerLogSink();
 
-    for (const name of ["init", "review", "git:commit", "Review"]) {
+    for (const name of ["init", "review", "automation", "git:commit", "Review"]) {
       recordPromptInputs(
         sink,
         "run-1",
@@ -881,6 +881,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
     expect(sink.events.map((event) => (event as { extra?: unknown }).extra)).toMatchObject([
       { command: "init", commandArgumentBytes: 5 },
       { command: "review", commandArgumentBytes: 5 },
+      { command: "automation", commandArgumentBytes: 5 },
       {
         command: "other",
         commandDigest: createHash("sha256").update("git:commit", "utf8").digest("hex"),

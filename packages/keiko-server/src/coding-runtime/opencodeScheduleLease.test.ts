@@ -15,7 +15,7 @@ import {
 
 /**
  * #4271 (ADR-0137 D10): Keiko's hold on the runtime's scheduler lease. `claimLeader` below is the
- * pinned runtime's claim, transcribed from OpenCode 2.2.5: it takes the lease only when the row is
+ * pinned runtime's claim, transcribed from OpenCode 2.4.1 (#4546; the 2.2.5 key was `schedule:leader`): it takes the lease only when the row is
  * absent, names itself, or has lapsed. The real runtime's behaviour is proven in the real-binary
  * suite; this pins the row Keiko writes against that rule.
  */
@@ -37,7 +37,7 @@ function database(options: { readonly scheduler?: boolean } = {}): string {
         "CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT, time_created INTEGER, time_updated INTEGER)",
       );
       db.exec(
-        'CREATE TABLE schedule (id TEXT PRIMARY KEY, session_id TEXT, status TEXT, run_count INTEGER, "check" TEXT)',
+        "CREATE TABLE automation (id TEXT PRIMARY KEY, session_id TEXT, name TEXT, status TEXT, run_count INTEGER, trigger TEXT, action TEXT, state TEXT, event_position TEXT, last_output TEXT)",
       );
     }
   } finally {
@@ -76,25 +76,38 @@ function lease(path: string): unknown {
   }
 }
 
+const EVERY = JSON.stringify({ type: "every", every: "30 minutes" });
+
+function prompt(session: string): string {
+  return JSON.stringify({ type: "prompt", prompt: "x", to: { session } });
+}
+
 function addSchedule(
   path: string,
   id: string,
   sessionId: string | null,
   status: string,
   runCount: number,
-  check: string | null = null,
+  action: string = prompt(SESSION),
+  trigger: string = EVERY,
 ): void {
   const db = new DatabaseSync(path);
   try {
     db.prepare(
-      'INSERT INTO schedule (id, session_id, status, run_count, "check") VALUES (?, ?, ?, ?, ?)',
-    ).run(id, sessionId, status, runCount, check);
+      "INSERT INTO automation (id, session_id, status, run_count, action, trigger) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(id, sessionId, status, runCount, action, trigger);
   } finally {
     db.close();
   }
 }
 
 describe("Keiko's scheduler hold", () => {
+  // The key belongs to the runtime (`automation:leader` since 2.3.1), so it is a literal here: a
+  // test that read it from production would move together with a wrong key (#4546 review).
+  it("holds the runtime's own election key", () => {
+    expect(SCHEDULER_LEASE_KEY).toBe("automation:leader");
+  });
+
   it("keeps the runtime from claiming the lease until Keiko releases it", () => {
     const path = database();
     const now = Date.now();
@@ -148,22 +161,25 @@ describe("Keiko's scheduler hold", () => {
   });
 });
 
-describe("reading the session's schedules", () => {
+describe("reading the session's automations", () => {
   it("sums run counts, counts active rows and the rows Keiko never admits", () => {
     const path = database();
-    addSchedule(path, "sch_a", SESSION, "active", 2);
-    addSchedule(path, "sch_b", SESSION, "paused", 1);
-    addSchedule(path, "sch_c", "ses_other", "active", 0);
-    addSchedule(path, "sch_d", null, "active", 0);
-    addSchedule(path, "sch_e", SESSION, "active", 0, '{"type":"shell"}');
+    addSchedule(path, "aut_a", SESSION, "active", 2);
+    addSchedule(path, "aut_b", SESSION, "paused", 1);
+    addSchedule(path, "aut_c", "ses_other", "active", 0);
+    addSchedule(path, "aut_d", null, "active", 0);
+    addSchedule(path, "aut_e", SESSION, "active", 0, '{"type":"shell","command":"id"}');
+    addSchedule(path, "aut_f", SESSION, "active", 0, '{"type":"code","code":"return"}');
+    addSchedule(path, "aut_g", SESSION, "active", 0, prompt(SESSION), '{"type":"event"}');
+    addSchedule(path, "aut_h", SESSION, "active", 0, prompt("ses_other"));
 
-    expect(readScheduleFireState(path, SESSION)).toEqual({ runCount: 3, unadmitted: 3, active: 2 });
+    expect(readScheduleFireState(path, SESSION)).toEqual({ runCount: 3, unadmitted: 6, active: 5 });
   });
 
   it("removes every inherited schedule from a fork's database", () => {
     const path = database();
-    addSchedule(path, "sch_a", SESSION, "active", 0);
-    addSchedule(path, "sch_b", SESSION, "paused", 0);
+    addSchedule(path, "aut_a", SESSION, "active", 0);
+    addSchedule(path, "aut_b", SESSION, "paused", 0);
 
     expect(removeInheritedSchedules(path)).toBe(2);
     expect(readScheduleFireState(path, SESSION)).toEqual({ runCount: 0, unadmitted: 0, active: 0 });

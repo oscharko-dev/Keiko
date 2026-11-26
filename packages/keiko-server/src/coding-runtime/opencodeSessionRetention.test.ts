@@ -1,3 +1,4 @@
+import { NATIVE_SESSION_ANCESTRY_MAX_DEPTH } from "./opencodeNativeSessionTree.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -64,6 +65,8 @@ interface RuntimeDatabaseOptions {
   readonly rows?: Readonly<Record<string, number>>;
   readonly session?: Readonly<Record<string, unknown>>;
   readonly extraSessions?: number;
+  /** Further sessions by id, each with its own row overrides (a subagent session names its parent). */
+  readonly sessions?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly messages?: number;
   /** Tables the runtime of this fixture does not have. */
   readonly without?: readonly string[];
@@ -83,15 +86,20 @@ function runtimeDatabase(path: string, options: RuntimeDatabaseOptions = {}): vo
   try {
     createTables(database, options.without ?? [], options.schema ?? VERSION);
     if (options.alter !== undefined) database.exec(options.alter);
-    insertSession(database, SESSION_ID, options.session ?? {});
-    for (let index = 0; index < (options.extraSessions ?? 0); index += 1) {
-      insertSession(database, `ses_extra_${String(index)}`, {});
-    }
+    insertSessions(database, options);
     insertMessages(database, options.messages ?? 3);
     insertRows(database, options.rows ?? {});
   } finally {
     database.close();
   }
+}
+
+function insertSessions(database: DatabaseSync, options: RuntimeDatabaseOptions): void {
+  insertSession(database, SESSION_ID, options.session ?? {});
+  for (let index = 0; index < (options.extraSessions ?? 0); index += 1) {
+    insertSession(database, `ses_extra_${String(index)}`, {});
+  }
+  for (const [id, row] of Object.entries(options.sessions ?? {})) insertSession(database, id, row);
 }
 
 function createTables(database: DatabaseSync, without: readonly string[], version: string): void {
@@ -354,9 +362,11 @@ describe("retaining a settled run's session state", () => {
     ["a credential", { rows: { credential: 1 } }, "credential-present"],
     ["an account", { rows: { account: 1 } }, "credential-present"],
     ["a control account", { rows: { control_account: 1 } }, "credential-present"],
-    // #4271: a schedule is retained only as the session's own, checked row; one of no session is
-    // state Keiko never admits.
-    ["a schedule of no session", { rows: { schedule: 1 } }, "schema-unknown", "schedule-rows"],
+    // #4271, #4546: an automation is retained only as the session's own prompt on a time, an
+    // interval or a cron; one of no session is state Keiko never admits.
+    ["an automation of no session", { rows: { automation: 1 } }, "schema-unknown", "schedule-rows"],
+    // #4546: a linked machine's key is a credential-like row nothing in a native run writes.
+    ["a linked machine", { rows: { machine: 1 } }, "schema-unknown", "machine-rows"],
     ["an inbox entry", { rows: { session_inbox: 1 } }, "pending-input"],
     ["a suspended session", { session: { time_suspended: 5 } }, "pending-input"],
     ["a staged undo", { session: { revert: '{"messageID":"msg_1"}' } }, "revert-staged"],
@@ -370,6 +380,55 @@ describe("retaining a settled run's session state", () => {
     ["a child session", { session: { parent_id: "ses_parent" } }, "session-mismatch"],
     ["an archived session", { session: { time_archived: 4 } }, "session-mismatch"],
     ["a second session", { extraSessions: 1 }, "session-mismatch"],
+    // #4546: a subagent session is retained only as the run's session's own descendant, under the
+    // same checks as the run's session.
+    [
+      "a subagent session with a permission ruleset",
+      { sessions: { ses_child: { parent_id: SESSION_ID, permission: '[{"action":"*"}]' } } },
+      "grant-present",
+    ],
+    [
+      "a suspended subagent session",
+      { sessions: { ses_child: { parent_id: SESSION_ID, time_suspended: 5 } } },
+      "pending-input",
+    ],
+    [
+      "a subagent session with a staged undo",
+      { sessions: { ses_child: { parent_id: SESSION_ID, revert: '{"messageID":"msg_1"}' } } },
+      "revert-staged",
+    ],
+    [
+      "a subagent session in another directory",
+      { sessions: { ses_child: { parent_id: SESSION_ID, directory: "/elsewhere" } } },
+      "session-mismatch",
+    ],
+    [
+      "a session whose parent is not in the database",
+      { sessions: { ses_orphan: { parent_id: "ses_gone" } } },
+      "session-mismatch",
+    ],
+    [
+      "two sessions that are each other's parent",
+      { sessions: { ses_a: { parent_id: "ses_b" }, ses_b: { parent_id: "ses_a" } } },
+      "session-mismatch",
+    ],
+    [
+      "a subagent session deeper than the live session tree's bound",
+      {
+        sessions: Object.fromEntries(
+          Array.from({ length: NATIVE_SESSION_ANCESTRY_MAX_DEPTH + 1 }, (_unused, index) => [
+            `ses_depth_${String(index)}`,
+            { parent_id: index === 0 ? SESSION_ID : `ses_depth_${String(index - 1)}` },
+          ]),
+        ),
+      },
+      "session-mismatch",
+    ],
+    [
+      "a subagent session with an id the runtime does not mint",
+      { sessions: { "child-1": { parent_id: SESSION_ID } } },
+      "session-mismatch",
+    ],
     ["an unknown schema", { without: ["permission"] }, "schema-unknown", "audit-unreadable"],
     // #3908 AC4: a schema beyond the producer's persistence contract is state no check examined.
     [
@@ -422,6 +481,36 @@ describe("retaining a settled run's session state", () => {
     // A `schema-unknown` refusal names the audit check that failed (#3904), never content.
     expect(result).toEqual({ ok: false, reason, ...(check === undefined ? {} : { check }) });
     expect(entryNames(f)).toEqual([]);
+  });
+
+  // #4546: a turn that ran subagents leaves their sessions under the run's session. The task keeps
+  // its native session all the same; only the run's own session's messages are counted.
+  it("retains the run's session with the subagent sessions its turns spawned", () => {
+    const f = fixture({
+      sessions: {
+        ses_child: { parent_id: SESSION_ID },
+        ses_grandchild: { parent_id: "ses_child" },
+        ...Object.fromEntries(
+          Array.from({ length: NATIVE_SESSION_ANCESTRY_MAX_DEPTH - 2 }, (_unused, index) => [
+            `ses_deep_${String(index)}`,
+            { parent_id: index === 0 ? "ses_grandchild" : `ses_deep_${String(index - 1)}` },
+          ]),
+        ),
+      },
+    });
+
+    expect(retain(f)).toMatchObject({
+      ok: true,
+      messageCount: 3,
+      subagentSessionCount: NATIVE_SESSION_ANCESTRY_MAX_DEPTH,
+    });
+    expect(checkout(f).result).toMatchObject({ ok: true, sessionId: SESSION_ID, messageCount: 3 });
+  });
+
+  it("refuses a run whose own session is a subagent session of another root", () => {
+    const f = fixture({ session: { parent_id: "ses_root" }, sessions: { ses_root: {} } });
+
+    expect(retain(f)).toEqual({ ok: false, reason: "session-mismatch" });
   });
 
   it("refuses a runtime version without a producer-derived persistence contract", () => {
@@ -1086,7 +1175,7 @@ describe("auditing a database directly", () => {
 
     expect(
       auditDatabase(path, { sessionId: SESSION_ID, directory: WORKSPACE, version: VERSION }),
-    ).toEqual({ ok: true, messageCount: 7 });
+    ).toEqual({ ok: true, messageCount: 7, subagentSessionCount: 0 });
   });
 
   it("treats an unreadable file as an unknown schema rather than a clean one", () => {
@@ -1116,7 +1205,9 @@ describe("auditing a database directly", () => {
     runtimeDatabase(path, { messages: 2, session: { directory: stored } });
 
     expect(auditDatabase(path, { sessionId: SESSION_ID, directory, version: VERSION })).toEqual(
-      accepted ? { ok: true, messageCount: 2 } : { ok: false, reason: "session-mismatch" },
+      accepted
+        ? { ok: true, messageCount: 2, subagentSessionCount: 0 }
+        : { ok: false, reason: "session-mismatch" },
     );
   });
 });

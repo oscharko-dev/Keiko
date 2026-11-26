@@ -46,6 +46,8 @@ const FAILURE_CODES = new Set([
   "runtime-supervisor-grants-capability",
   "runtime-supervisor-gateway-connect",
   "runtime-supervisor-gateway-admit",
+  "runtime-supervisor-no-desktop",
+  "runtime-supervisor-image-path",
   "runtime-supervisor-refused",
   "provider-failed",
   "stream-incomplete",

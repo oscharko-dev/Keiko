@@ -1538,6 +1538,7 @@ export type {
   CodingWorkbenchScheduleControlRequest,
   CodingWorkbenchScheduleControlResponse,
   CodingWorkbenchSchedulesResponse,
+  CodingWorkbenchScheduleChangedStatus,
   CodingWorkbenchScheduleStatus,
   CodingWorkbenchScheduleWait,
 } from "./coding-workbench-runtime-schedules.js";
@@ -2426,6 +2427,9 @@ export type {
   OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
+  WindowsStepDrive,
+  WindowsStepSupervisor,
+  WindowsStepSupervisorCopy,
   SandboxAttestation,
   CommandRule,
   CommandRunInput,

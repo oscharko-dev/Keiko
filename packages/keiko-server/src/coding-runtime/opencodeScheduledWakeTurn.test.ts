@@ -27,6 +27,31 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+const PROMPT_TO_SESSION = (session: string): string =>
+  JSON.stringify({ type: "prompt", prompt: "Check the build", to: { session } });
+const EVERY_HALF_HOUR = JSON.stringify({ type: "every", every: "30 minutes" });
+
+/** One automation row of the 2.4.x shape: a prompt into `session` every 30 minutes by default. */
+function automation(
+  id: string,
+  session: string,
+  status: string,
+  runCount: number,
+  overrides: { readonly trigger?: string; readonly action?: string } = {},
+): string {
+  const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const values = [
+    quote(id),
+    quote(session),
+    quote(status),
+    quote("Check the build"),
+    quote(overrides.trigger ?? EVERY_HALF_HOUR),
+    quote(overrides.action ?? PROMPT_TO_SESSION(session)),
+    String(runCount),
+  ];
+  return `INSERT INTO automation (id, session_id, status, name, trigger, action, run_count) VALUES (${values.join(", ")})`;
+}
+
 interface Harness {
   readonly run: ScheduledWakeRun & { ready: boolean };
   readonly database: string;
@@ -48,7 +73,7 @@ function harness(options: { readonly scheduler?: boolean } = {}): Harness {
         "CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT, time_created INTEGER, time_updated INTEGER)",
       );
       db.exec(
-        'CREATE TABLE schedule (id TEXT PRIMARY KEY, session_id TEXT, status TEXT, run_count INTEGER, "check" TEXT)',
+        "CREATE TABLE automation (id TEXT PRIMARY KEY, session_id TEXT, status TEXT, name TEXT, trigger TEXT, action TEXT, run_count INTEGER, state TEXT, event_position TEXT, last_output TEXT)",
       );
     }
   } finally {
@@ -171,6 +196,17 @@ describe("holding a run's scheduler", () => {
     expect(existsSync(h.database)).toBe(false);
   });
 
+  // A native runtime loads the automation plugin, so its bound database has the scheduler tables;
+  // one without them would create them later and lead its scheduler unheld (#4546 review).
+  it("fails a native run's readiness when its database has no scheduler to hold", () => {
+    const h = harness({ scheduler: false });
+
+    expect(() => {
+      holdRunScheduler(h.sink, h.run, "hold", { required: true });
+    }).toThrow();
+    expect(lines(h)).toEqual([expect.objectContaining({ action: "hold", outcome: "failed" })]);
+  });
+
   it("records a missing database as absent where no hold is required", () => {
     const h = harness();
     rmSync(h.database, { force: true });
@@ -203,7 +239,7 @@ describe("holding a run's scheduler", () => {
 describe("the wake run's turn", () => {
   it("releases the lease, and holds it again once the schedule fired", async () => {
     const h = harness();
-    exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 2, NULL)", SESSION);
+    exec(h.database, automation("aut_a", SESSION, "active", 2));
     holdRunScheduler(h.sink, h.run, "hold");
     const driven = drivenSleep();
 
@@ -223,7 +259,7 @@ describe("the wake run's turn", () => {
       '{"owner":"runtime","until":1}',
       SCHEDULER_LEASE_KEY,
     );
-    exec(h.database, "UPDATE schedule SET run_count = 3");
+    exec(h.database, "UPDATE automation SET run_count = 3");
     h.clock.value = 2_500;
     await driven.next();
     await settled(h, 3);
@@ -238,7 +274,7 @@ describe("the wake run's turn", () => {
 
   it("holds the lease again and cancels the turn when nothing fired in time", async () => {
     const h = harness();
-    exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 0, NULL)", SESSION);
+    exec(h.database, automation("aut_a", SESSION, "active", 0));
     const driven = drivenSleep();
 
     startScheduledWakeTurn(h.run, {
@@ -264,7 +300,7 @@ describe("the wake run's turn", () => {
 
   it("holds the lease again, records the failure and cancels the turn when the schedules cannot be read", async () => {
     const h = harness();
-    exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 0, NULL)", SESSION);
+    exec(h.database, automation("aut_a", SESSION, "active", 0));
     const driven = drivenSleep();
 
     startScheduledWakeTurn(h.run, {
@@ -272,9 +308,9 @@ describe("the wake run's turn", () => {
       sleep: driven.sleep,
       now: () => h.clock.value,
     });
-    // The runtime's schedule table changes shape while the turn waits for it to fire.
-    exec(h.database, "DROP TABLE schedule");
-    exec(h.database, "CREATE TABLE schedule (id TEXT PRIMARY KEY)");
+    // The runtime's automation table changes shape while the turn waits for it to fire.
+    exec(h.database, "DROP TABLE automation");
+    exec(h.database, "CREATE TABLE automation (id TEXT PRIMARY KEY)");
     await driven.next();
     await settled(h, 2);
 
@@ -291,7 +327,7 @@ describe("the wake run's turn", () => {
 
   it("records a run that closed before its schedule fired, and touches nothing", async () => {
     const h = harness();
-    exec(h.database, "INSERT INTO schedule VALUES ('sch_a', ?, 'active', 0, NULL)", SESSION);
+    exec(h.database, automation("aut_a", SESSION, "active", 0));
     const driven = drivenSleep();
 
     startScheduledWakeTurn(h.run, { activityLog: h.sink, sleep: driven.sleep });
@@ -310,19 +346,36 @@ describe("the wake run's turn", () => {
   it.each([
     [
       "a schedule of another session",
-      "INSERT INTO schedule VALUES ('sch_b', 'ses_other', 'active', 0, NULL)",
+      automation("aut_b", "ses_other", "active", 0),
       "unadmitted-rows",
     ],
     [
-      "a schedule gated by a check",
-      `INSERT INTO schedule VALUES ('sch_b', '${SESSION}', 'active', 0, '{"type":"shell"}')`,
+      "a shell action",
+      automation("aut_b", SESSION, "active", 0, {
+        action: JSON.stringify({ type: "shell", command: "env" }),
+      }),
       "unadmitted-rows",
     ],
     [
-      "no active schedule",
-      "INSERT INTO schedule VALUES ('sch_b', 'ses_1', 'paused', 0, NULL)",
-      "no-active-schedule",
+      "a Code Mode program",
+      automation("aut_b", SESSION, "active", 0, {
+        action: JSON.stringify({ type: "code", code: "return 1" }),
+      }),
+      "unadmitted-rows",
     ],
+    [
+      "an MCP event trigger",
+      automation("aut_b", SESSION, "active", 0, {
+        trigger: JSON.stringify({ type: "event", server: "jira", event: "issue.updated" }),
+      }),
+      "unadmitted-rows",
+    ],
+    [
+      "a prompt into another session",
+      automation("aut_b", SESSION, "active", 0, { action: PROMPT_TO_SESSION("ses_other") }),
+      "unadmitted-rows",
+    ],
+    ["no active schedule", automation("aut_b", SESSION, "paused", 0), "no-active-schedule"],
   ] as const)("keeps the lease and cancels the turn for %s", (_name, sql, reason) => {
     const h = harness();
     holdRunScheduler(h.sink, h.run, "hold");

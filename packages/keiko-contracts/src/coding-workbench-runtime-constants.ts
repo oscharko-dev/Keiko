@@ -139,13 +139,18 @@ export type CodingWorkbenchRuntimeFailureCode =
   // folder could not be opened. `runtime-supervisor-grants-capability`: the managed worktree's
   // capability could not be granted. `runtime-supervisor-gateway-connect` and
   // `runtime-supervisor-gateway-admit`: the runtime gateway service could not be reached, or did not
-  // admit the run. `runtime-supervisor-refused`: the supervisor refused at a step with no sentence of
-  // its own. Each carries no path, identifier or Windows error text.
+  // admit the run. `runtime-supervisor-no-desktop` (#4495): Keiko runs without a signed-in desktop
+  // session (over SSH or as a service), where Windows starts no confined process.
+  // `runtime-supervisor-image-path` (#4495): Keiko's folder path is too long for the runtime to be
+  // started from it. `runtime-supervisor-refused`: the supervisor refused at a step with no sentence
+  // of its own. Each carries no path, identifier or Windows error text.
   | "runtime-supervisor-grants-acl"
   | "runtime-supervisor-grants-directory"
   | "runtime-supervisor-grants-capability"
   | "runtime-supervisor-gateway-connect"
   | "runtime-supervisor-gateway-admit"
+  | "runtime-supervisor-no-desktop"
+  | "runtime-supervisor-image-path"
   | "runtime-supervisor-refused";
 
 /**
@@ -258,5 +263,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "runtime-supervisor-grants-capability",
     "runtime-supervisor-gateway-connect",
     "runtime-supervisor-gateway-admit",
+    "runtime-supervisor-no-desktop",
+    "runtime-supervisor-image-path",
     "runtime-supervisor-refused",
   ] as const);

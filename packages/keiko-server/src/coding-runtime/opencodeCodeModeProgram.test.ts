@@ -139,6 +139,27 @@ describe("the Code Mode program itself", () => {
     );
   });
 
+  // 2.4.1 runs the tool a hook renames a nested call to, and fires no before hook for it (#4546).
+  // Only plugin code can rename a call, so the boundary holds only while no plugin Keiko generates
+  // ever writes a hook event's tool: no assignment to it, and reflection only on its own objects.
+  it("generates no plugin that renames a tool call", () => {
+    const renames = [
+      /\.tool\s*=(?!=)/u,
+      /\[\s*["'`]tool["'`]\s*\]\s*=(?!=)/u,
+      /(?:Object\.assign|Reflect\.set|Object\.defineProperty)\((?!environment,)/u,
+    ];
+    const renaming = ['      event.tool = "bash";', '      event["tool"] = "bash";'];
+    for (const line of [...renaming, "      Object.assign(event, { tool: 1 });"])
+      expect(renames.some((pattern) => pattern.test(line))).toBe(true);
+    const profiles = ["native", "direct"] as const;
+    const sources = profiles.flatMap((profile) =>
+      Object.values(createGeneratedOpenCodeV2Plugins(profile)),
+    );
+    expect(sources.length).toBeGreaterThanOrEqual(6);
+    for (const source of sources)
+      for (const pattern of renames) expect(source).not.toMatch(pattern);
+  });
+
   it("keeps sending the program for review by default, and for a pin that does not vouch", () => {
     expect(createGeneratedOpenCodeNativePolicyPlugin()).toContain("const PROGRAM_REVIEWED = true;");
     expect(createGeneratedOpenCodeNativePolicyPlugin({ programReviewed: true })).toContain(

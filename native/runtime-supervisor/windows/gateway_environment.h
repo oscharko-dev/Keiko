@@ -35,6 +35,9 @@ extern const struct keiko_environment_target KEIKO_ENVIRONMENT_USER;
 
 /* This process as a holder. */
 int keiko_environment_holder_self(_Out_ struct keiko_environment_holder *holder);
+/* Whether the holder's process still runs. A process that cannot be opened for a reason other than
+ * its absence counts as alive, so an unproven death never releases what the holder owns. */
+int keiko_environment_holder_alive(_In_ const struct keiko_environment_holder *holder);
 
 /* Records the holder and the entries it removes, then removes the key's application-package read
  * entries and verifies none is left. Any failure unrecords the holder, restores what it removed when

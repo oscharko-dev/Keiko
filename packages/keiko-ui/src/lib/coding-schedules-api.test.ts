@@ -68,11 +68,11 @@ describe("controlCodingSchedule", () => {
     "posts %s with the task id body",
     async (action) => {
       vi.mocked(bffFetchJson).mockResolvedValue({ status: "paused" });
-      await expect(controlCodingSchedule("task-1", "sch_abc", action)).resolves.toEqual({
+      await expect(controlCodingSchedule("task-1", "aut_abc", action)).resolves.toEqual({
         status: "paused",
       });
       expect(codingAppSessionPairingSettled).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(bffFetchJson).mock.calls[0]?.[0]).toBe(`${ROOT}/sch_abc/${action}`);
+      expect(vi.mocked(bffFetchJson).mock.calls[0]?.[0]).toBe(`${ROOT}/aut_abc/${action}`);
       expect(lastInit().method).toBe("POST");
       expect(JSON.parse(lastInit().body as string)).toEqual({ taskId: "task-1" });
       expect(lastInit().signal).toBeInstanceOf(AbortSignal);
@@ -90,6 +90,6 @@ describe("controlCodingSchedule", () => {
   it("propagates a failure", async () => {
     const failure = new Error("boom");
     vi.mocked(bffFetchJson).mockRejectedValue(failure);
-    await expect(controlCodingSchedule("task-1", "sch_a", "pause")).rejects.toBe(failure);
+    await expect(controlCodingSchedule("task-1", "aut_a", "pause")).rejects.toBe(failure);
   });
 });
