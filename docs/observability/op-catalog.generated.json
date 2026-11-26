@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eae7839b9b1be2b9d5737255390c9b0536fc10c0b4db763730047d9b0af377d3",
+    "catalogDigest": "8a3ec933d383805d4df8a6f243e68413915dc3eab8268e0dd3843494b6fe40b7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10250,6 +10250,21 @@
             "dataClass": "count",
             "required": false
           },
+          "staleHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "misplacedHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unreadableHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "resultPathSha256": {
             "type": "string-array",
             "dataClass": "digest",
@@ -10286,7 +10301,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:216"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:219"
         ]
       },
       {
@@ -10316,7 +10331,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:24",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:291"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:294"
         ]
       },
       {
@@ -14276,9 +14291,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-tool.denied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:239",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:261",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1100"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1132"
         ]
       },
       {
@@ -17984,6 +17999,24 @@
             "required": false,
             "values": ["pending", "running", "failed", "succeeded", "denied"]
           },
+          "refusedFromState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["absent", "pending", "running", "succeeded", "failed", "denied", "cancelled"]
+          },
+          "refusedToState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["pending", "running", "succeeded", "failed", "denied", "cancelled"]
+          },
+          "refusedSignalSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["opencode", "keiko"]
+          },
           "rejection": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -18010,13 +18043,13 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.safe-activity.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:110",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:111",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:759",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:913",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:994",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1066",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1120"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:783",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:938",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1020",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1098",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1153"
         ]
       },
       {
@@ -19156,9 +19189,9 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.tool.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:270",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:292",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:719"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:743"
         ]
       },
       {
@@ -51382,8 +51415,8 @@
         "failureClasses": ["tool-catalog-dispatch-unbound"],
         "proofIds": ["tool-catalog.dispatch-unbound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:86",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:974"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:87",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:980"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -77272,6 +77305,12 @@
                   "required": false
                 },
                 {
+                  "name": "misplacedHitsSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outputBytes",
                   "type": "integer",
                   "dataClass": "count",
@@ -77326,6 +77365,12 @@
                   "required": false
                 },
                 {
+                  "name": "staleHitsSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "state",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -77345,6 +77390,12 @@
                 },
                 {
                   "name": "unreadableFilesSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "unreadableHitsSkipped",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -85698,6 +85749,24 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "refusedFromState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "refusedSignalSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "refusedToState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "rejection",
@@ -126117,7 +126186,7 @@
     {
       "op": "coding-runtime.native-tool.denied",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:242",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:264",
       "package": "keiko-server"
     },
     {
@@ -126429,20 +126498,20 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:113",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:114",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2320",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2377",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2338",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2395",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126648,7 +126717,7 @@
     {
       "op": "coding-runtime.tool.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:273",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:295",
       "package": "keiko-server"
     },
     {
@@ -129206,7 +129275,7 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:727",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:733",
       "package": "keiko-server"
     },
     {
@@ -129270,7 +129339,7 @@
     {
       "op": "tool-catalog.dispatch-unbound",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:89",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:90",
       "package": "keiko-server"
     },
     {

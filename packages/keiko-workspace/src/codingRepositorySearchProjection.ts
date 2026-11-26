@@ -10,13 +10,42 @@ interface SourceWindow {
   readonly endLine: number;
 }
 
-function sourceWindow(raw: string, startLine: number, endLine: number): SourceWindow {
-  const lines = raw.split("\n");
-  if (startLine > lines.length) throw new RepoSearchInvalidRangeError("line range is unavailable");
-  const actualEnd = Math.min(endLine, lines.length);
+/**
+ * One file's source, prepared once for every excerpt a search takes from it: line endings folded,
+ * the full-context redaction computed and the line offsets indexed. A search can return many hits
+ * in one file; redacting the whole file again for each of them cost seconds per search on a large
+ * generated file and blocked the event loop for the whole projection.
+ */
+export interface CodingRepositorySource {
+  readonly source: string;
+  readonly safe: string;
+  /** Offset of each line's first character, plus `source.length + 1` as the end sentinel. */
+  readonly lineStarts: readonly number[];
+}
+
+export function prepareCodingRepositorySource(raw: string): CodingRepositorySource {
+  // Windows line endings fold into LF first (#4439): the window arithmetic below counts one
+  // terminator character per line, and a CRLF copy must project exactly like its LF copy.
+  const source = normalizeSourceLineEndings(raw);
+  const lineStarts = [0];
+  for (let index = source.indexOf("\n"); index !== -1; index = source.indexOf("\n", index + 1)) {
+    lineStarts.push(index + 1);
+  }
+  lineStarts.push(source.length + 1);
+  return { source, safe: redact(source), lineStarts };
+}
+
+function sourceWindow(
+  { lineStarts }: CodingRepositorySource,
+  startLine: number,
+  endLine: number,
+): SourceWindow {
+  const lineCount = lineStarts.length - 1;
+  if (startLine > lineCount) throw new RepoSearchInvalidRangeError("line range is unavailable");
+  const actualEnd = Math.min(endLine, lineCount);
   return {
-    start: lines.slice(0, startLine - 1).reduce((size, line) => size + line.length + 1, 0),
-    end: lines.slice(0, actualEnd).reduce((size, line) => size + line.length + 1, -1),
+    start: lineStarts[startLine - 1] ?? 0,
+    end: (lineStarts[actualEnd] ?? 0) - 1,
     endLine: actualEnd,
   };
 }
@@ -66,11 +95,25 @@ export function codingRepositoryExcerpt(
   endLine: number,
   maxBytes: number,
 ): CodingRepositoryHit {
-  // Windows line endings fold into LF first (#4439): the window arithmetic below counts one
-  // terminator character per line, and a CRLF copy must project exactly like its LF copy.
-  const source = normalizeSourceLineEndings(raw);
-  const window = sourceWindow(source, startLine, endLine);
-  const safe = redact(source);
+  return codingRepositorySourceExcerpt(
+    path,
+    prepareCodingRepositorySource(raw),
+    startLine,
+    endLine,
+    maxBytes,
+  );
+}
+
+/** The excerpt of one prepared source; equal to `codingRepositoryExcerpt` on the raw text. */
+export function codingRepositorySourceExcerpt(
+  path: string,
+  prepared: CodingRepositorySource,
+  startLine: number,
+  endLine: number,
+  maxBytes: number,
+): CodingRepositoryHit {
+  const { source, safe } = prepared;
+  const window = sourceWindow(prepared, startLine, endLine);
   const projected = safeSourceWindow(source, safe, window);
   const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(projected, maxBytes);
   return {

@@ -251,4 +251,135 @@ describe("coding repository search completeness", () => {
     expect(result.metrics.skippedFiles).toBe(61);
     expect(result.truncationReasons).toContain("file-too-large");
   });
+
+  it("leaves out only the hit whose file changed after the scan", async () => {
+    const base = memFs(ROOT, {
+      "kept.html": "CodingCoverageProbe kept",
+      "changed.html": "CodingCoverageProbe before",
+    });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let changedReads = 0;
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> => {
+          if (path.endsWith("/changed.html") && ++changedReads > 1) {
+            // Same size as the scanned text, so only the verification can notice the change.
+            return Promise.resolve(new TextEncoder().encode("xxxxxxxxxxxxxxxxxxx before"));
+          }
+          return read(path, ...args);
+        },
+      },
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    expect(result.hits.map((hit) => hit.path)).toEqual(["kept.html"]);
+    expect(result.truncationReasons).toContain("io-error");
+    expect(result.diagnostics).toMatchObject({
+      staleHitsSkipped: 1,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
+    });
+  });
+
+  it("leaves out only the hit whose file disappeared after the scan", async () => {
+    const base = memFs(ROOT, {
+      "kept.html": "CodingCoverageProbe kept",
+      "removed.html": "CodingCoverageProbe removed",
+    });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let removedReads = 0;
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> =>
+          path.endsWith("/removed.html") && ++removedReads > 1
+            ? Promise.reject(Object.assign(new Error("fixture file removed"), { code: "ENOENT" }))
+            : read(path, ...args),
+      },
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    expect(result.hits.map((hit) => hit.path)).toEqual(["kept.html"]);
+    expect(result.diagnostics).toMatchObject({
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 1,
+    });
+  });
+
+  it("reads and projects a file once however many hits it holds", async () => {
+    const lines = Array.from({ length: 40 }, (_, index) =>
+      index % 4 === 0 ? `CodingCoverageProbe ${String(index)}` : `filler ${String(index)}`,
+    );
+    const base = memFs(ROOT, { "many.html": lines.join("\n") });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let reads = 0;
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> => {
+          reads += 1;
+          return read(path, ...args);
+        },
+      },
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    // One read for the scan, one for the projection of all ten hits.
+    expect(reads).toBe(2);
+    expect(result.hits).toHaveLength(10);
+    expect(result.diagnostics).toMatchObject({
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
+    });
+  });
+
+  it("counts a hit whose match moved to another line apart from a stale one", async () => {
+    const base = memFs(ROOT, {
+      "kept.html": "CodingCoverageProbe kept",
+      "moved.html": "CodingCoverageProbe before",
+    });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let movedReads = 0;
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> =>
+          path.endsWith("/moved.html") && ++movedReads > 1
+            ? // Same size, the match now on line 2 instead of the scanned line 1.
+              Promise.resolve(new TextEncoder().encode("before\nCodingCoverageProbe"))
+            : read(path, ...args),
+      },
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    expect(result.hits.map((hit) => hit.path)).toEqual(["kept.html"]);
+    expect(result.diagnostics).toMatchObject({
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 1,
+      unreadableHitsSkipped: 0,
+    });
+  });
+
+  it("returns every hit when more files hold hits than the projection keeps at once", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 6 }, (_, index) => [
+        `file-${String(index)}.html`,
+        `CodingCoverageProbe ${String(index)}\nfiller\nCodingCoverageProbe again`,
+      ]),
+    );
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: memFs(ROOT, files),
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    expect(result.hits).toHaveLength(12);
+    expect(new Set(result.hits.map((hit) => hit.path)).size).toBe(6);
+    expect(result.diagnostics).toMatchObject({
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
+    });
+  });
 });

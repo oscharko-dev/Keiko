@@ -482,6 +482,9 @@ describe("production coding repository handler composition", () => {
         state: "completed",
         filesScanned: 1,
         resultCount: 1,
+        staleHitsSkipped: 0,
+        misplacedHitsSkipped: 0,
+        unreadableHitsSkipped: 0,
         resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
       },
     });
@@ -509,6 +512,9 @@ describe("production coding repository handler composition", () => {
       reason: "none",
       filesScanned: 1,
       resultCount: 1,
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
       resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
     });
   });

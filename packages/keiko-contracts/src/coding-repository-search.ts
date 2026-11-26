@@ -127,6 +127,15 @@ export interface CodingRepositorySearchObservation {
     readonly binaryFilesSkipped: number;
     readonly oversizedFilesSkipped: number;
     readonly unreadableFilesSkipped: number;
+    /**
+     * Hits left out after the scan: their file no longer holds the match (`staleHitsSkipped`),
+     * holds it only outside the reported lines (`misplacedHitsSkipped`; with an unchanged file a
+     * line-selection defect), or could no longer be read (`unreadableHitsSkipped`). Such a hit is
+     * never shown; the search keeps its others.
+     */
+    readonly staleHitsSkipped: number;
+    readonly misplacedHitsSkipped: number;
+    readonly unreadableHitsSkipped: number;
   };
 }
 

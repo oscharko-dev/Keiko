@@ -50,6 +50,7 @@ import {
   type OpenCodeToolProfile,
 } from "../coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
+import { WORKSPACE_DISCOVERY_REFUSAL_CODES } from "../coding-runtime/codingToolReadEditPorts.js";
 import { COMMAND_RUN_MAX_DURATION_MS } from "../command-wall-time.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
@@ -666,6 +667,11 @@ const HANDLER_REFUSALS: ReadonlyMap<string, HandlerRefusal> = new Map<string, Ha
   ["workspace-read-not-found", ["invalid", "invalid-arguments"]],
   ["workspace-read-not-text", ["invalid", "invalid-arguments"]],
   ["workspace-read-too-large", ["invalid", "invalid-arguments"]],
+  // A discovery refused for the model's own request: a path outside the run, invalid arguments, or
+  // a walk past its deadline. A handler fault would open a support incident for each (#4130 lab).
+  [WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED, ["denied", "workspace-denied"]],
+  [WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST, ["invalid", "invalid-arguments"]],
+  [WORKSPACE_DISCOVERY_REFUSAL_CODES.TIMEOUT, ["timeout", "deadline-exceeded"]],
 ]);
 
 function handlerFault(

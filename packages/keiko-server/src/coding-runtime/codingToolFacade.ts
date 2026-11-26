@@ -1019,6 +1019,15 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     "workspace-read-denied":
       "This path is outside what the run may read. Do not retry it or route around the denial.",
   },
+  // #4130 lab: a refused discovery reached the model as a bare code, and it retried the same call.
+  discover: {
+    [WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED]:
+      "This directory is outside what the run may read or is excluded. Do not retry it or route around the denial; discover in another directory of the workspace.",
+    [WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST]:
+      "These discovery arguments are invalid. Pass directory as an existing folder relative to the workspace root (empty for the root, never an absolute path or ..), query as a non-empty glob or keywords, and maxResults as a whole number within the limit. Fix the arguments instead of retrying the same call.",
+    [WORKSPACE_DISCOVERY_REFUSAL_CODES.TIMEOUT]:
+      "This discovery ran out of time before it finished. Narrow it with a directory or a more specific query instead of retrying the same call.",
+  },
   verification: {
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",

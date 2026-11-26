@@ -1925,6 +1925,28 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // #4130 lab: a discovery the port refused for the model's own request names its code and the
+  // next step, like a refused read, instead of a bare failure the model retries unchanged.
+  it.each([
+    "WORKSPACE_DISCOVERY_SCOPE_DENIED",
+    "WORKSPACE_DISCOVERY_INVALID_REQUEST",
+    "WORKSPACE_DISCOVERY_TIMEOUT",
+  ])("names a discovery refused as %s to the model with its next step", async (reasonCode) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "discover", query: "target", maxResults: 10 }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode,
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      guidance: expect.stringMatching(/\S{3,}/u) as string,
+    });
+  });
+
   it.each([
     { commitProof: "recorded", unexpected: true },
     {
