@@ -389,6 +389,12 @@ runtime version for every target is 1.1.8 or higher. Keiko 1.5.5 declares
 `@oscharko-dev/keiko-coding-runtime-win32-x64` 1.1.7 in the root `optionalDependencies` beside the
 two darwin packages, so a Windows npm installation gets its runtime like a macOS one (#4068).
 
+**1.1.8 carries OpenCode 2.4.1 for every target (#4491).** All three packages were published to
+npm on 2026-11-26 from the transport prerelease `coding-runtime-1.1.8`. Each npm `dist.integrity`
+equals the SHA-512 of the reviewed tarball pinned in `docs/release/coding-runtime-npm-packages.json`.
+The root `optionalDependencies` declare 1.1.8 for `darwin-arm64`, `darwin-x64` and `win32-x64`, so
+the macOS packages leave 1.1.5 and the Windows package leaves 1.1.7 in the same change.
+
 _Reproducing the pinned bytes._ The reviewed 1.1.7 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
 tarball), and the tarball SHA-256 `2c322007c9693ed6e198b0337f71b4a37adb3d845a7cb275f892f825fbcb401f`
