@@ -109,10 +109,16 @@ function playwrightConfigs(): readonly string[] {
   );
 }
 
+// A config names none of the hermetic proxy settings itself: a key written after the spread
+// replaces the hermetic value, so naming one at all would weaken the routing the spread sets.
+const HERMETIC_PROXY_SETTING = /\bKEIKO_(?:HTTPS?|NO)_PROXY\b/u;
+
 function nonHermeticEnvBlocks(source: string): number {
   const blocks = source.split(/\benv:\s*\{/u).slice(1);
   return blocks.filter(
-    (block) => !HERMETIC_ENV_SPREADS.some((spread) => block.trimStart().startsWith(spread)),
+    (block) =>
+      !HERMETIC_ENV_SPREADS.some((spread) => block.trimStart().startsWith(spread)) ||
+      HERMETIC_PROXY_SETTING.test(block),
   ).length;
 }
 
@@ -198,6 +204,15 @@ describe("every Playwright web server's outbound traffic", () => {
   it("flags a web server env block without the hermetic settings", () => {
     expect(nonHermeticEnvBlocks('webServer: { env: { KEIKO_OS_KEYCHAIN: "off" } }')).toBe(1);
     expect(nonHermeticEnvBlocks("webServer: { env: { ...HERMETIC_OUTBOUND_ENV, A: 1 } }")).toBe(0);
+    for (const setting of ["KEIKO_HTTP_PROXY", "KEIKO_HTTPS_PROXY", "KEIKO_NO_PROXY"]) {
+      const overridden = `webServer: { command: "node server.mjs", env: { ...HERMETIC_OUTBOUND_ENV, ${setting}: "" } }`;
+      expect(isHermeticConfig(overridden)).toBe(false);
+    }
+    expect(
+      isHermeticConfig(
+        'webServer: { command: "node server.mjs", env: { ...HERMETIC_OUTBOUND_ENV } }',
+      ),
+    ).toBe(true);
     expect(isHermeticConfig("webServer: { command: 'node server.mjs' }")).toBe(false);
     const importOnly = [
       'import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";',

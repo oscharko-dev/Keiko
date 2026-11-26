@@ -720,12 +720,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signal.occurredAt,
     );
     enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(runId, entry, { ...prior, capacityDrop });
+    const finalized = this.finalizeCapacityDrop(runId, entry, signal, { ...prior, capacityDrop });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
-    if (finalized) {
-      this.rememberAppliedSignal(entry, signal);
-      this.recordTextFacts(runId, entry, countsBefore);
-    }
+    if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     // A call that failed gets its line even when the feed dropped, displaced or refused it.
     this.recordToolFailure(runId, entry);
     return finalized;
@@ -819,9 +816,10 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private finalizeCapacityDrop(
     runId: string,
     entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
     prior: PriorState & { readonly capacityDrop: DropCountChange | undefined },
   ): boolean {
-    const finalized = this.finalizeIngest(runId, entry, prior);
+    const finalized = this.finalizeIngest(runId, entry, signal, prior);
     const { capacityDrop } = prior;
     if (finalized && capacityDrop !== undefined) {
       this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
@@ -831,13 +829,21 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
 
   /**
    * Validates the feed after a signal has been applied and bounds enforced, and settles the
-   * ingest() call: notifies subscribers on success; on failure, rolls back to the pre-mutation
+   * ingest() call: on success remembers the applied signal's identity and then notifies
+   * subscribers, so a subscriber that delivers the same signal again synchronously sees it as
+   * already applied; on failure, rolls back to the pre-mutation
    * snapshot when one was taken (capacity rejection), or purges the entry entirely when validate
    * rejected state that isFeedNearProjectionLimit believed was within limits (a bug signal for
    * that threshold, per KEIKO-0878).
    */
-  private finalizeIngest(runId: string, entry: ProjectionEntry, prior: PriorState): boolean {
+  private finalizeIngest(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+    prior: PriorState,
+  ): boolean {
     if (validateCodingSafeActivityFeed(entry.feed).ok) {
+      this.rememberAppliedSignal(entry, signal);
       this.notify();
       return true;
     }

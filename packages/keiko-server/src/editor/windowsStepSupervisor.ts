@@ -154,11 +154,29 @@ export function realDirectory(
   value: string | undefined,
   fs: RealDirectoryFs = NODE_REAL_DIRECTORY_FS,
 ): string | undefined {
+  return realDrivePath(value, fs, true);
+}
+
+// The real drive path of an existing file or folder: a protected location such as `.netrc` or
+// `.git-credentials` is a file, and a link can place it inside a toolchain folder just as a
+// junction places a folder there. One that cannot be resolved keeps only its named path.
+export function realLocation(
+  value: string,
+  fs: RealDirectoryFs = NODE_REAL_DIRECTORY_FS,
+): string | undefined {
+  return realDrivePath(value, fs, false);
+}
+
+function realDrivePath(
+  value: string | undefined,
+  fs: RealDirectoryFs,
+  directoryOnly: boolean,
+): string | undefined {
   if (value === undefined || value === "") return undefined;
   const path = win32.normalize(value);
   if (!DRIVE_PATH.test(path)) return undefined;
   try {
-    if (fs.isDirectory(path) !== true) return undefined;
+    if (directoryOnly && fs.isDirectory(path) !== true) return undefined;
     const real = win32.normalize(fs.realpath(path));
     return DRIVE_PATH.test(real) ? real : undefined;
   } catch {
@@ -170,6 +188,8 @@ export function realDirectory(
 export interface WindowsReadRootHost {
   /** The directory's real drive path, or `undefined` when it is none (missing, a file, UNC). */
   readonly realDirectory: (value: string | undefined) => string | undefined;
+  /** A file's or directory's real drive path, or `undefined` when it is missing or unresolvable. */
+  readonly realLocation: (value: string) => string | undefined;
   /** The directory's entry names, or `undefined` when it cannot be listed. */
   readonly entryNames: (directory: string) => readonly string[] | undefined;
 }
@@ -185,6 +205,7 @@ function listEntryNames(directory: string): readonly string[] | undefined {
 
 const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
   realDirectory: (value) => realDirectory(value),
+  realLocation: (value) => realLocation(value),
   entryNames: listEntryNames,
 };
 
@@ -212,10 +233,11 @@ const WINDOWS_PROFILE_CREDENTIAL_LOCATIONS: readonly string[] = Object.freeze([
 // A drive's root directory (`D:\`): granting it would open the whole drive for reading.
 const DRIVE_ROOT = /^[A-Za-z]:\\$/u;
 
-// Each protected folder where the profile names it and, when it differs, where it really lies.
+// Each protected location (a folder or a file) where the profile names it and, when it differs,
+// where it really lies.
 function protectedFolders(named: readonly string[], host: WindowsReadRootHost): readonly string[] {
   return named.flatMap((folder) => {
-    const resolved = host.realDirectory(folder);
+    const resolved = host.realLocation(folder);
     return resolved === undefined || resolved === folder ? [folder] : [folder, resolved];
   });
 }

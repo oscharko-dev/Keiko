@@ -23,6 +23,7 @@ import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verific
 import {
   isRealDirectory,
   realDirectory,
+  realLocation,
   resolveWindowsStepSupervisor,
   windowsMavenRepository,
   windowsReadRootAdmission,
@@ -280,13 +281,16 @@ describe("windowsStepReadRoots", () => {
     const profile = String.raw`C:\Users\dev`;
     const none = { "drive-root": 0, m2: 0, credential: 0, unlistable: 0 };
     // `real` maps a short name or a junction to the folder it reaches, as the real host's
-    // realpath does; every other path is its own real path.
+    // realpath does; every other path is its own real path. `files` maps a linked file, which only
+    // `realLocation` resolves, as `realDirectory` resolves no file.
     const host = (
       entries: Readonly<Record<string, readonly string[] | null>> = {},
       real: Readonly<Record<string, string>> = {},
+      files: Readonly<Record<string, string>> = {},
     ): WindowsReadRootHost => ({
       realDirectory: (value): string | undefined =>
         value === undefined ? undefined : (real[value] ?? value),
+      realLocation: (value): string | undefined => files[value] ?? real[value] ?? value,
       entryNames: (directory): readonly string[] | undefined => {
         const names = entries[directory];
         return names === null ? undefined : (names ?? []);
@@ -398,6 +402,22 @@ describe("windowsStepReadRoots", () => {
       });
     });
 
+    it.each([
+      [".netrc", String.raw`C:\Users\dev\.netrc`],
+      [".git-credentials", String.raw`C:\Users\dev\.git-credentials`],
+      ["Cargo credentials file", String.raw`C:\Users\dev\.cargo\credentials.toml`],
+    ])("drops a home that holds the profile's %s through a file link", (_label, named) => {
+      const linked = host({}, {}, { [named]: String.raw`D:\tools\jdk\conf\store` });
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`D:\tools\jdk`, USERPROFILE: profile },
+        linked,
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+      expect(windowsReadRootAdmission(profile, linked)(String.raw`D:\tools\node`)).toEqual({
+        root: String.raw`D:\tools\node`,
+      });
+    });
+
     it("keeps a bin folder beside a credential store, as macOS keeps ~/.cargo/bin", () => {
       const bin = String.raw`C:\Users\dev\.cargo\bin`;
       expect(windowsReadRootAdmission(profile, host())(bin)).toEqual({ root: bin });
@@ -486,6 +506,36 @@ describe("realDirectory (#4496)", () => {
     const realpathRefused = { isDirectory: (): boolean => true, realpath: refusing("EPERM") };
     expect(realDirectory(folder, statRefused)).toBeUndefined();
     expect(realDirectory(folder, realpathRefused)).toBeUndefined();
+  });
+});
+
+describe("realLocation (#4496)", () => {
+  const file = String.raw`C:\Users\dev\.netrc`;
+
+  it("resolves a file, which realDirectory leaves out, to its real drive path", () => {
+    const fs: RealDirectoryFs = {
+      isDirectory: (): boolean => false,
+      realpath: (): string => "D:/tools/jdk/netrc",
+    };
+    expect(realLocation(file, fs)).toBe(String.raw`D:\tools\jdk\netrc`);
+    expect(realDirectory(file, fs)).toBeUndefined();
+  });
+
+  it("is no location when the path is no drive path, resolves off the drive or is refused", () => {
+    const resolves = (real: string): RealDirectoryFs => ({
+      isDirectory: (): boolean => false,
+      realpath: (): string => real,
+    });
+    expect(realLocation("", resolves(file))).toBeUndefined();
+    expect(realLocation(String.raw`\\server\share\.netrc`, resolves(file))).toBeUndefined();
+    expect(realLocation(file, resolves(String.raw`\\server\share\netrc`))).toBeUndefined();
+    const missing: RealDirectoryFs = {
+      isDirectory: (): undefined => undefined,
+      realpath: (): never => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      },
+    };
+    expect(realLocation(file, missing)).toBeUndefined();
   });
 });
 

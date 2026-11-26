@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6c2da97f6232b1856ae65b526d9ed5affa788cafcad975032e5f4e4c7384aa2f",
+    "catalogDigest": "3593da5a020a6e002a08a3db8b130a8b4341a5a51fca34d094fa5d32c7c1a79c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14320,7 +14320,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:261",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1137"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1143"
         ]
       },
       {
@@ -18080,11 +18080,11 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:111",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:788",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:943",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1025",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1103",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1158"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:785",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:949",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1031",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1109",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1164"
         ]
       },
       {
@@ -19232,7 +19232,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:292",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:748"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:745"
         ]
       },
       {
@@ -22533,7 +22533,7 @@
         "proofIds": ["editor.verification.windows-step-refused.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:108",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:453"]
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:475"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22622,7 +22622,7 @@
         "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:47",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:491"]
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:513"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -127277,14 +127277,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2385",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2391",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2403",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2409",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127969,7 +127969,7 @@
     {
       "op": "editor.verification.windows-step-supervisor.copy-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:402",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:424",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

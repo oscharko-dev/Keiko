@@ -1437,6 +1437,32 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(content)).not.toContain("tail");
   });
 
+  // A subscriber may deliver the same signal again while it is being notified. The identity is
+  // remembered before subscribers hear of the signal, so the re-delivery is a duplicate, not a
+  // second application of the same text.
+  it("treats a signal a subscriber re-delivers during notification as already applied", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user_1", "user"));
+    const signal = { ...text("msg_user_1", "once-only"), signalId: "evt_text_1" } as const;
+    const redelivered: boolean[] = [];
+    projection.subscribeContent(() => {
+      if (redelivered.length === 0) redelivered.push(projection.ingest(RUN_ID, signal));
+    });
+
+    expect(projection.ingest(RUN_ID, signal)).toBe(true);
+
+    expect(redelivered).toEqual([true]);
+    const serialized = JSON.stringify(projection.currentContent());
+    expect(serialized).toContain("once-only");
+    expect(serialized).not.toContain("once-onlyonce-only");
+  });
+
   // #4546 (real-model lab F1): two answers of one turn ran into the output limit, so the turn went
   // over its byte bound. Shedding the oldest content must not shed the turn's messages themselves:
   // the turn's user message is the parent every later answer names, and a message whose text was

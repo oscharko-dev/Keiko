@@ -107,7 +107,8 @@ really lies, so a relocated `.m2` cannot hide an overlap either; a folder whose 
 resolved is no folder, and without a known profile folder every step is refused. As on macOS, no
 toolchain root may be a drive root or hold or sit inside one of the profile's credential stores:
 the macOS home denials (`.ssh`, `.aws`, `.cargo\credentials.toml`, `.config\gh`, …) plus the
-Windows credential and DPAPI folders under `AppData`, compared named and resolved; and the step's
+Windows credential and DPAPI folders under `AppData`, compared named and resolved (a credential file
+such as `.netrc` through a file link as well as a folder through a junction); and the step's
 execution root is refused when its real path cannot be resolved, never granted by its spelling.
 
 ## Context
