@@ -11,8 +11,9 @@
 //
 // Canaries for the #4496 acceptance criteria, each printed as a body-free PASS/FAIL line and, with
 // `--json <file>`, written as booleans and error codes only:
-//   (a) from inside a step the internet (a TEST-NET address, so no outside host is touched), the
-//       host's loopback and another process's named pipe are refused with an error code, and the
+//   (a) from inside a step the internet (a TEST-NET address, so no outside host is touched) is
+//       refused with the AppContainer's EACCES, the host's loopback and another process's named
+//       pipe are refused with an error code, and the
 //       loopback listener and the pipe server, each reached once by the harness as a positive
 //       control, see no connection from the step;
 //   (b) a detached child and an `fs.watch` watcher a step started are gone when the step ends,
@@ -43,6 +44,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { once } from "node:events";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -176,6 +178,18 @@ function jsonArgument() {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+// One connection from the harness, settled on the server's side: the count is read only after the
+// server accepted it, so a late accept cannot land after the reset.
+async function positiveControl(state, open) {
+  const accepted = once(state.server, "connection");
+  const control = open();
+  control.on("connect", () => control.destroy());
+  const failed = once(control, "error").then(() => undefined);
+  const closed = once(control, "close");
+  await Promise.race([accepted, failed]);
+  await closed;
+}
+
 // The host's loopback listener: it counts every connection it accepts.
 async function startHostListener() {
   const state = { connections: 0 };
@@ -186,12 +200,7 @@ async function startHostListener() {
   await new Promise((resolve) => state.server.listen(0, "127.0.0.1", resolve));
   state.port = state.server.address().port;
   // Positive control: the harness itself reaches the listener, so a refusal later is the step's.
-  await new Promise((resolve) => {
-    const control = connect({ host: "127.0.0.1", port: state.port });
-    control.on("connect", () => control.destroy());
-    control.on("error", resolve);
-    control.on("close", resolve);
-  });
+  await positiveControl(state, () => connect({ host: "127.0.0.1", port: state.port }));
   check("loopback-positive-control", "(a)", state.connections === 1);
   state.connections = 0;
   return state;
@@ -207,11 +216,7 @@ async function startPipeServer() {
   });
   await new Promise((resolve) => state.server.listen(path, resolve));
   // Positive control: the harness itself reaches its pipe, so a refusal later is the step's.
-  await new Promise((resolve) => {
-    const control = connect({ path });
-    control.on("connect", () => control.destroy());
-    control.on("close", resolve);
-  });
+  await positiveControl(state, () => connect({ path }));
   check("pipe-positive-control", "(a)", state.connections === 1);
   state.connections = 0;
   return state;
@@ -402,7 +407,8 @@ const fileText = (path) => (existsSync(path) ? readFileSync(path, "utf8") : unde
 
 // A refusal is an error code the step saw; a probe that only timed out proves nothing.
 function checkNetwork(answer, host, pipe) {
-  check("internet-refused", "(a)", refused(answer.internet), answer.internet);
+  // A TEST-NET address is unroutable for everyone; only the AppContainer's EACCES is a refusal.
+  check("internet-refused", "(a)", answer.internet === "error:EACCES", answer.internet);
   check("loopback-refused", "(a)", refused(answer.loopback), answer.loopback);
   check("loopback-listener-saw-no-connection", "(a)", host.connections === 0);
   check("pipe-refused", "(a)", refused(answer.pipe), answer.pipe);

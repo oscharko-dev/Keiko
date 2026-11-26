@@ -6,6 +6,7 @@ import { buildAcceptanceEvidence } from "./acceptanceEvidence.js";
 import {
   WINDOWS_PRECONDITION_CODES,
   keikoRegistryServiceNames,
+  listPipeNames,
   probeWindowsPreconditions,
   windowsUserClass,
   type ScResult,
@@ -346,5 +347,32 @@ describe("probe output through the production evidence builder and checker", () 
       host: WINDOWS_HOST,
     });
     expect(acceptanceEvidenceFailures(evidence)).toEqual(["case-set-incomplete", "case-not-met"]);
+  });
+});
+
+describe("listPipeNames", () => {
+  it("reads exactly the named-pipe namespace and returns its names", () => {
+    const read = (directory: string): readonly string[] => {
+      expect(directory).toBe("\\\\.\\pipe\\");
+      return ["docker_engine", "InitShutdown"];
+    };
+    expect(listPipeNames(read)).toEqual(["docker_engine", "InitShutdown"]);
+  });
+
+  it("answers nothing when the system refuses the namespace, so the probe fails closed", () => {
+    const refused = (): readonly string[] => {
+      throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+    };
+    expect(listPipeNames(refused)).toBeUndefined();
+    expect(probeWindowsPreconditions(seams({ pipes: null })).unmetPreconditions).toContain(
+      "container-runtime-probe-failed",
+    );
+  });
+
+  it("rethrows a defect that is not a system refusal", () => {
+    const broken = (): readonly string[] => {
+      throw new TypeError("not a function");
+    };
+    expect(() => listPipeNames(broken)).toThrow(TypeError);
   });
 });

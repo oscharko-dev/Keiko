@@ -290,9 +290,11 @@ function runSystemTool(
 }
 
 /** The pipe names, or no answer when the namespace cannot be read, which the checker names. */
-function listPipes(): readonly string[] | undefined {
+export function listPipeNames(
+  read: (directory: string) => readonly string[] = readdirSync,
+): readonly string[] | undefined {
   try {
-    return readdirSync(PIPE_DIRECTORY);
+    return read(PIPE_DIRECTORY);
   } catch (error) {
     // A namespace the system refuses is a failed probe; anything else is a defect of the probe.
     if (error instanceof Error && "code" in error) return undefined;
@@ -305,7 +307,7 @@ export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): Win
   return {
     env,
     exists: (path) => existsSync(path),
-    pipes: () => listPipes(),
+    pipes: () => listPipeNames(),
     onPath: (program): boolean | undefined => {
       const { status } = runSystemTool(env, "where.exe", [program]);
       // `where.exe` answers 1 for a program that is not found; no status at all means it never ran.
