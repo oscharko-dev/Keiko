@@ -82,6 +82,9 @@ const FUNCTIONAL_BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const FUNCTIONAL_RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const FUNCTIONAL_ENABLED =
   FUNCTIONAL_BINARY !== undefined || FUNCTIONAL_RESOURCE_ROOT !== undefined;
+// The previous runtime (#4546): a raw older binary started under the current launch profile.
+const PREVIOUS_BINARY = process.env.KEIKO_OPENCODE_PREVIOUS_REAL_BINARY;
+const PREVIOUS_RESOURCE_ROOT = process.env.KEIKO_OPENCODE_PREVIOUS_REAL_RESOURCE_ROOT;
 const TEST_TIMEOUT_MS = 60_000;
 const RUN_ID = "run-2254";
 const TREE_BINDING_ID = "f".repeat(64);
@@ -342,17 +345,30 @@ function requiredEnvironment(name: string, value: string | undefined): string {
   return value;
 }
 
-function realPortableRuntime(testRoot: string): {
+interface StagedRuntimeSource {
+  readonly binary: string | undefined;
+  readonly resourceRoot: string | undefined;
+  readonly binaryVariable: string;
+  readonly rootVariable: string;
+}
+
+const CURRENT_RUNTIME_SOURCE: StagedRuntimeSource = {
+  binary: FUNCTIONAL_BINARY,
+  resourceRoot: FUNCTIONAL_RESOURCE_ROOT,
+  binaryVariable: "KEIKO_OPENCODE_REAL_BINARY",
+  rootVariable: "KEIKO_OPENCODE_REAL_RESOURCE_ROOT",
+};
+
+function realPortableRuntime(
+  testRoot: string,
+  source: StagedRuntimeSource = CURRENT_RUNTIME_SOURCE,
+): {
   readonly resourceRoot: string;
   readonly verification: PortableSidecarRuntimeVerification;
   readonly target: UpdatePortableTarget;
 } {
-  const stagedRoot = resolve(
-    requiredEnvironment("KEIKO_OPENCODE_REAL_RESOURCE_ROOT", FUNCTIONAL_RESOURCE_ROOT),
-  );
-  const stagedExecutable = resolve(
-    requiredEnvironment("KEIKO_OPENCODE_REAL_BINARY", FUNCTIONAL_BINARY),
-  );
+  const stagedRoot = resolve(requiredEnvironment(source.rootVariable, source.resourceRoot));
+  const stagedExecutable = resolve(requiredEnvironment(source.binaryVariable, source.binary));
   const platform = functionalPlatform();
   const payloadRootPath = "payload";
   const executablePath = `${payloadRootPath}/bin/opencode`;
@@ -1276,8 +1292,11 @@ interface NativeStdinLeaseHarness {
 
 // Isolate the upstream EOF contract from the BFF monitor, which can otherwise send a stop signal
 // when the closing native HTTP server disconnects its SSE stream. This is protocol proof only.
-function createNativeStdinLeaseHarness(root: string): NativeStdinLeaseHarness {
-  const portable = realPortableRuntime(root);
+function createNativeStdinLeaseHarness(
+  root: string,
+  source: StagedRuntimeSource = CURRENT_RUNTIME_SOURCE,
+): NativeStdinLeaseHarness {
+  const portable = realPortableRuntime(root, source);
   const stateRoot = join(root, "state");
   for (const name of ["home", "config", "state", "tmp"])
     mkdirSync(join(stateRoot, name), { recursive: true, mode: 0o700 });
@@ -1322,6 +1341,63 @@ async function closeNativeStdinLeaseHarness(harness: NativeStdinLeaseHarness): P
   harness.backend.signalTree(harness.tree, "force");
   expect(await harness.backend.waitForCompleteTreeExit(harness.tree, 5_000)).toBe(true);
 }
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("[functional-only] previous OpenCode runtime under the current launch profile", () => {
+  // Keiko's admission refuses an earlier package (`payload-outdated`, surfaced as
+  // `runtime-outdated`) and its readiness handshake pins the verified version, so this proves
+  // only what the raw binary can: it accepts the current composed profile and serves.
+  it.skipIf(PREVIOUS_BINARY === undefined)(
+    "starts under the current profile, answers info and exits cleanly on stdin EOF",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-previous-runtime-"));
+      let harness: NativeStdinLeaseHarness | undefined;
+      try {
+        const binary = PREVIOUS_BINARY ?? "";
+        harness = createNativeStdinLeaseHarness(root, {
+          binary,
+          resourceRoot: PREVIOUS_RESOURCE_ROOT ?? dirname(dirname(dirname(binary))),
+          binaryVariable: "KEIKO_OPENCODE_PREVIOUS_REAL_BINARY",
+          rootVariable: "KEIKO_OPENCODE_PREVIOUS_REAL_RESOURCE_ROOT",
+        });
+        const backend = harness.backend;
+        expect(
+          await waitForCondition(() => backend.nativeLeaseReady(), AbortSignal.timeout(20_000)),
+        ).toBe(true);
+        const lease = backend.nativeLease();
+        const client = createOpenCodeV2HttpClient({
+          endpoint: lease.endpoint,
+          password: harness.password,
+        });
+        const unauthenticated = await globalThis.fetch(new URL("/api/info", lease.endpoint));
+        expect(unauthenticated.status).toBe(401);
+        await unauthenticated.body?.cancel();
+        const info = await client.info();
+        expect(typeof info.version).toBe("string");
+        expect(lease.tree.exited).toBe(false);
+        expect(backend.redactedStderr()).not.toMatch(/unknown|unrecognized|invalid|plugin/iu);
+        const exited = backend.waitForCompleteTreeExit(lease.tree, 5_000);
+        lease.pipe.end();
+        await expect(exited).resolves.toBe(true);
+        const pid = lease.tree.child.pid;
+        expect(pid !== undefined && isAlive(pid)).toBe(false);
+        expect(backend.terminationSignals()).toBe(0);
+      } finally {
+        if (harness !== undefined) await closeNativeStdinLeaseHarness(harness);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
 
 describe("[functional-only] real staged OpenCode runtime", () => {
   it.skipIf(!FUNCTIONAL_ENABLED)(
