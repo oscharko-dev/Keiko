@@ -124963,21 +124963,21 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2097",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2098",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2143",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2144",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2324",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2325",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126302,7 +126302,7 @@
     {
       "op": "coding-runtime.approval-revocation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2042",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2043",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126451,7 +126451,7 @@
     {
       "op": "coding-runtime.exit",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1981",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1982",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126477,7 +126477,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2574",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2575",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126822,14 +126822,14 @@
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3150",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3151",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3167",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3168",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127070,14 +127070,14 @@
     {
       "op": "coding-runtime.stderr",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2001",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2002",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.stream-drain",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2020",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2021",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
