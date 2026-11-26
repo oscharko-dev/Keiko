@@ -2428,6 +2428,8 @@ export type {
   SandboxPolicy,
   SandboxBackend,
   WindowsStepDrive,
+  WindowsStepNode,
+  WindowsStepNodeDecision,
   WindowsStepSupervisor,
   WindowsStepSupervisorCopy,
   SandboxAttestation,

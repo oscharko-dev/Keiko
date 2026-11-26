@@ -14,6 +14,7 @@ import {
   type WindowsFilesystemGrant,
 } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import { CommandDeniedError } from "./errors.js";
+import { prependWindowsSearchPath, windowsPathContains } from "./windows-step-paths.js";
 
 /** What one supervised step needs once its environment is known. */
 export interface WindowsStepLaunch {
@@ -23,6 +24,8 @@ export interface WindowsStepLaunch {
   readonly args: readonly string[];
   readonly grants: readonly WindowsFilesystemGrant[];
   readonly recoveryHandle: string;
+  /** The patched Node.js folder that leads the step's `PATH` (#4492); absent for a step without it. */
+  readonly pathPrefix?: string | undefined;
 }
 
 const ENVIRONMENT_NAME = /^[A-Za-z_]\w{0,127}$/u;
@@ -46,10 +49,7 @@ export function quoteWindowsArgument(value: string): string {
   return quoted + "\\".repeat(backslashes * 2) + '"';
 }
 
-function contains(root: string, path: string): boolean {
-  const relative = win32.relative(root, path);
-  return relative === "" || (!relative.startsWith("..") && !win32.isAbsolute(relative));
-}
+const contains = windowsPathContains;
 
 /** The toolchain folder an executable belongs to: a `bin` folder's parent (a JDK, Maven). */
 function toolchainRoot(executable: string): string {
@@ -125,20 +125,24 @@ export function windowsStepLaunch(
   supervisor: WindowsStepSupervisor,
   command: string,
   profile: string | undefined,
+  stepNodeDirectory?: string,
 ): WindowsStepLaunch {
+  const readRoots = windowsStepReadRoots(executable, executionRoot, supervisor);
   return {
     image: invocation.command,
     args: invocation.windowsVerbatimArguments
       ? invocation.args
       : invocation.args.map(quoteWindowsArgument),
+    // The step Node.js folder is read and execute only, like every other toolchain folder (#4492).
     grants: windowsStepGrants(
       executionRoot,
       executable,
-      windowsStepReadRoots(executable, executionRoot, supervisor),
+      stepNodeDirectory === undefined ? readRoots : [...readRoots, stepNodeDirectory],
       command,
       profile,
     ),
     recoveryHandle: randomBytes(16).toString("hex"),
+    ...(stepNodeDirectory === undefined ? {} : { pathPrefix: stepNodeDirectory }),
   };
 }
 
@@ -263,6 +267,25 @@ function throughSearchPath(
     .join(";");
 }
 
+// The step's variables with the patched Node.js folder first on `PATH` (#4492): `node` and every
+// `node_modules\.bin` shim, which falls back to `node` on `PATH`, then run the patched binary. A
+// step whose environment has no `PATH` gets one holding only that folder.
+function withStepNodeFirst(
+  env: Readonly<Record<string, string>>,
+  directory: string | undefined,
+): [string, string][] {
+  const entries = Object.entries(env);
+  if (directory === undefined) return entries;
+  if (!entries.some(([name]) => name.toUpperCase() === "PATH")) {
+    return [...entries, ["PATH", directory]];
+  }
+  return entries.map(([name, value]) =>
+    name.toUpperCase() === "PATH"
+      ? [name, prependWindowsSearchPath(value, directory)]
+      : [name, value],
+  );
+}
+
 /**
  * The launch and the grants, in the order the supervisor reads them. The image, the working
  * directory, the arguments and every variable name a granted directory through its drive letter;
@@ -278,7 +301,7 @@ export function windowsStepFrames(
 ): Buffer {
   const through = (value: string): string => throughWindowsStepDrives(value, drives);
   const carried = Object.fromEntries(
-    Object.entries(env)
+    withStepNodeFirst(env, launch.pathPrefix)
       .filter(([name]) => ENVIRONMENT_NAME.test(name))
       .map(([name, value]) => [
         name,

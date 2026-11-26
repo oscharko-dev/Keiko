@@ -23,6 +23,22 @@ export interface NpmLaneRuntimeSupervisorApproval {
   readonly sourceTreeSha256: string;
 }
 
+/**
+ * The patched Node.js a Windows package carries for its confined verification steps (#4492,
+ * ADR-0043 D21): the official 26.13.1 source plus libuv#5181, built by
+ * `.github/workflows/windows-step-node.yml`. Official 26.13.1 bundles libuv 1.52.1, whose unique
+ * child-pipe names hang `node --test`, forks and piped children inside an AppContainer. The pin
+ * restates what that build's receipt records, so the binary can never vouch for itself.
+ */
+export interface NpmLaneStepNodeApproval {
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  /** SHA-256 of the official `node-v26.13.1.tar.gz` the binary was built from. */
+  readonly sourceSha256: string;
+  /** SHA-256 of each patch applied to that source, in the order they were applied. */
+  readonly patchSha256s: readonly string[];
+}
+
 export interface CodingRuntimeArtifactApproval {
   readonly upstreamVersion: string;
   readonly adapterName: string;
@@ -38,6 +54,8 @@ export interface CodingRuntimeArtifactApproval {
   readonly helperMaxBytes?: number;
   /** Required on Windows, absent elsewhere; a Windows approval without it is refused. */
   readonly runtimeSupervisor?: NpmLaneRuntimeSupervisorApproval;
+  /** Windows only; a step without a verified step Node.js runs as before (ADR-0043 D21). */
+  readonly stepNode?: NpmLaneStepNodeApproval;
 }
 
 export interface NpmLaneRuntimeApproval extends CodingRuntimeArtifactApproval {
@@ -82,6 +100,25 @@ const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.
   sourceTreeSha256: "57054c1e9614341b41b66146c4f2ba08b13bff0979f1db920c6d17e29f57060b",
 });
 
+// CI run 45777530612 of windows-step-node.yml (artifact keiko-step-node-windows-x64-26.13.1-libuv-5181).
+// A newer build replaces it by re-pinning these constants and nothing else.
+const STEP_NODE_WINDOWS_X64_SHA256 =
+  "61547f93cc5f92870d7e67e8847c6b3da05d6978fb9d9713a0551ed358dd8fd7";
+const STEP_NODE_WINDOWS_X64_SIZE_BYTES = 100_574_720;
+
+const STEP_NODE_WINDOWS_X64: NpmLaneStepNodeApproval = Object.freeze({
+  sha256: STEP_NODE_WINDOWS_X64_SHA256,
+  sizeBytes: STEP_NODE_WINDOWS_X64_SIZE_BYTES,
+  // node-v26.13.1.tar.gz, from https://nodejs.org/dist/v26.13.1/SHASUMS256.txt
+  sourceSha256: "60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e",
+  patchSha256s: Object.freeze([
+    // patches/node-26.13.1-libuv-5181.patch
+    "8549a84f23e812688b12ab6de8cd5b6f2cb82aaa3d754ebbe3cd6527c67bd387",
+    // patches/node-26.13.1-win-crates-synchronization.patch
+    "4370d95801980482c98693d3ca0ba178b69897f89c7851c5b5c0ea5025e5eacc",
+  ]),
+});
+
 const SHARED = {
   ...HELPER,
   upstreamVersion: "2.4.1",
@@ -115,6 +152,7 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     executableTreeSha256: "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
     sbomSha256: "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0",
     runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
+    stepNode: STEP_NODE_WINDOWS_X64,
   }),
 });
 
@@ -133,6 +171,7 @@ export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = 
   executableTreeSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].executableTreeSha256,
   sbomSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].sbomSha256,
   runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
+  stepNode: STEP_NODE_WINDOWS_X64,
 });
 
 /**

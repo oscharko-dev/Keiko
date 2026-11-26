@@ -9,7 +9,7 @@
 
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -64,6 +64,7 @@ import {
   WindowsStepResponses,
   type WindowsStepLaunch,
 } from "./windows-step.js";
+import { planWindowsStepNode, type WindowsStepNodeProbe } from "./windows-step-node.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
@@ -170,6 +171,8 @@ export interface RunCommandDeps {
   // `windows-appcontainer` backend's availability; an execution-root step then runs in a per-run
   // AppContainer without network instead of being refused for a missing container runtime.
   readonly windowsStepSupervisor?: WindowsStepSupervisor | undefined;
+  // Hermetic test seam: how the step Node.js plan reads an install's npm CLI script (#4492).
+  readonly windowsStepNodeProbe?: WindowsStepNodeProbe | undefined;
 }
 
 // Body-free evidence of a termination decision, handed to the optional `onTerminated` seam below.
@@ -1143,20 +1146,27 @@ function windowsStepTarget(
     throw new CommandDeniedError("the Windows step supervisor is unavailable", input.command);
   }
   const resolved = executable();
-  const invocation = buildWindowsShellInvocation(resolved, input.args, {
-    platform: "win32",
-    env: deps.processEnv,
-  });
   const executionRoot = realRoot(workspaceFsOf(deps), deps.workspace.root);
+  const plan = planWindowsStepNode({
+    command: input.command,
+    executable: resolved,
+    args: input.args,
+    executionRoot,
+    stepNode: supervisor.stepNode,
+    probe: deps.windowsStepNodeProbe ?? nodeWindowsStepNodeProbe,
+  });
   const launch = windowsStepLaunch(
-    invocation,
-    resolved,
+    windowsStepInvocation(input, deps, resolved, plan),
+    plan.kind === "applied" ? plan.grantExecutable : resolved,
     executionRoot,
     supervisor,
     input.command,
     environmentVariableValue(deps.processEnv, "USERPROFILE", "win32"),
+    plan.kind === "applied" ? plan.stepNode.directory : undefined,
   );
   const copy = supervisor.acquire(launch.grants.map((grant) => grant.path));
+  // Recorded once the step holds its supervisor copy, so a refused step logs no launch decision.
+  if (plan.kind !== "none") supervisor.stepNode?.record(plan.decision);
   return {
     command: copy.path,
     args: decision.args,
@@ -1169,6 +1179,36 @@ function windowsStepTarget(
     },
   };
 }
+
+// The step's own launch: the step Node.js for `node`, `npm` and `npx` when the plan says so (#4492),
+// otherwise the resolved executable, through cmd.exe for a command script.
+function windowsStepInvocation(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  resolved: string,
+  plan: ReturnType<typeof planWindowsStepNode>,
+): ReturnType<typeof buildWindowsShellInvocation> {
+  if (plan.kind === "applied" && plan.invocation !== undefined) {
+    return { ...plan.invocation, windowsVerbatimArguments: false };
+  }
+  return buildWindowsShellInvocation(resolved, input.args, {
+    platform: "win32",
+    env: deps.processEnv,
+  });
+}
+
+// The two questions the step Node.js plan asks of the file system (#4492). A path that cannot be
+// read is an ordinary condition for the plan, not a failure: it falls back to the install's `.cmd`.
+const nodeWindowsStepNodeProbe: WindowsStepNodeProbe = {
+  isFile: (path) => {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  },
+  realPath: realWindowsSearchPathEntry,
+};
 
 function onceOnly(action: () => void): () => void {
   let done = false;

@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import type { WindowsStepSupervisor } from "@oscharko-dev/keiko-contracts";
+import type {
+  WindowsStepNode,
+  WindowsStepNodeDecision,
+  WindowsStepSupervisor,
+} from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { makeWorkspace } from "./_support.js";
 import { CommandCancelledError, CommandDeniedError } from "./errors.js";
@@ -484,7 +488,14 @@ interface Harness {
   readonly written: () => Buffer;
 }
 
-function harness(): Harness {
+interface HarnessOptions {
+  readonly stepNode?: WindowsStepNode | undefined;
+  readonly commandRules?: RunCommandDeps["commandRules"];
+  readonly resolveExecutable?: RunCommandDeps["resolveExecutable"];
+  readonly windowsStepNodeProbe?: RunCommandDeps["windowsStepNodeProbe"];
+}
+
+function harness(options: HarnessOptions = {}): Harness {
   const { info } = makeWorkspace();
   const child = supervisedChild();
   const spawned: Harness["spawned"] = [];
@@ -509,16 +520,20 @@ function harness(): Harness {
       };
     },
     readRoots: [],
+    ...(options.stepNode === undefined ? {} : { stepNode: options.stepNode }),
   };
   const deps: RunCommandDeps = {
     workspace: info,
     policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
-    commandRules: [{ executable: "node" }],
+    commandRules: options.commandRules ?? [{ executable: "node" }],
     spawn: (command, args, options): ChildProcess => {
       spawned.push({ command, args: [...args], options });
       return child as unknown as ChildProcess;
     },
-    resolveExecutable: () => String.raw`C:\tools\node\node.exe`,
+    resolveExecutable: options.resolveExecutable ?? (() => String.raw`C:\tools\node\node.exe`),
+    ...(options.windowsStepNodeProbe === undefined
+      ? {}
+      : { windowsStepNodeProbe: options.windowsStepNodeProbe }),
     processEnv: { PATH: String.raw`C:\tools\node`, SystemRoot: String.raw`C:\Windows` },
     now: () => 0,
     platform: "win32",
@@ -554,6 +569,122 @@ function input(signal: AbortSignal): Parameters<typeof runCommand>[0] {
 async function settled(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
+
+const STEP_NODE_FOLDER = String.raw`C:\Program Files\Keiko\runtime\step-node`;
+
+function recordingStepNode(): {
+  readonly node: WindowsStepNode;
+  readonly seen: WindowsStepNodeDecision[];
+} {
+  const seen: WindowsStepNodeDecision[] = [];
+  return {
+    seen,
+    node: {
+      directory: STEP_NODE_FOLDER,
+      executable: `${STEP_NODE_FOLDER}\\node.exe`,
+      record: (decision): void => {
+        seen.push(decision);
+      },
+    },
+  };
+}
+
+function launchText(h: Harness): string {
+  return h.written().subarray(0, h.written().indexOf("KGG1")).toString("utf8");
+}
+
+describe("runCommand with the patched step Node.js (#4492)", () => {
+  it("runs a command named node as the step Node.js, first on PATH through its drive", async () => {
+    const { node, seen } = recordingStepNode();
+    const h = harness({ stepNode: node });
+    const run = runCommand(input(new AbortController().signal), h.deps);
+    await settled();
+    // The host's own node folder is not granted: the step runs the step Node.js alone.
+    expect(h.acquired).toEqual([[realpathSync(h.deps.workspace.root), STEP_NODE_FOLDER]]);
+    const launch = launchText(h);
+    expect(launch).toContain(String.raw`L:\node.exe`);
+    expect(launch).toContain(String.raw`L:\;C:\tools\node`);
+    expect(seen).toEqual([
+      {
+        image: "step-node",
+        npmLaunch: "not-npm",
+        npmFallback: "none",
+        pathPrefixed: true,
+        placement: "applied",
+      },
+    ]);
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+  });
+
+  it("starts npm through the step Node.js and the install's own npm-cli.js", async () => {
+    const { node, seen } = recordingStepNode();
+    const install = String.raw`C:\Program Files\nodejs`;
+    const cli = `${install}\\node_modules\\npm\\bin\\npm-cli.js`;
+    const h = harness({
+      stepNode: node,
+      commandRules: [{ executable: "npm" }],
+      resolveExecutable: () => `${install}\\npm.cmd`,
+      windowsStepNodeProbe: { isFile: (path) => path === cli, realPath: (path) => path },
+    });
+    const run = runCommand(
+      { ...input(new AbortController().signal), command: "npm", args: ["test"] },
+      h.deps,
+    );
+    await settled();
+    expect(h.acquired).toEqual([[realpathSync(h.deps.workspace.root), install, STEP_NODE_FOLDER]]);
+    const launch = launchText(h);
+    expect(launch).toContain(String.raw`M:\node.exe`);
+    expect(launch).toContain(String.raw`L:\node_modules\npm\bin\npm-cli.js`);
+    expect(launch).not.toContain("cmd.exe");
+    expect(seen).toEqual([
+      {
+        image: "step-node",
+        npmLaunch: "step-node",
+        npmFallback: "none",
+        pathPrefixed: true,
+        placement: "applied",
+      },
+    ]);
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+  });
+
+  it("changes nothing and records nothing when the runtime carries no step Node.js", async () => {
+    const h = harness();
+    const run = runCommand(input(new AbortController().signal), h.deps);
+    await settled();
+    expect(launchText(h)).toContain(String.raw`L:\node.exe`);
+    expect(launchText(h)).not.toContain("step-node");
+    expect(h.acquired).toEqual([[realpathSync(h.deps.workspace.root), String.raw`C:\tools\node`]]);
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+  });
+
+  it("records no launch decision for a step whose supervisor copy could not be acquired", async () => {
+    const { node, seen } = recordingStepNode();
+    const h = harness({ stepNode: node });
+    const deps: RunCommandDeps = {
+      ...h.deps,
+      windowsStepSupervisor: {
+        ...(h.deps.windowsStepSupervisor as WindowsStepSupervisor),
+        acquire: () => {
+          throw new CommandDeniedError("no free drive letter", "node");
+        },
+      },
+    };
+    await expect(runCommand(input(new AbortController().signal), deps)).rejects.toThrow(
+      "no free drive letter",
+    );
+    expect(seen).toEqual([]);
+  });
+});
 
 describe("runCommand on the windows-appcontainer backend (#4496)", () => {
   it("frames the step to the supervisor and reports the exit code it reaped", async () => {

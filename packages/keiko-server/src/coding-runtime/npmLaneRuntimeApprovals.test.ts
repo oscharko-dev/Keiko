@@ -139,6 +139,25 @@ describe("npm-lane runtime approvals", () => {
     expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].runtimeSupervisor).toBeUndefined();
   });
 
+  // #4492: the step Node.js is the patched official 26.13.1 build; only Windows names one, and the
+  // desktop package pins the same bytes as the npm package.
+  it("pins the patched Windows step Node.js for Windows only, with its source and patches", () => {
+    const stepNode = NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode;
+    expect(stepNode).toStrictEqual({
+      sha256: "61547f93cc5f92870d7e67e8847c6b3da05d6978fb9d9713a0551ed358dd8fd7",
+      sizeBytes: 100_574_720,
+      sourceSha256: "60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e",
+      patchSha256s: [
+        "8549a84f23e812688b12ab6de8cd5b6f2cb82aaa3d754ebbe3cd6527c67bd387",
+        "4370d95801980482c98693d3ca0ba178b69897f89c7851c5b5c0ea5025e5eacc",
+      ],
+    });
+    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.stepNode).toBe(stepNode);
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].stepNode).toBeUndefined();
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].stepNode).toBeUndefined();
+    expect(Object.isFrozen(stepNode)).toBe(true);
+  });
+
   // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages (2.1.4) approve nothing;
   // their executable trees are only recognised so the person is told to update.
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(

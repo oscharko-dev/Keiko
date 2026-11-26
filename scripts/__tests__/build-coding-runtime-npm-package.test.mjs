@@ -126,6 +126,8 @@ function catalogUpstreamVersion() {
     .version;
 }
 
+const STEP_NODE = "patched-step-node-bytes";
+
 /** The Windows build: `.exe` names, the pinned supervisor and the win32 ripgrep (#4068). */
 function windowsDeps() {
   const { deps } = fakeDeps();
@@ -139,6 +141,10 @@ function windowsDeps() {
     },
     runSupervisorBuild: async ({ argv }) => {
       write(argv[3], "built-supervisor");
+      return 0;
+    },
+    runStepNodeStage: async ({ argv }) => {
+      write(argv[2], STEP_NODE);
       return 0;
     },
     stageRipgrep: async (_target, packageRoot) => {
@@ -195,6 +201,15 @@ async function releaseFixture(target = "macos-arm64") {
     ...(built.runtimeSupervisor === undefined
       ? {}
       : { runtimeSupervisor: built.runtimeSupervisor }),
+    ...(built.stepNode === undefined
+      ? {}
+      : {
+          stepNode: {
+            ...built.stepNode,
+            sourceSha256: "c".repeat(64),
+            patchSha256s: ["d".repeat(64), "e".repeat(64)],
+          },
+        }),
   };
   const calls = [];
   const deps = {
@@ -598,6 +613,10 @@ describe("coding runtime npm package", () => {
         write(argv[3], "built-supervisor");
         return 0;
       },
+      runStepNodeStage: async ({ argv }) => {
+        write(argv[2], STEP_NODE);
+        return 0;
+      },
     };
 
     const result = await buildCodingRuntimeNpmPackage({
@@ -631,6 +650,44 @@ describe("coding runtime npm package", () => {
     expect(readFileSync(join(outDir, "LICENSE.md"), "utf8")).toContain(
       "`runtime/native/keiko-runtime-supervisor.exe`",
     );
+    // #4492: the patched step Node.js ships beside the supervisor and is named in the notice.
+    expect(readFileSync(join(outDir, "runtime/step-node/node.exe"), "utf8")).toBe(STEP_NODE);
+    expect(result.stepNode).toStrictEqual({
+      sha256: sha256Of(STEP_NODE),
+      sizeBytes: STEP_NODE.length,
+    });
+    expect(readFileSync(join(outDir, "LICENSE.md"), "utf8")).toContain(
+      "`runtime/step-node/node.exe`: Node.js 26.13.1, MIT License",
+    );
+  });
+
+  it("carries no step Node.js in a macOS package", async () => {
+    const outDir = join(scratch(), "package");
+    const { deps } = fakeDeps();
+    const result = await buildCodingRuntimeNpmPackage({
+      target: "macos-arm64",
+      version: "1.2.3",
+      outDir,
+      deps,
+    });
+    expect(result.stepNode).toBeUndefined();
+    expect(existsSync(join(outDir, "runtime/step-node"))).toBe(false);
+    expect(builder.runtimePackageLayout("macos-arm64").stepNodePath).toBeUndefined();
+    expect(builder.runtimePackageLayout("windows-x64").stepNodePath).toBe(
+      "runtime/step-node/node.exe",
+    );
+  });
+
+  it("refuses a Windows package that has no step Node.js input", async () => {
+    const outDir = join(scratch(), "package");
+    await expect(
+      buildCodingRuntimeNpmPackage({
+        target: "windows-x64",
+        version: "1.2.3",
+        outDir,
+        deps: { ...windowsDeps(), runStepNodeStage: undefined },
+      }),
+    ).rejects.toThrow("the Windows step Node.js needs a prebuilt input");
   });
 
   // The publisher verifies every target on Linux, so a Windows candidate without POSIX executable
@@ -638,8 +695,10 @@ describe("coding runtime npm package", () => {
   it("seals a Windows candidate that carries no executable bit, with its supervisor pin", async () => {
     const fixture = await releaseFixture("windows-x64");
     const { receipt } = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
-    expect(receipt.files).toHaveLength(10);
+    expect(receipt.files).toHaveLength(11);
     expect(receipt.runtimeSupervisor).toStrictEqual(fixture.approval.runtimeSupervisor);
+    expect(receipt.stepNode).toStrictEqual(fixture.approval.stepNode);
+    expect(receipt.files.map(({ path }) => path)).toContain("runtime/step-node/node.exe");
     expect(receipt.files.map(({ path }) => path)).toContain(
       "runtime/native/keiko-runtime-supervisor.exe",
     );
@@ -655,6 +714,34 @@ describe("coding runtime npm package", () => {
       packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
     ).rejects.toThrow("runtime candidate digest mismatch");
     expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it("refuses a Windows candidate whose step Node.js is not the pinned binary", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    write(join(fixture.packageDir, "runtime/step-node/node.exe"), "patched-step-node-bytez");
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("runtime candidate digest mismatch");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  it("refuses a Windows candidate whose approval names no step Node.js", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    const { stepNode: _omitted, ...withoutStepNode } = fixture.approval;
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+        ...fixture.deps,
+        loadApproval: async () => withoutStepNode,
+      }),
+    ).rejects.toThrow("runtime candidate step Node.js approval mismatch");
+  });
+
+  it("refuses a Windows candidate that lacks the step Node.js file", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    rmSync(join(fixture.packageDir, "runtime/step-node"), { recursive: true });
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("exactly the approved package files");
   });
 
   it("fails when the Windows supervisor build fails", async () => {
@@ -920,6 +1007,7 @@ describe("windows-x64 package reproducibility", () => {
   describe("prebuilt native executables", () => {
     const PREBUILT_HELPER = "prebuilt-helper-bytes";
     const PREBUILT_SUPERVISOR = "prebuilt-supervisor-bytes";
+    const PREBUILT_STEP_NODE = "prebuilt-step-node-bytes";
     const approval = {
       helperSha256: sha256Of(PREBUILT_HELPER),
       helperSizeBytes: PREBUILT_HELPER.length,
@@ -927,12 +1015,21 @@ describe("windows-x64 package reproducibility", () => {
         sha256: sha256Of(PREBUILT_SUPERVISOR),
         sizeBytes: PREBUILT_SUPERVISOR.length,
       },
+      stepNode: {
+        sha256: sha256Of(PREBUILT_STEP_NODE),
+        sizeBytes: PREBUILT_STEP_NODE.length,
+      },
     };
 
-    function nativeDir(helper = PREBUILT_HELPER, supervisor = PREBUILT_SUPERVISOR) {
+    function nativeDir(
+      helper = PREBUILT_HELPER,
+      supervisor = PREBUILT_SUPERVISOR,
+      stepNode = PREBUILT_STEP_NODE,
+    ) {
       const dir = scratch();
       if (helper !== null) write(join(dir, "keiko-secure-workspace-read.exe"), helper);
       if (supervisor !== null) write(join(dir, "keiko-runtime-supervisor.exe"), supervisor);
+      if (stepNode !== null) write(join(dir, "node.exe"), stepNode);
       return dir;
     }
 
@@ -959,18 +1056,37 @@ describe("windows-x64 package reproducibility", () => {
       expect(readFileSync(join(native, "keiko-runtime-supervisor.exe"), "utf8")).toBe(
         PREBUILT_SUPERVISOR,
       );
+      expect(readFileSync(join(outDir, "runtime", "step-node", "node.exe"), "utf8")).toBe(
+        PREBUILT_STEP_NODE,
+      );
       expect(result.helperSha256).toBe(approval.helperSha256);
       expect(result.runtimeSupervisor.sha256).toBe(approval.runtimeSupervisor.sha256);
+      expect(result.stepNode.sha256).toBe(approval.stepNode.sha256);
     });
 
     it.each([
       ["helper", ["tampered-helper-bytes!", PREBUILT_SUPERVISOR], "does not match the pinned"],
       ["supervisor", [PREBUILT_HELPER, "tampered-supervisor-bytes!!"], "does not match the pinned"],
       ["missing supervisor", [PREBUILT_HELPER, null], "missing or not an ordinary"],
+      [
+        "step Node.js",
+        [PREBUILT_HELPER, PREBUILT_SUPERVISOR, "tampered-step-node-bytes"],
+        "does not match the pinned",
+      ],
+      [
+        "same-size step Node.js",
+        [PREBUILT_HELPER, PREBUILT_SUPERVISOR, "prebuilt-step-node-bytez"],
+        "does not match the pinned",
+      ],
+      [
+        "missing step Node.js",
+        [PREBUILT_HELPER, PREBUILT_SUPERVISOR, null],
+        "missing or not an ordinary",
+      ],
     ])(
       "refuses a %s that is not the pinned file before staging anything",
       async (_l, files, why) => {
-        const dir = nativeDir(files[0], files[1]);
+        const dir = nativeDir(files[0], files[1], files[2]);
         const outDir = join(scratch(), "package");
         let prepared = false;
         await expect(
