@@ -571,12 +571,26 @@ static int process_control(HANDLE job) {
 }
 
 /*
+ * #4496: a step ends when its root process ends. A detached child or a watcher the root left
+ * behind stays in the job and would hold the step open until its timeout, so once the root has
+ * exited the rest of the tree is terminated, as macOS stops the whole scope when its root is
+ * reaped (keiko_app_supervise). The root's own exit code is what the proof reports.
+ */
+static void end_tree_after_root(HANDLE job, HANDLE root, int *ended) {
+  if (*ended || WaitForSingleObject(root, 0) != WAIT_OBJECT_0) return;
+  (void)TerminateJobObject(job, 137);
+  *ended = 1;
+}
+
+/*
  * KEIKO-0270: reports the OBSERVED active-process count through `observed` so wmain can put it in
  * the reap proof. It used to be discarded here and the proof hard-coded a literal 0, which made
  * the harness's "Job Object must report zero active processes" assertion read a constant the
  * producer wrote rather than anything the Job Object said — an assertion that could not fail.
  */
-static int wait_for_zero_active(HANDLE job, HANDLE completion_port, uint32_t *observed) {
+static int wait_for_zero_active(HANDLE job, HANDLE completion_port, HANDLE root,
+                                uint32_t *observed) {
+  int root_ended = 0;
   *observed = UINT32_MAX;
   for (;;) {
     DWORD bytes = 0;
@@ -594,6 +608,7 @@ static int wait_for_zero_active(HANDLE job, HANDLE completion_port, uint32_t *ob
       return accounting.ActiveProcesses == 0;
     }
     if (!process_control(job)) return 0;
+    end_tree_after_root(job, root, &root_ended);
   }
 }
 
@@ -916,7 +931,7 @@ int wmain(int argc, wchar_t **argv) {
   write_u32(launched + 12, profiles.failed);
   if (!send_response(RESPONSE_LAUNCHED, confined ? launched : NULL, confined ? sizeof(launched) : 0))
     goto cleanup;
-  if (!wait_for_zero_active(job, completion_port, &active_processes)) {
+  if (!wait_for_zero_active(job, completion_port, process.hProcess, &active_processes)) {
     send_error(ERROR_JOB_OBSERVE);
     goto cleanup;
   }

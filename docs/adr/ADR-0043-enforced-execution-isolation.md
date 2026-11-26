@@ -1319,6 +1319,12 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   per-run profile (`Keiko.Step.<owner>-<16 hex>`) without a network capability, so the step reaches neither
   the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
   kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
+  - **The step ends with its root.** Once the root process has exited, the supervisor terminates
+    whatever is left in the job (a detached child, a watcher) and reports the root's own exit code
+    once the job holds no process, as macOS stops the whole scope when its root is reaped. Before
+    #4496 the supervisor waited for the job to empty, so a test command that left a daemon behind
+    held the step until its timeout (measured 2026-11-26, Windows 11 ARM64 guest, standard user:
+    the canary in `scripts/testing/test-windows-step-confinement.mjs` received no REAPED answer).
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
     modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
