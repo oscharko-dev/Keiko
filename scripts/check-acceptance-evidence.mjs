@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { containsCredentialShape } from "@oscharko-dev/keiko-security";
 
 import { readJsonArgument } from "./lib/json-argument.mjs";
+import ACCEPTANCE_CASE_SET from "./acceptance-case-ids.json" with { type: "json" };
 
 const NAME = "check-acceptance-evidence";
 const SCHEMA_VERSION = 5;
@@ -50,6 +51,15 @@ const CONTAINER_RUNTIME_SIGNS = {
   ],
 };
 
+// The case set a result must carry exactly (productionOpenCodeBackend.acceptance.test.ts pins its
+// cases to it): a missing, a repeated or an unknown case id each refuses the result.
+const REQUIRED_CASE_IDS = new Set(ACCEPTANCE_CASE_SET.caseIds);
+
+/** A platform is one of the producers' own keys, never an inherited or converted one. */
+function knownPlatform(platform) {
+  return typeof platform === "string" && Object.hasOwn(CONTAINER_RUNTIME_SIGNS, platform);
+}
+
 // The Windows promise also needs no installed Keiko service: the gateway service of Keiko 1.5.x or
 // any service named with the Keiko prefix. A fact it stopped recording counts as present.
 function recordedServices(services) {
@@ -71,14 +81,33 @@ function presentSigns(containerRuntime, platform = "darwin") {
   const recorded = Object.entries(containerRuntime)
     .filter(([, present]) => present !== false)
     .map(([sign]) => (printableKey(sign) ? sign : "<sign>"));
-  const unrecorded = (CONTAINER_RUNTIME_SIGNS[platform] ?? CONTAINER_RUNTIME_SIGNS.darwin).filter(
-    (sign) => !Object.hasOwn(containerRuntime, sign),
-  );
+  const expected = knownPlatform(platform)
+    ? CONTAINER_RUNTIME_SIGNS[platform]
+    : CONTAINER_RUNTIME_SIGNS.darwin;
+  const unrecorded = expected.filter((sign) => !Object.hasOwn(containerRuntime, sign));
   return [...recorded, ...unrecorded.map((sign) => `${sign}-unrecorded`)];
 }
 
 function casesOf(evidence) {
   return Array.isArray(evidence?.cases) ? evidence.cases : [];
+}
+
+function caseIds(evidence) {
+  return casesOf(evidence).map((entry) => entry?.caseId);
+}
+
+function missingCase(evidence) {
+  const recorded = new Set(caseIds(evidence));
+  return [...REQUIRED_CASE_IDS].some((id) => !recorded.has(id));
+}
+
+function repeatedCase(evidence) {
+  const ids = caseIds(evidence);
+  return new Set(ids).size !== ids.length;
+}
+
+function unexpectedCase(evidence) {
+  return caseIds(evidence).some((id) => typeof id !== "string" || !REQUIRED_CASE_IDS.has(id));
 }
 
 function metCount(evidence) {
@@ -164,7 +193,7 @@ function bodyFreeViolations(node, pointer = "", found = []) {
 // administrator, so an unrecognized value fails closed.
 const PRECONDITIONS = [
   ["schema-version", (evidence) => evidence.schemaVersion !== SCHEMA_VERSION],
-  ["platform", (evidence) => !Object.hasOwn(CONTAINER_RUNTIME_SIGNS, evidence.platform)],
+  ["platform", (evidence) => !knownPlatform(evidence.platform)],
   [
     "administrator",
     (evidence) => evidence.userClass !== "standard" && evidence.userClass !== "unknown",
@@ -208,10 +237,9 @@ function recordedPreconditions(evidence) {
 }
 
 const CASE_RULES = [
-  [
-    "case-set-incomplete",
-    (evidence) => evidence.caseSetComplete !== true || casesOf(evidence).length === 0,
-  ],
+  ["case-set-incomplete", (evidence) => evidence.caseSetComplete !== true || missingCase(evidence)],
+  ["case-repeated", repeatedCase],
+  ["case-unexpected", unexpectedCase],
   [
     "case-not-met",
     (evidence) =>
@@ -225,10 +253,17 @@ function resultFailures(evidence, preconditionsOnly) {
   const noCases =
     evidence.cases === undefined || (Array.isArray(evidence.cases) && evidence.cases.length === 0);
   const withCases = preconditionsOnly && !noCases;
+  // A machine-only file claims no result: the producer writes every result flag as `false`.
+  const claimsResult =
+    preconditionsOnly &&
+    (evidence.caseSetComplete !== false ||
+      evidence.everyCaseMetExpectation !== false ||
+      evidence.certifiesPromise !== false);
   const caseRules = preconditionsOnly ? [] : CASE_RULES;
   const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
   return [
     ...(withCases ? ["preconditions-only-with-cases"] : []),
+    ...(claimsResult ? ["preconditions-only-claims-result"] : []),
     ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
     ...bodyFree.map((pointer) => `body-free:${pointer}`),
   ];

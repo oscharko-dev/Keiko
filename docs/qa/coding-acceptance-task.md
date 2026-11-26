@@ -217,6 +217,7 @@ with the same owner-private writer. Log in as the standard user to be certified 
 administrator, never an elevated shell), in a built checkout, and run in PowerShell:
 
 ```powershell
+$env:KEIKO_WINDOWS_PRECONDITIONS = "1"
 $env:KEIKO_ACCEPTANCE_EVIDENCE_FILE = "$env:USERPROFILE\keiko-acceptance\windows-preconditions.json"
 npx vitest run packages/keiko-server/src/test-support/windowsAcceptancePreconditions.windows.test.ts
 node scripts/check-acceptance-evidence.mjs $env:KEIKO_ACCEPTANCE_EVIDENCE_FILE --preconditions-only
@@ -226,7 +227,13 @@ The evidence file must lie outside the checkout. The test passes whenever the fi
 checker's exit code is the verdict. It prints every unmet precondition by code, and on success says
 `PASS preconditions met ... no case was run, so no result is certified`: that certifies the machine,
 never a Windows result. Without `--preconditions-only` the same file fails with
-`case-set-incomplete, case-not-met`, and with `--preconditions-only` a file that carries cases is refused as `preconditions-only-with-cases`, so the machine-only PASS line never sits over a full-suite file.
+`case-set-incomplete, case-not-met`, and with `--preconditions-only` a file that carries cases is refused as `preconditions-only-with-cases`, and one that claims a result (`caseSetComplete`, `everyCaseMetExpectation` or `certifiesPromise` not `false`) as `preconditions-only-claims-result`, so the machine-only PASS line never sits over a full-suite file. An ordinary Windows test run skips the producer; `KEIKO_WINDOWS_PRECONDITIONS=1` asks for it.
+
+**The complete case set.** A full result certifies only when its case ids are exactly the set in
+[`scripts/acceptance-case-ids.json`](../../scripts/acceptance-case-ids.json): a missing case is
+`case-set-incomplete`, a repeated one `case-repeated` and an unknown one `case-unexpected`. The
+acceptance test pins its own cases to that file, so adding, renaming or removing a case moves the
+required set in the same change.
 
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)

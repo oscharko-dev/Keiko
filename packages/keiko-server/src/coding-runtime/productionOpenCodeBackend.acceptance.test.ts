@@ -653,6 +653,20 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
   },
 ];
 
+// The checker certifies a result only when its case ids are exactly this set, so a case added,
+// renamed or removed here moves the set the checker requires in the same change.
+describe("the acceptance case set (#4492)", () => {
+  it("is exactly the set check-acceptance-evidence requires", () => {
+    const required = JSON.parse(
+      readFileSync(
+        new URL("../../../../scripts/acceptance-case-ids.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { readonly caseIds: readonly string[] };
+    expect(ACCEPTANCE_CASES.map((expectation) => expectation.id)).toEqual(required.caseIds);
+  });
+});
+
 describe.skipIf(!acceptanceEnabled())(
   "Coding acceptance task on macOS without a container runtime (#4492)",
   () => {

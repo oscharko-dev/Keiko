@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +9,12 @@ import {
   acceptanceEvidenceSummary,
   runCheck,
 } from "../check-acceptance-evidence.mjs";
+
+// The complete case set the checker requires (scripts/acceptance-case-ids.json).
+const CASE_IDS = JSON.parse(
+  readFileSync(new URL("../acceptance-case-ids.json", import.meta.url), "utf8"),
+).caseIds;
+const allCases = (entry = (caseId) => ({ caseId, metExpectation: true })) => CASE_IDS.map(entry);
 
 const NO_RUNTIME = {
   dockerOnPath: false,
@@ -33,10 +40,7 @@ const CERTIFYING = {
   everyCaseMetExpectation: true,
   certifiesPromise: true,
   unmetPreconditions: [],
-  cases: [
-    { caseId: "verify-supervised-coding", metExpectation: true },
-    { caseId: "wrong-fix", metExpectation: true },
-  ],
+  cases: allCases(),
 };
 
 // The shape productionOpenCodeBackend.acceptance.test.ts writes per case (EvidenceEntry with an
@@ -81,10 +85,15 @@ const REAL_CASE = {
   observed: OBSERVED,
   metExpectation: true,
 };
-const REAL_SHAPE = { ...CERTIFYING, cases: [REAL_CASE] };
+const withRealCase = (realCase) =>
+  allCases((caseId) => (caseId === realCase.caseId ? realCase : { caseId, metExpectation: true }));
+const REAL_SHAPE = { ...CERTIFYING, cases: withRealCase(REAL_CASE) };
 
 function withObserved(patch) {
-  return { ...REAL_SHAPE, cases: [{ ...REAL_CASE, observed: { ...OBSERVED, ...patch } }] };
+  return {
+    ...REAL_SHAPE,
+    cases: withRealCase({ ...REAL_CASE, observed: { ...OBSERVED, ...patch } }),
+  };
 }
 
 describe("acceptanceEvidenceFailures (#4519)", () => {
@@ -113,7 +122,10 @@ describe("acceptanceEvidenceFailures (#4519)", () => {
       containerRuntime: { ...NO_RUNTIME, applicationPresent: true },
     };
     expect(acceptanceEvidenceFailures(planted)).toEqual(["container-runtime-present"]);
-    const missed = { ...CERTIFYING, cases: [{ caseId: "wrong-fix", metExpectation: false }] };
+    const missed = {
+      ...CERTIFYING,
+      cases: allCases((caseId) => ({ caseId, metExpectation: caseId !== "wrong-fix" })),
+    };
     expect(acceptanceEvidenceFailures(missed)).toEqual(["case-not-met"]);
     expect(acceptanceEvidenceFailures({ ...CERTIFYING, caseSetComplete: false })).toEqual([
       "case-set-incomplete",
@@ -422,7 +434,7 @@ describe("--preconditions-only (#4492 AC3)", () => {
 
   it("refuses a file that carries cases, so the PASS line never sits over a full-suite file", () => {
     const withCases = {
-      ...WINDOWS_CERTIFYING,
+      ...MACHINE_ONLY,
       cases: [{ caseId: "wrong-fix", metExpectation: true }],
     };
     const result = check(withCases, true);
@@ -431,10 +443,20 @@ describe("--preconditions-only (#4492 AC3)", () => {
     expect(acceptanceEvidenceFailures(withCases, { preconditionsOnly: true })).toEqual([
       "preconditions-only-with-cases",
     ]);
-    const malformed = { ...WINDOWS_CERTIFYING, cases: "x" };
+    const malformed = { ...MACHINE_ONLY, cases: "x" };
     expect(acceptanceEvidenceFailures(malformed, { preconditionsOnly: true })).toEqual([
       "preconditions-only-with-cases",
     ]);
+  });
+
+  it("refuses a machine-only file that claims a result", () => {
+    for (const flag of ["caseSetComplete", "everyCaseMetExpectation", "certifiesPromise"]) {
+      const claimed = { ...MACHINE_ONLY, [flag]: true };
+      expect(acceptanceEvidenceFailures(claimed, { preconditionsOnly: true })).toEqual([
+        "preconditions-only-claims-result",
+      ]);
+    }
+    expect(check({ ...MACHINE_ONLY, certifiesPromise: true }, true).code).toBe(1);
   });
 
   it("still refuses an unmet precondition and a body-free violation", () => {
@@ -446,6 +468,38 @@ describe("--preconditions-only (#4492 AC3)", () => {
   });
 });
 
+describe("the complete case set (#4492)", () => {
+  it("refuses a result that misses a required case", () => {
+    const partial = { ...CERTIFYING, cases: [{ caseId: "wrong-fix", metExpectation: true }] };
+    expect(acceptanceEvidenceFailures(partial)).toEqual(["case-set-incomplete"]);
+  });
+
+  it("refuses a repeated case, which would inflate the met count", () => {
+    const repeated = { ...CERTIFYING, cases: [...allCases(), CERTIFYING.cases[0]] };
+    expect(acceptanceEvidenceFailures(repeated)).toEqual(["case-repeated"]);
+  });
+
+  it("refuses a case the task does not define, and a case without an id", () => {
+    const unknown = {
+      ...CERTIFYING,
+      cases: [...allCases(), { caseId: "extra", metExpectation: true }],
+    };
+    expect(acceptanceEvidenceFailures(unknown)).toEqual(["case-unexpected"]);
+    const anonymous = { ...CERTIFYING, cases: [...allCases(), { metExpectation: true }] };
+    expect(acceptanceEvidenceFailures(anonymous)).toEqual(["case-unexpected"]);
+  });
+});
+
+describe("the platform key", () => {
+  it("refuses a converted or inherited platform name without throwing", () => {
+    const converted = { ...WINDOWS_CERTIFYING, platform: ["win32"] };
+    expect(acceptanceEvidenceFailures(converted)).toContain("platform");
+    const inherited = { ...CERTIFYING, platform: "constructor" };
+    expect(acceptanceEvidenceFailures(inherited)).toContain("platform");
+    expect(() => acceptanceEvidenceSummary(inherited)).not.toThrow();
+  });
+});
+
 describe("acceptanceEvidenceSummary", () => {
   it("prints closed values and counts only", () => {
     expect(acceptanceEvidenceSummary(CERTIFYING)).toEqual([
@@ -453,7 +507,7 @@ describe("acceptanceEvidenceSummary", () => {
       "node 26.13.1, opencode 2.2.5",
       "user class standard",
       "container runtime signs: none",
-      "cases: 2 of 2 met, set complete true",
+      `cases: ${String(CASE_IDS.length)} of ${String(CASE_IDS.length)} met, set complete true`,
       "certifies the promise: true",
     ]);
     const signs = acceptanceEvidenceSummary({

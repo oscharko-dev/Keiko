@@ -26,8 +26,10 @@
 //       its unit tests), so the canary places such files in the real workspace next to that copy,
 //       as the product does, and proves the step reaches neither.
 //
-// The `relay-confinement` job of `windows-gateway-confinement.yml` runs it on a hosted runner with
-// the supervisor built as the release builds it; the standard-user proof runs in a Windows guest.
+// It runs in the Windows 11 guest as the standard user on the interactive desktop, the profile of
+// the promise. A hosted Windows Server 2025 x64 runner (an administrator in a CI session) refuses
+// every process a step starts with EPERM, including the system cmd.exe (2026-11-26, #4561), so it
+// is not a lane for this proof.
 //
 //   node scripts/testing/test-windows-step-confinement.mjs --helper <keiko-runtime-supervisor.exe> [--json <file>]
 import assert from "node:assert/strict";
@@ -548,9 +550,12 @@ async function detachedChildren(helper, root, context, drives) {
   await observeChildren("detached", staged.execution, answer);
 }
 
+// Until the step's report line is complete: a chunk may end inside the JSON.
+const reportComplete = (stdout) => /(?:^|\n)STEP [^\n]*\n/u.test(stdout);
+
 // Until the step has reported its children.
 async function untilReported(started) {
-  while (!started.output.stdout.includes("STEP ")) {
+  while (!reportComplete(started.output.stdout)) {
     if (started.child.exitCode !== null) break;
     await new Promise((resolve) => setTimeout(resolve, 100)); // NOSONAR javascript:S9382 -- each check waits for the step's report.
   }

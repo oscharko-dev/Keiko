@@ -39,7 +39,8 @@ const NO_SERVICES: ScResult = { status: 1060, stdout: "" };
 const REGISTRY_ROOT = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services";
 const registryListing = (...names: readonly string[]): ScResult => ({
   status: 0,
-  stdout: ["", REGISTRY_ROOT, ...names.map((name) => `${REGISTRY_ROOT}\\${name}`), ""].join("\r\n"),
+  // As `reg.exe` prints it for the Services key, which has no values: its child keys, no header.
+  stdout: ["", ...names.map((name) => `${REGISTRY_ROOT}\\${name}`), ""].join("\r\n"),
 });
 const EMPTY_LISTING: ScResult = registryListing("Spooler", "BFE", "Dhcp");
 const SERVICES_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
@@ -225,22 +226,48 @@ describe("probeWindowsPreconditions", () => {
     }
   });
 
-  it("fails closed as its own code when the container probe cannot run", () => {
+  it("fails closed as its own code when the container probe cannot run, leaving its signs out", () => {
     const facts = probeWindowsPreconditions(seams({ whereUnrunnable: true }));
-    expect(facts.containerRuntime).toEqual({});
+    expect(Object.keys(facts.containerRuntime).sort()).toEqual([
+      "applicationPresent",
+      "containerServiceInstalled",
+      "dockerHostConfigured",
+      "runtimePipePresent",
+    ]);
     expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
   });
 
   it("fails closed as its own code when the pipe listing cannot be read", () => {
     const facts = probeWindowsPreconditions(seams({ pipes: null }));
-    expect(facts.containerRuntime).toEqual({});
+    expect(facts.containerRuntime).not.toHaveProperty("runtimePipePresent");
     expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
+  });
+
+  it("still names a sign it found when another container probe failed", () => {
+    const facts = probeWindowsPreconditions(
+      seams({ pipes: null, env: { DOCKER_HOST: "npipe:////./pipe/docker_engine" } }),
+    );
+    expect(facts.containerRuntime).toMatchObject({ dockerHostConfigured: true });
+    expect(facts.unmetPreconditions).toEqual([
+      "container-runtime-present",
+      "container-runtime-probe-failed",
+    ]);
+  });
+
+  it("reads a registry answer that names no service as no inventory", () => {
+    const facts = probeWindowsPreconditions(seams({ listing: { status: 0, stdout: "\r\n" } }));
+    expect(facts.containerRuntime).not.toHaveProperty("containerServiceInstalled");
+    expect(facts.services).toBeUndefined();
+    expect(facts.unmetPreconditions).toEqual([
+      "container-runtime-probe-failed",
+      "service-probe-failed",
+    ]);
   });
 
   it("fails closed in both probes when the registry listing cannot be read", () => {
     for (const status of [1, null]) {
       const facts = probeWindowsPreconditions(seams({ listing: { status, stdout: "" } }));
-      expect(facts.containerRuntime).toEqual({});
+      expect(facts.containerRuntime).not.toHaveProperty("containerServiceInstalled");
       expect(facts.services).toBeUndefined();
       expect(facts.unmetPreconditions).toEqual([
         "container-runtime-probe-failed",

@@ -10,7 +10,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { win32 } from "node:path";
 
-import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
+import {
+  WindowsSystemBinaryMissingError,
+  resolveWindowsSystemBinary,
+} from "@oscharko-dev/keiko-security";
 
 /** Every code the probe can emit; the checker must recognize each of them. */
 export const WINDOWS_PRECONDITION_CODES = [
@@ -48,6 +51,12 @@ export interface ScResult {
 }
 
 /** Everything the probe reads from the machine; a test replaces each seam. */
+/** The container signs that were answered, and whether every probe answered. */
+export interface WindowsContainerRuntimeProbe {
+  readonly facts: Readonly<Record<string, boolean>>;
+  readonly complete: boolean;
+}
+
 export interface WindowsProbeSeams {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly exists: (path: string) => boolean;
@@ -163,26 +172,34 @@ function applicationFolders(env: WindowsProbeSeams["env"]): readonly string[] {
 export function windowsContainerRuntimeFacts(
   seams: WindowsProbeSeams,
   serviceNames: ReadonlySet<string> | undefined,
-): Readonly<Record<string, boolean>> | undefined {
-  const clients = ["docker", "podman", "nerdctl", "colima", "limactl"].map((program) =>
-    seams.onPath(program),
+): WindowsContainerRuntimeProbe {
+  const [docker, podman, ...others] = ["docker", "podman", "nerdctl", "colima", "limactl"].map(
+    (program) => seams.onPath(program),
   );
   const pipeNames = seams.pipes();
-  if (clients.includes(undefined) || serviceNames === undefined || pipeNames === undefined) {
-    return undefined;
-  }
-  const pipes = new Set(pipeNames.map((name) => name.toLowerCase()));
-  const [docker, podman, ...others] = clients;
-  return {
-    dockerOnPath: docker === true,
-    podmanOnPath: podman === true,
-    otherClientOnPath: others.includes(true),
+  const pipes = pipeNames && new Set(pipeNames.map((name) => name.toLowerCase()));
+  const signs: Readonly<Record<string, boolean | undefined>> = {
+    dockerOnPath: docker,
+    podmanOnPath: podman,
+    otherClientOnPath: anyKnown(others),
     dockerHostConfigured:
       (seams.env.DOCKER_HOST ?? "") !== "" || (seams.env.CONTAINER_HOST ?? "") !== "",
-    containerServiceInstalled: CONTAINER_SERVICES.some((name) => serviceNames.has(name)),
-    runtimePipePresent: CONTAINER_PIPES.some((name) => pipes.has(name)),
+    containerServiceInstalled:
+      serviceNames && CONTAINER_SERVICES.some((name) => serviceNames.has(name)),
+    runtimePipePresent: pipes && CONTAINER_PIPES.some((name) => pipes.has(name)),
     applicationPresent: applicationFolders(seams.env).some((folder) => seams.exists(folder)),
   };
+  // A sign whose probe gave no answer is left out: the checker reads it as unrecorded and present.
+  const facts = Object.fromEntries(
+    Object.entries(signs).filter((entry): entry is [string, boolean] => entry[1] !== undefined),
+  );
+  return { facts, complete: Object.keys(facts).length === Object.keys(signs).length };
+}
+
+/** `true` once any answer is `true`, `false` when every answer is `false`, otherwise unknown. */
+function anyKnown(answers: readonly (boolean | undefined)[]): boolean | undefined {
+  if (answers.includes(true)) return true;
+  return answers.includes(undefined) ? undefined : false;
 }
 
 const SERVICES_REGISTRY_KEY = String.raw`HKLM\SYSTEM\CurrentControlSet\Services`;
@@ -207,7 +224,11 @@ export function keikoRegistryServiceNames(listing: string): readonly string[] {
 /** The service keys of the registry; `undefined` when `reg.exe` could not answer. */
 function registryServiceNames(seams: WindowsProbeSeams): ReadonlySet<string> | undefined {
   const listing = seams.reg(["query", SERVICES_REGISTRY_KEY]);
-  return listing.status === 0 ? serviceKeyNames(listing.stdout) : undefined;
+  if (listing.status !== 0) return undefined;
+  // `reg.exe` prints no header for a key without values, only its child keys; every Windows has
+  // many services, so an answer that names none is no inventory and stays unknown.
+  const names = serviceKeyNames(listing.stdout);
+  return names.size > 0 ? names : undefined;
 }
 
 function serviceInstalled(seams: WindowsProbeSeams, name: string): boolean | undefined {
@@ -237,11 +258,12 @@ function userClassCodes(userClass: WindowsUserClass): readonly WindowsPreconditi
   return userClass === "unknown" ? ["administrator-probe-failed"] : [];
 }
 
-function containerCodes(
-  facts: Readonly<Record<string, boolean>> | undefined,
-): readonly WindowsPreconditionCode[] {
-  if (facts === undefined) return ["container-runtime-probe-failed"];
-  return Object.values(facts).some(Boolean) ? ["container-runtime-present"] : [];
+// A sign that was found is named even when another probe failed, so the operator sees both.
+function containerCodes(probe: WindowsContainerRuntimeProbe): readonly WindowsPreconditionCode[] {
+  return [
+    ...(Object.values(probe.facts).some(Boolean) ? (["container-runtime-present"] as const) : []),
+    ...(probe.complete ? [] : (["container-runtime-probe-failed"] as const)),
+  ];
 }
 
 function serviceCodes(facts: WindowsServiceFacts | undefined): readonly WindowsPreconditionCode[] {
@@ -261,7 +283,7 @@ export function probeWindowsPreconditions(
   const services = windowsServiceFacts(seams, serviceNames);
   return {
     userClass,
-    containerRuntime: containerRuntime ?? {},
+    containerRuntime: containerRuntime.facts,
     services,
     unmetPreconditions: [
       ...userClassCodes(userClass),
@@ -271,13 +293,24 @@ export function probeWindowsPreconditions(
   };
 }
 
+/** The System32 tool, or none when the system folder does not hold it: that probe then fails. */
+function systemBinary(tool: string, env: WindowsProbeSeams["env"]): string | undefined {
+  try {
+    return resolveWindowsSystemBinary(tool, env);
+  } catch (error) {
+    if (error instanceof WindowsSystemBinaryMissingError) return undefined;
+    throw error;
+  }
+}
+
 /** Runs one System32 tool without a shell and with a timeout; a tool that never ran has no status. */
 function runSystemTool(
   env: WindowsProbeSeams["env"],
   tool: string,
   args: readonly string[],
 ): ScResult {
-  const binary = resolveWindowsSystemBinary(tool, env);
+  const binary = systemBinary(tool, env);
+  if (binary === undefined) return { status: null, stdout: "" };
   const result = spawnSync(binary, [...args], {
     // The System32 folder, so a tool never resolves anything against the caller's directory.
     cwd: win32.dirname(binary),

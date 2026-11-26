@@ -19,7 +19,11 @@ import { probeWindowsPreconditions } from "./windowsAcceptancePreconditions.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 
-describe.skipIf(process.platform !== "win32")("Windows acceptance preconditions (#4492)", () => {
+// An evidence producer, not a unit test: an ordinary Windows test run skips it, and a run that asks
+// for it with `KEIKO_WINDOWS_PRECONDITIONS=1` fails when it has no file to write.
+const requested = process.platform === "win32" && process.env.KEIKO_WINDOWS_PRECONDITIONS === "1";
+
+describe.skipIf(!requested)("Windows acceptance preconditions (#4492)", () => {
   it("writes the body-free preconditions evidence", () => {
     const file = process.env.KEIKO_ACCEPTANCE_EVIDENCE_FILE;
     expect(

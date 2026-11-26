@@ -98,5 +98,3 @@ jobs:
           path: relay-out/keiko-runtime-supervisor.exe
           if-no-files-found: error
           retention-days: 14
-      - name: Prove a governed step's confinement canaries
-        run: node scripts/testing/test-windows-step-confinement.mjs --helper relay-out/keiko-runtime-supervisor.exe
