@@ -163,15 +163,16 @@ const EXPECTED_PAYLOAD_LENGTH_BY_KIND = new Map([
   [4, 36], // Persistent application admission: root PID and launch ID.
   [5, 32], // Durable application ownership committed.
 ]);
-// Only a confined Windows launch (`--gateway-supervised`) reports its stale-grant sweep, so only a
-// caller that asks for it admits the 8-byte RESPONSE_LAUNCHED; every other harness stays exact.
-const CONFINED_LAUNCH_PAYLOAD_BYTES = 8;
+// Only a confined Windows launch reports its sweeps (stale grants, then stale run profiles: #4495),
+// so only a caller that asks for it admits the 16-byte RESPONSE_LAUNCHED; every other harness stays
+// exact.
+const CONFINED_LAUNCH_PAYLOAD_BYTES = 16;
 
 /**
  * Read one KRS1 response.
  *
  * @param {object} reader                       a `streamReader` queue
- * @param {{ confinedLaunch?: boolean }=} options  `confinedLaunch` admits the 8-byte launch sweep
+ * @param {{ confinedLaunch?: boolean }=} options  `confinedLaunch` admits the 16-byte launch sweeps
  */
 export async function response(reader, { confinedLaunch = false } = {}) {
   const responseHeader = await readBytes(reader, 12);

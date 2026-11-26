@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { hostCredentialConfigArgs, HOST_CREDENTIAL_CONFIG_QUERY } from "./network-credentials.js";
 import { gitEnv, networkGitEnv } from "./env.js";
+import { LINE_ENDING_CONFIG_QUERY, lineEndingConfigArgs } from "./line-ending-config.js";
 import { resolveGitExecutable } from "./git-executable.js";
 import type {
   GitProcessOptions,
@@ -478,6 +479,18 @@ function refusedOptionResult(forbidden: string, refusal: GitRefusalClass): GitPr
   };
 }
 
+function timedOutProcessResult(): GitProcessResult {
+  return {
+    exitCode: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    timedOut: true,
+    aborted: false,
+  };
+}
+
 function abortedProcessResult(): GitProcessResult {
   return {
     exitCode: null,
@@ -682,9 +695,13 @@ const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
 const FILTER_LISTING_MAX_BYTES = 1024 * 1024;
 
 // The listing must read the configuration the read itself will use, so it keeps the caller's `-C`.
-function configNamesArgs(args: readonly string[]): readonly string[] {
+function configQueryArgs(args: readonly string[], query: readonly string[]): readonly string[] {
   const index = findSubcommandIndex(args) ?? 0;
-  return [...args.slice(0, index), "config", "--name-only", "--list"];
+  return [...args.slice(0, index), ...query];
+}
+
+function configNamesArgs(args: readonly string[]): readonly string[] {
+  return configQueryArgs(args, ["config", "--name-only", "--list"]);
 }
 
 function filterDriverNames(listing: string): readonly string[] {
@@ -712,17 +729,58 @@ function filterNeutralizingArgs(names: readonly string[]): readonly string[] {
 // but command-overrides repository-controlled executable config and never prompts — see env.ts.
 const localGitProcessRunner = createGitProcessRunnerWithFixedArgs(gitEnv, LOCAL_READ_CONFIG_ARGS);
 
-export const defaultGitProcessRunner: GitProcessRunner = async (args, options) => {
-  if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
-    return await localGitProcessRunner(args, options);
-  const reopening = nestedRepositoryReopeningFlag(args);
-  if (reopening !== undefined) return refusedOptionResult(reopening, "config-override");
-  return await runFilterNeutralized(withNestedRepositoriesIsolated(args), options);
-};
+// The line-ending keys are read per call, in the read's own directory, because a repository-local
+// `core.autocrlf` outranks the user's scopes and `-c` outranks the repository file: forwarding the
+// value Git itself resolves (in the caller's `-C` directory) keeps that precedence. The query
+// executes nothing and is bounded, so no cache (and no stale value after the person edits their
+// configuration) is needed. Any failure forwards nothing, the previous fully isolated behaviour.
+const LINE_ENDING_QUERY_TIMEOUT_MS = 5000;
+const LINE_ENDING_QUERY_MAX_BYTES = 4 * 1024;
+
+async function resolveLineEndingArgs(
+  hostEnv: () => NodeJS.ProcessEnv,
+  args: readonly string[],
+  options: Parameters<GitProcessRunner>[1],
+): Promise<readonly string[]> {
+  const listing = await createGitProcessRunnerWithFixedArgs(
+    () => ({ ...networkGitEnv(hostEnv()), GIT_CONFIG_NOSYSTEM: "0" }),
+    PLATFORM_GIT_CONFIG_ARGS,
+  )(configQueryArgs(args, LINE_ENDING_CONFIG_QUERY), {
+    ...options,
+    timeoutMs: Math.min(options.timeoutMs, LINE_ENDING_QUERY_TIMEOUT_MS),
+    maxBytes: LINE_ENDING_QUERY_MAX_BYTES,
+  });
+  if (listing.exitCode !== 0 || listing.truncated || listing.timedOut || listing.aborted) return [];
+  return lineEndingConfigArgs(listing.stdout);
+}
+
+export function createLocalGitProcessRunner(
+  hostEnv: () => NodeJS.ProcessEnv = () => process.env,
+): GitProcessRunner {
+  return async (args, options) => {
+    if (!FILTER_APPLYING_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
+      return await localGitProcessRunner(args, options);
+    const reopening = nestedRepositoryReopeningFlag(args);
+    if (reopening !== undefined) return refusedOptionResult(reopening, "config-override");
+    const startedAt = Date.now();
+    const lineEndings = await resolveLineEndingArgs(hostEnv, args, options);
+    // The query spends the read's own deadline: the read never outlives what its caller allowed.
+    const timeoutMs = options.timeoutMs - (Date.now() - startedAt);
+    if (timeoutMs <= 0) return timedOutProcessResult();
+    return await runFilterNeutralized(
+      withNestedRepositoriesIsolated(args),
+      { ...options, timeoutMs },
+      lineEndings,
+    );
+  };
+}
+
+export const defaultGitProcessRunner: GitProcessRunner = createLocalGitProcessRunner();
 
 async function runFilterNeutralized(
   args: readonly string[],
   options: Parameters<GitProcessRunner>[1],
+  lineEndings: readonly string[],
 ): Promise<GitProcessResult> {
   const startedAt = Date.now();
   // The caller's byte bound is about the read's own answer; the listing has its own. The two share
@@ -740,11 +798,11 @@ async function runFilterNeutralized(
   if (listing.exitCode !== 0) return { ...listing, stdout: "" };
   const read = { ...options, timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAt)) };
   const names = filterDriverNames(listing.stdout);
-  if (names.length === 0) return await localGitProcessRunner(args, read);
   if (!names.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name)))
     return refusedOptionResult("filter", "config-override");
   return await createGitProcessRunnerWithFixedArgs(gitEnv, [
     ...LOCAL_READ_CONFIG_ARGS,
+    ...lineEndings,
     ...filterNeutralizingArgs(names),
   ])(args, read);
 }

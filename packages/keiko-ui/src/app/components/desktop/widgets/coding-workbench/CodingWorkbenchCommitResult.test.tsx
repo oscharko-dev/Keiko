@@ -100,6 +100,7 @@ describe("verified commit outcome in the Code task", () => {
 
   it.each([
     ["failed", "execution-failed", "Commit failed"],
+    ["failed", "signing-failed", "Commit failed"],
     ["recovery-required", "execution-uncertain", "Commit needs recovery"],
     ["verification-failed", "verification-missing", "Commit verification failed"],
     ["drift", "candidate-drift", "Commit proposal changed"],
@@ -109,6 +110,23 @@ describe("verified commit outcome in the Code task", () => {
     render(<CodingWorkbenchCommitResult result={{ ...base, status, reason }} runId="run-1" />);
     expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  // #4546 (lab T17): the person reads why the commit failed and what to repair.
+  it("names a commit Git could not sign and the setup to check", () => {
+    const base = blocked();
+    Reflect.deleteProperty(base, "blockReason");
+    render(
+      <CodingWorkbenchCommitResult
+        result={{ ...base, status: "failed", reason: "signing-failed" }}
+        runId="run-1"
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Git could not sign this commit. Check your Git signing setup, then commit again.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("removes an old receipt on a run switch and does not repeat its diagnostic on a reread", () => {

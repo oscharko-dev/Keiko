@@ -24,7 +24,13 @@ const TREE_HASH_SCHEMA = "KHT1";
 const MAX_TREE_ENTRIES = 60_000;
 const MAX_TREE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_TREE_PATH_BYTES = 16 * 1024 * 1024;
-const MAX_FILE_BYTES = 256 * 1024 * 1024;
+/**
+ * The largest single file a portable payload may carry. Every reader hashes or copies in fixed-size
+ * chunks, so this bounds work, not memory; it stays below the tree bound. 256 MiB refused OpenCode
+ * 2.4.1's Windows executable (278,383,496 bytes) and with it every Windows Coding run (#4495).
+ */
+export const PORTABLE_MAX_FILE_BYTES = 1024 * 1024 * 1024;
+const MAX_FILE_BYTES = PORTABLE_MAX_FILE_BYTES;
 const MAX_SELECTED_PATHS = 8;
 const BUFFER_BYTES = 64 * 1024;
 const ASYNC_READS_PER_YIELD = 64;
@@ -432,11 +438,11 @@ function assertOpenedFile(before: BigIntStats, opened: BigIntStats): void {
     !opened.isFile() ||
     opened.nlink !== 1n ||
     before.dev !== opened.dev ||
-    before.ino !== opened.ino ||
-    opened.size > BigInt(MAX_FILE_BYTES)
+    before.ino !== opened.ino
   ) {
     fail("portable handoff artifact is unsafe");
   }
+  if (opened.size > BigInt(MAX_FILE_BYTES)) fail("portable handoff artifact is too large");
 }
 
 function assertOpenedDirectory(expected: BigIntStats, current: BigIntStats): void {

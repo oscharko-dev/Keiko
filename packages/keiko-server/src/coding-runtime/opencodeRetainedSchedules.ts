@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+
 import type {
   EditEntryResult,
   RetainedSessionManifest,
@@ -9,20 +11,23 @@ import type {
 } from "./opencodeSessionRetention.js";
 
 /**
- * The schedules a retained native session holds (#4271, ADR-0137 D10), read and changed only
- * through the retention store's whole-entry, digest-verified `readEntry` and `editEntry`. The
- * retention audit already admits only rows of the retained session without any `if`/`until`
- * check, so what is read here is what the runtime will fire at a wake.
+ * The scheduled wakes a retained native session holds (#4271, ADR-0137 D10): since 2.3.1 the rows
+ * of the producer's `automation` table, read and changed only through the retention store's
+ * whole-entry, digest-verified `readEntry` and `editEntry`. The retention audit already admits only
+ * rows of the retained session that prompt that session on a time, an interval or a cron
+ * (`opencodeAutomationRows.ts`), so what is read here is what the runtime will fire at a wake.
  *
  * A change is the producer's own: pause makes an active row `paused`, delete removes the row, and
  * resume makes a paused row `active` again with its failures and retry cleared. A resumed one-shot
- * whose time has passed, and a repeating schedule whose next slot has passed, fire once at the next
- * wake; the runtime then moves a repeating schedule to its following slot. A schedule whose end
- * time has passed, or that has no run left, is `done` instead.
+ * whose time has passed, and a repeating automation whose next slot has passed, fire once at the
+ * next wake; the runtime then moves a repeating one to its following slot. An automation whose
+ * expiry has passed is `done` instead.
  */
 
-export type RetainedScheduleStatus = "active" | "paused" | "done";
-export type RetainedScheduleCadence = "in" | "at" | "every" | "cron" | "other";
+export type RetainedScheduleStatus = RetainedScheduleRowStatus | "removed";
+/** A status the runtime's own row carries; `removed` is Keiko's, for a retired runtime's ledger. */
+export type RetainedScheduleRowStatus = "active" | "paused" | "done";
+export type RetainedScheduleCadence = "at" | "every" | "cron" | "other";
 export type RetainedScheduleAction = "pause" | "resume" | "delete";
 
 export const RETAINED_SCHEDULE_ACTIONS: readonly RetainedScheduleAction[] = [
@@ -63,7 +68,7 @@ interface ScheduleRow {
   readonly id?: unknown;
   readonly name?: unknown;
   readonly status?: unknown;
-  readonly when?: unknown;
+  readonly trigger?: unknown;
   readonly action?: unknown;
   readonly next_due_at?: unknown;
   readonly retry_at?: unknown;
@@ -74,7 +79,7 @@ interface ScheduleRow {
 function hasScheduleTable(database: DatabaseSync): boolean {
   return (
     database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automation'")
       .get() !== undefined
   );
 }
@@ -106,17 +111,17 @@ function parsedObject(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-const CADENCES = new Set<RetainedScheduleCadence>(["in", "at", "every", "cron"]);
+const CADENCES = new Set<RetainedScheduleCadence>(["at", "every", "cron"]);
 
-function cadenceOf(when: Record<string, unknown> | undefined): {
+function cadenceOf(trigger: Record<string, unknown> | undefined): {
   readonly cadence: RetainedScheduleCadence;
   readonly cadenceText?: string;
 } {
-  const type = when?.type;
+  const type = trigger?.type;
   if (typeof type !== "string" || !CADENCES.has(type as RetainedScheduleCadence)) {
     return { cadence: "other" };
   }
-  const text = cadenceTextOf(when?.[type]);
+  const text = cadenceTextOf(trigger?.[type]);
   return {
     cadence: type as RetainedScheduleCadence,
     ...(text === undefined ? {} : { cadenceText: text.slice(0, CADENCE_MAX_CHARS) }),
@@ -135,7 +140,7 @@ function cadenceTextOf(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
-function statusOf(value: unknown): RetainedScheduleStatus | undefined {
+function statusOf(value: unknown): RetainedScheduleRowStatus | undefined {
   return value === "active" || value === "paused" || value === "done" ? value : undefined;
 }
 
@@ -178,7 +183,7 @@ function scheduleOf(
     id: row.id,
     ...nameField(row),
     status,
-    ...cadenceOf(parsedObject(row.when)),
+    ...cadenceOf(parsedObject(row.trigger)),
     ...(status === "active" && due !== undefined ? { dueAtMs: due } : {}),
     runCount: integer(row.run_count) ?? 0,
     failures: integer(row.failures) ?? 0,
@@ -194,7 +199,7 @@ function readSchedules(
   if (!hasScheduleTable(database)) return [];
   const rows = database
     .prepare(
-      'SELECT id, name, status, "when", action, next_due_at, retry_at, run_count, failures FROM schedule WHERE session_id = ? ORDER BY time_created, id',
+      "SELECT id, name, status, trigger, action, next_due_at, retry_at, run_count, failures FROM automation WHERE session_id = ? ORDER BY time_created, id",
     )
     .all(manifest.sessionId) as readonly ScheduleRow[];
   const schedules: RetainedSchedule[] = [];
@@ -203,6 +208,40 @@ function readSchedules(
     if (schedule !== undefined) schedules.push(schedule);
   }
   return schedules;
+}
+
+/**
+ * An entry retained under another OpenCode version is refused at the task's next run
+ * (`version-changed`) and its database is never opened by the runtime Keiko runs now (#4546). Its
+ * schedules can therefore never wake the task: each one the consent ledger names is listed as
+ * removed, without its prompt, name or cadence, and no wake is ever due for it.
+ */
+function removedSchedules(manifest: RetainedSessionManifest): readonly RetainedSchedule[] {
+  const modes = manifest.scheduleModes ?? {};
+  return Object.keys(modes)
+    .sort(compareIds)
+    .map((id) => ({
+      id,
+      status: "removed",
+      cadence: "other",
+      runCount: 0,
+      failures: 0,
+      consentMode: consentOf(id, manifest),
+    }));
+}
+
+function compareIds(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+function schedulesOf(
+  database: DatabaseSync,
+  manifest: RetainedSessionManifest,
+): readonly RetainedSchedule[] {
+  if (manifest.scheduleModes === undefined) return [];
+  if (manifest.runtimeVersion !== OPENCODE_PINNED_VERSION) return removedSchedules(manifest);
+  return readSchedules(database, manifest);
 }
 
 /**
@@ -217,7 +256,7 @@ export function listRetainedSchedules(
     taskId,
     sessionId: manifest.sessionId,
     retainedAtMs: manifest.retainedAtMs,
-    schedules: manifest.scheduleModes === undefined ? [] : readSchedules(database, manifest),
+    schedules: schedulesOf(database, manifest),
   }));
 }
 
@@ -234,7 +273,7 @@ export function retainedScheduleCount(
 }
 
 export type RetainedScheduleControlResult =
-  | { readonly ok: true; readonly status: RetainedScheduleStatus | "deleted" }
+  | { readonly ok: true; readonly status: RetainedScheduleRowStatus | "deleted" }
   | {
       readonly ok: false;
       readonly reason:
@@ -246,20 +285,18 @@ export type RetainedScheduleControlResult =
     };
 
 type EditOutcome =
-  | { readonly kind: "changed"; readonly status: RetainedScheduleStatus | "deleted" }
+  | { readonly kind: "changed"; readonly status: RetainedScheduleRowStatus | "deleted" }
   | { readonly kind: "not-found" }
   | { readonly kind: "not-applicable" };
 
 interface ControlRow {
   readonly status?: unknown;
-  readonly ends_at?: unknown;
-  readonly remaining_runs?: unknown;
+  readonly expires_at?: unknown;
 }
 
 function finished(row: ControlRow, nowMs: number): boolean {
-  const endsAt = integer(row.ends_at);
-  const remaining = integer(row.remaining_runs);
-  return (endsAt !== undefined && endsAt <= nowMs) || remaining === 0;
+  const expiresAt = integer(row.expires_at);
+  return expiresAt !== undefined && expiresAt <= nowMs;
 }
 
 function applyControl(
@@ -272,27 +309,27 @@ function applyControl(
   database.exec("PRAGMA busy_timeout = 5000");
   if (!hasScheduleTable(database)) return { kind: "not-found" };
   const row = database
-    .prepare("SELECT status, ends_at, remaining_runs FROM schedule WHERE id = ? AND session_id = ?")
+    .prepare("SELECT status, expires_at FROM automation WHERE id = ? AND session_id = ?")
     .get(scheduleId, sessionId) as ControlRow | undefined;
   if (row === undefined) return { kind: "not-found" };
   if (action === "delete") {
     database
-      .prepare("DELETE FROM schedule WHERE id = ? AND session_id = ?")
+      .prepare("DELETE FROM automation WHERE id = ? AND session_id = ?")
       .run(scheduleId, sessionId);
     return { kind: "changed", status: "deleted" };
   }
   if (action === "pause") {
     if (row.status !== "active") return { kind: "not-applicable" };
     database
-      .prepare("UPDATE schedule SET status = 'paused', time_updated = ? WHERE id = ?")
+      .prepare("UPDATE automation SET status = 'paused', time_updated = ? WHERE id = ?")
       .run(nowMs, scheduleId);
     return { kind: "changed", status: "paused" };
   }
   if (row.status !== "paused") return { kind: "not-applicable" };
-  const status: RetainedScheduleStatus = finished(row, nowMs) ? "done" : "active";
+  const status: RetainedScheduleRowStatus = finished(row, nowMs) ? "done" : "active";
   database
     .prepare(
-      "UPDATE schedule SET status = ?, failures = 0, retry_at = NULL, time_updated = ? WHERE id = ?",
+      "UPDATE automation SET status = ?, failures = 0, retry_at = NULL, time_updated = ? WHERE id = ?",
     )
     .run(status, nowMs, scheduleId);
   return { kind: "changed", status };
@@ -324,7 +361,7 @@ export function controlRetainedSchedule(
     status: hasScheduleTable(database)
       ? (
           database
-            .prepare("SELECT status FROM schedule WHERE id = ? AND session_id = ?")
+            .prepare("SELECT status FROM automation WHERE id = ? AND session_id = ?")
             .get(scheduleId, manifest.sessionId) as { readonly status?: unknown } | undefined
         )?.status
       : undefined,

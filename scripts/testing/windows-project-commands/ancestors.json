@@ -1,0 +1,66 @@
+{
+  "path": [
+    "${home}\\AppData\\Local\\Programs\\jdk-21\\bin",
+    "${home}\\AppData\\Local\\Programs\\maven\\bin",
+    "C:\\Program Files\\nodejs"
+  ],
+  "env": {
+    "JAVA_HOME": "${home}\\AppData\\Local\\Programs\\jdk-21"
+  },
+  "cwd": "${home}\\keiko-4493\\mvn-ws",
+  "grants": [
+    {
+      "access": "read",
+      "path": "${home}\\AppData\\Local\\Programs"
+    },
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\mvn-ws"
+    },
+    {
+      "access": "read",
+      "path": "${home}\\keiko-4493-m2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "npm-version-no-options",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/c", "npm.cmd -v"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "node-realpath",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["-e", "console.log(require('fs').realpathSync('pom.xml'))"],
+      "timeoutMs": 60000
+    },
+    {
+      "id": "javac-release-21",
+      "file": "${home}\\AppData\\Local\\Programs\\jdk-21\\bin\\javac.exe",
+      "args": [
+        "--release",
+        "21",
+        "-d",
+        "${home}\\keiko-4493\\mvn-ws\\javac-out",
+        "${home}\\keiko-4493\\mvn-ws\\src\\main\\java\\probe\\Sum.java"
+      ],
+      "timeoutMs": 300000
+    },
+    {
+      "id": "maven-verify",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": [
+        "/d",
+        "/c",
+        "mvn.cmd -B -o -Dmaven.repo.local=${home}\\keiko-4493-m2 verify > mvn-anc.log 2>&1"
+      ],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "maven-test-report",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\mvn-ws\\target\\surefire-reports\\TEST-probe.SumTest.xml"
+    }
+  ]
+}

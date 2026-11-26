@@ -3147,6 +3147,38 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // #4492: a recreated repository invalidated the active workspace, the start answered
+  // `authority-resolution-failed`, and the log named no cause. Each scope gap now has its reason.
+  it.each([
+    [
+      "conversation-not-admitted",
+      { admits: (): boolean => false, previousRunId: (): string | undefined => undefined },
+    ],
+    [
+      "prior-run-missing",
+      { admits: (): boolean => true, previousRunId: (): string | undefined => "run-unknown" },
+    ],
+  ] as const)("names the start scope gap %s in its diagnostic", async (gap, history) => {
+    const captured = captureDiagnostics();
+    const f = fixtureFrom({ diagnostics: captured.diagnostics, history: history as never });
+
+    expect(
+      await f.orchestrator.start(
+        { ...start, conversationId: "task-prior" },
+        "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b11",
+      ),
+    ).toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b11",
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: `stage=start-scope:reason=${gap}`,
+      }),
+    );
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+  });
+
   it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {
     const f = fixture();
     f.launchResolver.resolve.mockImplementationOnce(() => {
@@ -5212,6 +5244,9 @@ describe("CodingRuntimeOrchestrator", () => {
     ["runtime-supervisor-grants-capability", "runtime-supervisor-grants-capability"],
     ["runtime-supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
     ["runtime-supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    // #4495: started outside a signed-in desktop session, or from a path too long to relay.
+    ["runtime-supervisor-no-desktop", "runtime-supervisor-no-desktop"],
+    ["runtime-supervisor-image-path", "runtime-supervisor-image-path"],
     ["runtime-supervisor-refused", "runtime-supervisor-refused"],
   ] as const)(
     "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
@@ -8612,6 +8647,72 @@ describe("verification truth at task settlement", () => {
     });
   }
 
+  // #4492 (Windows lab): a task's run ended "Changes not checked"; the follow-up the person started
+  // with "Run the check now" changed nothing, its check failed, and it settled as succeeded, which
+  // erased the warning. A follow-up of an unverified change owes the same evidence.
+  async function followUpOf(prior: Partial<CodingRuntimeSnapshot>) {
+    const history = new CodingRuntimeHistory(createInMemoryUiStore(), () => "operator", undefined);
+    vi.spyOn(history, "admits").mockReturnValue(true);
+    vi.spyOn(history, "previousRunId").mockReturnValue("run-prior");
+    vi.spyOn(history, "begin").mockImplementation(() => undefined);
+    vi.spyOn(history, "initialContext").mockReturnValue("HISTORY-CONTEXT");
+    const f = fixtureFrom({
+      seededRows: [{ ...settledRow("run-prior", "2025-12-31T00:00:00.000Z", 3), ...prior }],
+      history,
+      newRunId: () => "run-1",
+    });
+    let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+    const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    f.taskDispatcher.dispatch.mockResolvedValue({ ok: false });
+    await f.orchestrator.start({ ...start, conversationId: "task-prior" });
+    return { f, finish: (): void => finish?.("succeeded") };
+  }
+
+  it("keeps a failed rerun of an unverified change from settling as succeeded", async () => {
+    const { f, finish } = await followUpOf({
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+    });
+    await verification(f, "failed");
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("settles a follow-up of an unverified change that runs no check as succeeded", async () => {
+    const { f, finish } = await followUpOf({
+      state: "failed",
+      failureCode: "verification-not-evidenced",
+    });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
+  it.each([
+    [
+      "a passing rerun of an unverified change",
+      { state: "failed", failureCode: "verification-not-evidenced" },
+      "passed",
+    ],
+    ["a failed check after a verified task", {}, "failed"],
+  ] as const)("settles %s as succeeded", async (_name, prior, status) => {
+    const { f, finish } = await followUpOf(prior);
+    await verification(f, status);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+  });
+
   it.each(["failed", "partial"] as const)(
     "completes a read-only %s diagnosis without initiating a repair",
     async (status) => {
@@ -9812,7 +9913,7 @@ describe("native session continuity requested by a start", () => {
       consentMode: "governed-assist" | "supervised-coding" | "autonomous-delivery",
     ) => ({
       taskId: "task-prior",
-      scheduleId: "sch_1",
+      scheduleId: "aut_1",
       intent: "  Check the build  ",
       consentMode,
     });

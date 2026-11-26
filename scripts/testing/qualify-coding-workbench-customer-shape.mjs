@@ -401,10 +401,38 @@ async function startGuardFacts(page) {
       alertDigests: alerts.map((text) =>
         createHash("sha256").update(text.trim()).digest("hex").slice(0, 16),
       ),
+      runtime: await runtimeReadinessFacts(page),
     };
   } catch {
     return { unavailable: true };
   }
+}
+
+// The server's runtime readiness behind a held-back Start: whether the runtime is available and,
+// when it is not, the closed reason code that names the first failed prerequisite (for example an
+// unpublished runtime package). A value outside the code shape is reported as unrecognized.
+const READINESS_REASON_SHAPE = /^[a-z0-9-]{1,64}$/u;
+
+async function runtimeReadinessFacts(page) {
+  try {
+    const response = await page.request.get(
+      "/api/coding-workbench/runtime/readiness?requestedMode=governed-assist",
+      { timeout: 10_000 },
+    );
+    if (!response.ok()) return { readiness: `http-${String(response.status())}` };
+    const body = await response.json();
+    return {
+      runtimeAvailable: body.runtimeAvailable === true,
+      runtimeUnavailableReason: readinessReasonCode(body.runtimeUnavailableReason),
+    };
+  } catch {
+    return { readiness: "unreadable" };
+  }
+}
+
+function readinessReasonCode(reason) {
+  if (typeof reason !== "string") return "absent";
+  return READINESS_REASON_SHAPE.test(reason) ? reason : "unrecognized";
 }
 
 // Whether another element receives a click at the Start button's centre: a closed class, never the

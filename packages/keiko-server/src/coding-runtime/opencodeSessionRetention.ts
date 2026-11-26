@@ -35,6 +35,14 @@ import {
   windowsOwnerPrivateVerdict,
 } from "@oscharko-dev/keiko-security/windows-owner-private";
 
+import { NATIVE_SESSION_ANCESTRY_MAX_DEPTH } from "./opencodeNativeSessionTree.js";
+import {
+  AUTOMATION_ID_PATTERN,
+  RETIRED_SCHEDULE_ID_PATTERN,
+  RETAINED_SCHEDULE_MAX,
+  UNADMITTED_AUTOMATION_PREDICATE,
+} from "./opencodeAutomationRows.js";
+import { SCHEDULER_LEASE_KEY } from "./opencodeScheduleLease.js";
 import {
   OPENCODE_PERSISTENCE_SCHEMAS,
   OPENCODE_PERSISTENCE_TABLE_CLASSES,
@@ -127,6 +135,7 @@ export type RetentionRefusal =
 export type RetentionAuditCheck =
   | "kv-rows"
   | "workspace-rows"
+  | "machine-rows"
   | "job-rows"
   | "blob-rows"
   | "schedule-rows"
@@ -173,6 +182,8 @@ export type RetainResult =
       readonly ok: true;
       readonly databaseBytes: number;
       readonly messageCount: number;
+      /** The subagent sessions retained under the run's own session (#4546). */
+      readonly subagentSessionCount: number;
       readonly entryCount: number;
       readonly prunedCount: number;
       /** Entries a pruning wanted gone but a process holds open; the next pruning retries them. */
@@ -313,7 +324,7 @@ interface AuditExpectation {
 }
 
 type AuditResult =
-  | { readonly ok: true; readonly messageCount: number }
+  | { readonly ok: true; readonly messageCount: number; readonly subagentSessionCount: number }
   | {
       readonly ok: false;
       readonly reason: RetentionRefusal;
@@ -351,6 +362,7 @@ class Store {
         ok: true,
         databaseBytes: staged.databaseBytes,
         messageCount: staged.messageCount,
+        subagentSessionCount: staged.subagentSessionCount,
         entryCount: pruned.entryCount,
         prunedCount: pruned.expired + pruned.orphaned + pruned.invalid + pruned.quota,
         blockedCount: pruned.blocked,
@@ -549,7 +561,12 @@ class Store {
     };
     writeFileSync(join(staging, MANIFEST_FILE), JSON.stringify(manifest), { mode: 0o600 });
     this.protectPrivatePath(join(staging, MANIFEST_FILE));
-    return { ok: true, databaseBytes: hashed.bytes, messageCount: audit.messageCount };
+    return {
+      ok: true,
+      databaseBytes: hashed.bytes,
+      messageCount: audit.messageCount,
+      subagentSessionCount: audit.subagentSessionCount,
+    };
   }
 
   // The previous entry moves aside before the new one is renamed in, so a reader sees one whole
@@ -720,7 +737,12 @@ class Store {
 }
 
 type StageResult =
-  | { readonly ok: true; readonly databaseBytes: number; readonly messageCount: number }
+  | {
+      readonly ok: true;
+      readonly databaseBytes: number;
+      readonly messageCount: number;
+      readonly subagentSessionCount: number;
+    }
   | {
       readonly ok: false;
       readonly reason: RetentionRefusal;
@@ -945,12 +967,6 @@ function stagedRowsRefused(path: string, manifest: RetainedSessionManifest): boo
   }
 }
 
-/** The scheduler's leader lease row (`kv`, 2.2.5): process-lifetime state of the runtime. */
-const SCHEDULER_LEASE_KEY = "schedule:leader";
-const SCHEDULE_ID = /^sch_[0-9A-Za-z]{1,64}$/u;
-/** At most this many schedules are carried in a ledger; more refuse the retain as unknown state. */
-export const RETAINED_SCHEDULE_MAX = 64;
-
 /**
  * The lease row is process-lifetime state: Keiko's own hold (`opencodeScheduleLease.ts`) or a
  * runtime's lease left behind when its process was ended. The staged copy drops exactly that row;
@@ -970,6 +986,11 @@ function dropSchedulerLease(path: string): void {
   }
 }
 
+/** A ledger names the runtime's automations, or the schedules of an entry retained under 2.2.5. */
+function ledgerId(id: string): boolean {
+  return AUTOMATION_ID_PATTERN.test(id) || RETIRED_SCHEDULE_ID_PATTERN.test(id);
+}
+
 function validScheduleModes(value: unknown): boolean {
   if (value === undefined) return true;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -977,7 +998,7 @@ function validScheduleModes(value: unknown): boolean {
   return (
     entries.length > 0 &&
     entries.length <= RETAINED_SCHEDULE_MAX &&
-    entries.every(([id, mode]) => SCHEDULE_ID.test(id) && isCodingWorkbenchMode(mode))
+    entries.every(([id, mode]) => ledgerId(id) && isCodingWorkbenchMode(mode))
   );
 }
 
@@ -1008,16 +1029,16 @@ function scheduleIds(path: string): readonly string[] {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     const table = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schedule'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automation'")
       .get();
     if (table === undefined) return [];
     const rows = database
-      .prepare("SELECT id FROM schedule ORDER BY id LIMIT ?")
+      .prepare("SELECT id FROM automation ORDER BY id LIMIT ?")
       .all(RETAINED_SCHEDULE_MAX + 1) as readonly { readonly id?: unknown }[];
     const ids = rows.map((row) => row.id);
     if (
       ids.length > RETAINED_SCHEDULE_MAX ||
-      ids.some((id) => typeof id !== "string" || !SCHEDULE_ID.test(id))
+      ids.some((id) => typeof id !== "string" || !AUTOMATION_ID_PATTERN.test(id))
     )
       throw new Error("retained-schedules-invalid");
     return ids as readonly string[];
@@ -1041,6 +1062,7 @@ const CLASS_REFUSALS = [
 const UNKNOWN_STATE_CHECKS: Readonly<Record<string, RetentionAuditCheck>> = {
   kv: "kv-rows",
   workspace: "workspace-rows",
+  machine: "machine-rows",
   job: "job-rows",
   blob: "blob-rows",
   blob_ref: "blob-rows",
@@ -1070,7 +1092,8 @@ class AuditRefused extends Error {
 const SQLITE_ERROR = "ERR_SQLITE_ERROR";
 
 /**
- * Proves that a database holds exactly one session, the expected one, and no state that could act
+ * Proves that a database holds exactly one top-level session, the expected one, with only the
+ * subagent sessions its turns spawned under it, and no state that could act
  * with authority a later run does not have: saved grants, credentials, queued inputs, a staged undo.
  * An unknown schema is refused rather than guessed at.
  */
@@ -1110,18 +1133,14 @@ function auditOpenDatabase(database: DatabaseSync, expected: AuditExpectation): 
       "SELECT id, directory, version, parent_id, workspace_id, permission, revert, time_archived, time_suspended FROM session_v2",
     )
     .all() as SessionRow[];
-  const session = sessions[0];
-  if (sessions.length !== 1 || session === undefined) {
-    return { ok: false, reason: "session-mismatch" };
-  }
-  const sessionProblem = sessionRefusal(session, expected);
+  const sessionProblem = sessionTreeRefusal(sessions, expected);
   if (sessionProblem !== undefined) return { ok: false, reason: sessionProblem };
   const messageCount = rowCount(
     database,
     "SELECT COUNT(*) AS n FROM session_message WHERE session_id = ?",
     expected.sessionId,
   );
-  return { ok: true, messageCount };
+  return { ok: true, messageCount, subagentSessionCount: sessions.length - 1 };
 }
 
 function refusalForClassifiedRows(
@@ -1153,22 +1172,19 @@ function refusalForClassifiedRows(
   };
 }
 
-/** The largest schedule action (its prompt) and name a retained copy may carry, in characters. */
-export const RETAINED_SCHEDULE_ACTION_MAX_CHARS = 16_384;
-export const RETAINED_SCHEDULE_NAME_MAX_CHARS = 256;
-
 /**
- * Schedule rows a retained copy may not carry: one of another session or of none, a status the
- * producer does not write, an id Keiko cannot name, an oversized action or name, check state, or any
- * `if`/`until` check. A shell check runs with the runtime server's whole environment, its secrets
- * included, outside the policy hook's shell scrub (measured with the real 2.2.5 runtime); a Code
- * Mode check would boot a runtime for every poll. The policy refuses both at creation, so a row
- * that carries one is state Keiko did not admit. More than `RETAINED_SCHEDULE_MAX` rows count too.
+ * Automation rows a retained copy may not carry (`opencodeAutomationRows.ts`): anything but a
+ * prompt into the retained session on a time, an interval or a cron. A shell action runs with the
+ * runtime server's whole environment, its secrets included, outside the policy hook's shell scrub,
+ * and a Code Mode program or an MCP event watch runs without a human; the policy refuses all three
+ * at creation, so a row that carries one is state Keiko did not admit. More than
+ * `RETAINED_SCHEDULE_MAX` rows count too.
  */
 function unadmittedScheduleRows(database: DatabaseSync, table: string, sessionId: string): number {
   const unadmitted = rowCount(
     database,
-    `SELECT COUNT(*) AS n FROM "${table}" WHERE session_id IS NOT ? OR status NOT IN ('active', 'paused', 'done') OR "check" IS NOT NULL OR state IS NOT NULL OR id NOT GLOB 'sch_?*' OR substr(id, 5) GLOB '*[^0-9A-Za-z]*' OR length(id) > 68 OR length(action) > ${String(RETAINED_SCHEDULE_ACTION_MAX_CHARS)} OR length(COALESCE(name, '')) > ${String(RETAINED_SCHEDULE_NAME_MAX_CHARS)}`,
+    `SELECT COUNT(*) AS n FROM "${table}" WHERE ${UNADMITTED_AUTOMATION_PREDICATE}`,
+    sessionId,
     sessionId,
   );
   const total = rowCount(database, `SELECT COUNT(*) AS n FROM "${table}"`);
@@ -1229,15 +1245,53 @@ function persistedDirectory(directory: string): string {
   return /^[A-Za-z]:[\\/]/u.test(directory) ? directory.replaceAll("\\", "/") : directory;
 }
 
+/**
+ * The run's session and the subagent sessions its turns spawned: exactly one root, the run's own
+ * session, and every other session a descendant of it whose parent chain ends at the root. Each one
+ * passes the same checks, so a child carries no grant, queued input or staged undo either (#4546).
+ */
+function sessionTreeRefusal(
+  sessions: readonly SessionRow[],
+  expected: AuditExpectation,
+): RetentionRefusal | undefined {
+  const roots = sessions.filter((session) => session.parent_id === null);
+  const root = roots[0];
+  if (roots.length !== 1 || root?.id !== expected.sessionId || !descendsFromRoot(sessions, root)) {
+    return "session-mismatch";
+  }
+  for (const session of [root, ...sessions.filter((entry) => entry !== root)]) {
+    const problem = sessionRefusal(session, expected);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/** Every session's parent chain ends at the root within the live session tree's depth bound. */
+function descendsFromRoot(sessions: readonly SessionRow[], root: SessionRow): boolean {
+  const parents = new Map<unknown, unknown>(
+    sessions.map((session) => [session.id, session.parent_id]),
+  );
+  if (parents.size !== sessions.length) return false;
+  return sessions.every((session) => {
+    let current: unknown = session.id;
+    for (let step = 0; step <= NATIVE_SESSION_ANCESTRY_MAX_DEPTH; step += 1) {
+      if (current === root.id) return true;
+      if (!parents.has(current)) return false;
+      current = parents.get(current);
+    }
+    return false;
+  });
+}
+
 function sessionRefusal(
   session: SessionRow,
   expected: AuditExpectation,
 ): RetentionRefusal | undefined {
   if (
-    session.id !== expected.sessionId ||
+    typeof session.id !== "string" ||
+    !SESSION_ID.test(session.id) ||
     session.directory !== persistedDirectory(expected.directory) ||
     session.version !== expected.version ||
-    session.parent_id !== null ||
     session.workspace_id !== null ||
     session.time_archived !== null
   ) {

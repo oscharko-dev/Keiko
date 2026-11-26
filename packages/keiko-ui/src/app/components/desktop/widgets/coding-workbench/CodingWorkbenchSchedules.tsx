@@ -132,6 +132,8 @@ function ScheduleActions({
   readonly onAct: (action: CodingWorkbenchScheduleAction) => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  // A removed schedule belongs to a session the runtime no longer opens: nothing to change.
+  if (schedule.status === "removed") return null;
   const actions: readonly CodingWorkbenchScheduleAction[] = [
     ...(schedule.status === "active" ? (["pause"] as const) : []),
     ...(schedule.status === "paused" ? (["resume"] as const) : []),
@@ -160,6 +162,7 @@ function scheduleSummary(schedule: CodingWorkbenchSchedule, t: CodingWorkbenchTr
   const label = schedule.name ?? schedule.cadenceText ?? t("codingWorkbench.schedules.unnamed");
   if (schedule.status === "paused") return t("codingWorkbench.schedules.paused", { label });
   if (schedule.status === "done") return t("codingWorkbench.schedules.done", { label });
+  if (schedule.status === "removed") return t("codingWorkbench.schedules.removed", { label });
   if (schedule.wait !== undefined)
     return t(`codingWorkbench.schedules.wait.${schedule.wait}`, { label });
   if (schedule.dueAt === undefined) return label;

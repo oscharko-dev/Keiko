@@ -300,6 +300,12 @@ test("submits the live Composer text with Enter and clears the draft @smoke", as
   const composer = page.getByRole("textbox", { name: "Chat message" });
   const source = "Immediate Enter send preserves every character.";
   await composer.fill(source);
+  // Enter sends once the composer is ready, exactly when the Send button is: while the skill
+  // selection still loads, both wait (a press in that window was the Firefox flake).
+  await expect(page.getByRole("button", { name: "Send message" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   await composer.press("Enter");
   const params = new URLSearchParams({ chatId: chat.id, projectPath });
   await expect

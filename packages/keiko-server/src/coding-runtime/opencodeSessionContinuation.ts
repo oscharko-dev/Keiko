@@ -13,6 +13,7 @@ import {
   type SessionContinuityRecord,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
+import { NATIVE_SESSION_ANCESTRY_MAX_DEPTH } from "./opencodeNativeSessionTree.js";
 import { holdSchedulerLease, removeInheritedSchedules } from "./opencodeScheduleLease.js";
 import type {
   CheckoutResult,
@@ -262,8 +263,8 @@ class ContinuationRefused extends Error {
 /**
  * Binds the started runtime to the session the run continues. A resume uses the retained session as
  * it is; a fork copies it (to just before a user turn, or through its end) into a new session and
- * removes the source from this run's private database, so the run holds exactly one session and the
- * retained entry of the source task is untouched. Either way the session must be the retained one in
+ * removes the source, and with it the subagent sessions under it, from this run's private database,
+ * so the run holds exactly one session and the retained entry of the source task is untouched. Either way the session must be the retained one in
  * the run's own workspace; anything else is a refusal. A session retained at the fork source's
  * location is first moved to the run's own workspace by the runtime itself (`session.move`).
  */
@@ -296,15 +297,52 @@ interface RetainedSessionView {
   readonly agent: unknown;
 }
 
-/** The run's one session and where the runtime says it is; anything else is a refusal. */
+type ListedSession = Readonly<Record<string, unknown>>;
+
+function listedParent(session: ListedSession): unknown {
+  return session.parentID ?? undefined;
+}
+
+/** True when the listed session's parent chain reaches `rootId` within the session tree's bound. */
+function descendsFrom(
+  sessions: readonly ListedSession[],
+  session: ListedSession,
+  rootId: string,
+): boolean {
+  const byId = new Map(sessions.map((entry) => [entry.id, entry] as const));
+  let current: ListedSession | undefined = session;
+  for (
+    let depth = 0;
+    depth < NATIVE_SESSION_ANCESTRY_MAX_DEPTH && current !== undefined;
+    depth += 1
+  ) {
+    const parent = listedParent(current);
+    if (typeof parent !== "string" || parent === current.id) return false;
+    if (parent === rootId) return true;
+    current = byId.get(parent);
+  }
+  return false;
+}
+
+/**
+ * The run's session and where the runtime says it is. It is the one root session the runtime
+ * lists; every other session is a subagent session whose parent chain reaches it, as the retained
+ * database's audit proved (#4546). Anything else is a refusal.
+ */
 async function locatedSession(
   client: ContinuationClient,
   expectedId: string,
   signal: AbortSignal | undefined,
 ): Promise<{ readonly view: RetainedSessionView; readonly directory: unknown }> {
   const sessions = await client.sessions(signal);
-  const session = sessions[0];
-  if (sessions.length !== 1 || session?.id !== expectedId) {
+  const roots = sessions.filter((entry) => listedParent(entry) === undefined);
+  const session = roots[0];
+  if (
+    new Set(sessions.map((entry) => entry.id)).size !== sessions.length ||
+    roots.length !== 1 ||
+    session?.id !== expectedId ||
+    !sessions.every((entry) => entry === session || descendsFrom(sessions, entry, expectedId))
+  ) {
     throw new ContinuationRefused("session-mismatch");
   }
   const location = session.location;
@@ -317,7 +355,7 @@ async function locatedSession(
   };
 }
 
-async function soleSession(
+async function runSessionAt(
   client: ContinuationClient,
   expectedId: string,
   directory: string,
@@ -367,8 +405,8 @@ async function relocatedSession(
   signal: AbortSignal | undefined,
 ): Promise<RetainedSessionView> {
   const source = continuation.sourceDirectory;
-  if (source === undefined) return soleSession(client, continuation.sessionId, directory, signal);
-  await soleSession(client, continuation.sessionId, source, signal);
+  if (source === undefined) return runSessionAt(client, continuation.sessionId, directory, signal);
+  await runSessionAt(client, continuation.sessionId, source, signal);
   try {
     await client.moveSession(continuation.sessionId, directory, signal);
   } catch (error) {
@@ -440,7 +478,7 @@ async function forkAndReplace(
   } catch (error) {
     throw new ContinuationRefused("fork-failed", { cause: error });
   }
-  await soleSession(client, forked.id, directory, signal);
+  await runSessionAt(client, forked.id, directory, signal);
   return forked.id;
 }
 
@@ -590,6 +628,7 @@ function attemptRetain(
         outcome: "retained",
         databaseBytes: result.databaseBytes,
         messageCount: result.messageCount,
+        subagentSessionCount: result.subagentSessionCount,
         entryCount: result.entryCount,
         prunedCount: result.prunedCount,
         blockedCount: result.blockedCount,

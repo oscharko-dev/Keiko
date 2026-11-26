@@ -11,6 +11,8 @@ export {
   buildGatewaySeatbeltCommand,
   SEATBELT_DENY_EGRESS_PROFILE,
   DEFAULT_CONTAINER_IMAGE,
+  WINDOWS_STEP_SUPERVISOR_COMMAND,
+  WINDOWS_STEP_SUPERVISOR_MODE,
 } from "./backends.js";
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";

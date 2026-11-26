@@ -567,7 +567,7 @@ async function startProductiveGateway(media: Media): Promise<ProductiveGateway> 
         capability === GATEWAY_CAPABILITY && audience === "model-gateway"
           ? { ok: true, binding: { runId: RUN_ID } }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: RUN_ID }),
+      admitModelCall: () => ({ ok: true, runId: RUN_ID }),
     },
     openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
     codingWorkbenchEvidenceStore: {

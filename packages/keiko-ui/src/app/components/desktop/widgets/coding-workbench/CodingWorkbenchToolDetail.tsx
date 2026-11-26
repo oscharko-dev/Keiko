@@ -121,13 +121,10 @@ export function ToolFailureExplanation({
   const cause = tool.presentation?.refusalCause;
   const causeText =
     cause === undefined ? undefined : t(`codingWorkbench.activity.refusalCause.${cause}`);
-  const exitCode = tool.presentation?.exitCode;
   return (
     <div className={styles.cmpToolFailure}>
       <p className={styles.cmpToolOutcome}>
-        {origin === "command-failed" && exitCode !== undefined
-          ? t("codingWorkbench.activity.failure.command-failed", { code: exitCode })
-          : t(`codingWorkbench.activity.failure.${failureSentence(origin)}`)}
+        {failureLead(tool, origin, t)}
         {causeText === undefined ? null : ` ${causeText}`}
       </p>
       {origin === "keiko-refused" || origin === "cancelled" ? null : (
@@ -135,6 +132,22 @@ export function ToolFailureExplanation({
       )}
     </div>
   );
+}
+
+// The first sentence of a failed row. An edit the runtime refused because the file is not UTF-8 text
+// says so in its own words (#4546); a command that exited names its exit code.
+function failureLead(
+  tool: CodingSafeActivityTool,
+  origin: CodingSafeActivityToolFailureOrigin,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (tool.presentation?.refusalReason === "FILE_NOT_UTF8") {
+    return t("codingWorkbench.activity.editRefusalNotUtf8");
+  }
+  const exitCode = tool.presentation?.exitCode;
+  return origin === "command-failed" && exitCode !== undefined
+    ? t("codingWorkbench.activity.failure.command-failed", { code: exitCode })
+    : t(`codingWorkbench.activity.failure.${failureSentence(origin)}`);
 }
 
 function failureSentence(

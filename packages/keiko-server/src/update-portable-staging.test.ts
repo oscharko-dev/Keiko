@@ -34,6 +34,13 @@ import {
 } from "./update-portable-staging-shared.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = ((): (typeof OPENCODE_RUNTIME_VERSION_PINS)[number] => {
+  const [pin] = OPENCODE_RUNTIME_VERSION_PINS;
+  if (pin === undefined) throw new Error("no OpenCode runtime pin");
+  return pin;
+})();
+
 const ENC = new TextEncoder();
 const TARGET_VERSION = "0.2.11";
 const RELEASE_ID = 987_654_321;
@@ -222,9 +229,9 @@ function sidecarRuntime(
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.2.5",
-      tag: "v2.2.5",
-      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+      version: PINNED_OPENCODE.version,
+      tag: PINNED_OPENCODE.tag,
+      commit: PINNED_OPENCODE.commit,
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -233,7 +240,7 @@ function sidecarRuntime(
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
+      sha256: PINNED_OPENCODE.rawSchemaSha256,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -639,6 +646,17 @@ describe("portable archive limit guards", () => {
       { entries: 0, inflated: 0 },
       { compressedSize: 1, uncompressedSize: MAX_INFLATE_RATIO + 1 },
     );
+  });
+
+  // #4495: OpenCode 2.4.1's Windows executable (278,383,496 bytes, about 110 MB compressed) is one
+  // entry of the portable payload; a 256 MiB entry bound refused every Windows update carrying it.
+  it("accepts the OpenCode 2.4.1 Windows executable as one entry", () => {
+    expect(() => {
+      assertPortableArchiveEntryLimits(
+        { compressedSize: 110_000_000, uncompressedSize: 278_383_496 },
+        { entries: 0, inflated: 0 },
+      );
+    }).not.toThrow();
   });
 
   it("applies the frozen archive, inflation, current-tree, and 512 MiB disk formula", () => {
@@ -1051,7 +1069,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.2.5",
+      upstreamVersion: PINNED_OPENCODE.version,
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",

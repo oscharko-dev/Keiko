@@ -82,6 +82,8 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
   "summary",
   "init",
   "review",
+  // The pinned runtime's automation command (2.4.1).
+  "automation",
   "opencode",
   "report",
   "default",

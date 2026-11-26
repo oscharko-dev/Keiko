@@ -43,7 +43,11 @@ Every Git invocation runs server-side through `defaultGitProcessRunner` (or an i
 <repositoryRoot>`, a hardened environment (`GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`,
 `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, no system/global config, no shell), a byte cap,
 and a timeout. Exceeding the byte cap or the timeout sets `truncated: true`; a spawn failure maps to
-exit code 127. There is no client-supplied argv anywhere in this surface.
+exit code 127. The one value carried over from the user's configuration is line endings: a
+config-only query reads the effective `core.autocrlf` and `core.eol`, keeps only their closed values
+and forwards them as `-c` to `status`/`diff`-family reads, so a CRLF checkout the user's own Git
+calls clean is not shown as modified (ADR-0098). There is no client-supplied argv anywhere in this
+surface.
 
 ### Content-free responses
 

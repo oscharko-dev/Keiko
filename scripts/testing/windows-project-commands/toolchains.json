@@ -1,0 +1,66 @@
+{
+  "note": "No grant beyond the runtime, supervisor and private state.",
+  "path": ["C:\\Program Files\\nodejs", "C:\\Program Files\\Git\\cmd"],
+  "steps": [
+    {
+      "id": "node-program-files",
+      "file": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["-v"]
+    },
+    {
+      "id": "npm-program-files",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npm.cmd -v"]
+    },
+    {
+      "id": "npx-program-files",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npx.cmd --version"]
+    },
+    {
+      "id": "node-admin-folder",
+      "file": "C:\\tools\\node-x64\\node.exe",
+      "args": ["-v"]
+    },
+    {
+      "id": "node-per-user",
+      "file": "${home}\\AppData\\Local\\Programs\\nodejs\\node.exe",
+      "args": ["-v"]
+    },
+    {
+      "id": "node-folder-package",
+      "file": "${home}\\Keiko npm folder\\Keiko\\system\\node\\node.exe",
+      "args": ["-v"]
+    },
+    {
+      "id": "cmd-ver",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "ver"]
+    },
+    {
+      "id": "cmd-exit-code",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "exit 7"]
+    },
+    {
+      "id": "windows-powershell",
+      "file": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "args": ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]
+    },
+    {
+      "id": "git-program-files",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["--version"]
+    },
+    {
+      "id": "profile-list",
+      "kind": "list",
+      "path": "${home}"
+    },
+    {
+      "id": "profile-documents-list",
+      "kind": "list",
+      "path": "${home}\\Documents"
+    }
+  ]
+}

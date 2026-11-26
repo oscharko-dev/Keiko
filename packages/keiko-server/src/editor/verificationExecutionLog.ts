@@ -74,6 +74,7 @@ const ISOLATION_BACKEND_VALUES = [
   "seatbelt",
   "container-docker",
   "container-podman",
+  "windows-appcontainer",
   "none",
   "unknown",
 ] as const satisfies readonly (SandboxBackend | "unknown")[];

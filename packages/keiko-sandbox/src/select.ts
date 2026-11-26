@@ -19,6 +19,11 @@ function selectExecutionRootBackend(
   if (availability.podman) {
     return "container-podman";
   }
+  // #4496: a Windows host without a container runtime runs the step in a per-run AppContainer of
+  // the pinned supervisor. A host that has one keeps its container path unchanged (ADR-0043 D21).
+  if (platform === "win32" && availability.windowsAppContainer === true) {
+    return "windows-appcontainer";
+  }
   return "none";
 }
 

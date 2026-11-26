@@ -165,6 +165,56 @@ describe("V82 output-limit cause", () => {
   });
 });
 
+describe("V84 Windows session and path causes (#4495)", () => {
+  const WINDOWS_CAUSES = ["runtime-supervisor-no-desktop", "runtime-supervisor-image-path"];
+
+  it("denies the causes at v83 and admits them after v84, keeping the verification gap", () => {
+    const db = databaseAtVersion(83);
+    db.exec(
+      "UPDATE coding_runtime_snapshots SET verification_gap = 'check-failed' WHERE run_id = 'run-1'",
+    );
+    for (const cause of WINDOWS_CAUSES) {
+      expect(() => {
+        settle(db, cause);
+      }).toThrow(/CHECK constraint failed/u);
+    }
+    const before = db.prepare("SELECT * FROM coding_runtime_snapshots").all();
+    runMigrations(db);
+    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").all()).toEqual(before);
+    for (const cause of [...WINDOWS_CAUSES, ...CAUSES, "output-limit-reached"]) settle(db, cause);
+    expect(() => {
+      settle(db, "runtime-supervisor-invented");
+    }).toThrow(/CHECK constraint failed/u);
+    expect(() => {
+      db.exec(
+        "UPDATE coding_runtime_snapshots SET verification_gap = 'invented' WHERE run_id = 'run-1'",
+      );
+    }).toThrow(/CHECK constraint failed/u);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM chat_tool_mutations").get()).toEqual({ n: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("keeps every column and index of the v83 table", () => {
+    const db = databaseAtVersion(83);
+    const columns = (): unknown =>
+      db
+        .prepare("PRAGMA table_info(coding_runtime_snapshots)")
+        .all()
+        .map((column) => column.name)
+        .sort();
+    const indexes = (): unknown =>
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all();
+    const before = { columns: columns(), indexes: indexes() };
+    runMigrations(db);
+    expect({ columns: columns(), indexes: indexes() }).toEqual(before);
+  });
+});
+
 // The stored CREATE TABLE text with the one part V81 is allowed to change taken out.
 // The column v83 appended to the table; the V81 and V82 rebuilds are judged without it.
 const LATER_COLUMN = "verification_gap";

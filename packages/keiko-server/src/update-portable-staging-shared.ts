@@ -23,7 +23,8 @@ export const PORTABLE_PAYLOAD_ROOT = "Keiko";
 export const MAX_RELEASE_METADATA_BYTES = 256_000;
 export const MAX_PORTABLE_MANIFEST_BYTES = 1_048_576;
 export const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
-export const MAX_ENTRY_BYTES = 256 * 1024 * 1024;
+// One file of the portable payload: the bound the payload's own attestation applies (#4495).
+export { PORTABLE_MAX_FILE_BYTES as MAX_ENTRY_BYTES } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 export const MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_ARCHIVE_ENTRIES = 60_000;
 export const MAX_INFLATE_RATIO = 100;

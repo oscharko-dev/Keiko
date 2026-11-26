@@ -19,6 +19,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { McpServerDefinition, VerificationKind } from "@oscharko-dev/keiko-contracts";
@@ -64,7 +65,22 @@ import {
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
-import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import {
+  createMcpCredentialRelay,
+  MCP_RELAY_PATH_PREFIX,
+  serveMcpRelayRequest,
+  type McpRelayMethod,
+} from "../mcp/mcpCredentialRelay.js";
+import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
+import {
+  holdSchedulerLease,
+  releaseSchedulerLease,
+  SCHEDULER_HOLD_OWNER,
+} from "./opencodeScheduleLease.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OPENCODE_NOT_UTF8_EDIT_REFUSAL,
+} from "./opencodeV2History.js";
 import {
   createOpenCodeNativeToolAdvertisement,
   hasExactOpenCodeVisibleToolContract,
@@ -187,14 +203,22 @@ async function startStub(
       .catch(() => response.writeHead(500).end());
   });
   stub.server = server;
+  stub.port = await listenOnLoopback(server);
+  return stub as Stub;
+}
+
+/** Binds a fixture listener to an ephemeral loopback port; a failed bind rejects, never hangs. */
+async function listenOnLoopback(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("fixture-listener-invalid");
-  stub.port = address.port;
-  return stub as Stub;
+  return address.port;
 }
 
 async function closeStub(stub: Stub): Promise<void> {
@@ -205,6 +229,20 @@ async function closeStub(stub: Stub): Promise<void> {
       else reject(error);
     });
   });
+}
+
+/** The text of a request's newest message when it is the user's, so a prompt is counted once. */
+function lastUserText(body: unknown): string | undefined {
+  const messages = object(body)?.messages;
+  const last = Array.isArray(messages) ? object(messages.at(-1)) : undefined;
+  if (last?.role !== "user") return undefined;
+  const content = last.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+  return content
+    .map((part) => object(part)?.text)
+    .filter((text): text is string => typeof text === "string")
+    .join("");
 }
 
 function lastRole(body: unknown): unknown {
@@ -354,6 +392,8 @@ interface LaunchOptions {
   readonly plugins: Readonly<Record<string, string>>;
   /** The operator's MCP registry servers for this run, admitted as production admits them. */
   readonly mcpServers?: ((fixture: Fixture) => readonly McpServerDefinition[]) | undefined;
+  /** A complete MCP admission in place of `mcpServers`: a managed server behind Keiko's relay. */
+  readonly mcpAdmission?: (() => OpenCodeNativeMcpAdmission) | undefined;
   /**
    * A toolchain directory on the launcher's `PATH`, opened as production opens the launcher's
    * `PATH` (`nativeToolchainReadRoots`), so the agent runs the host's real executables (#3901 AC1).
@@ -627,6 +667,8 @@ interface Run {
   readonly password: string;
   /** A GET of the runtime's own API for the run's location (`/api/mcp`, say). */
   readonly raw: (path: string) => Promise<unknown>;
+  /** A POST to the runtime's own API for the run's location, with the server password. */
+  readonly post: (path: string, body: unknown) => Promise<{ status: number; body: unknown }>;
 }
 
 async function withRun(
@@ -641,13 +683,14 @@ async function withRun(
   await options.prepare?.(fixture);
   const gateway = await startGateway();
   const mcp =
-    options.mcpServers === undefined
+    options.mcpAdmission?.() ??
+    (options.mcpServers === undefined
       ? undefined
       : openCodeNativeMcpAdmission({
           servers: options.mcpServers(fixture),
           mode: options.mode,
           home: join(fixture.state, "home"),
-        });
+        }));
   const facade = await startFacade({
     mode: options.mode,
     workspaceRoot: fixture.workspace,
@@ -672,13 +715,21 @@ async function withRun(
     expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
     const session = await client.createSession(fixture.workspace);
     if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
+    const location = `location%5Bdirectory%5D=${encodeURIComponent(fixture.workspace)}`;
+    const authorization = `Basic ${Buffer.from(`opencode:${launched.password}`).toString("base64")}`;
     const raw: Run["raw"] = async (path) => {
-      const location = `location%5Bdirectory%5D=${encodeURIComponent(fixture.workspace)}`;
-      const authorization = `Basic ${Buffer.from(`opencode:${launched.password}`).toString("base64")}`;
       const response = await fetch(`${endpoint}${path}?${location}`, {
         headers: { Authorization: authorization },
       });
       return (await response.json()) as unknown;
+    };
+    const post: Run["post"] = async (path, body) => {
+      const response = await fetch(`${endpoint}${path}?${location}`, {
+        method: "POST",
+        headers: { Authorization: authorization, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, body: (await response.json()) as unknown };
     };
     await body({
       fixture,
@@ -689,6 +740,7 @@ async function withRun(
       child: launched.child,
       password: launched.password,
       raw,
+      post,
     });
   } finally {
     await stopChild(launched.child);
@@ -1536,6 +1588,137 @@ describe("pinned native OpenCode hard links inside the workspace (PR #4064 revie
   );
 });
 
+// A file saved in Windows-1252 ("Grüße, Maß" with 0xFC and 0xDF) is not UTF-8. Since 2.4.0 the edit
+// tool refuses it instead of writing U+FFFD over every umlaut; Keiko's coding alias is not offered
+// `patch` (T08). The refusal carries the words the history projection turns into its closed
+// `FILE_NOT_UTF8` reason (#4546).
+describe("pinned native OpenCode edit of a file that is not UTF-8 (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const LEGACY = Buffer.from([0x47, 0x72, 0xfc, 0xdf, 0x65, 0x2c, 0x20, 0x4d, 0x61, 0xdf, 0x0a]);
+
+  it.skipIf(skip)(
+    "refuses to edit a cp1252 file and leaves its bytes unchanged",
+    async () => {
+      await withRun(
+        {
+          files: { "src/a.ts": "export const a = 1;\n" },
+          mode: "autonomous-delivery",
+          prepare: (fixture) => {
+            writeFileSync(join(fixture.workspace, "legacy.txt"), LEGACY);
+          },
+        },
+        async (run) => {
+          const refused = await scriptedTurn(run, {
+            name: "edit",
+            arguments: { path: "legacy.txt", oldString: "Ma", newString: "Mo" },
+          });
+          expect(refused).toContain(OPENCODE_NOT_UTF8_EDIT_REFUSAL);
+          expect(readFileSync(join(run.fixture.workspace, "legacy.txt"))).toEqual(LEGACY);
+          // The runtime refuses before it asks for the edit permission: nothing was decided.
+          expect(run.facade.decisions).toEqual([]);
+        },
+      );
+    },
+    180_000,
+  );
+});
+
+// 2.3.1 moves a command still running at its timeout to the background; the runtime reports how it
+// ended and runs the session again. Keiko's run waits for that report, and the check never counts
+// as verification (#4546).
+describe("pinned native OpenCode command that outlives its timeout (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "holds the run until the moved command reported, and gives the check no exit status",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          const moved = await scriptedTurn(run, shell(idleCommand(3, marker), { timeout: 1_000 }));
+          expect(moved).toContain("moved to the background");
+          await expect
+            .poll(
+              async () =>
+                (await run.client.messages(run.sessionId)).some(
+                  (message) =>
+                    message.type === "synthetic" && object(message.metadata)?.source === "shell",
+                ),
+              { timeout: 30_000 },
+            )
+            .toBe(true);
+          await settledIdle(run);
+          const messages = await run.client.messages(run.sessionId);
+          const firstIdle = messages.findIndex((message) => message.type === "idle");
+          const projection = createOpenCodeV2HistoryProjection({
+            runId: RUN_ID,
+            activityLog: undefined,
+            toolProfile: "native",
+          });
+          // Up to the idle message before the report, the run's work has not ended.
+          const before = projection.project(
+            run.sessionId,
+            messages.slice(0, firstIdle + 1),
+            undefined,
+          );
+          expect(before.map((event) => event.kind)).not.toContain("terminal");
+          const all = createOpenCodeV2HistoryProjection({
+            runId: RUN_ID,
+            activityLog: undefined,
+            toolProfile: "native",
+          });
+          const events = all.project(run.sessionId, messages, undefined);
+          expect(events.at(-1)?.kind).toBe("terminal");
+          const tools = events
+            .flatMap((event) => all.takeSignal(event) ?? [])
+            .filter((signal) => signal.kind === "tool");
+          expect(tools).toHaveLength(1);
+          expect(tools[0]).not.toHaveProperty("exitCode");
+          expect(tools[0]).not.toHaveProperty("exitStatusCheck");
+          expect(liveCount(marker)).toBe(0);
+        });
+      });
+    },
+    180_000,
+  );
+});
+
+describe("pinned native OpenCode shell commands the scanner cannot read, and here-documents (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  // 2.4.1 asks for an unanalysable command instead of failing it: the whole command and every
+  // directory (`external_directory` on `*`), because it may reach any. Keiko's mode-independent
+  // floor denies every external directory, so such a command never runs, in any mode.
+  it.skipIf(skip).each(ALL_MODES)(
+    "refuses a command the scanner cannot analyse in %s, before it runs",
+    async (mode) => {
+      await withRun({ mode, approveAsks: true }, async (run) => {
+        // A trailing backslash is an unterminated escape the scanner cannot analyse.
+        const result = await scriptedTurn(run, shell("echo opaque > opaque.txt \\"));
+        expect(result).toContain("permission.rejected");
+        expect(result).toContain("external_directory");
+        expect(existsSync(join(run.fixture.workspace, "opaque.txt"))).toBe(false);
+        expect(run.facade.decisions).toEqual([]);
+      });
+    },
+    180_000,
+  );
+
+  // zsh writes a here-document to a temporary file under TMPPREFIX (default /tmp/zsh), which the
+  // native profile refuses; a model writing a file with `cat > file <<EOF` then failed in every
+  // mode. The run's own temporary directory takes it.
+  it.skipIf(skip)(
+    "writes a file through a here-document",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const result = await scriptedTurn(run, shell("cat > notes.txt <<'EOT'\nhello\nEOT"));
+        expect(result).not.toContain("here document");
+        expect(readFileSync(join(run.fixture.workspace, "notes.txt"), "utf8")).toBe("hello\n");
+      });
+    },
+    180_000,
+  );
+});
+
 describe("pinned native OpenCode patch (T08)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const files = {
@@ -2325,6 +2508,27 @@ describe("pinned native OpenCode shell processes (T13)", () => {
     120_000,
   );
 
+  // #4546 (policy audit): 2.4.1 moves a foreground command that outlives its timeout to the
+  // background on its own; such a job is the same background job and is reaped the same way.
+  it.skipIf(skip)(
+    "reaps a command its timeout moved to the background when the runtime is stopped",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          const moved = await scriptedTurn(
+            run,
+            shell(idleCommand(120, marker), { timeout: 1_000 }),
+          );
+          expect(moved).toContain("moved to the background");
+          await expect.poll(() => liveCount(marker), { timeout: 20_000 }).toBeGreaterThan(0);
+          await stopChild(run.child, "SIGTERM");
+          await expect.poll(() => liveCount(marker), { timeout: 20_000 }).toBe(0);
+        });
+      });
+    },
+    120_000,
+  );
+
   // The control shows what only Keiko's native supervisor can cover: a runtime that is killed
   // instead of stopped leaves its background job running as an orphan of launchd. The supervisor
   // reaps such a process by its kernel resource coalition (`native/runtime-supervisor`), which a test
@@ -2458,9 +2662,9 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
           '#!/bin/sh\nif [ "$FAIL" = 1 ]; then echo "1 failing"; exit 1; fi\necho "1 passing"\n',
           { mode: 0o755 },
         );
-        expect(await scriptedTurn(run, shell("FAIL=1 ./bin/npm test"))).toMatch(
-          /Exited with code 1$/u,
-        );
+        // 2.4.x ends the output with `Exit code: <n>` (2.2.5: `Exited with code <n>`); Keiko reads
+        // the status from the part's metadata, never from this text.
+        expect(await scriptedTurn(run, shell("FAIL=1 ./bin/npm test"))).toMatch(/Exit code: 1$/u);
         expect(await scriptedTurn(run, shell("./bin/npm test"))).toContain("1 passing");
         expect(openCodeNativeVerificationKind(["FAIL=1 ./bin/npm test"])).toBe("test");
         const projection = createOpenCodeV2HistoryProjection({
@@ -2923,6 +3127,31 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
     180_000,
   );
 
+  // OpenCode falls back to CLAUDE.md wherever no AGENTS.md exists, at the root and in the read
+  // tool's nested walk. Repository instructions reach a run only through Keiko's copy (#4546).
+  it.skipIf(skip)(
+    "never hands the model a CLAUDE.md, at the root or in a folder the read reaches",
+    async () => {
+      await withRun(
+        {
+          files: {
+            "CLAUDE.md": "ROOT-CLAUDE-RULE\n",
+            "src/CLAUDE.md": "NESTED-CLAUDE-RULE\n",
+            "src/a.ts": "export const a = 1;\n",
+          },
+        },
+        async (run) => {
+          await scriptedTurn(run, read("src/a.ts"));
+          // Positive control: the read reached the file next to the nested CLAUDE.md.
+          expect(requestText(run, 1)).toContain("export const a = 1;");
+          expect(requestText(run, 0)).not.toContain("ROOT-CLAUDE-RULE");
+          expect(requestText(run, 0)).not.toContain("NESTED-CLAUDE-RULE");
+        },
+      );
+    },
+    180_000,
+  );
+
   // `/init` (C02) writes the workspace's first AGENTS.md during a run: the copy Keiko writes before
   // the next turn lands in the slot the producer has watched since launch.
   it.skipIf(skip)(
@@ -3306,7 +3535,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
   const viaCodeMode = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
   // The runtime starts a location's MCP servers lazily, on its first use, and registers their tools
   // shortly after it reports them connected: wait until Code Mode itself lists the server.
-  async function connected(run: Run): Promise<void> {
+  async function connected(run: Run, name = "fixture"): Promise<void> {
     await expect
       .poll(
         async () => {
@@ -3321,7 +3550,7 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
         async () => await scriptedTurn(run, viaCodeMode("return Object.keys(tools).join(',');")),
         { timeout: 20_000, interval: 250 },
       )
-      .toContain("fixture");
+      .toContain(name);
     run.facade.decisions.length = 0;
   }
 
@@ -3414,6 +3643,106 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
     120_000,
   );
 
+  // #4546 AC8: a managed server (the shape of a Jira Pod the person picked) reaches the run only
+  // through Keiko's relay, and the pinned runtime's MCP client negotiates with it in every mode.
+  // The relay serves it from Keiko's own handler, as the managed connections do in production.
+  it.skipIf(skip)(
+    "connects a managed server through Keiko's relay and reads its tool in every mode, pool off",
+    async () => {
+      const negotiated: unknown[] = [];
+      const serve = (_name: string, request: Request): Promise<Response> =>
+        request.text().then((text) => {
+          const message = object(parseJson(text));
+          if (message?.id === undefined) return new Response(null, { status: 202 });
+          const params = object(message.params);
+          if (message.method === "initialize") negotiated.push(params?.protocolVersion);
+          const result =
+            message.method === "initialize"
+              ? {
+                  protocolVersion: params?.protocolVersion,
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "pod", version: "1" },
+                }
+              : message.method === "tools/list"
+                ? { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] }
+                : { content: [{ type: "text", text: "POD-ECHO" }] };
+          return Response.json({ jsonrpc: "2.0", id: message.id, result });
+        });
+      const servers: readonly McpServerDefinition[] = [
+        {
+          name: "pod",
+          description: undefined,
+          enabled: true,
+          transport: { kind: "remote", url: "https://pod.example.invalid/mcp" },
+          tools: { echo: "read" },
+        },
+      ];
+      const relay = createMcpCredentialRelay();
+      const listener = createServer((request, response) => {
+        void serveMcpRelayRequest(
+          request,
+          response,
+          {
+            relayId: (request.url ?? "").slice(MCP_RELAY_PATH_PREFIX.length),
+            method: request.method as McpRelayMethod,
+          },
+          {
+            relay,
+            upstream: () => Promise.reject(new Error("fixture-unmanaged-upstream")),
+            activityLog: undefined,
+            correlationId: "relay-fixture",
+          },
+        );
+      });
+      const port = await listenOnLoopback(listener);
+      const generation = new AbortController();
+      try {
+        const measured: Record<string, string> = {};
+        for (const mode of ALL_MODES) {
+          const relays = bindNativeMcpRelays({
+            servers,
+            mode,
+            runId: RUN_ID,
+            relay: {
+              relay,
+              origin: `http://127.0.0.1:${String(port)}`,
+              secrets: {},
+              managed: { generation: () => generation.signal, serve },
+            },
+            activityLog: undefined,
+          });
+          const admission = openCodeNativeMcpAdmission({
+            servers,
+            mode,
+            home: "/unused",
+            relays,
+            managed: true,
+            grantedServers: new Set(["pod"]),
+          });
+          expect(JSON.stringify(admission.config)).toContain('"pool":false');
+          await withRun(
+            { ...mcpLaunch(mode, true), mcpServers: undefined, mcpAdmission: () => admission },
+            async (run) => {
+              await connected(run, "pod");
+              measured[mode] = await scriptedTurn(
+                run,
+                viaCodeMode("return await tools.pod.echo({});"),
+              );
+            },
+          );
+          relay.releaseRun(RUN_ID);
+        }
+        expect(Object.values(measured).every((result) => result.includes("POD-ECHO"))).toBe(true);
+        expect(negotiated.length).toBeGreaterThanOrEqual(ALL_MODES.length);
+        expect(negotiated.every((version) => typeof version === "string")).toBe(true);
+      } finally {
+        generation.abort();
+        await closeStub({ server: listener, port: 0, requests: [] });
+      }
+    },
+    360_000,
+  );
+
   it.skipIf(skip)(
     "control: without the registry the same server is not configured at all",
     async () => {
@@ -3447,7 +3776,7 @@ describe("pinned native OpenCode Code Mode session move and worktree creation (#
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const move = (input: Readonly<Record<string, unknown>>): ScriptedCall => ({
     name: "execute",
-    arguments: { code: `return await tools.opencode.session_move(${JSON.stringify(input)});` },
+    arguments: { code: `return await tools.opencode.session.move(${JSON.stringify(input)});` },
   });
   const files = { "src/a.ts": "export const a = 1;\n" };
 
@@ -3857,4 +4186,571 @@ describe("pinned native OpenCode webfetch and websearch (T14, T15, #3903 AC3)", 
     },
     180_000,
   );
+});
+
+// ─── Code Mode nested effects (#4359, #4546) ───────────────────────────────────────────────────
+
+// The condition of a pin's `decidesNestedEffects`: every nested call of a Code Mode program that
+// changes state reaches its own decision of Keiko's policy, in Ask for approval and in Full access;
+// only the reads (the worktree listing, the model search, the automation listing) and a plain
+// computation decide nothing beyond the program itself. Repeated on every runtime upgrade.
+describe("pinned native OpenCode decides every nested effect of a Code Mode program (#4359, #4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const server = (fixture: Fixture): readonly McpServerDefinition[] => [
+    {
+      name: "fixture",
+      description: undefined,
+      enabled: true,
+      transport: {
+        kind: "local",
+        command: [process.execPath, join(fixture.workspace, "mcp-server.cjs")],
+        environment: { FIXTURE_MODE: "qualification" },
+      },
+      tools: { echo: "read" },
+    },
+  ];
+  const execute = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
+
+  type Mode = "governed-assist" | "autonomous-delivery";
+  /** One program, the one nested decision it must reach, and what its output must show. */
+  interface NestedProgram {
+    readonly name: string;
+    readonly code: string;
+    /** The nested permission and its effect per mode; `undefined`: it decides nothing. */
+    readonly decides?: {
+      readonly permission: string;
+      readonly effect: Readonly<Record<Mode, string>>;
+    };
+    /** The output of a program that decides nothing, so a failed program never passes as a read. */
+    readonly output?: RegExp;
+    /** What the decided effect left behind, so a decision without its effect never passes. */
+    readonly effect?: (run: Run) => Promise<void> | void;
+  }
+  const both = (effect: string): Readonly<Record<Mode, string>> => ({
+    "governed-assist": effect,
+    "autonomous-delivery": effect,
+  });
+  const askThenAllow = { "governed-assist": "ask", "autonomous-delivery": "allow" } as const;
+
+  /** A file in the directory the removal program names: a denied removal leaves it in place. */
+  const WORKTREE_KEEP = "KEEP.txt";
+
+  function programs(workspace: string, page: string): readonly NestedProgram[] {
+    const move = JSON.stringify({ directory: join(workspace, "src") });
+    const remove = JSON.stringify({ directory: join(workspace, "wt") });
+    return [
+      {
+        name: "rename",
+        code: 'return await tools.opencode.session.rename({ title: "renamed" });',
+        decides: { permission: "opencode_session_rename", effect: both("allow") },
+        effect: async (run): Promise<void> => {
+          expect(JSON.stringify(await run.raw("/api/session"))).toMatch(/"title":"renamed"/u);
+        },
+      },
+      {
+        name: "move",
+        code: `return await tools.opencode.session.move(${move});`,
+        decides: { permission: "opencode_session_move", effect: both("allow") },
+      },
+      {
+        name: "worktree create",
+        code: 'return await tools.opencode.worktree_create({ name: "feature-x" });',
+        decides: { permission: "opencode_worktree_create", effect: both("ask") },
+      },
+      {
+        name: "worktree remove",
+        code: `return await tools.opencode.worktree_remove(${remove});`,
+        decides: { permission: "edit", effect: both("deny") },
+        effect: (run): void => {
+          expect(existsSync(join(run.fixture.workspace, "wt", WORKTREE_KEEP))).toBe(true);
+        },
+      },
+      {
+        name: "MCP resources",
+        code: 'return await tools.opencode.list_mcp_resources({ server: "fixture" });',
+        decides: { permission: "opencode_list_mcp_resources", effect: askThenAllow },
+      },
+      {
+        name: "MCP resource",
+        code: 'return await tools.opencode.read_mcp_resource({ server: "fixture", uri: "file:///x" });',
+        decides: { permission: "opencode_read_mcp_resource", effect: askThenAllow },
+      },
+      {
+        name: "MCP tool",
+        code: 'return await tools.fixture.echo({ text: "hi" });',
+        decides: { permission: "fixture_echo", effect: askThenAllow },
+      },
+      {
+        name: "fetch",
+        code: `return await (await fetch(${JSON.stringify(page)})).text();`,
+        decides: {
+          permission: "webfetch",
+          effect: { "governed-assist": "deny", "autonomous-delivery": "allow" },
+        },
+      },
+      {
+        name: "automation",
+        code: 'return await tools.automation.create({ name: "n", trigger: { type: "at", at: "in 1 hour" }, action: { type: "prompt", prompt: "check" } });',
+        decides: { permission: "opencode_schedule", effect: askThenAllow },
+      },
+      {
+        name: "worktree list",
+        code: "return await tools.opencode.worktree_list({});",
+        output: /"worktrees":\[/u,
+      },
+      {
+        name: "model search",
+        code: "return await tools.opencode.models({});",
+        output: /"providers":\[/u,
+      },
+      {
+        name: "automation list",
+        code: "return await tools.automation.list({});",
+        output: /"automations":\[/u,
+      },
+      { name: "computation", code: "return 1 + 1;", output: /^2$/u },
+    ];
+  }
+
+  /**
+   * Every name a program can call on this runtime. A new name fails this pin until it has a row
+   * above (a state-changing one with its own decision) or is shown to change nothing.
+   */
+  const NAMESPACE = [
+    ["automation", ["create", "delete", "list", "pause", "resume"]],
+    ["fixture", ["echo", "wipe"]],
+    [
+      "opencode",
+      [
+        "list_mcp_resources",
+        "models",
+        "read_mcp_resource",
+        "session",
+        "worktree_create",
+        "worktree_list",
+        "worktree_remove",
+      ],
+    ],
+  ];
+
+  it.skipIf(skip).each(["governed-assist", "autonomous-delivery"] as const)(
+    "reaches a decision for every nested effect in %s",
+    async (mode) => {
+      const page = await startStub((_self, _recorded, response) => {
+        response.writeHead(200, { "Content-Type": "text/plain" }).end("NESTED-FETCH-CANARY\n");
+      });
+      try {
+        await withRun(
+          {
+            mode,
+            approveAsks: true,
+            files: {
+              [FIXTURE_FILE]: "fixture\n",
+              "src/a.ts": "export const a = 1;\n",
+              [`wt/${WORKTREE_KEEP}`]: "kept\n",
+              "mcp-server.cjs": MCP_FIXTURE_SERVER,
+            },
+            mcpServers: server,
+          },
+          async (run) => {
+            await expect
+              .poll(
+                async () =>
+                  await scriptedTurn(run, execute("return Object.keys(tools).join(',');")),
+                { timeout: 20_000, interval: 250 },
+              )
+              .toContain("fixture");
+            const names =
+              "return JSON.stringify(Object.keys(tools).sort().map((k) => [k, Object.keys(tools[k]).sort()]));";
+            expect(JSON.parse(await scriptedTurn(run, execute(names)))).toEqual(NAMESPACE);
+            expect(
+              await scriptedTurn(
+                run,
+                execute("return Object.keys(tools.opencode.session).sort().join(',');"),
+              ),
+            ).toBe("move,rename");
+            const url = `http://127.0.0.1:${String(page.port)}/notes.txt`;
+            for (const program of programs(run.fixture.workspace, url)) {
+              run.facade.decisions.length = 0;
+              const output = await scriptedTurn(run, execute(program.code));
+              const decided = run.facade.decisions.map((decision) => [
+                decision.permission,
+                decision.effect,
+              ]);
+              expect(decided, program.name).toEqual([
+                ["execute", "allow"],
+                ...(program.decides === undefined
+                  ? []
+                  : [[program.decides.permission, program.decides.effect[mode]]]),
+              ]);
+              if (program.output !== undefined)
+                expect(output, program.name).toMatch(program.output);
+              await program.effect?.(run);
+            }
+          },
+        );
+      } finally {
+        await closeStub(page);
+      }
+    },
+    300_000,
+  );
+});
+
+// ─── C09: scheduled wakes on the producer's automations (#4271, #4546) ─────────────────────────
+
+describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const execute = (code: string): ScriptedCall => ({ name: "execute", arguments: { code } });
+  const create = (request: Readonly<Record<string, unknown>>): ScriptedCall =>
+    execute(`return await tools.automation.create(${JSON.stringify(request)});`);
+  const PROMPT = { type: "prompt", prompt: "Check the build again." };
+  const LATER = { type: "at", at: "in 1 hour" };
+
+  function database(run: Run): string {
+    return join(run.fixture.state, "state", "opencode.db");
+  }
+
+  /** Checks of half a second each: 35 s, past the producer's heartbeat and longest timer sleep. */
+  const HELD_LEASE_CHECKS = 70;
+
+  /** The owner named in the producer's scheduler election row, read-only. */
+  function leaseOwner(run: Run): unknown {
+    const db = new DatabaseSync(database(run), { readOnly: true });
+    try {
+      const row = db.prepare("SELECT value FROM kv WHERE key = 'automation:leader'").get();
+      return row === undefined
+        ? undefined
+        : (JSON.parse(String(row.value)) as { owner?: unknown }).owner;
+    } finally {
+      db.close();
+    }
+  }
+
+  /** The session's automations as the producer stores them, read-only. */
+  function automations(run: Run): readonly Readonly<Record<string, unknown>>[] {
+    const db = new DatabaseSync(database(run), { readOnly: true });
+    try {
+      return db
+        .prepare(
+          "SELECT id, session_id, status, run_count, action, trigger FROM automation ORDER BY time_created",
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+
+  // Outside the native profile automations are off: the producer offers no tool, its API refuses
+  // to create one, so none can fire. On 2.4.1 without `automations: false` both were open.
+  it.skipIf(skip)(
+    "offers no automation in the direct profile, and its API refuses to create one",
+    async () => {
+      await withRun(
+        { mode: "autonomous-delivery", toolProfile: "direct", plugins: REGISTRY_PROBE },
+        async (run) => {
+          await scriptedTurn(run, read(FIXTURE_FILE));
+          expect(registeredToolIds(run).filter((id) => id.startsWith("automation"))).toEqual([]);
+          const created = await run.post("/api/experimental/automation", {
+            sessionID: run.sessionId,
+            name: "probe",
+            trigger: { type: "at", at: "in 1 second" },
+            action: PROMPT,
+          });
+          expect(created.status).toBe(403);
+          expect(automations(run)).toEqual([]);
+        },
+      );
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "creates, pauses, resumes and deletes a prompt automation through the policy in Full access",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        expect(
+          await scriptedTurn(run, create({ name: "Recheck", trigger: LATER, action: PROMPT })),
+        ).toContain('"id":"aut_');
+        const [row] = automations(run);
+        expect(row).toMatchObject({ status: "active", run_count: 0 });
+        expect(JSON.parse(String(row?.action))).toEqual({
+          ...PROMPT,
+          to: { session: run.sessionId },
+        });
+        const id = String(row?.id);
+        for (const [operation, status] of [
+          ["pause", "paused"],
+          ["resume", "active"],
+        ] as const) {
+          await scriptedTurn(
+            run,
+            execute(`return await tools.automation.${operation}({ id: ${JSON.stringify(id)} });`),
+          );
+          expect(automations(run)[0]?.status).toBe(status);
+        }
+        await scriptedTurn(
+          run,
+          execute(`return await tools.automation.delete({ id: ${JSON.stringify(id)} });`),
+        );
+        expect(automations(run)).toEqual([]);
+        expect(
+          run.facade.decisions
+            .filter((decision) => decision.permission === "opencode_schedule")
+            .map((decision) => [decision.resources[0], decision.effect]),
+        ).toEqual([
+          ["create", "allow"],
+          ["pause", "allow"],
+          ["resume", "allow"],
+          ["delete", "allow"],
+        ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "asks before a prompt automation in Ask for approval",
+    async () => {
+      await withRun({ mode: "governed-assist", approveAsks: true }, async (run) => {
+        await scriptedTurn(run, create({ name: "Recheck", trigger: LATER, action: PROMPT }));
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({ permission: "opencode_schedule", effect: "ask" }),
+        );
+        expect(automations(run)).toHaveLength(1);
+      });
+    },
+    120_000,
+  );
+
+  // A shell command, a Code Mode program and an MCP event run without a person, with the runtime
+  // server's environment; a prompt with its own recipient reaches another session or a subagent.
+  it.skipIf(skip)(
+    "refuses a shell, Code Mode, MCP-event, redirected or unreviewed automation at creation, in Full access",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const refused: readonly (readonly [string, Readonly<Record<string, unknown>>])[] = [
+          [
+            "shell",
+            { name: "s", trigger: LATER, action: { type: "shell", command: "env > leaked.txt" } },
+          ],
+          ["code", { name: "c", trigger: LATER, action: { type: "code", code: "return 1;" } }],
+          [
+            "event",
+            {
+              name: "e",
+              trigger: { type: "event", server: "fixture", event: "changed" },
+              action: PROMPT,
+            },
+          ],
+          [
+            "subagent",
+            { name: "a", trigger: LATER, action: { ...PROMPT, to: { subagent: "general" } } },
+          ],
+          ["unreviewed key", { name: "k", trigger: LATER, action: { ...PROMPT, agent: "build" } }],
+        ];
+        for (const [name, request] of refused) {
+          run.facade.decisions.length = 0;
+          expect(await scriptedTurn(run, create(request)), name).toContain(
+            "Keiko refused this automation",
+          );
+          expect(run.facade.decisions, name).toContainEqual(
+            expect.objectContaining({
+              permission: "opencode_schedule",
+              effect: "deny",
+              reason: "unsupported-action",
+            }),
+          );
+        }
+        expect(automations(run)).toEqual([]);
+        expect(existsSync(join(run.fixture.workspace, "leaked.txt"))).toBe(false);
+      });
+    },
+    120_000,
+  );
+
+  // Keiko holds the producer's scheduler lease (`automation:leader`) in every run a human started,
+  // so a due automation never fires inside it; once the lease lapses the runtime fires it.
+  it.skipIf(skip)(
+    "never fires a due automation while Keiko holds the scheduler lease, and fires it once released",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        expect(holdSchedulerLease(database(run))).toBe(true);
+        await scriptedTurn(
+          run,
+          create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
+        );
+        const prompts = run.gateway.requests.length;
+        // Re-checked for longer than the producer's lease heartbeat (10 s) and its longest timer
+        // sleep (30 s): the automation stays unfired, no prompt reaches the model, and the lease
+        // row still names Keiko, so the runtime looked and stood back rather than never looking.
+        for (let check = 0; check < HELD_LEASE_CHECKS; check += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const [row] = automations(run);
+          const held =
+            row?.status === "active" &&
+            row.run_count === 0 &&
+            run.gateway.requests.length === prompts &&
+            leaseOwner(run) === SCHEDULER_HOLD_OWNER;
+          if (!held)
+            throw new Error(`the runtime fired or took the lease (check ${String(check)})`);
+        }
+
+        expect(releaseSchedulerLease(database(run))).toBe(true);
+        await expect
+          .poll(() => automations(run)[0]?.run_count, { timeout: 60_000, interval: 500 })
+          .toBe(1);
+        // The fired automation delivers its prompt to the model once, as the newest user message
+        // of a request, in the session the run created it in.
+        const delivered = (): number =>
+          run.gateway.requests.filter((request) =>
+            lastUserText(request.body)?.includes(PROMPT.prompt),
+          ).length;
+        await expect.poll(delivered, { timeout: 30_000, interval: 250 }).toBe(1);
+        expect(automations(run)[0]?.session_id).toBe(run.sessionId);
+      });
+    },
+    180_000,
+  );
+});
+
+// ─── #4546 AC6: no plugin is installed or checked for updates during a run ──────────────────────
+
+describe("pinned native OpenCode fetches no plugin during a run (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  // A package nobody publishes, named mutably (`@latest`): the producer installs a package plugin
+  // it does not have from the registry and checks a mutable one for updates (`plugin/supervisor.ts`,
+  // `util/npm.ts` in 2.4.1). The registry is a loopback recorder that answers nothing found.
+  const CANARY_NAME = `keiko-canary-plugin-${randomUUID().slice(0, 8)}`;
+  const CANARY_CONFIG = JSON.stringify({ plugins: [`${CANARY_NAME}@latest`] });
+  // One bound for both sides: the control must reach the registry within it, and the confined run
+  // is watched for all of it after its turn settled, so at least as long since its runtime started.
+  const REGISTRY_LOOKUP_BOUND_MS = 30_000;
+  const REGISTRY_CHECK_INTERVAL_MS = 500;
+  const REGISTRY_QUIET_CHECKS = REGISTRY_LOOKUP_BOUND_MS / REGISTRY_CHECK_INTERVAL_MS;
+
+  async function withRegistryRecorder(body: (registry: Stub) => Promise<void>): Promise<void> {
+    const registry = await startStub((_stub, _recorded, response) => {
+      response.writeHead(404, { "Content-Type": "application/json" }).end("{}");
+    });
+    try {
+      await body(registry);
+    } finally {
+      await closeStub(registry);
+    }
+  }
+
+  const registryEnv = (registry: Stub): Readonly<Record<string, string>> => {
+    const url = `http://127.0.0.1:${String(registry.port)}/`;
+    return { npm_config_registry: url, NPM_CONFIG_REGISTRY: url };
+  };
+
+  const packageSources = async (raw: (path: string) => Promise<unknown>): Promise<unknown[]> => {
+    const data: unknown = object(await raw("/api/plugin"))?.data;
+    if (!Array.isArray(data)) throw new Error("fixture-plugin-list-invalid");
+    const entries: readonly unknown[] = data;
+    return entries.filter((entry) => object(object(entry)?.source)?.type === "package");
+  };
+
+  it.skipIf(skip)(
+    "loads, installs and checks no package plugin a project or home configuration names, in Full access",
+    async () => {
+      await withRegistryRecorder(async (registry) => {
+        await withRun(
+          {
+            mode: "autonomous-delivery",
+            egress: openCodeNativeEgress("autonomous-delivery"),
+            env: registryEnv(registry),
+            files: {
+              [FIXTURE_FILE]: "native qualification fixture\n",
+              "opencode.json": CANARY_CONFIG,
+              ".opencode/opencode.json": CANARY_CONFIG,
+            },
+            prepare: (fixture) => {
+              const home = join(fixture.state, "home", ".config", "opencode");
+              mkdirSync(home, { recursive: true });
+              writeFileSync(join(home, "opencode.json"), CANARY_CONFIG);
+            },
+          },
+          async (run) => {
+            await scriptedTurn(run, read(FIXTURE_FILE));
+            await settledIdle(run);
+            // Re-checked for longer than the control needs to reach the registry: a lookup the
+            // producer starts in the background after the turn would still be seen.
+            for (let check = 0; check < REGISTRY_QUIET_CHECKS; check += 1) {
+              await new Promise((resolve) => setTimeout(resolve, REGISTRY_CHECK_INTERVAL_MS));
+              if (registry.requests.length > 0)
+                throw new Error(`the runtime asked the registry (check ${String(check)})`);
+            }
+            expect(await packageSources(run.raw)).toEqual([]);
+            expect(registry.requests.map((request) => request.url)).toEqual([]);
+          },
+        );
+      });
+    },
+    120_000,
+  );
+
+  // The positive control: the same executable, launched on its own with the plugin in its
+  // configuration, lists the package plugin and asks the recorder for it.
+  it.skipIf(skip)(
+    "control: the pinned runtime on its own asks the registry for a configured package plugin",
+    async () => {
+      if (BINARY === undefined) throw new Error("fixture-binary-missing");
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plugin-canary-")));
+      try {
+        await controlRegistryLookup(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    },
+    120_000,
+  );
+
+  async function controlRegistryLookup(root: string): Promise<void> {
+    if (BINARY === undefined) throw new Error("fixture-binary-missing");
+    const config = join(root, "config", "opencode");
+    const workspace = join(root, "workspace");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(config, "opencode.json"), CANARY_CONFIG);
+    const password = randomUUID();
+    await withRegistryRecorder(async (registry) => {
+      const child = spawn(realpathSync(BINARY), ["serve", "--port", "0"], {
+        cwd: workspace,
+        env: {
+          PATH: "/usr/bin:/bin",
+          HOME: join(root, "home"),
+          XDG_CONFIG_HOME: join(root, "config"),
+          TMPDIR: tmpdir(),
+          OPENCODE_SERVER_PASSWORD: password,
+          ...registryEnv(registry),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        const endpoint = await childEndpoint(child);
+        const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+        const raw = async (path: string): Promise<unknown> => {
+          const location = `location%5Bdirectory%5D=${encodeURIComponent(workspace)}`;
+          const response = await fetch(`${endpoint}${path}?${location}`, {
+            headers: { Authorization: authorization },
+          });
+          return (await response.json()) as unknown;
+        };
+        await expect
+          .poll(async () => (await packageSources(raw)).length, {
+            timeout: REGISTRY_LOOKUP_BOUND_MS,
+          })
+          .toBe(1);
+        await expect
+          .poll(() => registry.requests.map((request) => request.url), {
+            timeout: REGISTRY_LOOKUP_BOUND_MS,
+          })
+          .toContain(`/${CANARY_NAME}`);
+      } finally {
+        await stopChild(child);
+      }
+    });
+  }
 });

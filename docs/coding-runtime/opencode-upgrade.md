@@ -27,7 +27,7 @@ each version's database schema.
 | `opencodeLaunchProfile.ts`                                        | An explicit value for every new setting Keiko takes over, so a producer default cannot widen a run. A new built-in plugin Keiko does not admit goes into `OPENCODE_WITHHELD_BUILT_IN_PLUGINS`, which removes it at the source. Its `experimental` switch stays off.                                                                                                                                                                                         |
 | Owning adapter, ADR-0137, `docs/qa/opencode-capability-parity.md` | Only when the report or a real-binary suite shows a changed contract: section 3.                                                                                                                                                                                                                                                                                                                                                                            |
 | `npmLaneRuntimeApprovals.ts`                                      | Part of the bump: the table restates the catalog runtime, and the retired runtime packages' executable trees are listed only so discovery can say `runtime-outdated` instead of `payload-tampered`; `npmLaneRuntimeApprovals.test.ts` refuses anything else. The packages themselves, and the root optional dependencies, move only when the owner publishes. Verify the helper digests then.                                                               |
-| Performance evidence                                              | The tool-catalog pair is re-measured on the bump commit and the coding-runtime calibration moves with `--recalibrate-runtime` (`docs/qa/perf-evidence.md`). Both need Node 24.18.0 and npm 11.16.0, and a code change afterwards invalidates them, so they run last.                                                                                                                                                                                        |
+| Performance evidence                                              | The tool-catalog pair is re-measured on the bump commit and the coding-runtime calibration moves with `--recalibrate-runtime` (`docs/qa/perf-evidence.md`). Both need the repository's own Node and npm (the `engines` in `package.json`, today 26.13.1 and 11.20.0), and a code change afterwards invalidates them, so they run last.                                                                                                                      |
 
 An upgrade is its own pull request and carries only the rows of this table. Hardening, fixes and
 features found while upgrading are recorded in the upgrade issue and delivered in a separate pull
@@ -71,10 +71,10 @@ Run them in a clean checkout of the branch that carries the bump.
 6. Classify every table of the new persistence schema in `opencodePersistenceContract.ts`, and add
    a retention check when a new table can hold state a retained copy must not carry.
 7. Run every `opencode*.real.test.ts` suite again without the write flags. They cover the native
-   tools, boundaries, revert, prompt inputs, retention and offline search. Set
-   `KEIKO_OPENCODE_PREVIOUS_REAL_BINARY` to the previous runtime, which an installed npm runtime
-   package carries, so `opencodeServiceInventory.real.test.ts` proves it still starts under the new
-   profile.
+   tools, boundaries, revert, prompt inputs, retention and offline search. The previous runtime is
+   not started under the new profile: one OpenCode runs everywhere (#4359), so an installation that
+   still holds the previous runtime package is refused with `runtime-outdated` before a launch
+   (`npmLaneCodingRuntime.test.ts`).
 8. Run the ordinary gates of AGENTS.md section 3: `typecheck`, `lint`, `format:check`, `test`,
    `gates:sonar`. `check:package-surface:assembled` when a contracts export changed. Commit, then
    measure the performance evidence above, last. `check:activity-log` includes the tool-catalog
@@ -110,6 +110,10 @@ only after repeating the effect inventory on the new version: one program per ef
 move and rename, worktree create and remove, MCP resources and tools including a Jira write, `fetch`)
 in Ask for approval and Full access, each leaving its `coding-runtime.native-policy.decided` line.
 Any effect that reaches no decision leaves the flag off and the card stays.
+Since 2.4.1 (#4546) the inventory is a permanent real-binary test
+(`opencodeNativeQualification.real.test.ts`, "decides every nested effect of a Code Mode program");
+add a row for every new state-changing Code Mode tool the new version offers before setting the
+flag.
 
 ## 4. Rollback and persisted state
 
@@ -146,8 +150,10 @@ the previous runtime packages republished), and nothing needs migrating:
 
 - The service inventory diff, for example 2.1.4 to 2.2.5: 149 to 169 operations with every admitted
   endpoint kept, 16 configuration settings added, and five built-in plugins added and three removed.
+  From 2.2.5 to 2.4.1: 169 to 178 operations (the schedule operations replaced by automations),
+  29 more configuration settings and eight more built-in plugins (net).
 - The real-binary suites above, on the new pin.
-- The parity matrix rows (T01–T22, S01–S19, C01–C08), each re-verified, or marked with what was not
+- The parity matrix rows (T01–T22, S01–S19, C01–C09), each re-verified, or marked with what was not
   re-run.
 - The performance evidence measured on the declared reference environment.
 

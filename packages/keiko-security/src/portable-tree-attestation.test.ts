@@ -10,6 +10,7 @@ import {
   renameSync,
   readdirSync,
   rmSync,
+  truncateSync,
   writeFileSync,
   type PathLike,
   type Mode,
@@ -26,6 +27,7 @@ import {
   attestPortableSidecarTreeSync,
   computePortableSidecarPayloadTreeDigest,
   hashPortableTreeKht1,
+  PORTABLE_MAX_FILE_BYTES,
   PortableTreeAttestationError,
   type PortableTreeKht1Operation,
 } from "./portable-tree-attestation.js";
@@ -875,4 +877,40 @@ describe("portable legacy sidecar tree attestation", () => {
       expect(JSON.stringify(events)).not.toContain(root);
     },
   );
+});
+
+// #4495: OpenCode 2.4.1's Windows executable is 278,383,496 bytes. A per-file bound of 256 MiB
+// refused it as an "unsafe artifact", so no Windows standalone installation could start a Coding
+// run, although the file is hashed in fixed-size reads and never held in memory.
+describe("a sidecar executable larger than 256 MiB", () => {
+  const OPENCODE_241_WINDOWS_BYTES = 278_383_496;
+
+  it("attests the tree and digests the executable", async () => {
+    const root = fixtureRoot();
+    mkdirSync(join(root, "bin"));
+    const executable = join(root, "bin", "opencode.exe");
+    writeFileSync(executable, "");
+    truncateSync(executable, OPENCODE_241_WINDOWS_BYTES);
+    const zeros = Buffer.alloc(1024 * 1024);
+    const expected = createHash("sha256");
+    for (let left = OPENCODE_241_WINDOWS_BYTES; left > 0; left -= zeros.byteLength) {
+      expected.update(left >= zeros.byteLength ? zeros : zeros.subarray(0, left));
+    }
+    const result = await attestPortableSidecarTree(
+      root,
+      "bin/opencode.exe",
+      operation({ deadline: Date.now() + 60_000 }),
+    );
+    expect(result.selectedFileSha256).toBe(expected.digest("hex"));
+  }, 120_000);
+
+  it("names a file above the bound as too large, not as unsafe", async () => {
+    const root = fixtureRoot();
+    const oversized = join(root, "oversized.bin");
+    writeFileSync(oversized, "");
+    truncateSync(oversized, PORTABLE_MAX_FILE_BYTES + 1);
+    await expect(attestPortableSidecarTree(root, "oversized.bin", operation())).rejects.toThrow(
+      "portable handoff artifact is too large",
+    );
+  });
 });

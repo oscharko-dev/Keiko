@@ -12,7 +12,7 @@ import {
   type SetStateAction,
 } from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
-import { ApiError, fetchGitStatus } from "@/lib/api";
+import { ApiError, fetchGitStatus, fetchProjects } from "@/lib/api";
 import { selectFolderWorkspace, selectLocalCheckout } from "@/lib/task-workspace-api";
 import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
 import { secureRandomId } from "@/lib/secure-random";
@@ -22,6 +22,7 @@ import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind, newClientCorrelationId } from "@/lib/http";
 import { codingWorkbenchSetupTaskId } from "./CodingWorkbenchSetup";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
+import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
 
 const OPERATOR = "studio-operator";
 
@@ -411,15 +412,79 @@ function bindingDenied(error: boolean, input: LocationInput): boolean {
   return error && input.branchDenied;
 }
 
-export function useWorkbenchExecutionLocation(
-  input: LocationInput,
-): WorkbenchExecutionLocationState {
-  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}\0${String(input.folderMode)}`;
-  const ready =
+/**
+ * Whether the registered folder lost its workspace while the held binding still names it. Read on
+ * every selection and whenever the window regains focus; a failed read changes nothing, so the
+ * binding the person already has keeps working.
+ */
+function useUnboundSelection(root: string | null): {
+  readonly unbound: boolean;
+  readonly recheck: () => Promise<void>;
+} {
+  // The answer names the root it was read for, so a switch never carries another folder's state.
+  const [state, setState] = useState<{ readonly root: string; readonly unbound: boolean } | null>(
+    null,
+  );
+  const selected = useRef(root);
+  const latestRead = useRef(0);
+  useLayoutEffect(() => {
+    selected.current = root;
+  }, [root]);
+  const recheck = useCallback(async (): Promise<void> => {
+    const at = selected.current;
+    if (at === null) return;
+    latestRead.current += 1;
+    const read = latestRead.current;
+    try {
+      const { projects } = await fetchProjects();
+      // Only the newest read for the still-selected root may answer; an older one is stale.
+      if (read !== latestRead.current || selected.current !== at) return;
+      const project = projects.find((entry) => entry.path === at);
+      setState({ root: at, unbound: project !== undefined && !locallyAvailable(project) });
+    } catch (error) {
+      reportClientDiagnostic("[keiko] coding workbench repository availability read failed", {
+        kind: "other",
+        errorKind: bffRequestErrorKind(error),
+        correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+      });
+    }
+  }, []);
+  useEffect(() => {
+    void recheck();
+    const onFocus = (): void => void recheck();
+    window.addEventListener("focus", onFocus);
+    return (): void => {
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [root, recheck]);
+  return { unbound: state !== null && state.root === root && state.unbound, recheck };
+}
+
+function selectionReady(input: LocationInput): boolean {
+  return (
     input.locationsPending !== true &&
     !input.workspaceLoading &&
     !input.workspaceError &&
-    bindingReady(input.activeInstance, input.root, input.branch, input.location, input.folderMode);
+    bindingReady(input.activeInstance, input.root, input.branch, input.location, input.folderMode)
+  );
+}
+
+export function useWorkbenchExecutionLocation(
+  rawInput: LocationInput,
+): WorkbenchExecutionLocationState {
+  const { unbound, recheck } = useUnboundSelection(rawInput.root);
+  const { refresh: refreshWorkspace } = rawInput;
+  // A bind is confirmed by the folder's own availability, read before the attempt settles, so a
+  // successful bind never shows the stale selection's error in between.
+  const refresh = useCallback(async (): Promise<boolean> => {
+    const refreshed = await refreshWorkspace();
+    await recheck();
+    return refreshed;
+  }, [refreshWorkspace, recheck]);
+  // A held binding the folder no longer backs is stale: it counts as no binding at all.
+  const input = { ...rawInput, activeInstance: unbound ? null : rawInput.activeInstance, refresh };
+  const key = `${input.root ?? ""}\0${input.branch ?? ""}\0${input.location}\0${String(input.folderMode)}\0${String(unbound)}`;
+  const ready = selectionReady(input);
   const attempt = useBindingAttempt(input, ready, key);
   const pending =
     attempt.pending ||

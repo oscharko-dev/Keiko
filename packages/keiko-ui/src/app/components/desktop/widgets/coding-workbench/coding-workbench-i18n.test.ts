@@ -228,6 +228,8 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
     "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
     "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
+    "codingWorkbench.event.failure.runtime-supervisor-image-path",
     "codingWorkbench.event.failure.runtime-supervisor-refused",
     "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
@@ -253,7 +255,7 @@ describe("Coding Workbench translations", () => {
     );
   });
 
-  // #4068: the six Windows start refusals are plain words for a non-technical reader: no "install"
+  // #4068, #4495: the Windows start refusals are plain words for a non-technical reader: no "install"
   // (a folder package installs nothing) and no internal jargon.
   it.each([
     "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
@@ -261,6 +263,8 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
     "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
     "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
+    "codingWorkbench.event.failure.runtime-supervisor-image-path",
     "codingWorkbench.event.failure.runtime-supervisor-refused",
   ] as const)("words %s in plain language without install or jargon", (key) => {
     for (const locale of ["en", "de"] as const) {

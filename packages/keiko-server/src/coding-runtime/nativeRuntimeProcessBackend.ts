@@ -58,6 +58,7 @@ import {
   recordRuntimeGatewayConfinementSpawned,
   recordWindowsGatewayConfinementSpawned,
   recordWindowsStaleGrantsSwept,
+  recordWindowsTreeReaped,
   runtimeProfileAttestsGit,
 } from "./runtimeGatewayProcessSandbox.js";
 import type {
@@ -240,8 +241,13 @@ function spawnWindowsGateway(
     ["--relay-supervised"],
     request.runId,
   );
-  const tree = new NativeRuntimeTree(request.recoveryHandle, child, "win32", (sweep) => {
-    recordWindowsStaleGrantsSwept(options.activityLog, request.runId, sweep);
+  const tree = new NativeRuntimeTree(request.recoveryHandle, child, "win32", {
+    launchSweep: (sweep): void => {
+      recordWindowsStaleGrantsSwept(options.activityLog, request.runId, sweep);
+    },
+    reaped: (rootExitCode): void => {
+      recordWindowsTreeReaped(options.activityLog, request.runId, rootExitCode);
+    },
   });
   child.controlInput.write(packet);
   recordWindowsGatewayConfinementSpawned(

@@ -439,4 +439,40 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.failedCheck("run-a")).toBeUndefined();
     expect(ledger.verificationBlockedReason("run-a")).toBe("VERIFICATION_RUNNER_UNAVAILABLE");
   });
+
+  // #4492: a follow-up of a change left without a passing check owes that check.
+  it("fails only a follow-up whose own check of an unverified change failed", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("question");
+    ledger.inheritVerificationDebt("question", true);
+    expect(ledger.needsVerification("question")).toBe(false);
+    ledger.begin("rerun");
+    ledger.inheritVerificationDebt("rerun", true);
+    ledger.verification("rerun", false, "test");
+    expect(ledger.needsVerification("rerun")).toBe(true);
+    ledger.begin("unrelated");
+    ledger.inheritVerificationDebt("unrelated", false);
+    ledger.verification("unrelated", false, "test");
+    expect(ledger.needsVerification("unrelated")).toBe(false);
+  });
+
+  it("hands an unpaid verification debt on past settlement until a check passes", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("question");
+    ledger.inheritVerificationDebt("question", true);
+    ledger.forget("question");
+    expect(ledger.carriesVerificationDebt("question")).toBe(true);
+    ledger.begin("stopped");
+    ledger.inheritVerificationDebt("stopped", ledger.carriesVerificationDebt("question"));
+    ledger.verification("stopped", true, "lint");
+    ledger.verification("stopped", false, "test");
+    ledger.forget("stopped");
+    expect(ledger.carriesVerificationDebt("stopped")).toBe(true);
+    ledger.begin("paid");
+    ledger.inheritVerificationDebt("paid", ledger.carriesVerificationDebt("stopped"));
+    ledger.verification("paid", true, "test");
+    ledger.forget("paid");
+    expect(ledger.carriesVerificationDebt("paid")).toBe(false);
+    expect(ledger.carriesVerificationDebt("never-seen")).toBe(false);
+  });
 });

@@ -14,6 +14,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.schedules.next": "{label} · nächste {time}",
   "codingWorkbench.schedules.paused": "{label} · pausiert",
   "codingWorkbench.schedules.done": "{label} · erledigt",
+  "codingWorkbench.schedules.removed": "{label} · durch das Laufzeit-Update entfernt",
   "codingWorkbench.schedules.wait.run-active": "{label} · fällig, wartet auf den laufenden Lauf",
   "codingWorkbench.schedules.wait.workspace-inactive":
     "{label} · fällig, wartet auf den Workspace dieser Aufgabe",
@@ -1120,6 +1121,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Eine Git-Prüfung hat diesen Commit verhindert. Prüfe die folgenden Befunde.",
   "codingWorkbench.commitResult.reason.execution-failed":
     "Git konnte diesen Commit nicht erstellen.",
+  "codingWorkbench.commitResult.reason.signing-failed":
+    "Git konnte diesen Commit nicht signieren. Prüfe deine Git-Signatureinrichtung und committe dann erneut.",
   "codingWorkbench.commitResult.reason.execution-uncertain":
     "Das Commit-Ergebnis ist unklar. Gleiche den Repository-Zustand vor einem weiteren Versuch ab.",
   "codingWorkbench.commitResult.reason.restart-reconciliation":
@@ -1374,6 +1377,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, nicht geantwortet hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, ihn nicht angenommen hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
+  "codingWorkbench.event.failure.runtime-supervisor-no-desktop":
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Keiko nicht in einer angemeldeten Desktop-Sitzung gestartet wurde, zum Beispiel über eine Remote-Shell oder als Dienst. Starte Keiko auf dem Desktop eines angemeldeten Windows-Benutzers und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-image-path":
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Pfad des Keiko-Ordners zu lang ist. Verschiebe den Keiko-Ordner an einen kürzeren Pfad, zum Beispiel direkt unter deinen Benutzerordner, und starte Keiko und die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.runtime-supervisor-refused":
     "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows den Start verweigert hat. Starte die Aufgabe erneut. Tritt es wieder auf, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.generic":
@@ -1450,6 +1457,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
   "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
+  "codingWorkbench.activity.editRefusalNotUtf8":
+    "Die Datei blieb unverändert, weil sie nicht als UTF-8-Text gespeichert ist.",
   "codingWorkbench.activity.editRefusal.DIRTY":
     "Die Datei hat ungespeicherte Änderungen im Editor, daher wurde die Änderung nicht übernommen.",
   "codingWorkbench.activity.editRefusal.VERSION_MISMATCH":
@@ -1551,7 +1560,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.not-run":
     "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.isolation-unavailable":
-    "Die Verifizierung konnte auf diesem Computer nicht laufen: Für diesen Run führt Keiko Projektbefehle nur in einer Container-Laufzeit (Docker oder Podman) aus, und keine läuft. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
+    "Die Verifizierung konnte auf diesem Computer nicht laufen: Für diesen Run führt Keiko Projektbefehle nur in einer Container-Laufzeit (Docker oder Podman) oder unter Windows in seiner eigenen geprüften Isolation aus, und beides ist hier nicht verfügbar. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
   "codingWorkbench.activity.verification.dependencies-unavailable":
     "Die Verifizierung ist nicht gelaufen: Keiko konnte die Abhängigkeiten des Projekts nicht installieren, deshalb lief keine Prüfung. Das ist keine fehlgeschlagene Prüfung. Installiere die Abhängigkeiten selbst im Projektordner und verifiziere dann erneut.",
   "codingWorkbench.activity.git.waiting-for-approval":

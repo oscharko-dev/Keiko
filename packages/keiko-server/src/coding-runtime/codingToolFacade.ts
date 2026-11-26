@@ -891,9 +891,16 @@ const PROTECTED_BRANCH_COMMIT_GUIDANCE =
 // on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
 const UNVERIFIED_COMMIT_GUIDANCE = `The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. ${SHELL_VERIFICATION_STATUS_RULE} Then propose the commit again.`;
 
+// Lab T17 on OpenCode 2.4.1 (#4546): Git could not sign the commit and the model repeated it until
+// the deadline. Nothing was committed and only the person can repair the signing setup.
+const SIGNING_FAILED_COMMIT_GUIDANCE =
+  "Git could not sign this commit, so nothing was committed. Keiko signs every commit with the person's own Git signing setup and never commits unsigned. Do not retry this commit and do not try to change the Git signing configuration. Tell the person that the change is staged and verified, and that committing it needs their Git signing setup (key, agent or signing program) to work.";
+
 function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
   if (result.status === "blocked" && result.blockReason === "protected-branch")
     return { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE };
+  if (result.status === "failed" && result.reason === "signing-failed")
+    return { guidance: SIGNING_FAILED_COMMIT_GUIDANCE };
   return result.status === "verification-failed" && result.reason === "verification-missing"
     ? { guidance: UNVERIFIED_COMMIT_GUIDANCE }
     : {};
@@ -1032,7 +1039,7 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // and the model kept asking for a shell the profile does not have. The cause is the computer's,
     // not the model's or the policy's: no number of retries or other verifiers changes it.
     VERIFICATION_ISOLATION_UNAVAILABLE:
-      "Verification could not run because this computer has no running container runtime (Docker or Podman), which Keiko needs to run project commands safely. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime and verify again, or check the change themselves.",
+      "Verification could not run because this computer has no isolation Keiko can run project commands in safely: no running container runtime (Docker or Podman), and on Windows no verified Keiko runtime supervisor. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime (or, on Windows, repair the Keiko installation) and verify again, or check the change themselves.",
     // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
     // and the model gave up instead of running the build tool the repository already uses.
     NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
@@ -1087,7 +1094,7 @@ const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
   "native-shell-required":
     "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
   "isolation-unavailable":
-    "this computer has no running container runtime (Docker or Podman), so Keiko cannot run project commands safely here",
+    "this computer has no isolation for project commands (no running container runtime such as Docker or Podman, and on Windows no verified Keiko runtime supervisor), so Keiko cannot run them safely here",
   denied: "denied by policy",
   cancelled: "cancelled",
   skipped: "skipped",
@@ -1133,12 +1140,12 @@ function verificationNotRunDetail(
 const SHELL_DEPENDENCIES_INSTALLED =
   "Keiko has now installed this project's npm dependencies for your shell, without install scripts: run the project's check in your shell again, where its result counts as the verification. Do not replace, remove or reimplement a dependency to make the check pass.";
 
-// The isolated verifier has no container runtime on this host. A run that reaches the model as
+// The isolated verifier has no isolation backend on this host. A run that reaches the model as
 // VERIFICATION_NOT_RUN has a shell of its own (the port names a shell-less run
 // VERIFICATION_ISOLATION_UNAVAILABLE instead), and there the same check still counts: the model is
 // told to run it in that shell, as for a step the verifier cannot install for.
 const ISOLATION_UNAVAILABLE_WITH_SHELL =
-  "the isolated verifier has no running container runtime (Docker or Podman) on this computer; run this check in your own shell";
+  "the isolated verifier has no isolation on this computer (no running container runtime such as Docker or Podman, and on Windows no verified Keiko runtime supervisor); run this check in your own shell";
 
 function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
   return shell && reason === "isolation-unavailable"

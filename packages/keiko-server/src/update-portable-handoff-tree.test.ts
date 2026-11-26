@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { PORTABLE_MAX_FILE_BYTES } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
 import {
   digestPortableHandoffFile,
@@ -91,7 +92,7 @@ describe("portable handoff file digest", () => {
     );
   });
 
-  it.each([0, -1, Number.NaN, 256 * 1024 * 1024 + 1])(
+  it.each([0, -1, Number.NaN, PORTABLE_MAX_FILE_BYTES + 1])(
     "rejects the invalid caller byte limit %s",
     async (maximumBytes) => {
       const path = await fixturePath();

@@ -6811,6 +6811,34 @@ describe("ChatWindow private draft and skill recovery", () => {
     expect(session.sendMessage).not.toHaveBeenCalled();
   });
 
+  // A Firefox smoke pressed Enter while the selection read was in flight: the send was refused with
+  // "Skills could not be updated" although nothing had failed, and the Enter was lost.
+  it("lets Enter wait while the skill selection loads, as the Send button does", async () => {
+    const user = userEvent.setup();
+    const session = makeSession({
+      activeChat: makeChat(),
+      draft: "A complete message",
+      markdownSkill: {
+        chatId: makeChat().id,
+        view: undefined,
+        busy: true,
+        failed: false,
+        refresh: vi.fn(),
+        select: vi.fn(),
+      },
+    });
+    renderWindow(session);
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAccessibleDescription(
+      "Loading skills…",
+    );
+    await user.click(screen.getByRole("textbox", { name: "Chat message" }));
+    await user.keyboard("{Enter}");
+    expect(session.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+      "A complete message",
+    );
+  });
+
   it("explains a blocked skill selection for a populated composer", () => {
     renderWindow(
       makeSession({

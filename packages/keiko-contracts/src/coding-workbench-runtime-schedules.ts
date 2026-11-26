@@ -7,8 +7,18 @@
  * it never sees the scheduled prompt, and it never names a session.
  */
 
-export const CODING_WORKBENCH_SCHEDULE_STATUSES = ["active", "paused", "done"] as const;
+/**
+ * `removed`: a schedule a retained session carried under a previous OpenCode version. The runtime
+ * Keiko runs now never reads that session's database, so the schedule never wakes the task again
+ * and is shown once as removed until the task's next run replaces the entry (#4546).
+ */
+export const CODING_WORKBENCH_SCHEDULE_STATUSES = ["active", "paused", "done", "removed"] as const;
 export type CodingWorkbenchScheduleStatus = (typeof CODING_WORKBENCH_SCHEDULE_STATUSES)[number];
+/** What a pause, resume or delete leaves: a removed schedule is never changed. */
+export type CodingWorkbenchScheduleChangedStatus = Exclude<
+  CodingWorkbenchScheduleStatus,
+  "removed"
+>;
 
 export const CODING_WORKBENCH_SCHEDULE_CADENCES = ["in", "at", "every", "cron", "other"] as const;
 export type CodingWorkbenchScheduleCadence = (typeof CODING_WORKBENCH_SCHEDULE_CADENCES)[number];
@@ -25,7 +35,8 @@ export const CODING_WORKBENCH_SCHEDULE_WAITS = [
 export type CodingWorkbenchScheduleWait = (typeof CODING_WORKBENCH_SCHEDULE_WAITS)[number];
 
 const SCHEDULE_ACTIONS: ReadonlySet<string> = new Set(CODING_WORKBENCH_SCHEDULE_ACTIONS);
-const SCHEDULE_ID = /^sch_[0-9A-Za-z]{1,64}$/u;
+/** The runtime's automation id (`aut_`, OpenCode 2.3.1 and later); only these can be changed. */
+const SCHEDULE_ID = /^aut_[0-9A-Za-z]{1,64}$/u;
 /** A Coding History task id, as a start request's `conversationId` admits it. */
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
@@ -52,7 +63,7 @@ export interface CodingWorkbenchScheduleControlRequest {
 }
 
 export interface CodingWorkbenchScheduleControlResponse {
-  readonly status: CodingWorkbenchScheduleStatus | "deleted";
+  readonly status: CodingWorkbenchScheduleChangedStatus | "deleted";
 }
 
 export function isCodingWorkbenchScheduleId(value: unknown): value is string {

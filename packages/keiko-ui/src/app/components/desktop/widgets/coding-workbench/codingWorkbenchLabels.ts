@@ -454,6 +454,8 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
     "runtime-supervisor-gateway-admit",
     "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
   ],
+  ["runtime-supervisor-no-desktop", "codingWorkbench.event.failure.runtime-supervisor-no-desktop"],
+  ["runtime-supervisor-image-path", "codingWorkbench.event.failure.runtime-supervisor-image-path"],
   ["runtime-supervisor-refused", "codingWorkbench.event.failure.runtime-supervisor-refused"],
 ]);
 

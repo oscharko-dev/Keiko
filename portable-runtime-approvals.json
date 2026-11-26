@@ -30,9 +30,9 @@
         "owner": "anomalyco",
         "repository": "opencode",
         "name": "opencode",
-        "version": "2.2.5",
-        "tag": "v2.2.5",
-        "commit": "9bbb8ce18c80f099e0e448775f59d965ead40a21"
+        "version": "2.4.1",
+        "tag": "v2.4.1",
+        "commit": "6f0514052a3c859894ad01bb14cc14dda1e44b96"
       },
       "adapterCompatibility": {
         "adapterName": "keiko-coding-sidecar",
@@ -41,8 +41,8 @@
       },
       "protocolSchema": {
         "path": "packages/protocol/openapi.json",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/protocol/openapi.json",
-        "sha256": "92cc33ef9a107c8af6295e6fcbdf6d339d4374955910924456bd91a76844a5db",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/6f0514052a3c859894ad01bb14cc14dda1e44b96/packages/protocol/openapi.json",
+        "sha256": "e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b",
         "hashAlgorithm": "sha256",
         "hashEncoding": "lowercase-hex",
         "digestInput": "upstream-raw-bytes",
@@ -60,42 +60,42 @@
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/9bbb8ce18c80f099e0e448775f59d965ead40a21/LICENSE",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/6f0514052a3c859894ad01bb14cc14dda1e44b96/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
       "archives": {
         "linux-x64": {
-          "url": "https://opencode.ai/files/bin/2.2.5/opencode-linux-x64.tar.gz",
-          "sha256": "09f44302c10fd036912f59c81fd1aef5df45dd06f649197f9dfc9bbe2a79614e",
-          "sizeBytes": 119196162,
+          "url": "https://opencode.ai/files/bin/2.4.1/opencode-linux-x64.tar.gz",
+          "sha256": "9ddd18e3faf64eaeccf6a0fcbc96a5c7a14520ae5fd5b61e5be51d894f478b47",
+          "sizeBytes": 130647866,
           "executableName": "opencode",
-          "executableTreeSha256": "e335c6335f82bc23028d9c7a64228b73ac81bfa29897c452b57ec866f6eaead6",
-          "sbomSha256": "0b101a03256f3c4fb89b1b863e302e9b8a7d780318b39bb0deb6b745c0703647"
+          "executableTreeSha256": "a5cd1f1335bdd105443df9addf660e2d6353d6b5c22d9a5b3b76141e483e9812",
+          "sbomSha256": "18aa64640b852bc58a275601dc6c8c52776711cc9ed1dec5311083a57070ef08"
         },
         "windows-x64": {
-          "url": "https://opencode.ai/files/bin/2.2.5/opencode-windows-x64.zip",
-          "sha256": "2f3bfd6b3527c60c2a882557b20ddc9ba6bdff4b5a8fe61c853da8fcfb3076e8",
-          "sizeBytes": 121962397,
+          "url": "https://opencode.ai/files/bin/2.4.1/opencode-windows-x64.zip",
+          "sha256": "831e00806531fabb184533ef85fead96eb92287cab2d0f21db7daaa494e75083",
+          "sizeBytes": 132524450,
           "executableName": "opencode.exe",
-          "executableTreeSha256": "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
-          "sbomSha256": "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493"
+          "executableTreeSha256": "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
+          "sbomSha256": "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0"
         },
         "macos-arm64": {
-          "url": "https://opencode.ai/files/bin/2.2.5/opencode-darwin-arm64.zip",
-          "sha256": "25ba9908979fa7d764792c82589b4b5768ab1511154e0317d98aa77d216ce767",
-          "sizeBytes": 105851917,
+          "url": "https://opencode.ai/files/bin/2.4.1/opencode-darwin-arm64.zip",
+          "sha256": "95a101eda95108478f1db43cff8fcbd4811f6c0e79af1e167301843c6a48d731",
+          "sizeBytes": 115188658,
           "executableName": "opencode",
-          "executableTreeSha256": "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
-          "sbomSha256": "ad9c8c0e1ae594a9cf84133c48fa131b05ec429b14fe6187a06a0127018cb2cf"
+          "executableTreeSha256": "dd29f79df0af9b1ce293465f2ff1e2dfb4e740872509d75b23c4948dd4d72131",
+          "sbomSha256": "900f6be50d4f1a9b4a7292d48bcce37dbda9314265dc78d997f9cda10df73e25"
         },
         "macos-x64": {
-          "url": "https://opencode.ai/files/bin/2.2.5/opencode-darwin-x64.zip",
-          "sha256": "4d4419022e6ffbd48afc97c5101bdf001d38b0499f516169b9a80a87a340fd56",
-          "sizeBytes": 111093657,
+          "url": "https://opencode.ai/files/bin/2.4.1/opencode-darwin-x64.zip",
+          "sha256": "a7a4c758a32488138531ab2d82be86e2a1438c35c017664f83daa1d5b63bb82c",
+          "sizeBytes": 115360639,
           "executableName": "opencode",
-          "executableTreeSha256": "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
-          "sbomSha256": "1213a19896a2ce21f96a3510dee01bfce87ac93964430e5a2188654294794e1b"
+          "executableTreeSha256": "4c93d7ebdb8deee2805770c2682eb938fb1ab91c710d77c5b2bf703ebe1ad836",
+          "sbomSha256": "1f4174f86c396d95c2461f10a8dd871b5e8fbeacdfc269b76067982103cee497"
         }
       }
     }

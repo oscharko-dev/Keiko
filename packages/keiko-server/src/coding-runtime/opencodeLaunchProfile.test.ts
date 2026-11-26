@@ -5,6 +5,9 @@ import {
   buildOpenCodeLaunchProfile,
   createFixedOpenCodeConfig,
   createFixedOpenCodeV2Config,
+  OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS,
+  OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS,
+  OPENCODE_WITHHELD_BUILT_IN_PLUGINS,
   OPENCODE_CHANGESET_SIZE_LIMIT_TEXT,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
@@ -329,6 +332,10 @@ describe("OpenCode launch profile", () => {
         expect(record(JSON.parse(launched.config)).policies, toolProfile).toEqual(expected);
         expect(launched.env.OPENCODE_DISABLE_FREE_MODELS, toolProfile).toBe("1");
         expect(launched.env.OPENCODE_DISABLE_MODELS_FETCH, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE, toolProfile).toBe("1");
+        expect(launched.env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT, toolProfile).toBe("1");
+        // zsh here-documents go to TMPPREFIX, never the shared /tmp (#4546).
+        expect(launched.env.TMPPREFIX, toolProfile).toBe("/private/run/tmp/zsh");
       }
     });
 
@@ -1017,5 +1024,76 @@ describe("governed system prompt verification step", () => {
       "say so once with the exact cause and finish",
     );
     expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).toContain("never retry it in a loop");
+  });
+});
+
+describe("the launch profile on OpenCode 2.4.x (#4546)", () => {
+  const PROFILES = ["direct", "code-mode", "native"] as const;
+  const CLOSED_SWITCHES = [
+    "all_flags",
+    "artifacts",
+    "codemode_vm",
+    "console_watches",
+    "full_codemode",
+    "home_memory",
+    "image_generate",
+    "location_idle_timeout",
+    "machines",
+    "media_blob",
+    "model_speeds",
+    "opencode_api",
+    "project_overlay",
+    "recommended_api",
+    "sqlite_fts",
+    "video_generate",
+  ] as const;
+
+  function composed(profile: (typeof PROFILES)[number]): Readonly<Record<string, unknown>> {
+    return createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, profile);
+  }
+
+  it.each(PROFILES)("turns automations off except in the native profile (%s)", (profile) => {
+    expect(composed(profile).automations).toBe(profile === "native");
+  });
+
+  it("withholds the automation tool wherever automations are off, and only there", () => {
+    expect(OPENCODE_WITHHELD_BUILT_IN_PLUGINS).toContain("opencode.tool.automation");
+    expect(OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS).toEqual(["opencode.tool.automation"]);
+    expect(OPENCODE_NATIVE_WITHHELD_BUILT_IN_PLUGINS).not.toContain("opencode.tool.automation");
+    expect(OPENCODE_WITHHELD_BUILT_IN_PLUGINS).not.toContain("opencode.tool.schedule");
+    for (const profile of ["direct", "code-mode"] as const) {
+      expect(composed(profile).plugins).toContain("-opencode.tool.automation");
+    }
+    expect(composed("native").plugins).not.toContain("-opencode.tool.automation");
+  });
+
+  it("withholds every built-in plugin 2.4.x added unless an owner admits it", () => {
+    for (const plugin of [
+      "opencode.fork-notice",
+      "opencode.home-memory",
+      "opencode.tool.machine",
+      "opencode.tool.session-interrupt",
+      "opencode.tool.session-search",
+      "opencode.tool.video-generate",
+      "opencode.tools.mcp-events",
+    ]) {
+      for (const profile of PROFILES) expect(composed(profile).plugins).toContain(`-${plugin}`);
+    }
+  });
+
+  it.each(PROFILES)(
+    "states every experimental switch and drops the removed ones (%s)",
+    (profile) => {
+      const experimental = record(composed(profile).experimental);
+      for (const key of CLOSED_SWITCHES) expect(experimental[key]).toBe(false);
+      expect(experimental).not.toHaveProperty("schedules");
+      expect(experimental).not.toHaveProperty("background_compaction");
+      expect(experimental).not.toHaveProperty("part_rows");
+      expect(experimental.todo).toBe(profile === "native" ? true : undefined);
+    },
+  );
+
+  it.each(PROFILES)("never writes a background compaction summary (%s)", (profile) => {
+    expect(record(composed(profile).compaction).background).toBe(false);
   });
 });
