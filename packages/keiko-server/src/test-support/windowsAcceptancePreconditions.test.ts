@@ -5,7 +5,7 @@ import { OPENCODE_PINNED_VERSION } from "../coding-runtime/opencodeRuntimeVersio
 import { buildAcceptanceEvidence } from "./acceptanceEvidence.js";
 import {
   WINDOWS_PRECONDITION_CODES,
-  keikoServiceNames,
+  keikoRegistryServiceNames,
   probeWindowsPreconditions,
   windowsUserClass,
   type ScResult,
@@ -35,10 +35,14 @@ const FILTERED_ADMIN_GROUPS = [
 ].join("\n");
 
 const NO_SERVICES: ScResult = { status: 1060, stdout: "" };
-const EMPTY_LISTING: ScResult = {
+const REGISTRY_ROOT = "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services";
+const registryListing = (...names: readonly string[]): ScResult => ({
   status: 0,
-  stdout: "SERVICE_NAME: Spooler\nDISPLAY_NAME: Print Spooler\n",
-};
+  stdout: ["", REGISTRY_ROOT, ...names.map((name) => `${REGISTRY_ROOT}\\${name}`), ""].join("\r\n"),
+});
+const EMPTY_LISTING: ScResult = registryListing("Spooler", "BFE", "Dhcp");
+/** What the SCM answers to a standard user under a batch or network logon: it cannot enumerate. */
+const ENUMERATION_DENIED: ScResult = { status: 5, stdout: "[SC] OpenSCManager FAILED 5:" };
 
 interface SeamOverrides {
   readonly env?: Record<string, string | undefined>;
@@ -49,6 +53,7 @@ interface SeamOverrides {
   readonly gateway?: ScResult;
   /** The answer for `com.docker.service`. */
   readonly dockerService?: ScResult;
+  /** The registry listing of the service keys. */
   readonly listing?: ScResult;
   /** `where.exe` could not run. */
   readonly whereUnrunnable?: boolean;
@@ -65,8 +70,9 @@ function seams(overrides: SeamOverrides = {}): WindowsProbeSeams {
       overrides.whereUnrunnable === true ? undefined : (overrides.programs ?? []).includes(program),
     whoamiGroups: () =>
       overrides.groups === null ? undefined : (overrides.groups ?? STANDARD_GROUPS),
+    reg: () => overrides.listing ?? EMPTY_LISTING,
     sc: (args): ScResult => {
-      if (args.length !== 2) return overrides.listing ?? EMPTY_LISTING;
+      if (args.length !== 2) return ENUMERATION_DENIED;
       return args[1] === "com.docker.service"
         ? (overrides.dockerService ?? NO_SERVICES)
         : (overrides.gateway ?? NO_SERVICES);
@@ -108,16 +114,16 @@ describe("windowsUserClass", () => {
   });
 });
 
-describe("keikoServiceNames", () => {
-  it("finds the Keiko-prefixed names in any locale and counts each once", () => {
-    const listing = [
-      "SERVICE_NAME: KeikoRuntimeGateway",
-      "DISPLAY_NAME: KeikoRuntimeGateway",
-      "DIENSTNAME: keikoHelper",
-      "SERVICE_NAME: Spooler",
-      "DISPLAY_NAME: Not Keiko at all",
-    ].join("\r\n");
-    expect(keikoServiceNames(listing)).toEqual(["keikoruntimegateway", "keikohelper"]);
+describe("keikoRegistryServiceNames", () => {
+  it("finds the Keiko-prefixed service keys in any locale and counts each once", () => {
+    const listing = registryListing("KeikoRuntimeGateway", "keikoHelper", "Spooler", "NotKeiko");
+    const output = `${listing.stdout}\r\n${REGISTRY_ROOT}\\KEIKORUNTIMEGATEWAY`;
+    expect(keikoRegistryServiceNames(output)).toEqual(["keikoruntimegateway", "keikohelper"]);
+  });
+
+  it("ignores a nested key and any other root", () => {
+    const output = `${REGISTRY_ROOT}\\Keiko\\Parameters\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Keiko\r\n`;
+    expect(keikoRegistryServiceNames(output)).toEqual([]);
   });
 });
 
@@ -176,10 +182,16 @@ describe("probeWindowsPreconditions", () => {
   });
 
   it("names any service with the Keiko prefix", () => {
-    const listing = { status: 0, stdout: "SERVICE_NAME: KeikoOther\nSERVICE_NAME: Spooler\n" };
+    const listing = registryListing("KeikoOther", "Spooler");
     const facts = probeWindowsPreconditions(seams({ listing }));
     expect(facts.unmetPreconditions).toEqual(["service-installed"]);
     expect(facts.services).toEqual({ keikoGatewayServiceInstalled: false, keikoServiceCount: 1 });
+  });
+
+  it("certifies a clean machine whose SCM refuses enumeration to a batch logon (regression)", () => {
+    const facts = probeWindowsPreconditions(seams());
+    expect(facts.services).toEqual({ keikoGatewayServiceInstalled: false, keikoServiceCount: 0 });
+    expect(facts.unmetPreconditions).toEqual([]);
   });
 
   it("names every failed precondition, not only the first", () => {
@@ -272,11 +284,7 @@ const CODE_CASES = [
     ["container-runtime-present", "container-runtime-probe-failed"],
   ],
   ["service-installed", { gateway: { status: 0, stdout: "" } }, ["service-installed"]],
-  [
-    "service-probe-failed",
-    { listing: { status: null, stdout: "" } },
-    ["service-installed", "service-probe-failed"],
-  ],
+  ["service-probe-failed", { listing: { status: null, stdout: "" } }, ["service-probe-failed"]],
 ] satisfies readonly (readonly [string, SeamOverrides, readonly string[]])[];
 
 describe("probe output through the production evidence builder and checker", () => {

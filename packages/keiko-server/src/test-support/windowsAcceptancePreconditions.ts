@@ -55,8 +55,14 @@ export interface WindowsProbeSeams {
   readonly onPath: (program: string) => boolean | undefined;
   /** Output of `whoami /groups /fo csv`; `undefined` when it could not run. */
   readonly whoamiGroups: () => string | undefined;
-  /** Runs `sc.exe` with the arguments; a spawn failure is a `null` status. */
+  /** Runs `sc.exe query <name>`; a spawn failure is a `null` status. */
   readonly sc: (args: readonly string[]) => ScResult;
+  /**
+   * Lists the service keys of the registry with `reg.exe`. The SCM refuses to enumerate services
+   * to a standard user under a batch or network logon (OpenSCManager access denied), but the keys
+   * are readable under every logon.
+   */
+  readonly reg: (args: readonly string[]) => ScResult;
 }
 
 /** BUILTIN\Administrators: a member of it is never certified, enabled or deny-only. */
@@ -161,12 +167,19 @@ export function windowsContainerRuntimeFacts(
   };
 }
 
-/** The distinct names that start with the Keiko prefix in an `sc query` listing, in any locale. */
-export function keikoServiceNames(listing: string): readonly string[] {
+const SERVICES_REGISTRY_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
+const SERVICE_KEY_LINE =
+  /^HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\([^\\\r\n]+)\s*$/u;
+
+/**
+ * The distinct names, lower-cased, of the service keys that start with the Keiko prefix in a
+ * `reg query` listing of the Services key. Only direct children count, in any locale.
+ */
+export function keikoRegistryServiceNames(listing: string): readonly string[] {
   const names = new Set<string>();
-  const pattern = new RegExp(`^[^:\\r\\n]+:\\s*(${KEIKO_SERVICE_PREFIX}[\\w.-]*)\\s*$`, "gimu");
-  for (const match of listing.matchAll(pattern)) {
-    if (match[1] !== undefined) names.add(match[1].toLowerCase());
+  for (const line of listing.split(/\r?\n/u)) {
+    const name = SERVICE_KEY_LINE.exec(line)?.[1]?.toLowerCase();
+    if (name?.startsWith(KEIKO_SERVICE_PREFIX.toLowerCase()) === true) names.add(name);
   }
   return [...names];
 }
@@ -179,13 +192,13 @@ function serviceInstalled(seams: WindowsProbeSeams, name: string): boolean | und
 
 /**
  * Whether the gateway service, or any service named with the Keiko prefix, is installed;
- * `undefined` when `sc.exe` could not answer.
+ * `undefined` when `sc.exe` or `reg.exe` could not answer.
  */
 export function windowsServiceFacts(seams: WindowsProbeSeams): WindowsServiceFacts | undefined {
   const installed = serviceInstalled(seams, KEIKO_GATEWAY_SERVICE);
-  const listing = seams.sc(["query", "type=", "service", "state=", "all"]);
+  const listing = seams.reg(["query", SERVICES_REGISTRY_KEY]);
   if (installed === undefined || listing.status !== 0) return undefined;
-  const names = new Set(keikoServiceNames(listing.stdout));
+  const names = new Set(keikoRegistryServiceNames(listing.stdout));
   if (installed) names.add(KEIKO_GATEWAY_SERVICE.toLowerCase());
   return { keikoGatewayServiceInstalled: installed, keikoServiceCount: names.size };
 }
@@ -258,5 +271,6 @@ export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): Win
       return status === 0 ? stdout : undefined;
     },
     sc: (args) => runSystemTool(env, "sc.exe", args),
+    reg: (args) => runSystemTool(env, "reg.exe", args),
   };
 }

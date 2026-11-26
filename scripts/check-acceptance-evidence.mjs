@@ -52,8 +52,14 @@ const CONTAINER_RUNTIME_SIGNS = {
 
 // The Windows promise also needs no installed Keiko service: the gateway service of Keiko 1.5.x or
 // any service named with the Keiko prefix. A fact it stopped recording counts as present.
+function recordedServices(services) {
+  return typeof services === "object" && services !== null;
+}
+
+// A services block that is not recorded at all is a probe that could not run (or a writer that
+// dropped it): it is reported once, as `service-probe-failed`, not also as an installed service.
 function presentServiceSigns(services) {
-  if (typeof services !== "object" || services === null) return ["unrecorded"];
+  if (!recordedServices(services)) return ["unrecorded"];
   const signs = [];
   if (services.keikoGatewayServiceInstalled !== false) signs.push("gatewayServiceInstalled");
   if (services.keikoServiceCount !== 0) signs.push("keikoServiceCount");
@@ -171,18 +177,24 @@ const PRECONDITIONS = [
   [
     "service-installed",
     (evidence) =>
-      evidence.platform === "win32" && presentServiceSigns(evidence.services).length > 0,
+      evidence.platform === "win32" &&
+      recordedServices(evidence.services) &&
+      presentServiceSigns(evidence.services).length > 0,
+  ],
+  [
+    "service-probe-failed",
+    (evidence) => evidence.platform === "win32" && !recordedServices(evidence.services),
   ],
 ];
 
-// The names a run may record in `unmetPreconditions`: the ones recomputed above and the three
-// Windows probe failures (windowsAcceptancePreconditions.ts). A failed container or service probe
-// leaves its signs unrecorded, which the recomputed rules above refuse as present and installed; the
-// recorded code then says that the probe could not run.
+// The names a run may record in `unmetPreconditions`: the ones recomputed above and the container
+// probe failure (windowsAcceptancePreconditions.ts). A failed container probe leaves its signs
+// unrecorded, which the recomputed rule above refuses as present; the recorded code then says that
+// the probe could not run. A failed service probe leaves the services block unrecorded, which the
+// recomputed `service-probe-failed` rule reports once.
 const PRECONDITION_NAMES = new Set([
   ...PRECONDITIONS.map(([name]) => name),
   "container-runtime-probe-failed",
-  "service-probe-failed",
 ]);
 
 // What the run itself said was unmet; a run that recorded nothing certifies nothing. Only a known

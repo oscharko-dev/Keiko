@@ -337,15 +337,16 @@ describe("acceptanceEvidenceFailures on Windows (#4492 AC3)", () => {
         "administrator-probe-failed",
         "container-runtime-probe-failed",
         "service-probe-failed",
-        "service-installed",
       ]),
     );
     expect(failures).not.toContain("administrator");
+    expect(failures).not.toContain("service-installed");
+    expect(failures.filter((code) => code === "service-probe-failed")).toHaveLength(1);
   });
 
   it("refuses Windows evidence that does not record the services at all", () => {
     const { services: _dropped, ...bare } = WINDOWS_CERTIFYING;
-    expect(acceptanceEvidenceFailures(bare)).toEqual(["service-installed"]);
+    expect(acceptanceEvidenceFailures(bare)).toEqual(["service-probe-failed"]);
   });
 
   it("counts a Windows sign the evidence no longer records as present", () => {
