@@ -1378,16 +1378,24 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     there, and libuv reads that as a name collision and retries forever (libuv#5181, fixed in libuv
     1.53; no official Node.js carries it yet, nodejs/node#66282). Until one does, the Windows
     runtime package carries `runtime/step-node/node.exe`, the official 26.13.1 source plus exactly
-    that fix (`.github/workflows/windows-step-node.yml`), pinned by digest, size, source digest and
-    patch digests in `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build and at
-    every launch. The server offers it only when the folder is a real folder that holds exactly the
+    that fix, built by `.github/workflows/windows-step-node.yml` from
+    `patches/node-26.13.1-libuv-5181.patch` and `patches/node-26.13.1-win-crates-synchronization.patch`
+    (the provenance of the pin), pinned by digest, size, source digest and patch digests in
+    `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build, by the package
+    inspection (the folder may hold exactly that one file) and at every launch; the server hashes
+    it once per (path, size, modification time, inode) for its lifetime. The server offers it only when the folder is a real folder that holds exactly the
     pinned file (`editor.verification.windows-step-supervisor` field `stepNode`: `patched`, `absent`
     or `mismatch`); the step then reads and executes that folder, finds it first on its `PATH`
-    through its drive letter (so `node` and every `node_modules\.bin\*.cmd` shim run it), runs a
+    through its drive letter (so every `node` resolved through the search path, including the bare
+    `node` a `node_modules\.bin\*.cmd` shim falls back to, runs it), runs a
     command named `node` as it, and starts an install's `npm` and `npx` as
     `<step node.exe> <install>\node_modules\npm\bin\npm-cli.js|npx-cli.js`, because the install's
     `.cmd` prefers the stock `node.exe` beside it; a CLI script that is missing or resolves outside
-    the install's folder keeps the `.cmd` and is recorded. Each decision is one
+    the install's folder keeps the `.cmd` and is recorded. cmd.exe still prefers a `node` in the
+    step's current directory for a shim's bare `node`; such a file runs in the same AppContainer
+    with the same grants, so it widens nothing, and the step does not set
+    `NoDefaultCurrentDirectoryInExePath`, which would break a project's `mvnw` or `gradlew` called
+    from its folder. Each decision is one
     `editor.verification.windows-step-node` line with closed values (`image`, `npmLaunch`,
     `npmFallback`, `pathPrefixed`, `placement`). Without a verified step Node.js, absent or
     mismatching, the step runs exactly as before, so a Maven-only project is unaffected and the log

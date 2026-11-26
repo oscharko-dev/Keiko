@@ -744,6 +744,22 @@ describe("coding runtime npm package", () => {
     ).rejects.toThrow("exactly the approved package files");
   });
 
+  it("refuses an extra file beside the step Node.js, in the candidate check and in --verify", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+    expect(prepared.receipt.files.map(({ path }) => path)).toContain("runtime/step-node/node.exe");
+    write(join(fixture.packageDir, "runtime/step-node/payload.dll"), "unverified");
+    await expect(
+      packCodingRuntimeNpmCandidate(
+        { ...releaseInput(fixture), artifactDir: join(scratch(), "again") },
+        fixture.deps,
+      ),
+    ).rejects.toThrow("exactly the approved package files");
+    await expect(
+      verifyCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("exactly the approved package files");
+  });
+
   it("fails when the Windows supervisor build fails", async () => {
     const outDir = join(scratch(), "package");
     const { deps } = fakeDeps();

@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  type Stats,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ import {
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
-import { windowsStepNodePin } from "./windowsStepNode.js";
+import { resolveStepNode, windowsStepNodePin, type StepNodeFs } from "./windowsStepNode.js";
 
 const roots: string[] = [];
 
@@ -257,6 +258,146 @@ describe("the runtime's step Node.js (#4492)", () => {
       expect(supervisorLines(stateRoot)[0]).toMatchObject({ stepNode: "mismatch" });
     },
   );
+
+  describe("with injected file system answers", () => {
+    const supervisorPath = join(tmpdir(), "rt", "native", "keiko-runtime-supervisor.exe");
+    const folder = join(tmpdir(), "rt", "step-node");
+
+    function stat(
+      overrides: Partial<{
+        size: number;
+        nlink: number;
+        mtimeMs: number;
+        ino: number;
+        file: boolean;
+      }> = {},
+    ): Stats {
+      return {
+        size: PIN.sizeBytes,
+        nlink: 1,
+        mtimeMs: 1000,
+        ino: 7,
+        isFile: () => overrides.file ?? true,
+        ...overrides,
+      } as unknown as Stats;
+    }
+
+    function fakeFs(
+      entry: Stats,
+      hashes: { count: number },
+      overrides: Partial<StepNodeFs> = {},
+    ): StepNodeFs {
+      return {
+        lstat: (path) => (path === folder ? stat() : entry),
+        readdir: () => ["node.exe"],
+        realpath: (path) => path,
+        sha256: (): string => {
+          hashes.count++;
+          return PIN.sha256;
+        },
+        ...overrides,
+      };
+    }
+
+    function run(fs: StepNodeFs, cache = new Set<string>()): ReturnType<typeof resolveStepNode> {
+      return resolveStepNode({
+        supervisorPath,
+        pin: PIN,
+        isDirectory: () => true,
+        correlationId: "step-node-fs",
+        fs,
+        cache,
+      });
+    }
+
+    it("answers mismatch, never throws, when stat of the runtime folder is refused", () => {
+      for (const code of ["EACCES", "EPERM"]) {
+        const refusing = fakeFs(
+          stat(),
+          { count: 0 },
+          {
+            lstat: () => {
+              throw Object.assign(new Error(code), { code });
+            },
+          },
+        );
+        expect(run(refusing)).toEqual({ outcome: "mismatch" });
+      }
+    });
+
+    it("accepts the pinned size with one link", () => {
+      expect(run(fakeFs(stat(), { count: 0 }))).toMatchObject({ outcome: "patched" });
+    });
+
+    it("refuses a file of another size even when its digest would match", () => {
+      expect(run(fakeFs(stat({ size: PIN.sizeBytes + 1 }), { count: 0 }))).toEqual({
+        outcome: "mismatch",
+      });
+    });
+
+    it("refuses a hard-linked file even when its bytes and size match", () => {
+      expect(run(fakeFs(stat({ nlink: 2 }), { count: 0 }))).toEqual({ outcome: "mismatch" });
+    });
+
+    it("refuses an entry that is not an ordinary file, as a link is not", () => {
+      expect(run(fakeFs(stat({ file: false }), { count: 0 }))).toEqual({ outcome: "mismatch" });
+    });
+
+    it("hashes once and trusts the same (path, size, mtime, inode) afterwards", () => {
+      const hashes = { count: 0 };
+      const cache = new Set<string>();
+      const fs = fakeFs(stat(), hashes);
+      expect(run(fs, cache)).toMatchObject({ outcome: "patched" });
+      expect(run(fs, cache)).toMatchObject({ outcome: "patched" });
+      expect(hashes.count).toBe(1);
+    });
+
+    it.each([
+      ["mtime", { mtimeMs: 2000 }],
+      ["inode", { ino: 8 }],
+    ])("hashes again when the %s changed", (_label, change) => {
+      const hashes = { count: 0 };
+      const cache = new Set<string>();
+      run(fakeFs(stat(), hashes), cache);
+      run(fakeFs(stat(change), hashes), cache);
+      expect(hashes.count).toBe(2);
+    });
+
+    it("hashes again when the size changed, and then refuses the wrong size", () => {
+      const hashes = { count: 0 };
+      const cache = new Set<string>();
+      run(fakeFs(stat(), hashes), cache);
+      expect(run(fakeFs(stat({ size: PIN.sizeBytes + 5 }), hashes), cache)).toEqual({
+        outcome: "mismatch",
+      });
+    });
+
+    it("never caches a file whose digest missed the pin", () => {
+      const hashes = { count: 0 };
+      const cache = new Set<string>();
+      const wrong = fakeFs(stat(), hashes, { sha256: () => (hashes.count++, "0".repeat(64)) });
+      expect(run(wrong, cache)).toEqual({ outcome: "mismatch" });
+      expect(run(wrong, cache)).toEqual({ outcome: "mismatch" });
+      expect(hashes.count).toBe(2);
+      expect(cache.size).toBe(0);
+    });
+
+    it("hashes again for another pin digest", () => {
+      const hashes = { count: 0 };
+      const cache = new Set<string>();
+      const fs = fakeFs(stat(), hashes);
+      run(fs, cache);
+      resolveStepNode({
+        supervisorPath,
+        pin: { ...PIN, sha256: "f".repeat(64) },
+        isDirectory: () => true,
+        correlationId: undefined,
+        fs,
+        cache,
+      });
+      expect(hashes.count).toBe(2);
+    });
+  });
 
   it("is pinned by this server for Windows with the real artifact digest", () => {
     expect(windowsStepNodePin()).toBe(NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode);

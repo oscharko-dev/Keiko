@@ -6,7 +6,7 @@
 // verified one a step runs exactly as it did before, and the log says so. Closed values only: never
 // a path.
 
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   activityLogEvent,
@@ -81,41 +81,91 @@ export function windowsStepNodePin(): NpmLaneStepNodeApproval | undefined {
   return NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode;
 }
 
-function isOrdinaryFile(path: string, sizeBytes: number): boolean {
-  const entry = lstatSync(path, { throwIfNoEntry: false });
-  return (
-    entry !== undefined &&
-    entry.isFile() &&
-    !entry.isSymbolicLink() &&
-    entry.nlink === 1 &&
-    entry.size === sizeBytes
-  );
+/** The file system questions discovery asks; tests inject faults and fake stats. */
+export interface StepNodeFs {
+  readonly lstat: (path: string) => Stats | undefined;
+  readonly readdir: (path: string) => readonly string[];
+  readonly realpath: (path: string) => string;
+  readonly sha256: (path: string) => string;
+}
+
+const nodeStepNodeFs: StepNodeFs = {
+  lstat: (path) => lstatSync(path, { throwIfNoEntry: false }),
+  readdir: (path) => readdirSync(path),
+  realpath: (path) => realpathSync.native(path),
+  sha256: sha256FileSync,
+};
+
+// Verified files by (realpath, size, mtimeMs, ino, pin) for the server's lifetime: a verification
+// run resolves twice, and hashing 100 MB each time is wasted work. Any change to the key, such as a
+// rewritten file with a new mtime or size, is verified again.
+const verifiedFiles = new Set<string>();
+
+// A lstat of a link reports `isFile() === false`, so the link case needs no condition of its own.
+// The size and the single link count are checked on their own: a hard link shares the pinned
+// bytes with a file the person can still write through another name.
+function isOrdinaryFile(entry: Stats | undefined, sizeBytes: number): entry is Stats {
+  return entry !== undefined && entry.isFile() && entry.nlink === 1 && entry.size === sizeBytes;
+}
+
+function verifiedBytes(
+  executable: string,
+  entry: Stats,
+  pin: NpmLaneStepNodeApproval,
+  fs: StepNodeFs,
+  cache: Set<string>,
+): boolean {
+  const key = [fs.realpath(executable), entry.size, entry.mtimeMs, entry.ino, pin.sha256].join("|");
+  if (cache.has(key)) return true;
+  if (fs.sha256(executable) !== pin.sha256) return false;
+  cache.add(key);
+  return true;
+}
+
+interface ResolveStepNodeInput {
+  readonly supervisorPath: string | undefined;
+  readonly pin: NpmLaneStepNodeApproval | undefined;
+  readonly isDirectory: (path: string) => boolean;
+  readonly correlationId: string | undefined;
+  /** Hermetic test seams. */
+  readonly fs?: StepNodeFs | undefined;
+  readonly cache?: Set<string> | undefined;
+}
+
+function inspect(
+  directory: string,
+  pin: NpmLaneStepNodeApproval,
+  input: ResolveStepNodeInput,
+): StepNodeResolution {
+  const fs = input.fs ?? nodeStepNodeFs;
+  if (fs.lstat(directory) === undefined) return { outcome: "absent" };
+  const executable = join(directory, STEP_NODE_FILE_NAME);
+  const entry = fs.lstat(executable);
+  const exact =
+    input.isDirectory(directory) &&
+    fs.readdir(directory).length === 1 &&
+    isOrdinaryFile(entry, pin.sizeBytes) &&
+    verifiedBytes(executable, entry, pin, fs, input.cache ?? verifiedFiles);
+  return exact ? { outcome: "patched", directory, executable } : { outcome: "mismatch" };
 }
 
 /**
  * The runtime's step Node.js, verified against `pin`. It lives in `step-node/` beside the runtime's
  * `native/` folder, which holds the supervisor `supervisorPath` names. The folder is granted to the
  * step as a whole, so it must be a real folder (no link or junction) that holds exactly the one
- * pinned file; anything else is not the build the pin describes.
+ * pinned file; anything else is not the build the pin describes. Any failure to read it, the first
+ * stat included, answers `mismatch` with a diagnostic and never aborts the verification run.
+ *
+ * Provenance of the pinned bytes: `.github/workflows/windows-step-node.yml` builds Node.js 26.13.1
+ * from the official source tarball with `patches/node-26.13.1-libuv-5181.patch` and
+ * `patches/node-26.13.1-win-crates-synchronization.patch`; the pin restates that build's receipt.
  */
-export function resolveStepNode(input: {
-  readonly supervisorPath: string | undefined;
-  readonly pin: NpmLaneStepNodeApproval | undefined;
-  readonly isDirectory: (path: string) => boolean;
-  readonly correlationId: string | undefined;
-}): StepNodeResolution {
+export function resolveStepNode(input: ResolveStepNodeInput): StepNodeResolution {
   const { supervisorPath, pin } = input;
   if (supervisorPath === undefined || pin === undefined) return { outcome: "absent" };
   const directory = join(dirname(dirname(supervisorPath)), STEP_NODE_DIRECTORY_NAME);
-  if (lstatSync(directory, { throwIfNoEntry: false }) === undefined) return { outcome: "absent" };
-  const executable = join(directory, STEP_NODE_FILE_NAME);
   try {
-    const exact =
-      input.isDirectory(directory) &&
-      readdirSync(directory).length === 1 &&
-      isOrdinaryFile(executable, pin.sizeBytes) &&
-      sha256FileSync(executable) === pin.sha256;
-    return exact ? { outcome: "patched", directory, executable } : { outcome: "mismatch" };
+    return inspect(directory, pin, input);
   } catch (error) {
     emitServerDiagnostic(
       undefined,
