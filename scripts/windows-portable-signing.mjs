@@ -45,6 +45,7 @@ import {
 } from "./windows-portable-verification-input.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { isStepNodeExecutablePath, nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
 import {
   hashPortableHandoffTree,
   PORTABLE_HANDOFF_TREE_HASH_SCHEMA,
@@ -155,7 +156,11 @@ function inspectPayloadFile(root, path, name, entry, state) {
   if (/\.(?:dll|exe)$/iu.test(name) && !isPe) {
     fail("an executable-named payload file is not valid PE");
   }
-  if (isPe) state.peFiles.push({ relativePath, sha256: sha256(readFileSync(path)) });
+  // The step Node.js is pinned by its exact bytes, which a signature would change, so it is never
+  // inventoried and never signed; it still had to be a valid PE above.
+  if (isPe && !isStepNodeExecutablePath(relativePath)) {
+    state.peFiles.push({ relativePath, sha256: sha256(readFileSync(path)) });
+  }
 }
 
 function inventoryPeFiles(rootPath) {
@@ -414,10 +419,12 @@ export async function rebindArchive(stageRoot, manifest, archiveAdapter = window
 }
 
 // The pinned ripgrep executable is a PE file in the payload, so the same PE-inventory Authenticode
-// signing covers it; the manifest then states what happened to it.
+// signing covers it; the manifest then states what happened to it. The step Node.js that may follow
+// it is deliberately outside that inventory (its bytes are the server's pin), so its entry keeps
+// the state it was staged with.
 function markNativeToolsVerified(manifest) {
   if (manifest.nativeTools === undefined) return;
-  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+  if (!nativeToolSetIsValid(manifest.nativeTools)) {
     fail("manifest must contain exactly one native tool");
   }
   manifest.nativeTools[0].signing = {

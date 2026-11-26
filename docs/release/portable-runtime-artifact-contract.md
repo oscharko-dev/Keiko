@@ -943,6 +943,22 @@ Validation rules:
   digest, signature/notarization state, and one CycloneDX `bom-ref`. The complete array is duplicated
   in the activation manifest and `reviewedBinding`; drift fails closed. It is not a sidecar runtime
   and not a Node addon, so `nativeAddons` keeps its exactly-one-addon rule.
+- On `windows-x64` only, `nativeTools` carries a second entry after ripgrep: `step-node` (#4492,
+  ADR-0043 D21), the patched Node.js 26.13.1 (libuv#5181) a Windows Coding step runs inside the
+  AppContainer, at the fixed paths `runtime/step-node/node.exe` and
+  `runtime/licenses/node-step/LICENSE` (the MIT text of the official source tarball, digest-pinned).
+  Its bytes are the file the server pins in `WINDOWS_PORTABLE_RUNTIME_APPROVAL.stepNode`; the stage
+  takes them from the reviewed `win32-x64` runtime package of the newest catalog release that
+  carries the approved OpenCode (`docs/release/coding-runtime-npm-packages.json`), downloaded
+  unauthenticated from its immutable transport prerelease `coding-runtime-<version>` or given with
+  `--step-node-package`, and refuses the build when the tarball differs from the catalog size and
+  digest, the package holds any other entry in `runtime/step-node/`, or the extracted bytes differ
+  from the pin. The entry binds the official source digest and the patch digests, and
+  `unsignedSha256` equals `shippedSha256`: no signing lane signs the file (a signature would change
+  the pinned bytes), so its state is the fixed `unsigned-non-production` record in every lane and the
+  Windows PE inventory leaves it out. Other targets carry no such entry, and a manifest of any other
+  target that names one is refused. Newly produced Windows artifacts require it
+  (`requireStepNode`); earlier manifests stay parseable.
 - `runtimeQualification` is required for production Linux and macOS artifacts and has exactly
   `schemaVersion`, `path`, `sha256`, and `backend`. Linux requires
   `.portable/runtime-qualification.json` with backend `linux-namespace-gateway`, plus the fixed

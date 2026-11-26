@@ -15,6 +15,7 @@ import {
   readWindowsPortablePeInventory,
 } from "./windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
+import { nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
 import { portableResourceRoot } from "./portable-signed-archive.mjs";
@@ -101,7 +102,7 @@ function optionalNativeToolsAreValid(activation) {
     activation === null ||
     typeof activation !== "object" ||
     activation.nativeTools === undefined ||
-    (Array.isArray(activation.nativeTools) && activation.nativeTools.length === 1)
+    nativeToolSetIsValid(activation.nativeTools)
   );
 }
 

@@ -226,7 +226,14 @@ it:
    `npm run portable:prepare-sidecars` on each native target runner.
 3. Stages all four production portable targets from those approvals with
    `scripts/run-portable-assets-stage.mjs` (Linux x64 on Linux, Windows x64 on Windows, and both
-   macOS targets on native runners, with each native launcher compiled in place). Manual dispatch
+   macOS targets on native runners, with each native launcher compiled in place). The Windows
+   payload also carries the patched step Node.js `runtime/step-node/node.exe` (#4492): the stage
+   downloads the reviewed `win32-x64` runtime package of the newest catalog release for the approved
+   OpenCode from its transport prerelease `coding-runtime-<version>` (public, unauthenticated, no
+   token), verifies it against `docs/release/coding-runtime-npm-packages.json`, extracts that one
+   file and verifies it against `npmLaneRuntimeApprovals.ts`. That release must therefore be
+   published before a Windows payload can be staged; for an offline build pass the same tarball with
+   `--step-node-package <path>` to `run-portable-assets-stage.mjs`. Manual dispatch
    can smoke the same targets but cannot reach assembly or publication.
 4. Runs the real launch/setup, USearch, ripgrep, and secure-read smoke on each native target. The
    ripgrep smoke starts the staged `runtime/native/rg` (`rg.exe` on Windows) outside `PATH` and the

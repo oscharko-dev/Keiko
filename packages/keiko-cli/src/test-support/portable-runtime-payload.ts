@@ -62,6 +62,17 @@ function runtimeSections(suffix: string): RuntimeSections {
         executablePath: `runtime/native/rg${suffix}`,
         licensePath: "runtime/licenses/ripgrep/LICENSE-MIT",
       },
+      // Only a Windows payload carries the patched step Node.js (#4492).
+      ...(suffix === ".exe"
+        ? [
+            {
+              name: "step-node",
+              kind: "native-tool",
+              executablePath: "runtime/step-node/node.exe",
+              licensePath: "runtime/licenses/node-step/LICENSE",
+            },
+          ]
+        : []),
     ],
     sidecarRuntimes: [
       {
