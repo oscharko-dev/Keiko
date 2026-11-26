@@ -121,6 +121,8 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
   Object.entries({
+    "packages/keiko-server/src/editor/windowsStepSupervisor.ts:listEntryNames":
+      "An unlistable toolchain home cannot be shown free of credentials, so it is refused fail-closed; the refusal is counted in readRootRefusedCount on the registered Windows step supervisor line (#4496).",
     "packages/keiko-connectors/src/atlassian-sync-classify.ts:parseAtlassianJsonValue":
       "Pure bounded JSON syntax validation returns unavailable data. Write transport, sync classification, and Jira/Confluence sync adapters propagate malformed-payload. Existing action/live-search and SyncRun owners project atlassian.action.outcome; real transition, live-search, both provider metadata and item-sync regressions reconstruct failures. Managed Jira arrays delegate to mcp.managed.lifecycle, proven through the real gateway/binder/SDK with malformed JSON. This replaces the retired legacy parseJsonRecord catch; no generic parser exemption.",
     "packages/keiko-connectors/src/atlassian-verification-probe.ts:parseAtlassianVerificationProbe":

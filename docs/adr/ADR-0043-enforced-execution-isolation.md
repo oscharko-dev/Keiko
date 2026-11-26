@@ -99,8 +99,8 @@ digest-pinned `win32-x64` runtime package and verified against the same server p
 signs it.
 
 1.18 — #4496 amends D21 (2026-11-26): a toolchain root inside or containing the profile's `.m2` is
-never granted, nor one that directly holds a credential-named entry; `MAVEN_HOME\conf` stays
-readable.
+never granted, nor a `JAVA_HOME`, `MAVEN_HOME` or `M2_HOME` folder that directly holds a
+credential-named entry or cannot be listed; `MAVEN_HOME\conf` stays readable.
 
 ## Context
 
@@ -1344,7 +1344,9 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
     grants, and no grant may hold the whole user profile. A toolchain root that is, holds or sits inside the
     profile's `.m2` (bar its `repository` folder, which a Maven launcher is given explicitly) is
-    never granted, and neither is one that directly holds a credential-named entry; Maven's own
+    never granted, and neither is a `JAVA_HOME`, `MAVEN_HOME` or `M2_HOME` folder that directly
+    holds a credential-named entry or cannot be listed (the refusal is counted on the supervisor
+    line as `readRootRefusedCount`); Maven's own
     global settings in `MAVEN_HOME\conf` stay readable because Maven needs them. The step's `TEMP`, `TMP` and npm cache
     stay inside the execution root.
   - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows

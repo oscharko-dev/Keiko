@@ -124,16 +124,16 @@ export interface WindowsReadRootHost {
   readonly entryNames: (directory: string) => readonly string[] | undefined;
 }
 
-const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
-  directoryOf,
-  entryNames: (directory) => {
-    try {
-      return readdirSync(directory);
-    } catch {
-      return undefined;
-    }
-  },
-};
+// An unlistable home is refused by `readRootIsRefused` and counted in `readRootRefusedCount`.
+function listEntryNames(directory: string): readonly string[] | undefined {
+  try {
+    return readdirSync(directory);
+  } catch {
+    return undefined;
+  }
+}
+
+const NODE_READ_ROOT_HOST: WindowsReadRootHost = { directoryOf, entryNames: listEntryNames };
 
 // Whether `child` is `parent` or lies inside it, with Windows' case-insensitive comparison.
 function windowsPathContains(parent: string, child: string): boolean {
@@ -149,7 +149,8 @@ function readRootIsRefused(
   profile: string | undefined,
   host: WindowsReadRootHost,
 ): boolean {
-  if (profile !== undefined && DRIVE_PATH.test(profile)) {
+  // The same profile rule as the grant check in keiko-tools, so a root it would refuse is dropped here.
+  if (profile !== undefined && win32.isAbsolute(profile)) {
     const m2 = win32.join(profile, ".m2");
     if (windowsPathContains(root, m2) || windowsPathContains(m2, root)) return true;
   }

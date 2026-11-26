@@ -267,7 +267,7 @@ describe("windowsStepReadRoots", () => {
       entries: Readonly<Record<string, readonly string[] | null>> = {},
     ): WindowsReadRootHost => ({
       directoryOf: (value) => value,
-      entryNames: (directory) => {
+      entryNames: (directory): readonly string[] | undefined => {
         const names = entries[directory];
         return names === null ? undefined : (names ?? []);
       },
@@ -281,6 +281,14 @@ describe("windowsStepReadRoots", () => {
       ["a parent of the profile", String.raw`C:\Users`],
     ])("drops a home that is %s and counts it", (_label, home) => {
       const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], refusedCount: 1 });
+    });
+
+    it("drops a home inside .m2 when the profile is written with forward slashes", () => {
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`C:\Users\dev\.m2\jdk`, USERPROFILE: "C:/Users/dev" },
+        host(),
+      );
       expect(result).toEqual({ roots: [], refusedCount: 1 });
     });
 

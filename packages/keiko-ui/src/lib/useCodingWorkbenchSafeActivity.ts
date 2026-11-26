@@ -236,6 +236,9 @@ function markDisconnected(
   });
 }
 
+// A closed error identifier as the BFF names it; anything else is left out of the diagnostic.
+const API_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/u;
+
 function markConnectionFailure(
   error: unknown,
   controller: AbortController,
@@ -244,9 +247,10 @@ function markConnectionFailure(
   if (controller.signal.aborted) return;
   const offline = error instanceof TypeError || globalThis.navigator?.onLine === false;
   // The timeline shows only "Activity unavailable"; the cause stays readable in the Activity Log.
-  // An ApiError's code is a closed Keiko identifier (a snapshot the page's own contract rejects
-  // reads CONTRACT_VALIDATION_FAILED, for example after an update left an old page open).
-  const code = error instanceof ApiError ? ` ${error.code}` : "";
+  // An ApiError's code names the failure class (a snapshot the page's own contract rejects reads
+  // CONTRACT_VALIDATION_FAILED, for example after an update left an old page open). It arrives in
+  // a response body, so only an identifier-shaped code is recorded.
+  const code = error instanceof ApiError && API_ERROR_CODE.test(error.code) ? ` ${error.code}` : "";
   reportClientDiagnostic(
     `[keiko] coding safe activity connection failed: ${clientErrorSummary(error)}${code}`,
     { correlationId: correlationIdOf(error) },

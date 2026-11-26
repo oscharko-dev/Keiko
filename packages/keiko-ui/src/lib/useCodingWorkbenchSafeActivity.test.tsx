@@ -677,6 +677,23 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(message).not.toContain("BFF response");
   });
 
+  it("leaves a code that is not an identifier out of the diagnostic", async () => {
+    getSnapshotMock.mockRejectedValue(
+      new ApiError("C:\\Users\\dev\\secret path", "BFF response failed.", 500),
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    const [message] = reportDiagnosticSpy.mock.calls[0] ?? [""];
+    expect(message).toBe("[keiko] coding safe activity connection failed: ApiError");
+  });
+
   it("records nothing when the connection is torn down on purpose", async () => {
     getSnapshotMock.mockImplementation(
       (signal: AbortSignal) =>
