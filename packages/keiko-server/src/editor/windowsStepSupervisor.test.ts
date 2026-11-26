@@ -264,10 +264,13 @@ describe("windowsStepReadRoots", () => {
   describe("a home that reaches the profile's .m2 or a credential (#4496)", () => {
     const profile = String.raw`C:\Users\dev`;
     const host = (
-      entries: Readonly<Record<string, readonly string[]>> = {},
+      entries: Readonly<Record<string, readonly string[] | null>> = {},
     ): WindowsReadRootHost => ({
       directoryOf: (value) => value,
-      entryNames: (directory) => entries[directory] ?? [],
+      entryNames: (directory) => {
+        const names = entries[directory];
+        return names === null ? undefined : (names ?? []);
+      },
     });
 
     it.each([
@@ -286,6 +289,15 @@ describe("windowsStepReadRoots", () => {
       const result = windowsStepReadRoots(
         { JAVA_HOME: home, USERPROFILE: profile },
         host({ [home]: ["bin", ".env"] }),
+      );
+      expect(result).toEqual({ roots: [], refusedCount: 1 });
+    });
+
+    it("drops a home whose entries cannot be listed", () => {
+      const home = String.raw`C:\tools\locked-jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: home, USERPROFILE: profile },
+        host({ [home]: null }),
       );
       expect(result).toEqual({ roots: [], refusedCount: 1 });
     });

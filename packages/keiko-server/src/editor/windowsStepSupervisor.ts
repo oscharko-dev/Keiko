@@ -120,7 +120,8 @@ function directoryOf(value: string | undefined): string | undefined {
 /** What the read-root check asks of the file system; injectable so tests need no Windows host. */
 export interface WindowsReadRootHost {
   readonly directoryOf: (value: string | undefined) => string | undefined;
-  readonly entryNames: (directory: string) => readonly string[];
+  /** The directory's entry names, or `undefined` when it cannot be listed. */
+  readonly entryNames: (directory: string) => readonly string[] | undefined;
 }
 
 const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
@@ -129,14 +130,10 @@ const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
     try {
       return readdirSync(directory);
     } catch {
-      // A home that cannot be listed cannot be shown free of credentials, so it is refused.
-      return [CREDENTIAL_UNLISTABLE_MARKER];
+      return undefined;
     }
   },
 };
-
-// `isCredentialNamedSegment` matches this name, so an unreadable listing refuses the root.
-const CREDENTIAL_UNLISTABLE_MARKER = ".env";
 
 // Whether `child` is `parent` or lies inside it, with Windows' case-insensitive comparison.
 function windowsPathContains(parent: string, child: string): boolean {
@@ -156,7 +153,9 @@ function readRootIsRefused(
     const m2 = win32.join(profile, ".m2");
     if (windowsPathContains(root, m2) || windowsPathContains(m2, root)) return true;
   }
-  return host.entryNames(root).some(isCredentialNamedSegment);
+  // A home that cannot be listed cannot be shown free of credentials, so it is refused.
+  const names = host.entryNames(root);
+  return names === undefined || names.some(isCredentialNamedSegment);
 }
 
 export function windowsStepReadRoots(

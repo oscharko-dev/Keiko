@@ -108,12 +108,18 @@ function rebindNativeHelpers(stageRoot, manifest, resourceRoot) {
 
 function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   const executable = containedResourcePath(resourceRoot, helper.executablePath);
+  rebindShippedBinary(stageRoot, executable, helper, "native helper");
+}
+
+// A signed binary's record takes the bytes it now ships: a contained regular single-link file, a
+// fresh digest and size, and the one matching SBOM component. `label` names it in every refusal.
+function rebindShippedBinary(stageRoot, executable, record, label) {
   const entry = lstatSync(executable);
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-    fail("native helper is not a regular single-link file");
+    fail(`${label} is not a regular single-link file`);
   }
-  helper.shippedSha256 = sha256(readFileSync(executable));
-  helper.sizeBytes = entry.size;
+  record.shippedSha256 = sha256(readFileSync(executable));
+  record.sizeBytes = entry.size;
   const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
   let sbom;
   try {
@@ -122,10 +128,10 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
     fail("portable SBOM is invalid");
   }
   const matches = (sbom.components ?? []).filter(
-    (component) => component?.["bom-ref"] === helper.sbomBomRef,
+    (component) => component?.["bom-ref"] === record.sbomBomRef,
   );
-  if (matches.length !== 1) fail("native helper CycloneDX component is missing or ambiguous");
-  matches[0].hashes = [{ alg: "SHA-256", content: helper.shippedSha256 }];
+  if (matches.length !== 1) fail(`${label} CycloneDX component is missing or ambiguous`);
+  matches[0].hashes = [{ alg: "SHA-256", content: record.shippedSha256 }];
   writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
@@ -136,25 +142,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   }
   const addon = manifest.nativeAddons[0];
   const executable = containedResourcePath(resourceRoot, addon.executablePath);
-  const entry = lstatSync(executable);
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-    fail("native addon is not a regular single-link file");
-  }
-  addon.shippedSha256 = sha256(readFileSync(executable));
-  addon.sizeBytes = entry.size;
-  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
-  let sbom;
-  try {
-    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
-  } catch {
-    fail("portable SBOM is invalid");
-  }
-  const matches = (sbom.components ?? []).filter(
-    (component) => component?.["bom-ref"] === addon.sbomBomRef,
-  );
-  if (matches.length !== 1) fail("native addon CycloneDX component is missing or ambiguous");
-  matches[0].hashes = [{ alg: "SHA-256", content: addon.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
+  rebindShippedBinary(stageRoot, executable, addon, "native addon");
 }
 
 // A pinned third-party tool such as ripgrep is signed with the payload it ships in, so its shipped
@@ -176,14 +164,7 @@ function rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget) {
 }
 
 function rebindNativeTool(stageRoot, resourceRoot, tool) {
-  const executable = containedToolPath(resourceRoot, tool);
-  const entry = lstatSync(executable);
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-    fail("native tool is not a regular single-link file");
-  }
-  tool.shippedSha256 = sha256(readFileSync(executable));
-  tool.sizeBytes = entry.size;
-  rebindToolSbomHash(stageRoot, tool);
+  rebindShippedBinary(stageRoot, containedToolPath(resourceRoot, tool), tool, "native tool");
 }
 
 // A tool path is a fixed literal; `..` segments are canonical to containedResourcePath but never
@@ -193,22 +174,6 @@ function containedToolPath(resourceRoot, tool) {
     fail("native tool path is not canonical");
   }
   return containedResourcePath(resourceRoot, tool.executablePath);
-}
-
-function rebindToolSbomHash(stageRoot, tool) {
-  const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
-  let sbom;
-  try {
-    sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
-  } catch {
-    fail("portable SBOM is invalid");
-  }
-  const matches = (sbom.components ?? []).filter(
-    (component) => component?.["bom-ref"] === tool.sbomBomRef,
-  );
-  if (matches.length !== 1) fail("native tool CycloneDX component is missing or ambiguous");
-  matches[0].hashes = [{ alg: "SHA-256", content: tool.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
