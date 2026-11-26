@@ -5,6 +5,7 @@
 //
 //   node scripts/write-windows-step-node-receipt.mjs --exe <node.exe> --source-sha256 <hex> \
 //     --patch <patch> --out <receipt.json> [--flag <name>=<value>]...
+import { execFileSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { sha256 } from "./lib/digest.mjs";
@@ -33,6 +34,7 @@ function main() {
   const flags = Object.fromEntries(
     values("--flag").map((entry) => {
       const separator = entry.indexOf("=");
+      if (separator < 1) throw new Error(`--flag needs name=value: ${entry}`);
       return [entry.slice(0, separator), entry.slice(separator + 1)];
     }),
   );
@@ -49,6 +51,7 @@ function main() {
       path: "node.exe",
       sha256: sha256(readFileSync(exe)),
       sizeBytes: statSync(exe).size,
+      libuv: execFileSync(exe, ["-p", "process.versions.uv"], { encoding: "utf8" }).trim(),
     },
     build: flags,
   };

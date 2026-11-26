@@ -11,12 +11,12 @@
 //     --node <patched node.exe> [--stock-node <official node.exe>]
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import {
   grantsFrame,
@@ -34,7 +34,7 @@ const PATCHED_UV = /^1\.52\.1-keiko\.5181$/u;
 const PROBE_SOURCE = String.raw`const { spawnSync, fork } = require("node:child_process");
 const net = require("node:net");
 const path = require("node:path");
-console.log("${"KEIKO_STEP_NODE_PROBE_START"}");
+console.log(${JSON.stringify(START_MARK)});
 const result = { uv: process.versions.uv, node: process.versions.node, exec: process.execPath };
 const attempt = (fn) => { try { return brief(fn()); } catch (error) { return { threw: String(error.code) + "/" + String(error.syscall) + "/" + String(error.message) }; } };
 const brief = (r) => ({ status: r.status, stdout: r.stdout, error: r.error ? String(r.error.code) + "/" + String(r.error.syscall) : undefined });
@@ -64,11 +64,11 @@ async function main() {
   const stamp = String(process.pid);
   result.globalPipe = await listen("\\\\.\\pipe\\keiko-step-node-global-" + stamp);
   result.localPipe = await listen("\\\\.\\pipe\\LOCAL\\keiko-step-node-local-" + stamp);
-  console.log("${"KEIKO_STEP_NODE_PROBE_RESULT "}" + JSON.stringify(result));
+  console.log(${JSON.stringify(RESULT_MARK)} + JSON.stringify(result));
 }
 main().catch((error) => {
   result.probeError = String(error);
-  console.log("${"KEIKO_STEP_NODE_PROBE_RESULT "}" + JSON.stringify(result));
+  console.log(${JSON.stringify(RESULT_MARK)} + JSON.stringify(result));
   process.exitCode = 1;
 });
 `;
@@ -134,8 +134,31 @@ function stageRun(helper, nodeExecutable, root, gatewayPort) {
   return { supervisor, frames };
 }
 
-// Runs the probe in the supervisor's AppContainer. Resolves { started, result } once the probe
-// printed its result or the deadline passed; the supervisor tree is always terminated afterwards.
+// Counts the node.exe processes running from this run's staged directory. The unique directory name
+// avoids 8.3 short-name mismatches of the temp path.
+function stagedNodeProcesses(root) {
+  const token = basename(root);
+  const filter = `$_.ExecutablePath -like '*\\${token}\\runtime\\*'`;
+  const query = `@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { ${filter} }).Count`;
+  const answer = spawnSync("powershell.exe", ["-NoProfile", "-Command", query], {
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  return answer.status === 0 ? Number(answer.stdout.trim()) : Number.NaN;
+}
+
+async function waitUntilGone(root) {
+  const end = Date.now() + 30_000;
+  while (Date.now() < end) {
+    if (stagedNodeProcesses(root) === 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return stagedNodeProcesses(root) === 0;
+}
+
+// Runs the probe in the supervisor's AppContainer. Resolves { started, result, timedOut, ... } once
+// the probe printed its result, the supervisor ended or the deadline passed; the supervisor tree is
+// always terminated afterwards, and the staged node.exe must be gone once the KRC1 frame was sent.
 async function runProbe(helper, nodeExecutable, deadlineMs) {
   const root = mkdtempSync(join(tmpdir(), "keiko-step-node-"));
   const gateway = await startGateway();
@@ -145,10 +168,17 @@ async function runProbe(helper, nodeExecutable, deadlineMs) {
     child = spawn(supervisor, ["--relay-supervised"], {
       stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
     });
+    child.on("error", () => undefined);
+    child.stdio[3].on("error", () => undefined);
     child.stdio[3].write(frames);
-    return await collect(child, deadlineMs);
+    const outcome = await collect(child, deadlineMs);
+    // Positive control for the process query: the staged node.exe runs now unless the probe ended.
+    outcome.stagedBefore = stagedNodeProcesses(root);
+    await terminate(child);
+    outcome.reaped = await waitUntilGone(root);
+    return outcome;
   } finally {
-    if (child !== undefined) await terminate(child);
+    if (child !== undefined && child.exitCode === null) child.kill();
     gateway.close();
     rmSync(root, { force: true, recursive: true, maxRetries: 5 });
   }
@@ -157,35 +187,39 @@ async function runProbe(helper, nodeExecutable, deadlineMs) {
 function collect(child, deadlineMs) {
   return new Promise((resolve) => {
     let stdout = "";
-    const outcome = () => {
+    const outcome = (timedOut) => {
       const line = stdout.split("\n").find((entry) => entry.startsWith(RESULT_MARK));
       return {
         started: stdout.includes(START_MARK),
         result: line === undefined ? undefined : JSON.parse(line.slice(RESULT_MARK.length)),
         stdout,
+        timedOut,
+        supervisorAlive: child.exitCode === null && child.signalCode === null,
       };
     };
-    const timer = setTimeout(() => resolve(outcome()), deadlineMs);
+    const timer = setTimeout(() => resolve(outcome(true)), deadlineMs);
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
       if (stdout.includes(RESULT_MARK) && stdout.endsWith("\n")) {
         clearTimeout(timer);
-        resolve(outcome());
+        resolve(outcome(false));
       }
     });
-    child.once("exit", () => {
+    // close, not exit: stdout is drained before the outcome is read.
+    child.once("close", () => {
       clearTimeout(timer);
-      resolve(outcome());
+      resolve(outcome(false));
     });
   });
 }
 
 async function terminate(child) {
-  if (child.exitCode !== null) return;
-  const exited = new Promise((resolve) => child.once("exit", resolve));
-  child.stdio[3].write(header("KRC1", 3, 0));
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const control = child.stdio[3];
+  if (control.writable) control.write(header("KRC1", 3, 0));
   const timer = setTimeout(() => child.kill(), 30_000);
-  await exited;
+  await closed;
   clearTimeout(timer);
 }
 
@@ -200,6 +234,12 @@ function assertPatchedResult(outcome) {
     { status: 0, stdout: "child-ok" },
     `spawnSync child exits: ${JSON.stringify(result)}`,
   );
+  assert.equal(result.ignoreStdioInfo.status, null, "ignored stdio does not run a child");
+  assert.match(
+    result.ignoreStdioInfo.error,
+    /^EPERM\/spawnSync /u,
+    "ignored stdio opens NUL, which the AppContainer refuses (expected EPERM)",
+  );
   assert.equal(result.forkExit, 0, "fork with IPC exits");
   assert.equal(result.forkEcho, 1, "the IPC round trip answered");
   assert.equal(result.nodeTest.status, 0, "node --test over two files exits clean");
@@ -211,6 +251,7 @@ function assertPatchedResult(outcome) {
     `a global pipe is still refused: ${JSON.stringify(result)}`,
   );
   assert.equal(result.localPipe, "listening", "a LOCAL pipe is allowed (positive control)");
+  assert.equal(outcome.reaped, true, "the patched node.exe is gone after the KRC1 frame");
   return result;
 }
 
@@ -227,11 +268,19 @@ async function main() {
   if (stock !== undefined) {
     const outcome = await runProbe(helper, stock, STOCK_DEADLINE_MS);
     assert.equal(outcome.started, true, "the stock probe started inside the container");
+    assert.equal(outcome.timedOut, true, "the stock probe ran to the deadline");
+    assert.equal(outcome.supervisorAlive, true, "the supervisor was still alive at the deadline");
     assert.equal(
       outcome.result,
       undefined,
       "the stock Node.js does not finish inside the container",
     );
+    assert.equal(
+      outcome.stagedBefore >= 1,
+      true,
+      "the stock node.exe was running (positive control)",
+    );
+    assert.equal(outcome.reaped, true, "the stock node.exe is gone after the KRC1 frame");
     control = "stock-hangs";
   }
   console.log(
