@@ -1,4 +1,4 @@
-# Public API surface — 1.5.8
+# Public API surface — 1.5.9
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -111,6 +111,14 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.5.9: CLI entrypoints are unchanged. The root barrel only adds exports: the connected-folder
+  Chat tool (`createConnectedFolderToolBudget`, `executeConnectedFolderToolRequest` and their
+  types), the turn-scoped workspace index, the workspace path-case and ignore helpers
+  (`workspacePathCase`, `platformPathCase`, `isCaseInsensitivePathCase`, `compileWorkspaceIgnore`,
+  `isCredentialNamedSegment`, `isSystemNoiseEntry`, `isWindowsDriveRoot`) and the Maven step
+  planner (`isMavenProject`, `mavenTestArguments`, `planMavenSteps`). The UI store moves to schema
+  84, which rebuilds the coding run snapshot table for the Windows step supervisor's closed causes
+  and carries every row forward (#4491).
 - 1.5.8: CLI entrypoints, root exports and UI stores are unchanged. Long work keeps running: a
   Coding run or Chat turn may work 480 minutes and make 10,000 tool calls, and one terminal, task,
   container or governed Coding command may run 30 minutes. The terminal policy summary

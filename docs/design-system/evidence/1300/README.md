@@ -527,3 +527,13 @@ The root `optionalDependencies` move the three coding-runtime packages to the pu
 integrity fields. No stylesheet or capture reads them. Only those two input digests were updated in
 the four proofs. The other declared digests, the Linux captures, the rendered CSS digest, the
 measurements, the tolerances and the accessibility records are unchanged, and no producer was rerun.
+
+## Release 1.5.9 input metadata and coding runtime 1.1.9 pins — 2026-11-26
+
+The release changes the version fields of `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, and the root `optionalDependencies` move the three coding-runtime
+packages to the published 1.1.9 (#4491), which changes `package.json` and `package-lock.json` only
+in those version, resolved and integrity fields. No stylesheet or capture reads them. Only those
+three input digests were updated in the four proofs; the other digests, the Linux captures, the
+rendered CSS digest, the measurements, the tolerances and the accessibility records are unchanged,
+and no producer was rerun.

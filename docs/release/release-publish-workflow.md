@@ -409,9 +409,10 @@ Windows package carries the supervisor whose step ends with its root (`88dfffdcâ
 `windows-step-node.yml` run 45788444328), both checked against `npmLaneRuntimeApprovals.ts` before
 they are staged. The reviewed tarballs are pinned in `docs/release/coding-runtime-npm-packages.json`;
 two independent builds of each target on a macOS host (Node.js 26.13.1, npm 11.20.0) produced the
-same tarballs and byte-identical receipts on 2026-11-26. They are published from the transport
-prerelease `coding-runtime-1.1.9` once this catalog is on `dev`; the root `optionalDependencies`
-move to 1.1.9 only after the registry holds all three.
+same tarballs and byte-identical receipts on 2026-11-26. All three were published to npm on
+2026-11-26 from the transport prerelease `coding-runtime-1.1.9`, each npm `dist.integrity` equal to
+the SHA-512 of its pinned tarball. The root `optionalDependencies` declare 1.1.9 for
+`darwin-arm64`, `darwin-x64` and `win32-x64` from Keiko 1.5.9 on.
 
 _Reproducing the pinned bytes._ The reviewed 1.1.7 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
