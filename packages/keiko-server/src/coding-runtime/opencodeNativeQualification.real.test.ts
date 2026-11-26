@@ -2437,6 +2437,88 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   );
 });
 
+// ─── the working-directory tool (#4546) ────────────────────────────────────────────────────────
+
+describe("pinned native OpenCode working-directory tool `cd` (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const TOOL = ["c", "d"].join("");
+  const isWorkingDirectoryTool = (id: string): boolean => id === TOOL;
+
+  // 2.4.2 adds a built-in tool that moves a session's working directory, onto another computer as
+  // well. Keiko binds a run to its workspace, so no mode may register or offer it: its own
+  // `machines` switch is stated off and its plugin is withheld, each a separate barrier.
+  it.skipIf(skip).each(ALL_MODES)(
+    "registers no cd tool and offers none to the model in %s",
+    async (mode) => {
+      await withRun({ mode, plugins: REGISTRY_PROBE }, async (run) => {
+        await scriptedTurn(run, read(FIXTURE_FILE));
+        expect(registeredToolIds(run).filter(isWorkingDirectoryTool)).toEqual([]);
+        expect(advertisedToolNames(run.gateway).filter(isWorkingDirectoryTool)).toEqual([]);
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "control: the producer ships the tool, and each of Keiko's two removals alone keeps it out",
+    async () => {
+      const open = { experimental: { machines: true }, plugins: [] };
+      expect((await registeredWith({ overlay: open })).filter(isWorkingDirectoryTool)).toEqual([
+        TOOL,
+      ]);
+      // The switch alone: the plugin is still withheld.
+      const switchOnly = await registeredWith({ overlay: { experimental: { machines: true } } });
+      expect(switchOnly.filter(isWorkingDirectoryTool)).toEqual([]);
+      // The withheld plugin alone: the switch stays off.
+      const pluginOnly = await registeredWith({ overlay: { plugins: [] } });
+      expect(pluginOnly.filter(isWorkingDirectoryTool)).toEqual([]);
+    },
+    300_000,
+  );
+});
+
+// ─── a tool whose every use is denied is not offered (#4546) ───────────────────────────────────
+
+describe("pinned native OpenCode tool visibility under a blanket denial (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  /** The tools the model is offered in the first turn under these configured permission rules. */
+  async function offeredUnder(
+    permissions: readonly Readonly<Record<string, string>>[],
+  ): Promise<readonly string[]> {
+    let names: readonly string[] = [];
+    await withRun({ overlay: { permissions } }, async (run) => {
+      await run.client.prompt(run.sessionId, "Answer without calling a tool.");
+      await expect
+        .poll(() => advertisedDefinitions(run.gateway).length, { timeout: 60_000 })
+        .toBeGreaterThan(0);
+      names = advertisedDefinitions(run.gateway).map(({ name }) => name);
+    });
+    return names;
+  }
+
+  const DENY_ALL = { action: "*", resource: "*", effect: "deny" };
+  const ALLOW_READ = { action: "read", resource: "*", effect: "allow" };
+  const NARROWER_DENIES = [
+    { action: "shell", resource: "git push *", effect: "deny" },
+    { action: "shell", resource: "rm *", effect: "deny" },
+  ];
+
+  // 2.4.1 kept a tool visible when narrower denials followed a blanket one, so the model was
+  // offered a tool no call of which could pass. Keiko's profiles state a blanket denial and then
+  // allow what they admit; the offered list must hold exactly the admitted tools.
+  it.skipIf(skip)(
+    "hides a tool that a blanket denial and narrower denials leave without any allowed use",
+    async () => {
+      const withNarrower = await offeredUnder([DENY_ALL, ALLOW_READ, ...NARROWER_DENIES]);
+      expect(withNarrower).toContain("read");
+      expect(withNarrower).not.toContain("shell");
+      expect(withNarrower).toEqual(await offeredUnder([DENY_ALL, ALLOW_READ]));
+    },
+    240_000,
+  );
+});
+
 // ─── T13: processes the agent starts ───────────────────────────────────────────────────────────
 
 describe("pinned native OpenCode shell processes (T13)", () => {

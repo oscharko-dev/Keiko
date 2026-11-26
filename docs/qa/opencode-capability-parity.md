@@ -4,7 +4,7 @@ Status: working inventory for [#3874](https://github.com/oscharko-dev/Keiko/issu
 [#3897](https://github.com/oscharko-dev/Keiko/issues/3897), refreshed 2026-10-23 against the
 working tree of PR oscharko-dev/Keiko#4064, and for the runtime upgrade of
 [#4271](https://github.com/oscharko-dev/Keiko/issues/4271) on 2026-11-05. Pinned runtime: OpenCode
-2.4.1 (`OPENCODE_PINNED_VERSION`, commit `6f051405`, [versions][versions]); Keiko runs
+2.4.2 (`OPENCODE_PINNED_VERSION`, commit `fc31a485`, [versions][versions]); Keiko runs
 exactly this one OpenCode on every channel (#4359); 2.1.4 is not approved and an installation that
 still holds its runtime package is refused (`runtime-outdated`). Executed heads and pending qualification are recorded separately in
 the live lab ledger ([lab][lab]). This document does not qualify an unexecuted current head, and no
@@ -520,6 +520,35 @@ executable on macOS arm64 (#4546). The upgrade changes these rows:
 - **Compaction.** The runtime compacts before a request that would overflow. When the compacted
   history still does not fit, it fails that one compaction and stops without sending the request.
 
+### 3.8 Runtime upgrade to 2.4.2 of 2026-11-26
+
+The upgrade adds no migration (the persistence schema is byte-identical) and changes no model-visible
+tool schema. The real-binary suites ran against the staged 2.4.2 executable on macOS arm64 (#4546):
+
+- **S18, C04, T17, S08: new surfaces stay closed.** Ten operations (nine push-device and push-session
+  operations that reach an external push service, and `experimental.skill.file`), the settings
+  `experimental.compaction_jobs` and `experimental.mcp_skills`, and the plugins `opencode.mcp.skill`
+  and `opencode.tool.cd` have a refused or `keiko-set` disposition. Both settings are stated off in
+  every profile, and both plugins are withheld at the source.
+- **S18: the `cd` tool.** It moves a session's working directory, also onto another computer. Its
+  own `machines` switch is off and its plugin is withheld, so no mode registers or offers it; the
+  real-binary test shows each removal alone keeps it out and that the producer registers it when
+  both are lifted (`opencodeNativeQualification.real.test.ts`).
+- **T21: image and video generation** moved into Code Mode. Their plugins stay withheld, and a
+  program's `search` finds no generation, working-directory or machine tool.
+- **S11: permission denials.** A tool whose rules are a blanket denial followed by narrower denials
+  is no longer offered to the model (#65899); a real-binary test pins it.
+- **T14: web fetch.** The producer's "always allow" for a site now covers that site only. Keiko
+  answers a permission request with `once` or `reject` and refuses `always`, so nothing is saved.
+- **C09: automations.** A failed run no longer pauses an automation, and a shell command of an
+  automation past its timeout fails. Keiko admits only a time-based prompt automation and wakes it
+  itself, and reads no failure count to decide; its own pause after three misses is unchanged.
+- **S01: archived sessions.** Sending to an archived session unarchives it. Keiko never archives.
+- **Protocol surface pinned from the served document.** As in 2.4.1, the pin's
+  `protocolSurfaceSha256` is the projection of the `/openapi.json` the 2.4.2 binary serves; the
+  committed upstream file differs in component names and in empty `allOf` entries, and the raw
+  digest of that file stays in `rawSchemaSha256`.
+
 ## 4. Keiko capabilities without a native counterpart
 
 On both profiles:
@@ -820,19 +849,19 @@ table with an owner. The diff unit test pins both fixtures.
 | `admitted`                              | 36              | 0            |
 | `covered`                               | 6               | 0            |
 | `keiko-operation`                       | 15              | 6            |
-| `refused`                               | 121             | 38           |
-| refused: `leaves-machine`               | 12              | 7            |
+| `refused`                               | 131             | 38           |
+| refused: `leaves-machine`               | 21              | 7            |
 | refused: `keiko-owns-workspace-binding` | 8               | 0            |
 | refused: `keiko-owns-authority`         | 8               | 0            |
 | refused: `keiko-owns-configuration`     | 5               | 1            |
 | refused: `keiko-owns-credentials`       | 12              | 6            |
-| refused: `experimental-unadmitted`      | 34              | 0            |
+| refused: `experimental-unadmitted`      | 35              | 0            |
 | refused: `host-surface`                 | 19              | 17           |
 | refused: `not-yet-implemented`          | 23              | 7            |
 | refused: `producer-inert`               | 0               | 0            |
-| Total                                   | 178             | 44           |
+| Total                                   | 188             | 44           |
 
-#### HTTP operations (178)
+#### HTTP operations (188)
 
 | operationId                                      | Endpoint                                                                   | Disposition       | Detail                                                                              | Owner | Rows     |
 | ------------------------------------------------ | -------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- | ----- | -------- |
@@ -900,6 +929,15 @@ table with an owner. The diff unit test pins both fixtures.
 | `experimental.persistentPty.shutdown`            | `POST /api/experimental/persistent-pty/shutdown`                           | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
 | `experimental.persistentPty.snapshot`            | `GET /api/experimental/persistent-pty/{ptyID}/snapshot`                    | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
 | `experimental.persistentPty.update`              | `PUT /api/experimental/persistent-pty/{ptyID}`                             | `refused`         | `experimental-unadmitted`                                                           | #3901 | T13      |
+| `experimental.push.device.register`              | `PUT /api/experimental/push/device/{deviceID}`                             | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.device.remove`                | `DELETE /api/experimental/push/device/{deviceID}`                          | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.device.session.remove`        | `DELETE /api/experimental/push/device/{deviceID}/session/{sessionID}`      | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.device.session.set`           | `PUT /api/experimental/push/device/{deviceID}/session/{sessionID}`         | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.device.update`                | `PATCH /api/experimental/push/device/{deviceID}`                           | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.get`                          | `GET /api/experimental/push`                                               | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.session.remove`               | `DELETE /api/experimental/push/session/{sessionID}`                        | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.session.set`                  | `PUT /api/experimental/push/session/{sessionID}`                           | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
+| `experimental.push.settings.set`                 | `PUT /api/experimental/push/settings`                                      | `refused`         | `leaves-machine`                                                                    | #4546 | S18      |
 | `experimental.session.export`                    | `GET /api/experimental/session/{sessionID}/export`                         | `keiko-operation` | Coding History task export (local, redacted) (`coding-runtime/codingTaskExport.ts`) | -     | S05      |
 | `experimental.session.import`                    | `POST /api/experimental/session/import`                                    | `keiko-operation` | Coding History task import (local, redacted) (`coding-runtime/codingTaskImport.ts`) | -     | S05      |
 | `experimental.session.instructions.entry.list`   | `GET /api/experimental/session/{sessionID}/instructions/entries`           | `refused`         | `experimental-unadmitted`                                                           | #3900 | C03      |
@@ -909,6 +947,7 @@ table with an owner. The diff unit test pins both fixtures.
 | `experimental.session.skill`                     | `POST /api/experimental/session/{sessionID}/skill`                         | `refused`         | `not-yet-implemented`                                                               | #3903 | T17      |
 | `experimental.session.stats`                     | `GET /api/experimental/session/stats`                                      | `refused`         | `experimental-unadmitted`                                                           | #3899 | S18      |
 | `experimental.session.wait`                      | `POST /api/experimental/session/{sessionID}/wait`                          | `refused`         | `experimental-unadmitted`                                                           | #3908 | S01      |
+| `experimental.skill.file`                        | `GET /api/experimental/skill/{skillID}/file/*`                             | `refused`         | `experimental-unadmitted`                                                           | #4546 | T17      |
 | `experimental.usage.limits`                      | `GET /api/experimental/usage/limits`                                       | `refused`         | `experimental-unadmitted`                                                           | #3908 | -        |
 | `experimental.voice.models`                      | `GET /api/experimental/voice/models`                                       | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
 | `experimental.voice.session`                     | `POST /api/experimental/voice/session`                                     | `refused`         | `leaves-machine`                                                                    | #3899 | -        |
@@ -1106,7 +1145,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 
 | Disposition                             | Settings |
 | --------------------------------------- | -------- |
-| `keiko-set`                             | 84       |
+| `keiko-set`                             | 86       |
 | `keiko-operation`                       | 15       |
 | `refused`                               | 178      |
 | refused: `leaves-machine`               | 6        |
@@ -1118,9 +1157,9 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | refused: `host-surface`                 | 0        |
 | refused: `not-yet-implemented`          | 20       |
 | refused: `producer-inert`               | 8        |
-| Total                                   | 277      |
+| Total                                   | 279      |
 
-#### Settings (277)
+#### Settings (279)
 
 | Setting                                                           | Disposition       | Detail                                                                                            | Owner | Rows     |
 | ----------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- | ----- | -------- |
@@ -1171,6 +1210,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `experimental.all_flags`                                          | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.artifacts`                                          | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.codemode_vm`                                        | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | T21      |
+| `experimental.compaction_jobs`                                    | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S08      |
 | `experimental.console_watches`                                    | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C06      |
 | `experimental.full_codemode`                                      | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | T21      |
 | `experimental.home_memory`                                        | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C03      |
@@ -1181,6 +1221,7 @@ A refusal is an open, owned gap, never parity evidence. Two facts found while ma
 | `experimental.image_generate.model.variant`                       | `refused`         | `keiko-owns-configuration`                                                                        | #3905 | S11      |
 | `experimental.location_idle_timeout`                              | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S01      |
 | `experimental.machines`                                           | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S18      |
+| `experimental.mcp_skills`                                         | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C04      |
 | `experimental.media_blob`                                         | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | C05      |
 | `experimental.model_speeds`                                       | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | S11      |
 | `experimental.opencode_api`                                       | `keiko-set`       | native profile (`opencodeLaunchProfile.ts`)                                                       | -     | T21      |
@@ -1435,10 +1476,10 @@ skills itself as sanitized copies (T17).
 | --------------- | ------- |
 | `native`        | 31      |
 | `configuration` | 21      |
-| `refused`       | 48      |
-| Total           | 100     |
+| `refused`       | 50      |
+| Total           | 102     |
 
-#### Built-in plugins (100)
+#### Built-in plugins (102)
 
 | Plugin                                    | Disposition     | Detail                                                     | Owner | Rows               |
 | ----------------------------------------- | --------------- | ---------------------------------------------------------- | ----- | ------------------ |
@@ -1468,6 +1509,7 @@ skills itself as sanitized copies (T17).
 | `opencode.goal`                           | `refused`       | `not-yet-implemented`                                      | #4271 | C02                |
 | `opencode.home-memory`                    | `refused`       | `experimental-unadmitted`                                  | #4546 | C03                |
 | `opencode.mcp.codemode.defaults`          | `configuration` | applies `mcp.servers.*.codemode`                           | -     | C04, T21           |
+| `opencode.mcp.skill`                      | `refused`       | `experimental-unadmitted`                                  | #4546 | C04, T17           |
 | `opencode.models.dev`                     | `refused`       | `leaves-machine`                                           | #3905 | S11                |
 | `opencode.plan`                           | `native`        | runs as in standalone OpenCode                             | -     | C01                |
 | `opencode.prompt.anthropic`               | `native`        | runs as in standalone OpenCode                             | -     | S11                |
@@ -1511,6 +1553,7 @@ skills itself as sanitized copies (T17).
 | `opencode.skill`                          | `native`        | runs as in standalone OpenCode                             | -     | T17                |
 | `opencode.tool.artifact`                  | `refused`       | `experimental-unadmitted`                                  | #4271 | C05                |
 | `opencode.tool.automation`                | `native`        | runs as in standalone OpenCode                             | -     | C09                |
+| `opencode.tool.cd`                        | `refused`       | `keiko-owns-workspace-binding`                             | #4546 | S18                |
 | `opencode.tool.edit`                      | `native`        | runs as in standalone OpenCode                             | -     | T05                |
 | `opencode.tool.glob`                      | `native`        | runs as in standalone OpenCode                             | -     | T03                |
 | `opencode.tool.grep`                      | `native`        | runs as in standalone OpenCode                             | -     | T04                |
@@ -1551,9 +1594,9 @@ Repository files read or searched for this refresh (paths relative to the reposi
 
 - Versions, protocol and tools:
   `packages/keiko-server/src/coding-runtime/opencodeRuntimeVersions.ts`,
-  `opencodeProtocolSurface.ts` and `opencodeProtocolSurface.opencode-2.4.1.fixture.json`,
+  `opencodeProtocolSurface.ts` and `opencodeProtocolSurface.opencode-2.4.2.fixture.json`,
   `opencodeV2HttpClient.ts`, `opencodeProtocol.ts`, `opencodeNativeTools.ts` and
-  `opencodeNativeTools.opencode-2.4.1.fixture.json`, `opencodeServiceInventory.ts` with its two
+  `opencodeNativeTools.opencode-2.4.2.fixture.json`, `opencodeServiceInventory.ts` with its two
   producer-derived fixtures (section 7) and `opencodeToolSchemas.ts` (mapped set).
 - Native profile: `opencodeLaunchProfile.ts`, `opencodeNativePolicy.ts` (and its test),
   `opencodeNativePolicyPlugin.ts`, `opencodeNativePluginReadiness.ts`, `opencodeNativeContext.ts`,
@@ -1603,7 +1646,7 @@ real home. The executable is staged by `npm run dev:coding-runtime:stage`:
 
 ```sh
 OC=.portable-sidecar-payloads/<target>/opencode-compatible/payload/bin/opencode
-"$OC" --version                      # opencode v2.4.1
+"$OC" --version                      # opencode v2.4.2
 "$OC" --help                         # subcommands and flags (the recursive walk is the section 7 CLI inventory)
 "$OC" mcp --help                     # likewise: plugin, session, debug, run, serve
 grep -a -o -E 'id:"opencode\.[A-Za-z0-9._-]+"' "$OC" | sort -u   # native plugin ids
@@ -1671,10 +1714,10 @@ names are the stable facts. The opt-in real-binary suites run with `KEIKO_OPENCO
 [native-readiness]: ../../packages/keiko-server/src/coding-runtime/opencodeNativePluginReadiness.ts
 [native-effect]: ../../packages/keiko-server/src/coding-runtime/codingToolNativeEffect.ts
 [native-tools]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeTools.ts
-[native-tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeTools.opencode-2.4.1.fixture.json
+[native-tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeTools.opencode-2.4.2.fixture.json
 [profile]: ../../packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts
 [qualification-test]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeQualification.real.test.ts
-[protocol-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.4.1.fixture.json
+[protocol-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.4.2.fixture.json
 [protocol-surface]: ../../packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.ts
 [commands]: ../../packages/keiko-server/src/coding-runtime/opencodeCommands.ts
 [prompt-inputs]: ../../packages/keiko-server/src/coding-runtime/opencodePromptInputs.ts
@@ -1711,7 +1754,7 @@ names are the stable facts. The opt-in real-binary suites run with `KEIKO_OPENCO
 [schemas]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts
 [seatbelt-root]: ../../packages/keiko-sandbox/src/seatbelt-execution-root.ts
 [skill-catalog]: ../../packages/keiko-server/src/coding-runtime/skillCatalog.ts
-[tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.4.1-direct-advertised.fixture.json
+[tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.4.2-direct-advertised.fixture.json
 [v2-client]: ../../packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.ts
 [verify-detect]: ../../packages/keiko-verification/src/detect.ts
 [versions]: ../../packages/keiko-server/src/coding-runtime/opencodeRuntimeVersions.ts

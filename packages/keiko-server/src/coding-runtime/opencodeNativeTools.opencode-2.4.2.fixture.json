@@ -1,9 +1,9 @@
 {
   "producer": {
     "upstream": "anomalyco/opencode",
-    "version": "2.4.1",
-    "commit": "6f0514052a3c859894ad01bb14cc14dda1e44b96",
-    "capturedBy": "ctx.tool.list() of a plugin loaded by the staged macOS arm64 `opencode serve` 2.4.1, 2026-11-24 (opencodeNativeQualification.real.test.ts pins every id against the registry; the automation_* tools are governed through OPENCODE_SCHEDULE_TOOLS, not this inventory)",
+    "version": "2.4.2",
+    "commit": "fc31a485317970bcf6be7b431a9830aaef875731",
+    "capturedBy": "ctx.tool.list() of a plugin loaded by the staged macOS arm64 `opencode serve` 2.4.2, 2026-11-26 (opencodeNativeQualification.real.test.ts pins every id against the registry; the automation_* tools are governed through OPENCODE_SCHEDULE_TOOLS, not this inventory)",
     "permissionActionsSource": "Permission.Request.action values observed through the permission.evaluate hook and the Tool.Info.options.permission field"
   },
   "tools": [

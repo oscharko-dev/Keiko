@@ -1,6 +1,6 @@
 /**
  * The private SQLite schema the pinned OpenCode runtime's own migrations create, derived from the
- * producer: a fresh admitted 2.4.1 server's `opencode.db`, every table (SQLite's internal `sqlite_*` tables
+ * producer: a fresh admitted 2.4.2 server's `opencode.db`, every table (SQLite's internal `sqlite_*` tables
  * excepted) with its complete column set. `opencodeNativeSessionResume.real.test.ts` proves that the
  * database of a real settled run still has exactly this schema.
  *
@@ -144,11 +144,11 @@ const OPENCODE_BASE_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freez
 });
 
 /**
- * The 2.4.1 schema: the tables below plus automations (2.3.1: they replace the schedules of 2.2.5),
+ * The 2.4.2 schema: the tables below plus automations (2.3.1: they replace the schedules of 2.2.5),
  * linked machines (2.4.0), background jobs, session parts and attachment blobs. Queued input lives in session_inbox (an earlier producer's session_pending is gone, and
  * with it the earlier runtime: Keiko admits exactly one OpenCode, #4359).
  */
-const OPENCODE_2_4_1_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
+const OPENCODE_2_4_2_PERSISTENCE_SCHEMA: OpenCodePersistenceSchema = Object.freeze({
   ...OPENCODE_BASE_PERSISTENCE_SCHEMA,
   automation: [
     "action",
@@ -266,11 +266,11 @@ const OPENCODE_BASE_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.free
 });
 
 /**
- * Which rows refuse a retained 2.4.1 copy. Rows nothing in a settled native run writes stay
+ * Which rows refuse a retained 2.4.2 copy. Rows nothing in a settled native run writes stay
  * refused; an automation is the session's own pending wake, which Keiko resumes (ADR-0137 D10,
  * #4546). The machine table holds the keys of linked machines: any row refuses the copy.
  */
-const OPENCODE_2_4_1_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
+const OPENCODE_2_4_2_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.freeze({
   ...OPENCODE_BASE_TABLE_CLASSES,
   automation: "schedule-state",
   machine: "unknown-state",
@@ -283,10 +283,10 @@ const OPENCODE_2_4_1_TABLE_CLASSES: OpenCodePersistenceTableClasses = Object.fre
 export const OPENCODE_PERSISTENCE_TABLE_CLASSES: Readonly<
   Record<string, OpenCodePersistenceTableClasses>
 > = Object.freeze({
-  "2.4.1": OPENCODE_2_4_1_TABLE_CLASSES,
+  "2.4.2": OPENCODE_2_4_2_TABLE_CLASSES,
 });
 
 export const OPENCODE_PERSISTENCE_SCHEMAS: Readonly<Record<string, OpenCodePersistenceSchema>> =
   Object.freeze({
-    "2.4.1": OPENCODE_2_4_1_PERSISTENCE_SCHEMA,
+    "2.4.2": OPENCODE_2_4_2_PERSISTENCE_SCHEMA,
   });

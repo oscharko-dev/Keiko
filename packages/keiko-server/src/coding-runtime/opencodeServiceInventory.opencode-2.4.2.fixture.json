@@ -1,5 +1,5 @@
 {
-  "version": "2.4.1",
+  "version": "2.4.2",
   "operations": [
     {
       "operationId": "agent.get",
@@ -322,6 +322,51 @@
       "path": "/api/experimental/persistent-pty/{ptyID}"
     },
     {
+      "operationId": "experimental.push.device.register",
+      "method": "PUT",
+      "path": "/api/experimental/push/device/{deviceID}"
+    },
+    {
+      "operationId": "experimental.push.device.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/push/device/{deviceID}"
+    },
+    {
+      "operationId": "experimental.push.device.session.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/push/device/{deviceID}/session/{sessionID}"
+    },
+    {
+      "operationId": "experimental.push.device.session.set",
+      "method": "PUT",
+      "path": "/api/experimental/push/device/{deviceID}/session/{sessionID}"
+    },
+    {
+      "operationId": "experimental.push.device.update",
+      "method": "PATCH",
+      "path": "/api/experimental/push/device/{deviceID}"
+    },
+    {
+      "operationId": "experimental.push.get",
+      "method": "GET",
+      "path": "/api/experimental/push"
+    },
+    {
+      "operationId": "experimental.push.session.remove",
+      "method": "DELETE",
+      "path": "/api/experimental/push/session/{sessionID}"
+    },
+    {
+      "operationId": "experimental.push.session.set",
+      "method": "PUT",
+      "path": "/api/experimental/push/session/{sessionID}"
+    },
+    {
+      "operationId": "experimental.push.settings.set",
+      "method": "PUT",
+      "path": "/api/experimental/push/settings"
+    },
+    {
       "operationId": "experimental.session.export",
       "method": "GET",
       "path": "/api/experimental/session/{sessionID}/export"
@@ -365,6 +410,11 @@
       "operationId": "experimental.session.wait",
       "method": "POST",
       "path": "/api/experimental/session/{sessionID}/wait"
+    },
+    {
+      "operationId": "experimental.skill.file",
+      "method": "GET",
+      "path": "/api/experimental/skill/{skillID}/file/*"
     },
     {
       "operationId": "experimental.usage.limits",
@@ -986,6 +1036,7 @@
     "experimental.all_flags",
     "experimental.artifacts",
     "experimental.codemode_vm",
+    "experimental.compaction_jobs",
     "experimental.console_watches",
     "experimental.full_codemode",
     "experimental.home_memory",
@@ -996,6 +1047,7 @@
     "experimental.image_generate.model.variant",
     "experimental.location_idle_timeout",
     "experimental.machines",
+    "experimental.mcp_skills",
     "experimental.media_blob",
     "experimental.model_speeds",
     "experimental.opencode_api",
@@ -1244,6 +1296,7 @@
     "opencode.goal",
     "opencode.home-memory",
     "opencode.mcp.codemode.defaults",
+    "opencode.mcp.skill",
     "opencode.models.dev",
     "opencode.plan",
     "opencode.prompt.anthropic",
@@ -1287,6 +1340,7 @@
     "opencode.skill",
     "opencode.tool.artifact",
     "opencode.tool.automation",
+    "opencode.tool.cd",
     "opencode.tool.edit",
     "opencode.tool.glob",
     "opencode.tool.grep",
