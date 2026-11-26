@@ -14,6 +14,7 @@ import {
   ownerPrivateEvidenceTarget,
   writeOwnerPrivateEvidence,
 } from "./acceptanceEvidence.js";
+import { makeOwnerPrivate, makeOwnerPrivateDirectory } from "./owner-private-fixture.js";
 import { probeWindowsPreconditions } from "./windowsAcceptancePreconditions.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -33,6 +34,9 @@ describe.skipIf(process.platform !== "win32")("Windows acceptance preconditions 
       caseSetComplete: false,
       everyCaseMetExpectation: false,
     });
-    writeOwnerPrivateEvidence(target, `${JSON.stringify(evidence, null, 2)}\n`);
+    writeOwnerPrivateEvidence(target, `${JSON.stringify(evidence, null, 2)}\n`, {
+      makeOwnerPrivate,
+      makeOwnerPrivateDirectory,
+    });
   });
 });

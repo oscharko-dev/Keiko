@@ -34,26 +34,21 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync,
-  constants,
   cpSync,
   existsSync,
-  fchmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { connect } from "node:net";
-import { homedir, release, tmpdir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

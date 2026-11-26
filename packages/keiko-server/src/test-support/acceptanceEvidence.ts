@@ -17,8 +17,6 @@ import {
 import { release } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import { makeOwnerPrivate, makeOwnerPrivateDirectory } from "./owner-private-fixture.js";
-
 export const ACCEPTANCE_EVIDENCE_SCHEMA_VERSION = 5;
 
 export interface PreconditionFacts {
@@ -98,11 +96,24 @@ export function ownerPrivateEvidenceTarget(file: string, repositoryRoot: string)
   return target;
 }
 
-function writeOwnerPrivateWindows(target: string, content: string): void {
-  const directory = dirname(target);
-  makeOwnerPrivateDirectory(directory);
+/**
+ * The Windows owner-private setters (`makeOwnerPrivate*` of owner-private-fixture.ts). A test
+ * passes them in: production source may not import a test-support fixture (ADR-0019 trust rule 8).
+ */
+export interface WindowsOwnerPrivacy {
+  readonly makeOwnerPrivate: (path: string) => void;
+  readonly makeOwnerPrivateDirectory: (path: string) => void;
+}
+
+function writeOwnerPrivateWindows(
+  target: string,
+  content: string,
+  privacy: WindowsOwnerPrivacy | undefined,
+): void {
+  if (privacy === undefined) throw new Error("acceptance-evidence-windows-privacy-missing");
+  privacy.makeOwnerPrivateDirectory(dirname(target));
   writeFileSync(target, "");
-  makeOwnerPrivate(target);
+  privacy.makeOwnerPrivate(target);
   writeFileSync(target, content);
 }
 
@@ -111,11 +122,15 @@ function writeOwnerPrivateWindows(target: string, content: string): void {
  * directory only its owner can enter, with mode 0600 whatever existed before. On Windows: a
  * protected DACL (the user, SYSTEM and Administrators) is set before the content is written.
  */
-export function writeOwnerPrivateEvidence(target: string, content: string): void {
+export function writeOwnerPrivateEvidence(
+  target: string,
+  content: string,
+  windowsPrivacy?: WindowsOwnerPrivacy,
+): void {
   const directory = dirname(target);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") {
-    writeOwnerPrivateWindows(target, content);
+    writeOwnerPrivateWindows(target, content, windowsPrivacy);
     return;
   }
   const stat = lstatSync(directory);

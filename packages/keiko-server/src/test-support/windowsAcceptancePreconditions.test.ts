@@ -65,7 +65,7 @@ function seams(overrides: SeamOverrides = {}): WindowsProbeSeams {
       overrides.whereUnrunnable === true ? undefined : (overrides.programs ?? []).includes(program),
     whoamiGroups: () =>
       overrides.groups === null ? undefined : (overrides.groups ?? STANDARD_GROUPS),
-    sc: (args) => {
+    sc: (args): ScResult => {
       if (args.length !== 2) return overrides.listing ?? EMPTY_LISTING;
       return args[1] === "com.docker.service"
         ? (overrides.dockerService ?? NO_SERVICES)

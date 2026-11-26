@@ -207,6 +207,16 @@ const CASE_RULES = [
   ],
 ];
 
+// The case rules (skipped for a machine on which no case was run) and the body-free scan.
+function resultFailures(evidence, preconditionsOnly) {
+  const caseRules = preconditionsOnly ? [] : CASE_RULES;
+  const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
+  return [
+    ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
+    ...bodyFree.map((pointer) => `body-free:${pointer}`),
+  ];
+}
+
 /** The reasons the evidence does not certify the promise; empty when it does. */
 export function acceptanceEvidenceFailures(evidence, { preconditionsOnly = false } = {}) {
   if (typeof evidence !== "object" || evidence === null) return ["evidence-unreadable"];
@@ -214,12 +224,7 @@ export function acceptanceEvidenceFailures(evidence, { preconditionsOnly = false
   for (const precondition of recordedPreconditions(evidence)) {
     if (!failures.includes(precondition)) failures.push(precondition);
   }
-  const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
-  const caseRules = preconditionsOnly ? [] : CASE_RULES;
-  failures.push(
-    ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
-    ...bodyFree.map((pointer) => `body-free:${pointer}`),
-  );
+  failures.push(...resultFailures(evidence, preconditionsOnly));
   if (!preconditionsOnly && evidence.certifiesPromise !== true && failures.length === 0) {
     failures.push("not-certified");
   }
