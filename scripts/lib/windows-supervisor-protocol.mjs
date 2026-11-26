@@ -11,7 +11,7 @@ export function header(magic, kind, length) {
   return frame;
 }
 
-export function lengthPrefixed(value, terminated) {
+function lengthPrefixed(value, terminated) {
   const encoded = Buffer.from(value, "utf8");
   const length = Buffer.alloc(4);
   length.writeUInt32LE(encoded.length);
