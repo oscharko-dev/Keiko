@@ -396,6 +396,16 @@ equals the SHA-512 of the reviewed tarball pinned in `docs/release/coding-runtim
 The root `optionalDependencies` declare 1.1.8 for `darwin-arm64`, `darwin-x64` and `win32-x64`, so
 the macOS packages leave 1.1.5 and the Windows package leaves 1.1.7 in the same change.
 
+**1.1.9 carries OpenCode 2.4.2 for every target (#4546, #4492, #4496).** Besides the upgrade, the
+Windows package carries the supervisor whose step ends with its root (`88dfffdc…`, the
+`relay-confinement` build) and the patched step Node.js `runtime/step-node/node.exe` (`761112ae…`,
+`windows-step-node.yml` run 45788444328), both checked against `npmLaneRuntimeApprovals.ts` before
+they are staged. The reviewed tarballs are pinned in `docs/release/coding-runtime-npm-packages.json`;
+two independent builds of each target on a macOS host (Node.js 26.13.1, npm 11.20.0) produced the
+same tarballs and byte-identical receipts on 2026-11-26. They are published from the transport
+prerelease `coding-runtime-1.1.9` once this catalog is on `dev`; the root `optionalDependencies`
+move to 1.1.9 only after the registry holds all three.
+
 _Reproducing the pinned bytes._ The reviewed 1.1.7 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
 tarball), and the tarball SHA-256 `2c322007c9693ed6e198b0337f71b4a37adb3d845a7cb275f892f825fbcb401f`
