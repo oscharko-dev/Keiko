@@ -10,10 +10,11 @@
 // Scope matches Sonar's: only files this branch changed against its base. A pre-existing finding in
 // untouched code is not this diff's to answer for, exactly as Sonar's new-code period decides.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getHeapStatistics } from "node:v8";
 
 import { ESLint } from "eslint";
 import sonarjs from "eslint-plugin-sonarjs";
@@ -233,5 +234,27 @@ export function existsInTree(path) {
   }
 }
 
+// One ESLint engine over the root and the `keiko-ui` type-aware programs needs about 4.7 GB for a
+// diff that touches both, more than Node's default heap on a hosted runner (#4562). The script
+// raises its own heap instead of its npm script line, which design evidence pins byte for byte.
+export const SONAR_RULES_HEAP_MB = 8192;
+
+export function needsLargerHeap(heapLimitBytes = getHeapStatistics().heap_size_limit) {
+  return heapLimitBytes < SONAR_RULES_HEAP_MB * 1024 * 1024 * 0.9;
+}
+
+function rerunWithLargerHeap(script, argv) {
+  const child = spawnSync(
+    process.execPath,
+    [`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, script, ...argv],
+    { stdio: "inherit" },
+  );
+  if (child.error !== undefined) throw child.error;
+  process.exit(child.status ?? 1);
+}
+
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
-if (invokedPath === fileURLToPath(import.meta.url)) await main();
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  if (needsLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
+  else await main();
+}

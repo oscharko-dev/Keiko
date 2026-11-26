@@ -1059,8 +1059,15 @@ function assemblerArchiveSize(index, largeArchive) {
   return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
 }
 
+// A windows-x64 handoff carries ripgrep followed by the step Node.js; every other target carries
+// no tool set in this fixture.
 function assemblerFixtureCandidate(target, evaluation, stableLanes) {
-  return stableLanes ? stableLaneCandidate(target) : assemblerCandidate(target, evaluation);
+  const candidate = stableLanes
+    ? stableLaneCandidate(target)
+    : assemblerCandidate(target, evaluation);
+  return target.platformTarget === "windows-x64"
+    ? withStepNodeTool(withRipgrepTool(candidate))
+    : candidate;
 }
 
 function writeAssemblerFixture(
@@ -3297,6 +3304,29 @@ describe("assemblePortableReleaseAssets bounds", () => {
 
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
       "linux-x64.security.verificationPolicy must be production in a stable release (evaluation)",
+    );
+  });
+
+  it.each([
+    ["without the step Node.js", (staged) => staged.nativeTools.pop()],
+    [
+      "without any tool",
+      (staged) => {
+        delete staged.nativeTools;
+        delete staged.releaseImpact.reviewedBinding.nativeTools;
+      },
+    ],
+  ])("refuses a windows-x64 handoff %s", async (_name, mutate) => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stageRoot = join(bundleRoot, "artifacts", "portable-stage-windows-x64");
+    const staged = readStagedManifest(stageRoot);
+    mutate(staged);
+    syncReviewedBinding(staged);
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 native tool set is incomplete",
     );
   });
 

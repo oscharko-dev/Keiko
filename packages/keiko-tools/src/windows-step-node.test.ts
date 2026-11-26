@@ -263,6 +263,8 @@ describe("the step Node.js in the launch frames (#4492)", () => {
       throw new Error("unused");
     },
     readRoots: [],
+    profile: String.raw`C:\Users\dev`,
+    admitReadRoot: (directory: string): string => directory,
   };
   const invocation = {
     command: `${STEP_NODE_DIRECTORY}\\node.exe`,
@@ -277,7 +279,6 @@ describe("the step Node.js in the launch frames (#4492)", () => {
       EXECUTION_ROOT,
       supervisor,
       "node",
-      undefined,
       STEP_NODE_DIRECTORY,
     );
     expect(launch.grants).toEqual([
@@ -329,7 +330,6 @@ describe("the step Node.js in the launch frames (#4492)", () => {
       EXECUTION_ROOT,
       supervisor,
       "node",
-      undefined,
     );
     expect(launch.pathPrefix).toBeUndefined();
     expect(launch.grants.map((grant) => grant.path)).toEqual([

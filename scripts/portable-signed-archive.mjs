@@ -14,10 +14,13 @@ import {
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
-import { nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
+import {
+  STEP_NODE_TOOL_NAME,
+  assertStepNodeBytesMatchPin,
+  loadWindowsPortableApproval,
+  nativeToolSetIsCompleteFor,
+} from "./lib/portable-step-node.mjs";
 import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
-
-const STEP_NODE_PLATFORM_TARGET = "windows-x64";
 
 export class PortableSignedArchiveError extends Error {}
 
@@ -149,22 +152,37 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
 // bytes change while `unsignedSha256` keeps the approved upstream identity. Rebinding it is the
 // same discipline as the addon: contained regular single-link file, fresh digest and size, and the
 // one matching SBOM component.
-function rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget) {
+function rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget, options = {}) {
   if (manifest.nativeTools === undefined) return;
-  // Only the Windows x64 payload carries the step Node.js beside ripgrep (ADR-0043 D21); every
-  // other target keeps its exactly-one-tool pin.
-  if (platformTarget !== STEP_NODE_PLATFORM_TARGET) {
-    if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
-      fail("signed payload must contain exactly one native tool");
-    }
-  } else if (!nativeToolSetIsValid(manifest.nativeTools)) {
-    fail("signed payload must contain ripgrep, optionally followed by the step Node.js");
+  // Only the Windows x64 payload carries the step Node.js beside ripgrep (ADR-0043 D21), and it must:
+  // every other target keeps its exactly-one-tool pin.
+  if (!nativeToolSetIsCompleteFor(platformTarget, manifest.nativeTools)) {
+    fail(
+      platformTarget === "windows-x64"
+        ? "signed payload must contain ripgrep followed by the step Node.js"
+        : "signed payload must contain exactly one native tool",
+    );
   }
-  for (const tool of manifest.nativeTools) rebindNativeTool(stageRoot, resourceRoot, tool);
+  for (const tool of manifest.nativeTools) {
+    rebindNativeTool(stageRoot, resourceRoot, tool, options);
+  }
 }
 
-function rebindNativeTool(stageRoot, resourceRoot, tool) {
-  rebindShippedBinary(stageRoot, containedToolPath(resourceRoot, tool), tool, "native tool");
+// The step Node.js is pinned by the server and no lane signs it, so its bytes must still be the
+// pinned bytes before its record takes whatever is on disk.
+function rebindNativeTool(stageRoot, resourceRoot, tool, options) {
+  const executable = containedToolPath(resourceRoot, tool);
+  if (tool.name === STEP_NODE_TOOL_NAME) {
+    try {
+      assertStepNodeBytesMatchPin(
+        executable,
+        (options.loadApproval ?? loadWindowsPortableApproval)(),
+      );
+    } catch (error) {
+      fail(error instanceof Error ? error.message : "the step Node.js could not be verified");
+    }
+  }
+  rebindShippedBinary(stageRoot, executable, tool, "native tool");
 }
 
 // A tool path is a fixed literal; `..` segments are canonical to containedResourcePath but never
@@ -263,12 +281,12 @@ function assertSidecarSbomExecutableHash(component, expectedSha256) {
   }
 }
 
-export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
+export function rebindSignedPayload(stageRoot, manifest, platformTarget, options = {}) {
   const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
   rebindNativeAddon(stageRoot, manifest, resourceRoot);
-  rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget);
+  rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget, options);
   if (manifest.runtimeActivation !== undefined) {
     writeRuntimeActivationManifest(resourceRoot, manifest);
   }
@@ -329,7 +347,7 @@ export async function rebindExistingSignedArchive(
 function rebindPayloadForArchive(stageRoot, manifest, platformTarget, options) {
   if (options.payloadAlreadyRebound !== true) {
     if (platformTarget === "windows-x64") {
-      rebindSignedPayload(stageRoot, manifest, platformTarget);
+      rebindSignedPayload(stageRoot, manifest, platformTarget, options);
     } else {
       const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
       rebindSidecars(manifest, resourceRoot, false);

@@ -65,6 +65,7 @@ import {
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import {
   CODING_RUNTIME_RELEASES_FILE,
+  loadWindowsPortableApproval as loadStepNodeApproval,
   resolveStepNodeRuntime,
   STEP_NODE_LICENSE_EXPRESSION,
   STEP_NODE_TOOL_NAME,
@@ -2071,16 +2072,11 @@ export async function verifyWindowsNativeHelpers(
 // (preparePackageSurface), while the scripts that only import this module's helpers, the secure-read
 // qualification and the sidecar preparation, run without a build and never get here.
 function loadWindowsPortableApproval() {
-  const result = spawnSync(
-    process.execPath,
-    [join(repoRoot, "scripts", "print-windows-portable-approval.mjs")],
-    { cwd: repoRoot, encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    const detail = (result.stderr ?? "").trim() || `exit ${String(result.status)}`;
-    fail(`could not read the Windows helper approval from the built server: ${detail}`);
+  try {
+    return loadStepNodeApproval();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "could not read the Windows helper approval");
   }
-  return JSON.parse(result.stdout);
 }
 
 function validateMacosRuntimeSupervisorSurface(supervisor) {

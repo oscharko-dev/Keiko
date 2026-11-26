@@ -110,6 +110,43 @@ export function nativeToolSetIsValid(tools) {
   return nativeToolSetShapeIsValid(tools) && tools[0]?.name === RIPGREP_TOOL_NAME;
 }
 
+/**
+ * The tool set a target must ship: windows-x64 exactly ripgrep then the step Node.js (a handoff
+ * without it would sign and assemble, and confined steps would hang on unpatched Node.js), every
+ * other target exactly ripgrep.
+ */
+export function nativeToolSetIsCompleteFor(platformTarget, tools) {
+  const expectedLength = platformTarget === STEP_NODE_PLATFORM_TARGET ? 2 : 1;
+  return nativeToolSetIsValid(tools) && tools.length === expectedLength;
+}
+
+/**
+ * The server's pin of the step Node.js, read from the built server in its own process. After
+ * staging, every lane that rewrites the shipped digest compares the bytes with this pin.
+ */
+export function loadWindowsPortableApproval({ run = spawnSync } = {}) {
+  const result = run(
+    process.execPath,
+    [join(repoRoot, "scripts", "print-windows-portable-approval.mjs")],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    const detail = (result.stderr ?? "").trim() || `exit ${String(result.status)}`;
+    throw new Error(`could not read the Windows helper approval from the built server: ${detail}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
+/** Refuses step Node.js bytes whose digest or size differ from the server's pin. */
+export function assertStepNodeBytesMatchPin(path, approval) {
+  const pin = approval?.stepNode;
+  if (pin === undefined) throw new Error("the server approves no step Node.js for this target");
+  const entry = verifiedRegularFile(path, "step Node.js");
+  if (entry.size !== pin.sizeBytes || sha256File(path) !== pin.sha256) {
+    throw new Error("the shipped step Node.js differs from the server's pin");
+  }
+}
+
 /** The ripgrep entry of a valid tool set, which is always the first. */
 export function ripgrepToolOf(tools) {
   return nativeToolSetIsValid(tools) ? tools[0] : undefined;
@@ -182,26 +219,28 @@ function verifyPackageTarball(path, selected) {
   }
 }
 
-// curl writes the file by its plain name in the folder that is its working directory, so the
-// size-bounded command line carries no path from the environment (temporary or cache folder).
-function downloadPackageTarball(selected, destination, run) {
+// curl writes the file by a plain name built from the catalog entry alone, in the folder that is
+// its working directory, so the size-bounded command line carries no path from the environment
+// (temporary or cache folder), not even a part of one.
+function downloadPackageTarball(selected, folder, fileName, run) {
   const bounds = { expectedSize: selected.sizeBytes, assetName: selected.tarball };
   const maxTimeSeconds = portableDownloadMaxTimeSeconds();
   const command = boundedCurlCommand(
     portableDownloadCurlArgs({
       expectedSize: selected.sizeBytes,
-      destination: `./${basename(destination)}`,
+      destination: `./${fileName}`,
       url: stepNodePackageUrl(selected),
       maxTimeSeconds,
     }),
     selected.sizeBytes,
   );
   const result = run(command.cmd, command.args, {
-    cwd: dirname(destination),
+    cwd: folder,
     encoding: "utf8",
     timeout: portableDownloadTimeoutMs(maxTimeSeconds),
   });
   if (result.error !== undefined || result.status !== 0) {
+    const destination = join(folder, fileName);
     rmSync(destination, { force: true });
     throw new Error(portableDownloadFailure(result, bounds, destination));
   }
@@ -221,10 +260,12 @@ export function obtainPackageTarball(selected, { localTarball, cacheDir, run = s
     verifyPackageTarball(cached, selected);
     return cached;
   }
-  mkdirSync(dirname(cached), { recursive: true });
-  const partial = `${cached}.${String(process.pid)}.tmp`;
+  const folder = dirname(cached);
+  mkdirSync(folder, { recursive: true });
+  const partialName = `${selected.tarball}.${String(process.pid)}.tmp`;
+  const partial = join(folder, partialName);
   try {
-    downloadPackageTarball(selected, partial, run);
+    downloadPackageTarball(selected, folder, partialName, run);
     verifyPackageTarball(partial, selected);
     renameSync(partial, cached);
   } finally {
@@ -324,7 +365,13 @@ export function resolveStepNodeRuntime({
   const tarball = obtainPackageTarball(selected, { localTarball, cacheDir, run });
   const scratch = mkdtempSync(join(tmpdir(), "keiko-step-node-"));
   try {
-    const sourceBinary = extractStepNode(tarball, pin, scratch, run);
+    // The bytes that are extracted are the bytes that were verified: the tarball is copied into the
+    // private scratch folder and verified there, so a swap of the named file after the first check
+    // changes nothing (a check/use gap).
+    const verifiedCopy = join(scratch, selected.tarball);
+    copyFileSync(tarball, verifiedCopy);
+    verifyPackageTarball(verifiedCopy, selected);
+    const sourceBinary = extractStepNode(verifiedCopy, pin, join(scratch, "extracted"), run);
     return {
       approved: pin,
       package: { version: selected.version, tarball: selected.tarball, sha256: selected.sha256 },

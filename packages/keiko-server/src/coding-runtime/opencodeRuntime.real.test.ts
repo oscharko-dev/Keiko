@@ -1381,9 +1381,15 @@ describe("[functional-only] previous OpenCode runtime under the current launch p
         expect(unauthenticated.status).toBe(401);
         await unauthenticated.body?.cancel();
         const info = await client.info();
-        expect(typeof info.version).toBe("string");
+        // Pointing the variable at the current binary would otherwise pass: it must be an older one.
+        expect(info.version).toEqual(expect.any(String));
+        expect(info.version).not.toBe(OPENCODE_PINNED_VERSION);
         expect(lease.tree.exited).toBe(false);
-        expect(backend.redactedStderr()).not.toMatch(/unknown|unrecognized|invalid|plugin/iu);
+        // Only refusal phrases the launch profile can cause (an option or config the old binary
+        // rejects); a bare "plugin" or "invalid" also appears in benign startup lines.
+        expect(backend.redactedStderr()).not.toMatch(
+          /(unknown|unrecognized|unsupported) (option|flag|argument|environment)|invalid (option|flag|argument|config)/iu,
+        );
         const exited = backend.waitForCompleteTreeExit(lease.tree, 5_000);
         lease.pipe.end();
         await expect(exited).resolves.toBe(true);

@@ -21649,9 +21649,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
-      readRootRefusedCount: {
+      readRootRefusedM2Count: {
         type: "integer",
         dataClass: "count",
+        required: true,
+      },
+      readRootRefusedCredentialCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      readRootRefusedUnlistableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      profileKnown: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: true,
       },
       mavenRepository: {
@@ -21664,6 +21679,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["patched", "absent", "mismatch"],
+      },
+      stepNodeMismatch: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "none",
+          "not-real-folder",
+          "extra-entries",
+          "not-ordinary-file",
+          "size",
+          "hash",
+          "unreadable",
+        ],
       },
     },
     causal: "correlation",

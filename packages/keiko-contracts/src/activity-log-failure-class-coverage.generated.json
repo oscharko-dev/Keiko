@@ -47759,19 +47759,43 @@
               "required": true
             },
             {
+              "name": "profileKnown",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "readRootCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
             },
             {
-              "name": "readRootRefusedCount",
+              "name": "readRootRefusedCredentialCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "readRootRefusedM2Count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "readRootRefusedUnlistableCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
             },
             {
               "name": "stepNode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stepNodeMismatch",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true

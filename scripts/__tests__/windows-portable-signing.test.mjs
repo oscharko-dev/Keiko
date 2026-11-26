@@ -936,6 +936,10 @@ describe("Windows portable PE signing inventory", () => {
     );
     const carrierBytes = portableExecutable(10);
     write(carrierPath, carrierBytes);
+    manifest.nativeTools = [
+      { name: "ripgrep", executablePath: "runtime/native/rg.exe", signing: {} },
+      { name: "step-node", executablePath: "runtime/step-node/node.exe", signing: {} },
+    ];
 
     bindRuntimeAttestation(fixture.stage, manifest);
 
@@ -958,20 +962,30 @@ describe("Windows portable PE signing inventory", () => {
 
   it("marks a declared native tool Authenticode verified with the attestation carrier", () => {
     // Epic #3897: rg.exe is a PE file in the payload, so the PE-inventory signing covers it and the
-    // manifest then states it. A manifest that declares no tool is untouched.
+    // manifest then states it. A manifest that does not declare both tools is refused.
     const fixture = windowsPrepareStage();
     const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
     write(
       join(fixture.stage, "payload", "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
       portableExecutable(10),
     );
-    bindRuntimeAttestation(fixture.stage, manifest);
-    expect(manifest.nativeTools).toBeUndefined();
-    expect(manifest.releaseImpact.reviewedBinding.nativeTools).toBeUndefined();
-
+    // A windows-x64 handoff with no tool set at all, or with ripgrep alone, would sign and then run
+    // confined steps on an unpatched Node.js: both are refused.
+    expect(() => bindRuntimeAttestation(fixture.stage, manifest)).toThrow(
+      /ripgrep followed by the step Node.js/u,
+    );
     manifest.nativeTools = [
       { name: "ripgrep", executablePath: "runtime/native/rg.exe", signing: {} },
     ];
+    expect(() => bindRuntimeAttestation(fixture.stage, manifest)).toThrow(
+      /ripgrep followed by the step Node.js/u,
+    );
+
+    manifest.nativeTools.push({
+      name: "step-node",
+      executablePath: "runtime/step-node/node.exe",
+      signing: {},
+    });
     bindRuntimeAttestation(fixture.stage, manifest);
 
     expect(manifest.nativeTools[0].signing).toEqual({
@@ -985,7 +999,7 @@ describe("Windows portable PE signing inventory", () => {
 
     manifest.nativeTools.push({ name: "other" });
     expect(() => bindRuntimeAttestation(fixture.stage, manifest)).toThrow(
-      /ripgrep, optionally followed by the step Node.js/u,
+      /ripgrep followed by the step Node.js/u,
     );
   });
 

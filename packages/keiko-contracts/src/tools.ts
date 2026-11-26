@@ -435,6 +435,17 @@ export interface WindowsStepSupervisor {
   /** Absolute read-only directories a step's toolchains need besides its executable's own. */
   readonly readRoots: readonly string[];
   /**
+   * The person's profile folder by its real path (long names, links resolved); absent when it is
+   * unknown, and every step is then refused, since no grant can be shown to stay out of it.
+   */
+  readonly profile: string | undefined;
+  /**
+   * The real path of the step executable's own toolchain folder, or `undefined` when that folder
+   * holds or sits in the profile's `.m2`, holds a credential-named entry, cannot be listed or is no
+   * drive path (#4496). The step is then refused.
+   */
+  readonly admitReadRoot: (directory: string) => string | undefined;
+  /**
    * The person's Maven repository, granted read-only to a step whose executable is Maven's
    * launcher and to no other step (#4492); absent when there is none.
    */

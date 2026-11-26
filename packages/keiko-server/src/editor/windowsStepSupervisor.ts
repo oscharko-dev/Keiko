@@ -58,8 +58,13 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
-    // #4496: toolchain homes left out because they hold or sit in `.m2`, or hold a credential-named entry.
-    readRootRefusedCount: { type: "integer", dataClass: "count", required: true },
+    // #4496: named toolchain homes left out, by reason: they hold or sit in the profile's `.m2`,
+    // hold a credential-named entry, or cannot be listed. Never their paths.
+    readRootRefusedM2Count: { type: "integer", dataClass: "count", required: true },
+    readRootRefusedCredentialCount: { type: "integer", dataClass: "count", required: true },
+    readRootRefusedUnlistableCount: { type: "integer", dataClass: "count", required: true },
+    // #4496: whether the person's profile folder is known; without it every step is refused.
+    profileKnown: { type: "boolean", dataClass: "closed-enum", required: true },
     // #4492: whether a Maven step may read the person's repository; never its path.
     mavenRepository: { type: "boolean", dataClass: "closed-enum", required: true },
     // #4492: the runtime's patched Node.js. `absent` runs the steps as before, `mismatch` is a
@@ -69,6 +74,21 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["patched", "absent", "mismatch"],
+    },
+    // #4496: which check a `mismatch` missed; `none` for the other outcomes.
+    stepNodeMismatch: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "not-real-folder",
+        "extra-entries",
+        "not-ordinary-file",
+        "size",
+        "hash",
+        "unreadable",
+      ],
     },
   },
   causal: "correlation",
@@ -112,19 +132,46 @@ const READ_ROOT_VARIABLES = ["JAVA_HOME", "MAVEN_HOME", "M2_HOME"] as const;
 // A drive path, as the supervisor accepts a grant: `X:\...`, never a relative or rooted one.
 const DRIVE_PATH = /^[A-Za-z]:\\/u;
 
-function directoryOf(value: string | undefined): string | undefined {
-  if (value === undefined || !DRIVE_PATH.test(value) || !existsSync(value)) return undefined;
-  return statSync(value).isDirectory() ? win32.normalize(value) : undefined;
+/** The two file-system reads `realDirectory` makes; injectable so a test can make them throw. */
+export interface RealDirectoryFs {
+  readonly isDirectory: (path: string) => boolean | undefined;
+  readonly realpath: (path: string) => string;
+}
+
+const NODE_REAL_DIRECTORY_FS: RealDirectoryFs = {
+  isDirectory: (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory(),
+  realpath: (path) => realpathSync.native(path),
+};
+
+// The real path: long names for 8.3 ones, links and junctions resolved, so every containment test
+// below compares the folders a grant actually reads (#4496). A folder that cannot be resolved (an
+// unreadable ancestor, a reparse point the resolver refuses) is no folder: a named home is then left
+// out, a step's own toolchain folder refused, and an unresolvable profile refuses every step.
+export function realDirectory(
+  value: string | undefined,
+  fs: RealDirectoryFs = NODE_REAL_DIRECTORY_FS,
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  const path = win32.normalize(value);
+  if (!DRIVE_PATH.test(path)) return undefined;
+  try {
+    if (fs.isDirectory(path) !== true) return undefined;
+    const real = win32.normalize(fs.realpath(path));
+    return DRIVE_PATH.test(real) ? real : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What the read-root check asks of the file system; injectable so tests need no Windows host. */
 export interface WindowsReadRootHost {
-  readonly directoryOf: (value: string | undefined) => string | undefined;
+  /** The directory's real drive path, or `undefined` when it is none (missing, a file, UNC). */
+  readonly realDirectory: (value: string | undefined) => string | undefined;
   /** The directory's entry names, or `undefined` when it cannot be listed. */
   readonly entryNames: (directory: string) => readonly string[] | undefined;
 }
 
-// An unlistable home is refused by `readRootIsRefused` and counted in `readRootRefusedCount`.
+// An unlistable home is refused by `readRootRefusal` and counted as `unlistable`.
 function listEntryNames(directory: string): readonly string[] | undefined {
   try {
     return readdirSync(directory);
@@ -133,7 +180,10 @@ function listEntryNames(directory: string): readonly string[] | undefined {
   }
 }
 
-const NODE_READ_ROOT_HOST: WindowsReadRootHost = { directoryOf, entryNames: listEntryNames };
+const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
+  realDirectory: (value) => realDirectory(value),
+  entryNames: listEntryNames,
+};
 
 // Whether `child` is `parent` or lies inside it, with Windows' case-insensitive comparison.
 function windowsPathContains(parent: string, child: string): boolean {
@@ -142,33 +192,92 @@ function windowsPathContains(parent: string, child: string): boolean {
   return !leaves && !win32.isAbsolute(relative);
 }
 
-// A home that holds or sits inside the profile's `.m2` would hand a read of its settings and their
-// credentials to the step; `MAVEN_HOME\conf` (Maven's own global settings) stays readable.
-function readRootIsRefused(
+/** Why a toolchain folder is not granted to a step; closed, so the log names it without a path. */
+export type WindowsReadRootRefusal = "m2" | "credential" | "unlistable";
+
+// A folder that holds or sits inside the profile's `.m2` would hand a read of its settings and
+// their credentials to the step; `MAVEN_HOME\conf` (Maven's own global settings) stays readable.
+// Both paths are real ones, and `.m2` is compared both where it is named and where it really lies,
+// so a short name, a junction or a relocated `.m2` cannot hide the overlap.
+function readRootRefusal(
   root: string,
-  profile: string | undefined,
+  m2Folders: readonly string[],
   host: WindowsReadRootHost,
-): boolean {
-  // The same profile rule as the grant check in keiko-tools, so a root it would refuse is dropped here.
-  if (profile !== undefined && win32.isAbsolute(profile)) {
-    const m2 = win32.join(profile, ".m2");
-    if (windowsPathContains(root, m2) || windowsPathContains(m2, root)) return true;
-  }
-  // A home that cannot be listed cannot be shown free of credentials, so it is refused.
+): WindowsReadRootRefusal | undefined {
+  const overlaps = m2Folders.some(
+    (m2) => windowsPathContains(root, m2) || windowsPathContains(m2, root),
+  );
+  if (overlaps) return "m2";
+  // A folder that cannot be listed cannot be shown free of credentials, so it is refused.
   const names = host.entryNames(root);
-  return names === undefined || names.some(isCredentialNamedSegment);
+  if (names === undefined) return "unlistable";
+  return names.some(isCredentialNamedSegment) ? "credential" : undefined;
 }
+
+type ReadRootAdmission = (root: string) => {
+  readonly root?: string;
+  readonly refusal?: WindowsReadRootRefusal;
+};
+
+// The admission of an already real folder against the profile's `.m2`, named and resolved. `.m2`
+// is resolved again on every admission, so one relocated after the supervisor was resolved is seen.
+function realReadRootAdmission(profile: string, host: WindowsReadRootHost): ReadRootAdmission {
+  const named = win32.join(profile, ".m2");
+  return (root) => {
+    const resolved = host.realDirectory(named);
+    const m2Folders = resolved === undefined || resolved === named ? [named] : [named, resolved];
+    const refusal = readRootRefusal(root, m2Folders, host);
+    return refusal === undefined ? { root } : { refusal };
+  };
+}
+
+/**
+ * The read-root admission every toolchain folder of a step passes: the named folder's real path,
+ * or `undefined` when it is none or is refused. Without a known profile nothing is admitted.
+ */
+export function windowsReadRootAdmission(
+  profile: string | undefined,
+  host: WindowsReadRootHost = NODE_READ_ROOT_HOST,
+): (directory: string | undefined) => {
+  readonly root?: string;
+  readonly refusal?: WindowsReadRootRefusal;
+} {
+  if (profile === undefined) return () => ({});
+  const admit = realReadRootAdmission(profile, host);
+  return (directory) => {
+    const root = host.realDirectory(directory);
+    return root === undefined ? {} : admit(root);
+  };
+}
+
+/** How many named homes each refusal left out, for the supervisor line. */
+export type WindowsReadRootRefusals = Readonly<Record<WindowsReadRootRefusal, number>>;
 
 export function windowsStepReadRoots(
   env: NodeJS.ProcessEnv,
   host: WindowsReadRootHost = NODE_READ_ROOT_HOST,
-): { readonly roots: readonly string[]; readonly refusedCount: number } {
-  const homes = READ_ROOT_VARIABLES.map((name) => host.directoryOf(env[name])).filter(
-    (root): root is string => root !== undefined,
-  );
-  const unique = [...new Set(homes)];
-  const roots = unique.filter((root) => !readRootIsRefused(root, env.USERPROFILE, host));
-  return { roots: Object.freeze(roots), refusedCount: unique.length - roots.length };
+): {
+  readonly roots: readonly string[];
+  readonly profile: string | undefined;
+  readonly refused: WindowsReadRootRefusals;
+} {
+  const profile = host.realDirectory(env.USERPROFILE);
+  const refused = { m2: 0, credential: 0, unlistable: 0 };
+  if (profile === undefined) return { roots: Object.freeze([]), profile, refused };
+  const admit = realReadRootAdmission(profile, host);
+  // Each real folder is judged and counted once, however many homes name it.
+  const folders = new Set<string>();
+  for (const name of READ_ROOT_VARIABLES) {
+    const folder = host.realDirectory(env[name]);
+    if (folder !== undefined) folders.add(folder);
+  }
+  const roots: string[] = [];
+  for (const folder of folders) {
+    const { root, refusal } = admit(folder);
+    if (root !== undefined) roots.push(root);
+    if (refusal !== undefined) refused[refusal] += 1;
+  }
+  return { roots: Object.freeze(roots), profile, refused: Object.freeze(refused) };
 }
 
 /**
@@ -328,6 +437,38 @@ function verifiedStepNode(
   });
 }
 
+// The one supervisor line a resolution writes: counts, closed values and flags, never a path.
+function recordResolution(
+  input: WindowsStepSupervisorInput,
+  resolved: {
+    readonly outcome: SupervisorBinary["outcome"];
+    readonly readRoots: readonly string[];
+    readonly refused: WindowsReadRootRefusals;
+    readonly profile: string | undefined;
+    readonly mavenRepository: string | undefined;
+    readonly stepNode: ReturnType<typeof resolveStepNode>;
+  },
+): void {
+  const { refused, stepNode } = resolved;
+  input.activityLog.write(
+    activityLogEvent(
+      WINDOWS_STEP_SUPERVISOR_OPERATION,
+      { correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {
+        outcome: resolved.outcome,
+        readRootCount: resolved.readRoots.length,
+        readRootRefusedM2Count: refused.m2,
+        readRootRefusedCredentialCount: refused.credential,
+        readRootRefusedUnlistableCount: refused.unlistable,
+        profileKnown: resolved.profile !== undefined,
+        mavenRepository: resolved.mavenRepository !== undefined,
+        stepNode: stepNode.outcome,
+        stepNodeMismatch: stepNode.outcome === "mismatch" ? stepNode.mismatch : "none",
+      },
+    ),
+  );
+}
+
 /**
  * The supervisor a verification run's steps are framed to on Windows, or undefined on every other
  * platform and when no verified supervisor exists. Resolving it records the outcome.
@@ -340,22 +481,19 @@ export function resolveWindowsStepSupervisor(
   const binary = supervisorBinary(
     input.runtime === undefined ? discoveredRuntime(env) : input.runtime(),
   );
-  const { roots: readRoots, refusedCount } = windowsStepReadRoots(env);
+  const { roots: readRoots, profile, refused } = windowsStepReadRoots(env);
   const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);
   const stepNode = verifiedStepNode(binary, input);
-  input.activityLog.write(
-    activityLogEvent(
-      WINDOWS_STEP_SUPERVISOR_OPERATION,
-      { correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {
-        outcome: binary.outcome,
-        readRootCount: readRoots.length,
-        readRootRefusedCount: refusedCount,
-        mavenRepository: mavenRepository !== undefined,
-        stepNode: stepNode.outcome,
-      },
-    ),
-  );
+  // Checked again for each step's own toolchain folder, so a credential added later is seen too.
+  const admitReadRoot = windowsReadRootAdmission(profile);
+  recordResolution(input, {
+    outcome: binary.outcome,
+    readRoots,
+    refused,
+    profile,
+    mavenRepository,
+    stepNode,
+  });
   if (binary.outcome !== "available") return undefined;
   const drives: WindowsStepDriveScope = {
     host: input.driveHost ?? nodeWindowsDriveHost(env),
@@ -365,6 +503,8 @@ export function resolveWindowsStepSupervisor(
   return {
     acquire: verifiedCopies(binary.helperPath, binary.pin, drives),
     readRoots,
+    profile,
+    admitReadRoot: (directory) => admitReadRoot(directory).root,
     mavenRepository,
     ...(stepNode.outcome === "patched" ? { stepNode: windowsStepNodeFor(stepNode, input) } : {}),
   };

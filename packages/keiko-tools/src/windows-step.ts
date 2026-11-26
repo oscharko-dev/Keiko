@@ -52,7 +52,7 @@ export function quoteWindowsArgument(value: string): string {
 const contains = windowsPathContains;
 
 /** The toolchain folder an executable belongs to: a `bin` folder's parent (a JDK, Maven). */
-function toolchainRoot(executable: string): string {
+export function windowsToolchainRoot(executable: string): string {
   const folder = win32.dirname(executable);
   return win32.basename(folder).toLowerCase() === "bin" ? win32.dirname(folder) : folder;
 }
@@ -60,46 +60,58 @@ function toolchainRoot(executable: string): string {
 // `<profile>\.m2` holds the person's Maven settings and their credentials. A read root may hold
 // neither it nor anything inside it, except the repository folder the Maven launcher is given
 // explicitly (`windowsStepReadRoots`); `MAVEN_HOME\conf` is not under the profile and stays readable.
-function touchesMavenUserDirectory(root: string, profile: string | undefined): boolean {
-  if (profile === undefined || !win32.isAbsolute(profile)) return false;
+function touchesMavenUserDirectory(root: string, profile: string): boolean {
   const m2 = win32.join(profile, ".m2");
   if (contains(root, m2)) return true;
   return contains(m2, root) && !contains(win32.join(m2, "repository"), root);
 }
 
+// A drive path, the only form the supervisor grants: `X:\...`, never UNC, `\\?\` or rooted (#4496).
+const DRIVE_PATH = /^[A-Za-z]:\\/u;
+
+function refuseReadRoot(root: string, profile: string, command: string): void {
+  if (!win32.isAbsolute(root))
+    throw new CommandDeniedError("step read root is not absolute", command);
+  if (!DRIVE_PATH.test(root)) {
+    throw new CommandDeniedError("step read root is not a drive path", command);
+  }
+  if (contains(root, profile)) {
+    throw new CommandDeniedError("a step read root holds the whole user profile", command);
+  }
+  if (touchesMavenUserDirectory(root, profile)) {
+    throw new CommandDeniedError(
+      "a step read root holds or sits in the Maven user folder",
+      command,
+    );
+  }
+}
+
 /**
- * The tree's grants: the execution root for modification, and read access to the toolchain of
- * the step's executable and to the supervisor's read roots. A directory inside the execution root
- * or inside another read grant adds nothing. A grant that would hold the whole user profile, and
- * more grants than the supervisor accepts, are refused.
+ * The tree's grants: the execution root for modification, and read access to the toolchain folder
+ * of the step's executable and to the supervisor's read roots. A directory inside the execution
+ * root or inside another read grant adds nothing. A step without a known profile, a grant that is
+ * no drive path, holds the whole user profile or reaches its `.m2`, and more grants than the
+ * supervisor accepts are refused. The caller passes real paths (`WindowsStepSupervisor.profile`,
+ * `admitReadRoot`), so a short name or a junction cannot hide an overlap.
  */
 export function windowsStepGrants(
   executionRoot: string,
-  executable: string,
+  toolchain: string,
   readRoots: readonly string[],
   command: string,
-  profile?: string,
+  profile: string | undefined,
 ): readonly WindowsFilesystemGrant[] {
-  const holdsProfile = (path: string): boolean =>
-    profile !== undefined && win32.isAbsolute(profile) && contains(path, profile);
-  if (holdsProfile(executionRoot)) {
+  if (profile === undefined || !DRIVE_PATH.test(profile)) {
+    throw new CommandDeniedError("the user profile folder is unknown", command);
+  }
+  if (contains(executionRoot, profile)) {
     throw new CommandDeniedError("the execution root holds the whole user profile", command);
   }
   const grants: WindowsFilesystemGrant[] = [
     { path: executionRoot, access: "modify", principal: "tree" },
   ];
-  for (const root of [toolchainRoot(executable), ...readRoots]) {
-    if (!win32.isAbsolute(root))
-      throw new CommandDeniedError("step read root is not absolute", command);
-    if (holdsProfile(root)) {
-      throw new CommandDeniedError("a step read root holds the whole user profile", command);
-    }
-    if (touchesMavenUserDirectory(root, profile)) {
-      throw new CommandDeniedError(
-        "a step read root holds or sits in the Maven user folder",
-        command,
-      );
-    }
+  for (const root of [toolchain, ...readRoots]) {
+    refuseReadRoot(root, profile, command);
     if (grants.some((grant) => contains(grant.path, root))) continue;
     grants.push({ path: root, access: "read", principal: "tree" });
   }
@@ -130,6 +142,26 @@ export function windowsStepReadRoots(
   return [...readRoots, mavenRepository];
 }
 
+// The executable's own toolchain folder passes the same admission as the named homes, by its real
+// path; a folder inside the execution root is the workspace copy's own, which holds no credential.
+function admittedToolchain(
+  executable: string,
+  executionRoot: string,
+  supervisor: WindowsStepSupervisor,
+  command: string,
+): string {
+  const folder = windowsToolchainRoot(executable);
+  if (contains(executionRoot, folder)) return folder;
+  const admitted = supervisor.admitReadRoot(folder);
+  if (admitted === undefined) {
+    throw new CommandDeniedError(
+      "the step's toolchain folder holds or sits in the Maven user folder, holds a credential-named entry or cannot be read",
+      command,
+    );
+  }
+  return admitted;
+}
+
 export function windowsStepLaunch(
   invocation: {
     readonly command: string;
@@ -140,7 +172,6 @@ export function windowsStepLaunch(
   executionRoot: string,
   supervisor: WindowsStepSupervisor,
   command: string,
-  profile: string | undefined,
   stepNodeDirectory?: string,
 ): WindowsStepLaunch {
   const readRoots = windowsStepReadRoots(executable, executionRoot, supervisor);
@@ -152,10 +183,10 @@ export function windowsStepLaunch(
     // The step Node.js folder is read and execute only, like every other toolchain folder (#4492).
     grants: windowsStepGrants(
       executionRoot,
-      executable,
+      admittedToolchain(executable, executionRoot, supervisor, command),
       stepNodeDirectory === undefined ? readRoots : [...readRoots, stepNodeDirectory],
       command,
-      profile,
+      supervisor.profile,
     ),
     recoveryHandle: randomBytes(16).toString("hex"),
     ...(stepNodeDirectory === undefined ? {} : { pathPrefix: stepNodeDirectory }),

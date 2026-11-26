@@ -276,6 +276,38 @@ describe("portable step Node.js staging", () => {
     expect(() => resolveFrom(tarball)).toThrow("outside its package root");
   });
 
+  it("extracts the bytes it verified even when the named tarball is swapped afterwards", () => {
+    const tarball = goodPackage();
+    const original = readFileSync(tarball);
+    const evil = buildPackage({
+      "package/package.json": "{}",
+      [STEP_NODE_PACKAGE_ENTRY]: "unpatched node swapped in after the check",
+    });
+    const tarCwds = [];
+    const swapping = (command, args, options) => {
+      // The first tar call comes after the digest check; replace the named file before it reads.
+      if (tarCwds.length === 0) writeFileSync(tarball, readFileSync(evil));
+      tarCwds.push(options.cwd);
+      return spawnSync(command, args, options);
+    };
+    const selected = selectedFor(tarball);
+    selected.sha256 = sha256(original);
+    const runtime = resolveStepNodeRuntime({
+      approval: fixtureStepNodeApproval(NODE_BYTES),
+      catalog: catalogFor(selected),
+      localTarball: tarball,
+      cacheDir: join(temporaryRoot(), "cache"),
+      run: swapping,
+    });
+    try {
+      expect(readFileSync(runtime.sourceBinary, "utf8")).toBe(NODE_BYTES);
+      expect(tarCwds.length).toBeGreaterThan(0);
+      expect(tarCwds.every((cwd) => cwd !== dirname(tarball))).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it("refuses license text that differs from its pinned digest", () => {
     const tarball = goodPackage();
     const swapped = writeFixture(join(temporaryRoot(), "LICENSE"), "not the Node.js license");
@@ -591,6 +623,11 @@ describe("the tool-set shape and the signing inventory", () => {
   });
 });
 
+// The signing lane reads the server's pin; the test hands it the fixture's own bytes as that pin.
+function pinnedBytes(bytes = NODE_BYTES) {
+  return { loadApproval: () => fixtureStepNodeApproval(bytes) };
+}
+
 describe("the step Node.js after the Windows signing lane", () => {
   function signedFixture() {
     const stageRoot = temporaryRoot();
@@ -629,18 +666,39 @@ describe("the step Node.js after the Windows signing lane", () => {
 
   it("rebinds both tools and leaves the unsigned step Node.js bytes and digest as staged", () => {
     const { manifest, stageRoot, stepNode } = signedFixture();
-    rebindSignedPayload(stageRoot, manifest, "windows-x64");
+    rebindSignedPayload(stageRoot, manifest, "windows-x64", pinnedBytes());
 
     expect(manifest.nativeTools[0].shippedSha256).toBe(sha256("ripgrep fixture"));
     expect(manifest.nativeTools[1].shippedSha256).toBe(stepNode.unsignedSha256);
     expect(manifest.nativeTools[1].sizeBytes).toBe(stepNode.sizeBytes);
   });
 
-  it("rebinds the digest of a changed step Node.js, which the manifest validator then refuses", () => {
-    const { manifest, resourceRoot, stageRoot } = signedFixture();
+  it("refuses a step Node.js whose bytes differ from the server's pin instead of rebinding them", () => {
+    const { manifest, resourceRoot, stageRoot, stepNode } = signedFixture();
     writeFileSync(join(resourceRoot, "runtime", "step-node", "node.exe"), "signed, so changed");
-    rebindSignedPayload(stageRoot, manifest, "windows-x64");
-    expect(manifest.nativeTools[1].shippedSha256).not.toBe(manifest.nativeTools[1].unsignedSha256);
+    expect(() => rebindSignedPayload(stageRoot, manifest, "windows-x64", pinnedBytes())).toThrow(
+      "the shipped step Node.js differs from the server's pin",
+    );
+    expect(manifest.nativeTools[1].shippedSha256).toBe(stepNode.unsignedSha256);
+  });
+
+  it("refuses a step Node.js of the pinned size whose digest differs", () => {
+    const { manifest, resourceRoot, stageRoot } = signedFixture();
+    writeFileSync(
+      join(resourceRoot, "runtime", "step-node", "node.exe"),
+      "X".repeat(Buffer.byteLength(NODE_BYTES)),
+    );
+    expect(() => rebindSignedPayload(stageRoot, manifest, "windows-x64", pinnedBytes())).toThrow(
+      "the shipped step Node.js differs from the server's pin",
+    );
+  });
+
+  it("refuses a windows-x64 payload that carries ripgrep without the step Node.js", () => {
+    const { manifest, stageRoot } = signedFixture();
+    manifest.nativeTools = [manifest.nativeTools[0]];
+    expect(() => rebindSignedPayload(stageRoot, manifest, "windows-x64", pinnedBytes())).toThrow(
+      "ripgrep followed by the step Node.js",
+    );
   });
 
   it("projects the provenance of the step Node.js with its source and patch digests", () => {

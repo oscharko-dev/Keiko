@@ -45,7 +45,7 @@ import {
 } from "./windows-portable-verification-input.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
-import { isStepNodeExecutablePath, nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
+import { isStepNodeExecutablePath, nativeToolSetIsCompleteFor } from "./lib/portable-step-node.mjs";
 import {
   hashPortableHandoffTree,
   PORTABLE_HANDOFF_TREE_HASH_SCHEMA,
@@ -423,9 +423,8 @@ export async function rebindArchive(stageRoot, manifest, archiveAdapter = window
 // it is deliberately outside that inventory (its bytes are the server's pin), so its entry keeps
 // the state it was staged with.
 function markNativeToolsVerified(manifest) {
-  if (manifest.nativeTools === undefined) return;
-  if (!nativeToolSetIsValid(manifest.nativeTools)) {
-    fail("manifest must contain ripgrep, optionally followed by the step Node.js");
+  if (!nativeToolSetIsCompleteFor(WINDOWS_TARGET, manifest.nativeTools)) {
+    fail("manifest must contain ripgrep followed by the step Node.js");
   }
   manifest.nativeTools[0].signing = {
     signatureKind: "authenticode",

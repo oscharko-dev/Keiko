@@ -315,7 +315,7 @@ describe("the runtime's step Node.js (#4492)", () => {
             },
           },
         );
-        expect(run(refusing)).toEqual({ outcome: "mismatch" });
+        expect(run(refusing)).toEqual({ outcome: "mismatch", mismatch: "unreadable" });
       }
     });
 
@@ -326,15 +326,22 @@ describe("the runtime's step Node.js (#4492)", () => {
     it("refuses a file of another size even when its digest would match", () => {
       expect(run(fakeFs(stat({ size: PIN.sizeBytes + 1 }), { count: 0 }))).toEqual({
         outcome: "mismatch",
+        mismatch: "size",
       });
     });
 
     it("refuses a hard-linked file even when its bytes and size match", () => {
-      expect(run(fakeFs(stat({ nlink: 2 }), { count: 0 }))).toEqual({ outcome: "mismatch" });
+      expect(run(fakeFs(stat({ nlink: 2 }), { count: 0 }))).toEqual({
+        outcome: "mismatch",
+        mismatch: "not-ordinary-file",
+      });
     });
 
     it("refuses an entry that is not an ordinary file, as a link is not", () => {
-      expect(run(fakeFs(stat({ file: false }), { count: 0 }))).toEqual({ outcome: "mismatch" });
+      expect(run(fakeFs(stat({ file: false }), { count: 0 }))).toEqual({
+        outcome: "mismatch",
+        mismatch: "not-ordinary-file",
+      });
     });
 
     // Metadata can be restored after a rewrite (the owner of the folder can set every timestamp),
@@ -345,7 +352,7 @@ describe("the runtime's step Node.js (#4492)", () => {
       const fs = fakeFs(stat(), hashes, { sha256: () => (hashes.count++, digest) });
       expect(run(fs)).toMatchObject({ outcome: "patched" });
       digest = "0".repeat(64);
-      expect(run(fs)).toEqual({ outcome: "mismatch" });
+      expect(run(fs)).toEqual({ outcome: "mismatch", mismatch: "hash" });
       expect(hashes.count).toBe(2);
     });
 
@@ -361,7 +368,7 @@ describe("the runtime's step Node.js (#4492)", () => {
           correlationId: undefined,
           fs,
         }),
-      ).toEqual({ outcome: "mismatch" });
+      ).toEqual({ outcome: "mismatch", mismatch: "hash" });
       expect(hashes.count).toBe(2);
     });
   });

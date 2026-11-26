@@ -97,6 +97,10 @@ function withObserved(patch) {
 }
 
 describe("acceptanceEvidenceFailures (#4519)", () => {
+  it("reads a non-empty case set, so no all-cases assertion is vacuous", () => {
+    expect(CASE_IDS.length).toBeGreaterThan(0);
+  });
+
   it("certifies a standard user without a container runtime whose cases all met", () => {
     expect(acceptanceEvidenceFailures(CERTIFYING)).toEqual([]);
   });

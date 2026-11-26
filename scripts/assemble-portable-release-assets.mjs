@@ -27,6 +27,7 @@ import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
+import { nativeToolSetIsCompleteFor } from "./lib/portable-step-node.mjs";
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
 import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 import { qualificationReceiptFor as linuxQualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
@@ -318,6 +319,7 @@ function assertEvidenceText(path, label) {
 }
 
 function assertEvidence(stageRoot, manifest, target) {
+  assertNativeToolSet(manifest, target);
   assertChecksumEvidence(stageRoot, manifest, target);
   assertSigningAndProvenanceEvidence(stageRoot, manifest, target);
   const sbomPath = regularContainedFile(stageRoot, manifest.evidence.sbomPath, "SBOM evidence");
@@ -425,6 +427,16 @@ function assertRuntimeAttestationSbomBinding(manifest, attestation, sbom) {
     hashes[0].content !== attestation.shippedSha256
   ) {
     fail("windows-x64 runtime attestation SBOM binding is invalid");
+  }
+}
+
+// windows-x64 must carry ripgrep and the step Node.js, so a handoff without the patched Node.js
+// never assembles; a tool set on any other target is exactly ripgrep.
+function assertNativeToolSet(manifest, target) {
+  const required = target.platformTarget === "windows-x64";
+  if (manifest.nativeTools === undefined && !required) return;
+  if (!nativeToolSetIsCompleteFor(target.platformTarget, manifest.nativeTools)) {
+    fail(`${target.platformTarget} native tool set is incomplete`);
   }
 }
 
@@ -672,23 +684,48 @@ function portableBundleRelativePaths(manifest, target, setupPath) {
   return [...paths];
 }
 
-async function copyPortableBundleFiles(sourceRoot, finalRoot, manifest, target, setupPath) {
-  mkdirSync(finalRoot, { recursive: false });
-  for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
-    const maxBytes =
-      relativePath === target.assetName || relativePath === WINDOWS_PORTABLE_SETUP_ASSET_NAME
-        ? MAX_ARCHIVE_BYTES
-        : MAX_EVIDENCE_BYTES;
-    const source = regularContainedFile(sourceRoot, relativePath, relativePath, maxBytes);
-    const destination = resolve(finalRoot, relativePath);
-    if (!contained(finalRoot, destination)) fail("compact bundle path escapes its target root");
-    mkdirSync(dirname(destination), { recursive: true });
-    const sourceDigest = await sha256File(source);
-    copyFileSync(source, destination);
-    if ((await sha256File(destination)) !== sourceDigest) {
+// The first rejected task in the given order, so a failure names the same path or target however
+// the digests finish; every task is awaited, so no stream is left running.
+async function settledInOrder(tasks) {
+  const settled = await Promise.allSettled(tasks);
+  const rejected = settled.find((entry) => entry.status === "rejected");
+  if (rejected !== undefined) throw rejected.reason;
+  return settled.map((entry) => entry.value);
+}
+
+// A bundle file is validated and copied, and its source and copy digests are compared.
+function copyVerifiedBundleFile(sourceRoot, finalRoot, target, relativePath) {
+  const maxBytes =
+    relativePath === target.assetName || relativePath === WINDOWS_PORTABLE_SETUP_ASSET_NAME
+      ? MAX_ARCHIVE_BYTES
+      : MAX_EVIDENCE_BYTES;
+  const source = regularContainedFile(sourceRoot, relativePath, relativePath, maxBytes);
+  const destination = resolve(finalRoot, relativePath);
+  if (!contained(finalRoot, destination)) fail("compact bundle path escapes its target root");
+  mkdirSync(dirname(destination), { recursive: true });
+  copyFileSync(source, destination);
+  return Promise.all([sha256File(source), sha256File(destination)]).then(([sourceDigest, copy]) => {
+    if (copy !== sourceDigest) {
       fail(`${target.platformTarget} compact bundle copy changed ${relativePath}`);
     }
+  });
+}
+
+// Files are validated and copied one after another, stopping at the first bad one; the digests
+// of the copied files are then compared, and the first mismatch in path order fails.
+async function copyPortableBundleFiles(sourceRoot, finalRoot, manifest, target, setupPath) {
+  mkdirSync(finalRoot, { recursive: false });
+  const verifications = [];
+  try {
+    for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
+      verifications.push(copyVerifiedBundleFile(sourceRoot, finalRoot, target, relativePath));
+    }
+  } catch (error) {
+    // An earlier file's digest comparison is still running; it is awaited, never left unhandled.
+    await Promise.allSettled(verifications);
+    throw error;
   }
+  await settledInOrder(verifications);
 }
 
 export async function assemblePortableReleaseAssets(argv, deps = {}) {
@@ -696,8 +733,7 @@ export async function assemblePortableReleaseAssets(argv, deps = {}) {
   const bundleRoot = requiredDirectory(options.bundleRoot, "bundle root");
   const stagesRoot = requiredDirectory(options.stagesRoot, "stages root");
   assertExactDownloadedSet(stagesRoot, options.stagePrefix);
-  const loaded = [];
-  for (const target of PORTABLE_TARGETS) loaded.push(await loadTarget(options, target));
+  const loaded = await settledInOrder(PORTABLE_TARGETS.map((t) => loadTarget(options, t)));
   const expected = {
     commitSha: options.commitSha,
     releaseTag: options.releaseTag,

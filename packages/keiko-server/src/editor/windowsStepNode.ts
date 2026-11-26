@@ -74,7 +74,15 @@ export type StepNodeResolution =
       readonly directory: string;
       readonly executable: string;
     }
-  | { readonly outcome: "absent" | "mismatch" };
+  | { readonly outcome: "absent" }
+  | { readonly outcome: "mismatch"; readonly mismatch: StepNodeMismatch };
+
+/**
+ * Which check a step Node.js missed, so a customer's log tells a stale package from a rewritten
+ * file (#4496); closed values, never a path.
+ */
+export type StepNodeMismatch =
+  "not-real-folder" | "extra-entries" | "not-ordinary-file" | "size" | "hash" | "unreadable";
 
 /** The pin this server carries for the Windows step Node.js. */
 export function windowsStepNodePin(): NpmLaneStepNodeApproval | undefined {
@@ -94,13 +102,6 @@ const nodeStepNodeFs: StepNodeFs = {
   sha256: sha256FileSync,
 };
 
-// A lstat of a link reports `isFile() === false`, so the link case needs no condition of its own.
-// The size and the single link count are checked on their own: a hard link shares the pinned
-// bytes with a file the person can still write through another name.
-function isOrdinaryFile(entry: Stats | undefined, sizeBytes: number): entry is Stats {
-  return entry !== undefined && entry.isFile() && entry.nlink === 1 && entry.size === sizeBytes;
-}
-
 interface ResolveStepNodeInput {
   readonly supervisorPath: string | undefined;
   readonly pin: NpmLaneStepNodeApproval | undefined;
@@ -110,23 +111,37 @@ interface ResolveStepNodeInput {
   readonly fs?: StepNodeFs | undefined;
 }
 
+// A lstat of a link reports `isFile() === false`, so the link case needs no condition of its own.
+// The single link count is checked on its own: a hard link shares the pinned bytes with a file the
+// person can still write through another name.
+function mismatchOf(
+  directory: string,
+  executable: string,
+  pin: NpmLaneStepNodeApproval,
+  input: ResolveStepNodeInput,
+): StepNodeMismatch | undefined {
+  const fs = input.fs ?? nodeStepNodeFs;
+  if (!input.isDirectory(directory)) return "not-real-folder";
+  if (fs.readdir(directory).length !== 1) return "extra-entries";
+  const entry = fs.lstat(executable);
+  if (entry === undefined || !entry.isFile() || entry.nlink !== 1) return "not-ordinary-file";
+  if (entry.size !== pin.sizeBytes) return "size";
+  // Hashed on every resolution: the folder's owner can restore every timestamp after a rewrite,
+  // so no metadata match proves the bytes are still the pinned build.
+  return fs.sha256(executable) === pin.sha256 ? undefined : "hash";
+}
+
 function inspect(
   directory: string,
   pin: NpmLaneStepNodeApproval,
   input: ResolveStepNodeInput,
 ): StepNodeResolution {
-  const fs = input.fs ?? nodeStepNodeFs;
-  if (fs.lstat(directory) === undefined) return { outcome: "absent" };
+  if ((input.fs ?? nodeStepNodeFs).lstat(directory) === undefined) return { outcome: "absent" };
   const executable = join(directory, STEP_NODE_FILE_NAME);
-  const entry = fs.lstat(executable);
-  const exact =
-    input.isDirectory(directory) &&
-    fs.readdir(directory).length === 1 &&
-    isOrdinaryFile(entry, pin.sizeBytes) &&
-    // Hashed on every resolution: the folder's owner can restore every timestamp after a rewrite,
-    // so no metadata match proves the bytes are still the pinned build.
-    fs.sha256(executable) === pin.sha256;
-  return exact ? { outcome: "patched", directory, executable } : { outcome: "mismatch" };
+  const mismatch = mismatchOf(directory, executable, pin, input);
+  return mismatch === undefined
+    ? { outcome: "patched", directory, executable }
+    : { outcome: "mismatch", mismatch };
 }
 
 /**
@@ -157,7 +172,7 @@ export function resolveStepNode(input: ResolveStepNodeInput): StepNodeResolution
         redact: () => "The Windows step Node.js could not be read to verify it.",
       }),
     );
-    return { outcome: "mismatch" };
+    return { outcome: "mismatch", mismatch: "unreadable" };
   }
 }
 

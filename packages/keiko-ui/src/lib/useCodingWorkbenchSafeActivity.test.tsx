@@ -7,6 +7,7 @@ import {
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { ApiError } from "./api";
+import { correlationIdOf } from "./client-error-summary";
 import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
 import type { ClientDiagnosticMeta } from "./client-diagnostics";
 import {
@@ -677,10 +678,10 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(message).not.toContain("BFF response");
   });
 
-  it("leaves a code that is not an identifier out of the diagnostic", async () => {
-    getSnapshotMock.mockRejectedValue(
-      new ApiError("C:\\Users\\dev\\secret path", "BFF response failed.", 500),
-    );
+  const CONNECTION_FAILED = "[keiko] coding safe activity connection failed: ApiError";
+
+  async function failedDiagnostic(failure: Error): Promise<readonly unknown[]> {
+    getSnapshotMock.mockRejectedValue(failure);
     const view = renderHook(() =>
       useCodingWorkbenchSafeActivity({
         runId: "run-1",
@@ -688,10 +689,31 @@ describe("useCodingWorkbenchSafeActivity", () => {
         runtimeEventSignal: 0,
       }),
     );
-
     await waitFor(() => expect(view.result.current.status).toBe("error"));
-    const [message] = reportDiagnosticSpy.mock.calls[0] ?? [""];
-    expect(message).toBe("[keiko] coding safe activity connection failed: ApiError");
+    return reportDiagnosticSpy.mock.calls[0] ?? [];
+  }
+
+  it.each([
+    ["a path", "C:\\Users\\dev\\secret path"],
+    ["a lowercase code", "contract_validation_failed"],
+    ["a code longer than 64 characters", `A${"B".repeat(64)}`],
+    ["an empty code", ""],
+  ])("leaves %s out of the diagnostic", async (_label, code) => {
+    const [message] = await failedDiagnostic(new ApiError(code, "BFF response failed.", 500));
+    expect(message).toBe(CONNECTION_FAILED);
+  });
+
+  it("keeps a code of exactly 64 identifier characters", async () => {
+    const code = `A${"B".repeat(63)}`;
+    const [message] = await failedDiagnostic(new ApiError(code, "BFF response failed.", 500));
+    expect(message).toBe(`${CONNECTION_FAILED} ${code}`);
+  });
+
+  it("passes whatever correlation id the error carries, none for a plain ApiError", async () => {
+    const failure = new ApiError("CONTRACT_VALIDATION_FAILED", "BFF response failed.", 502);
+    const [, meta] = await failedDiagnostic(failure);
+    expect(meta).toEqual({ correlationId: correlationIdOf(failure) });
+    expect(correlationIdOf(failure)).toBeUndefined();
   });
 
   it("records nothing when the connection is torn down on purpose", async () => {
@@ -711,8 +733,14 @@ describe("useCodingWorkbenchSafeActivity", () => {
       }),
     );
     await waitFor(() => expect(getSnapshotMock).toHaveBeenCalled());
+    const pending = getSnapshotMock.mock.results[0]?.value as Promise<unknown>;
     view.unmount();
-    await Promise.resolve();
+    // The hook's rejection handler was attached before this one, so it has run once this settles;
+    // the extra flushes cover the async frames between the client call and that handler.
+    await act(async () => {
+      await pending.catch(() => undefined);
+      for (let flush = 0; flush < 5; flush += 1) await Promise.resolve();
+    });
     expect(reportDiagnosticSpy).not.toHaveBeenCalled();
   });
 

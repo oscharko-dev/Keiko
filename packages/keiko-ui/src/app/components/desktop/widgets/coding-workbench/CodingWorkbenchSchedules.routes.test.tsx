@@ -5,21 +5,21 @@ import type {
   CodingWorkbenchScheduleAction,
 } from "@oscharko-dev/keiko-contracts";
 import { bffFetchJson } from "@/lib/http";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { CODING_SCHEDULES_ROOT as ROOT } from "@/lib/coding-schedules-api";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
 
 // #4546 (acceptance of the native automation clause): the Workbench lists an automation the way
-// the server's schedule route lists a native run's `automation` row and drives its pause, resume
-// and delete through the server's routes. Only the transport is replaced; the API module under the
-// component is the real one, so the route templates the server registers are what is called.
+// a schedule route response shapes a native run's `automation` row and drives its pause, resume
+// and delete. Only the transport is replaced by a stub (`serve`) that is NOT the server's routes;
+// the API module under the component is the real one and its exported route root is used here, so
+// this proves the component and API module agree with each other, not the server's registration.
 vi.mock("@/lib/coding-app-session-client", () => ({
   codingAppSessionPairingSettled: vi.fn(() => Promise.resolve(true)),
 }));
 vi.mock("@/lib/http", () => ({ bffFetchJson: vi.fn() }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
-// The route root of `coding-schedules-api.ts` (not exported there). The real API module sits under
-// the component, so a drift fails here: the simulated server only answers paths under this root.
-const ROOT = "/api/coding-workbench/runtime/schedules";
 const DUE = "2026-11-26T09:30:00.000Z";
 
 /** A prompt automation as the schedule route returns it: the runtime's id, a `at` trigger. */
@@ -35,6 +35,8 @@ const AUTOMATION: CodingWorkbenchSchedule = {
 
 interface Server {
   schedules: CodingWorkbenchSchedule[];
+  /** The control action the stub answers with a failure, when set. */
+  failAction?: CodingWorkbenchScheduleAction | undefined;
   readonly requests: { readonly path: string; readonly method: string; readonly body: unknown }[];
 }
 
@@ -52,6 +54,7 @@ function serve(server: Server): void {
       string,
       CodingWorkbenchScheduleAction,
     ];
+    if (action === server.failAction) return Promise.reject(new Error("control failed"));
     if (action === "delete") {
       server.schedules = server.schedules.filter((schedule) => schedule.id !== id);
       return Promise.resolve({ status: "deleted" });
@@ -105,5 +108,51 @@ describe("CodingWorkbenchSchedules against the server's schedule routes", () => 
     ]);
     for (const { body } of server.requests.filter(({ method }) => method === "POST"))
       expect(body).toEqual({ taskId: "task-7" });
+  });
+
+  // The component reads the list again after every control attempt; that read must not clear the
+  // alert of a failed control, so the person sees it, and the next successful control clears it.
+  it("reports a failed control action, keeps its alert past the list read, and keeps the row", async () => {
+    const server: Server = { schedules: [AUTOMATION], requests: [], failAction: "pause" };
+    serve(server);
+    render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+    await waitFor(() => {
+      expect(reportClientDiagnostic).toHaveBeenCalledTimes(1);
+    });
+    expect(vi.mocked(reportClientDiagnostic).mock.calls[0]?.[0]).toContain("pause failed");
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeEnabled();
+    await waitFor(() => {
+      expect(server.requests.filter((request) => request.method === "GET")).toHaveLength(2);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("listitem")).toHaveTextContent("Check the build again");
+
+    server.failAction = "delete";
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(reportClientDiagnostic).toHaveBeenCalledTimes(2);
+    });
+    expect(vi.mocked(reportClientDiagnostic).mock.calls[1]?.[0]).toContain("delete failed");
+    expect(screen.getByRole("listitem")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    server.failAction = undefined;
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  it("renders nothing for a task without schedules", async () => {
+    const server: Server = { schedules: [], requests: [] };
+    serve(server);
+    const { container } = render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+
+    await waitFor(() => {
+      expect(server.requests).toHaveLength(1);
+    });
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -26,6 +26,7 @@ import {
   windowsStepFrames,
   windowsStepGrants,
   windowsStepReadRoots,
+  windowsToolchainRoot,
   windowsStepRefusal,
   WindowsStepResponses,
   type WindowsStepLaunch,
@@ -76,10 +77,26 @@ describe("quoteWindowsArgument", () => {
 
 describe("windowsStepGrants", () => {
   const root = String.raw`C:\Users\dev\work\repo`;
+  const profile = String.raw`C:\Users\dev`;
+  // The production rule for an executable's folder; the supervisor admits it by its real path.
+  const grants = (
+    executionRoot: string,
+    executable: string,
+    readRoots: readonly string[],
+    command: string,
+    stepProfile: string | undefined = profile,
+  ): readonly unknown[] =>
+    windowsStepGrants(
+      executionRoot,
+      windowsToolchainRoot(executable),
+      readRoots,
+      command,
+      stepProfile,
+    );
 
   it("grants the execution root for modification and the executable's folder for reading", () => {
     expect(
-      windowsStepGrants(
+      grants(
         root,
         String.raw`C:\Users\dev\AppData\Local\Programs\nodejs\node.exe`,
         [String.raw`C:\Users\dev\AppData\Local\Programs\jdk-21`],
@@ -102,7 +119,7 @@ describe("windowsStepGrants", () => {
 
   it("adds nothing for a folder an earlier grant already covers", () => {
     expect(
-      windowsStepGrants(
+      grants(
         root,
         String.raw`C:\Users\dev\work\repo\node_modules\.bin\tool.exe`,
         [String.raw`C:\Users\dev\work\repo\vendor`],
@@ -113,7 +130,7 @@ describe("windowsStepGrants", () => {
 
   it("grants a JDK or Maven from its bin folder's parent", () => {
     expect(
-      windowsStepGrants(root, String.raw`C:\Users\dev\Programs\maven\bin\mvn.cmd`, [], "mvn"),
+      grants(root, String.raw`C:\Users\dev\Programs\maven\bin\mvn.cmd`, [], "mvn"),
     ).toContainEqual({
       path: String.raw`C:\Users\dev\Programs\maven`,
       access: "read",
@@ -121,26 +138,43 @@ describe("windowsStepGrants", () => {
     });
   });
 
+  it("refuses every step when the user profile folder is unknown or no drive path (#4496)", () => {
+    for (const unknown of [
+      undefined,
+      "",
+      String.raw`\\server\share\dev`,
+      String.raw`\\?\C:\Users\dev`,
+    ]) {
+      expect(() => windowsStepGrants(root, String.raw`C:\t`, [], "x", unknown)).toThrow(
+        /user profile folder is unknown/u,
+      );
+    }
+  });
+
+  it("refuses a read root that is no drive path (#4496)", () => {
+    for (const refused of [String.raw`\\server\share\jdk`, String.raw`\\?\C:\Users\dev\.m2`]) {
+      expect(() => grants(root, String.raw`C:\t\x.exe`, [refused], "x")).toThrow(
+        /not a drive path/u,
+      );
+    }
+  });
+
   it("refuses a grant that holds the whole user profile", () => {
-    const profile = String.raw`C:\Users\dev`;
-    expect(() =>
-      windowsStepGrants(root, String.raw`C:\Users\dev\node.exe`, [], "node", profile),
-    ).toThrow(/whole user profile/u);
-    expect(() =>
-      windowsStepGrants(root, String.raw`C:\t\x.exe`, [String.raw`C:\Users`], "x", profile),
-    ).toThrow(/whole user profile/u);
-    expect(() => windowsStepGrants(profile, String.raw`C:\t\x.exe`, [], "x", profile)).toThrow(
+    expect(() => grants(root, String.raw`C:\Users\dev\node.exe`, [], "node")).toThrow(
       /whole user profile/u,
     );
-    expect(
-      windowsStepGrants(root, String.raw`C:\Users\dev\Programs\node\node.exe`, [], "node", profile),
-    ).toHaveLength(2);
+    expect(() => grants(root, String.raw`C:\t\x.exe`, [String.raw`C:\Users`], "x")).toThrow(
+      /whole user profile/u,
+    );
+    expect(() => grants(profile, String.raw`C:\t\x.exe`, [], "x")).toThrow(/whole user profile/u);
+    expect(grants(root, String.raw`C:\Users\dev\Programs\node\node.exe`, [], "node")).toHaveLength(
+      2,
+    );
   });
 
   it("refuses a read root that holds, is, or sits in the profile's .m2, bar its repository", () => {
-    const profile = String.raw`C:\Users\dev`;
     const grant = (roots: readonly string[]): readonly unknown[] =>
-      windowsStepGrants(root, String.raw`C:\t\x.exe`, roots, "x", profile);
+      grants(root, String.raw`C:\t\x.exe`, roots, "x");
     for (const refused of [
       String.raw`C:\Users\dev\.m2`,
       String.raw`c:\users\DEV\.M2\toolchains`,
@@ -154,12 +188,12 @@ describe("windowsStepGrants", () => {
   });
 
   it("refuses a relative read root and more folders than one tree may be granted", () => {
-    expect(() => windowsStepGrants(root, String.raw`C:\t\x.exe`, ["relative"], "x")).toThrow(
-      CommandDeniedError,
+    expect(() => grants(root, String.raw`C:\t\x.exe`, ["relative"], "x")).toThrow(
+      /step read root is not absolute/u,
     );
     const many = Array.from({ length: 8 }, (_, index) => `C:\\tools\\t${String(index)}`);
-    expect(() => windowsStepGrants(root, String.raw`C:\t\x.exe`, many, "x")).toThrow(
-      CommandDeniedError,
+    expect(() => grants(root, String.raw`C:\t\x.exe`, many, "x")).toThrow(
+      /more directories than one tree may be granted/u,
     );
   });
 });
@@ -303,6 +337,8 @@ describe("windowsStepReadRoots (#4492)", () => {
       throw new Error("not acquired here");
     },
     readRoots: [String.raw`C:\jdk`],
+    profile: String.raw`C:\Users\dev`,
+    admitReadRoot: (directory) => directory,
     mavenRepository,
   });
 
@@ -510,6 +546,9 @@ interface HarnessOptions {
   readonly commandRules?: RunCommandDeps["commandRules"];
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"];
   readonly windowsStepNodeProbe?: RunCommandDeps["windowsStepNodeProbe"];
+  readonly admitReadRoot?: WindowsStepSupervisor["admitReadRoot"];
+  /** The supervisor's real profile folder; `null` for a host whose profile is unknown. */
+  readonly profile?: string | null;
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -537,6 +576,8 @@ function harness(options: HarnessOptions = {}): Harness {
       };
     },
     readRoots: [],
+    profile: options.profile === null ? undefined : (options.profile ?? String.raw`C:\Users\dev`),
+    admitReadRoot: options.admitReadRoot ?? ((directory): string => directory),
     ...(options.stepNode === undefined ? {} : { stepNode: options.stepNode }),
   };
   const deps: RunCommandDeps = {
@@ -732,6 +773,46 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
       platform: "win32",
     });
     expect(h.released()).toBe(1);
+  });
+
+  // #4496: the executable's own folder passes the supervisor's admission like the named homes, and
+  // the grant names the real folder it answers (a long name for a short one, a junction resolved).
+  it("grants the executable's toolchain folder by the real path the supervisor admits", async () => {
+    const asked: string[] = [];
+    const h = harness({
+      admitReadRoot: (directory) => {
+        asked.push(directory);
+        return String.raw`C:\Program Files\nodejs`;
+      },
+    });
+    const run = runCommand(input(new AbortController().signal), h.deps);
+    await settled();
+    expect(asked).toEqual([String.raw`C:\tools\node`]);
+    expect(h.acquired).toEqual([
+      [realpathSync(h.deps.workspace.root), String.raw`C:\Program Files\nodejs`],
+    ]);
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+  });
+
+  it("refuses a step whose toolchain folder the supervisor does not admit, before any launch", async () => {
+    const h = harness({ admitReadRoot: () => undefined });
+    await expect(runCommand(input(new AbortController().signal), h.deps)).rejects.toThrow(
+      /toolchain folder holds or sits in the Maven user folder, holds a credential-named entry/u,
+    );
+    expect(h.acquired).toEqual([]);
+    expect(h.spawned).toEqual([]);
+  });
+
+  it("refuses every step on a host whose profile folder is unknown, before any launch", async () => {
+    const h = harness({ profile: null });
+    await expect(runCommand(input(new AbortController().signal), h.deps)).rejects.toThrow(
+      /user profile folder is unknown/u,
+    );
+    expect(h.acquired).toEqual([]);
+    expect(h.spawned).toEqual([]);
   });
 
   // #4492: the supervisor resolves the user's LocalAppData for its per-user lock; Windows expands

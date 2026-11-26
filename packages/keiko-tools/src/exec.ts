@@ -1162,7 +1162,6 @@ function windowsStepTarget(
     executionRoot,
     supervisor,
     input.command,
-    environmentVariableValue(deps.processEnv, "USERPROFILE", "win32"),
     plan.kind === "applied" ? plan.stepNode.directory : undefined,
   );
   const copy = supervisor.acquire(launch.grants.map((grant) => grant.path));

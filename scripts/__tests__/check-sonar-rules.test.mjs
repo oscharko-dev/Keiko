@@ -12,14 +12,29 @@ import {
   evaluate,
   existsInTree,
   isUiTypeScriptFile,
+  needsLargerHeap,
   profileRules,
   QUALITY_PROFILE,
   resolveBaseRef,
+  SONAR_RULES_HEAP_MB,
   sonarRuleKey,
   summarise,
 } from "../check-sonar-rules.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+describe("needsLargerHeap (#4562)", () => {
+  const mib = 1024 * 1024;
+
+  it("re-runs under Node's default 4 GB heap, which the two programs exhaust", () => {
+    expect(needsLargerHeap(4144 * mib)).toBe(true);
+  });
+
+  it("runs in place once the heap is raised to the script's own size", () => {
+    expect(needsLargerHeap(SONAR_RULES_HEAP_MB * mib + 48 * mib)).toBe(false);
+    expect(needsLargerHeap(12288 * mib)).toBe(false);
+  });
+});
 
 describe("resolveBaseRef", () => {
   it("prefers an explicit --base argument", () => {
