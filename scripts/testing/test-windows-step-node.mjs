@@ -36,6 +36,7 @@ const net = require("node:net");
 const path = require("node:path");
 console.log("${"KEIKO_STEP_NODE_PROBE_START"}");
 const result = { uv: process.versions.uv, node: process.versions.node, exec: process.execPath };
+const attempt = (fn) => { try { return brief(fn()); } catch (error) { return { threw: String(error.code) + "/" + String(error.syscall) + "/" + String(error.message) }; } };
 const brief = (r) => ({ status: r.status, stdout: r.stdout, error: r.error ? String(r.error.code) + "/" + String(r.error.syscall) : undefined });
 function listen(name) {
   return new Promise((resolve) => {
@@ -55,8 +56,9 @@ function forkEcho() {
 }
 async function main() {
   const args = ["-e", "process.stdout.write('child-ok')"];
-  result.spawnSyncNoPipes = brief(spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
-  result.spawnSync = brief(spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 }));
+  result.cmdNoPipes = attempt(() => spawnSync(process.env.ComSpec ?? "cmd.exe", ["/c", "exit 0"], { stdio: "ignore", timeout: 60000 }));
+  result.spawnSyncNoPipes = attempt(() => spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
+  result.spawnSync = attempt(() => spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 }));
   result.forkExit = await forkEcho();
   const tests = spawnSync(process.execPath, ["--test", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
   result.nodeTest = { status: tests.status, error: brief(tests).error, passes: ((tests.stdout ?? "").match(/^# pass (\d+)/mu) ?? [])[1] };
@@ -65,7 +67,11 @@ async function main() {
   result.localPipe = await listen("\\\\.\\pipe\\LOCAL\\keiko-step-node-local-" + stamp);
   console.log("${"KEIKO_STEP_NODE_PROBE_RESULT "}" + JSON.stringify(result));
 }
-main().catch((error) => { console.log("probe-error:" + String(error)); process.exitCode = 1; });
+main().catch((error) => {
+  result.probeError = String(error);
+  console.log("${"KEIKO_STEP_NODE_PROBE_RESULT "}" + JSON.stringify(result));
+  process.exitCode = 1;
+});
 `;
 
 const ECHO_CHILD_SOURCE = `process.on("message", (message) => {
@@ -188,6 +194,7 @@ function assertPatchedResult(outcome) {
   assert.equal(outcome.started, true, "the probe started inside the container");
   assert.notEqual(outcome.result, undefined, `the probe finished: ${outcome.stdout.slice(0, 400)}`);
   const result = outcome.result;
+  assert.equal(result.probeError, undefined, `the probe ran every step: ${JSON.stringify(result)}`);
   assert.match(result.uv, PATCHED_UV, "process.versions.uv names the patched libuv");
   assert.deepEqual(
     result.spawnSync,
