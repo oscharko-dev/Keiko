@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "target": "coding-runtime",
   "policy": "observed-maximum-plus-full-range-v1",
-  "calibrationSha256": "319f8b06c25100e840498953c792ea9c100124268493f365b720354b81fa56f6",
+  "calibrationSha256": "8532c1d871e71157914417a088ae64d798d213c1fb4e81feae85619cce87a306",
   "maximumP95Ms": {
     "coldStartMs": 1744.0082930000062,
     "readinessMs": 0.7471669999940787,
