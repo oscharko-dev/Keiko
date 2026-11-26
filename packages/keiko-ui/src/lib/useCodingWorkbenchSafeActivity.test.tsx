@@ -6,7 +6,9 @@ import {
   encodeCodingAppSessionPairingFragment,
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { ApiError } from "./api";
 import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
+import type { ClientDiagnosticMeta } from "./client-diagnostics";
 import {
   redeemCodingAppSessionPairingNavigation,
   type CodingAppSessionPairingSeams,
@@ -20,6 +22,14 @@ import {
 
 const getSnapshotMock = vi.hoisted(() => vi.fn());
 const streamSnapshotsMock = vi.hoisted(() => vi.fn());
+const reportDiagnosticSpy = vi.hoisted(() =>
+  vi.fn<(message: string, meta?: ClientDiagnosticMeta) => void>(),
+);
+
+vi.mock("./client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-diagnostics")>()),
+  reportClientDiagnostic: reportDiagnosticSpy,
+}));
 
 vi.mock("./coding-app-session-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./coding-app-session-client")>()),
@@ -131,6 +141,7 @@ describe("useCodingWorkbenchSafeActivity", () => {
   beforeEach(() => {
     getSnapshotMock.mockReset();
     streamSnapshotsMock.mockReset();
+    reportDiagnosticSpy.mockReset();
     getSnapshotMock.mockResolvedValue(snapshot());
     holdStreamUntilAbort();
   });
@@ -638,6 +649,54 @@ describe("useCodingWorkbenchSafeActivity", () => {
 
     await waitFor(() => expect(view.result.current.status).toBe("error"));
     expect(view.result.current.errorCode).toBe("CODING_SAFE_ACTIVITY_STREAM_FAILED");
+  });
+
+  // A page left open across an update reads snapshots its own contract rejects: the timeline says
+  // only "Activity unavailable", so the Activity Log must name the class, the closed code and the
+  // request (Windows 11 lab, 2026-11-26: the failure was invisible in the log).
+  it("records a failed connection with its error class, closed code and correlation id", async () => {
+    const failure = Object.assign(
+      new ApiError("CONTRACT_VALIDATION_FAILED", "BFF response failed contract validation.", 502),
+      { correlationId: "corr-activity-1" },
+    );
+    getSnapshotMock.mockRejectedValue(failure);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    expect(reportDiagnosticSpy).toHaveBeenCalledWith(
+      "[keiko] coding safe activity connection failed: ApiError CONTRACT_VALIDATION_FAILED",
+      { correlationId: "corr-activity-1" },
+    );
+    const [message] = reportDiagnosticSpy.mock.calls[0] ?? [""];
+    expect(message).not.toContain("BFF response");
+  });
+
+  it("records nothing when the connection is torn down on purpose", async () => {
+    getSnapshotMock.mockImplementation(
+      (signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(getSnapshotMock).toHaveBeenCalled());
+    view.unmount();
+    await Promise.resolve();
+    expect(reportDiagnosticSpy).not.toHaveBeenCalled();
   });
 
   // Resync: after a failed projection, a bumped runtimeEventSignal must debounce and reconnect,

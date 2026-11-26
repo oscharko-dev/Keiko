@@ -20,10 +20,13 @@ import {
   codingAppSessionPairingSettled,
   useCodingAppSessionRedemptions,
 } from "./coding-app-session-client";
+import { ApiError } from "./api";
 import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
 } from "./coding-app-session-channel-api";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import {
   useCodingWorkbenchModelTexts,
   type CodingWorkbenchAnswers,
@@ -240,6 +243,14 @@ function markConnectionFailure(
 ): void {
   if (controller.signal.aborted) return;
   const offline = error instanceof TypeError || globalThis.navigator?.onLine === false;
+  // The timeline shows only "Activity unavailable"; the cause stays readable in the Activity Log.
+  // An ApiError's code is a closed Keiko identifier (a snapshot the page's own contract rejects
+  // reads CONTRACT_VALIDATION_FAILED, for example after an update left an old page open).
+  const code = error instanceof ApiError ? ` ${error.code}` : "";
+  reportClientDiagnostic(
+    `[keiko] coding safe activity connection failed: ${clientErrorSummary(error)}${code}`,
+    { correlationId: correlationIdOf(error) },
+  );
   setState((current) => ({
     ...current,
     status: offline ? "offline" : "error",
