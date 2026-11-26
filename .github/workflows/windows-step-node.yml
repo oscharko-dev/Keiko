@@ -143,8 +143,8 @@ jobs:
           if (r.stdout !== "ok") process.exit(1);
           if (process.versions.uv !== "1.52.1-keiko.5181") process.exit(2);
           console.log("canary ok", process.version, process.versions.uv);
-          '@ | Set-Content -Path step-node-out\canary.js
-          & step-node-out\node.exe step-node-out\canary.js
+          '@ | Set-Content -Path step-node-out\canary.cjs
+          & step-node-out\node.exe step-node-out\canary.cjs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build the runtime supervisor as the release does
         run: |

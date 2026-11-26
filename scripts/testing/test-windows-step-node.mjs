@@ -45,7 +45,7 @@ function listen(name) {
 }
 function forkEcho() {
   return new Promise((resolve) => {
-    const child = fork(path.join(__dirname, "echo-child.js"), [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    const child = fork(path.join(__dirname, "echo-child.cjs"), [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
     child.once("message", (message) => { result.forkEcho = message.echo; });
     child.once("exit", (code) => resolve(code));
     child.send({ ping: 1 });
@@ -55,7 +55,7 @@ async function main() {
   const spawned = spawnSync(process.execPath, ["-e", "process.stdout.write('child-ok')"], { encoding: "utf8", timeout: 60000 });
   result.spawnSync = { status: spawned.status, stdout: spawned.stdout };
   result.forkExit = await forkEcho();
-  const tests = spawnSync(process.execPath, ["--test", "a.test.js", "b.test.js"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
+  const tests = spawnSync(process.execPath, ["--test", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
   result.nodeTest = { status: tests.status, passes: (tests.stdout.match(/^# pass (\d+)/mu) ?? [])[1] };
   const stamp = String(process.pid);
   result.globalPipe = await listen("\\\\.\\pipe\\keiko-step-node-global-" + stamp);
@@ -96,10 +96,10 @@ function stageRun(helper, nodeExecutable, root, gatewayPort) {
   copyFileSync(helper, supervisor);
   copyFileSync(nodeExecutable, join(runtimeDirectory, "node.exe"));
   const files = {
-    "probe.js": PROBE_SOURCE,
-    "echo-child.js": ECHO_CHILD_SOURCE,
-    "a.test.js": TEST_SOURCE,
-    "b.test.js": TEST_SOURCE,
+    "probe.cjs": PROBE_SOURCE,
+    "echo-child.cjs": ECHO_CHILD_SOURCE,
+    "a.test.cjs": TEST_SOURCE,
+    "b.test.cjs": TEST_SOURCE,
   };
   for (const [name, source] of Object.entries(files)) {
     writeFileSync(join(runtimeDirectory, name), source);
@@ -117,7 +117,7 @@ function stageRun(helper, nodeExecutable, root, gatewayPort) {
       handle,
       join(runtimeDirectory, "node.exe"),
       runtimeDirectory,
-      [join(runtimeDirectory, "probe.js")],
+      [join(runtimeDirectory, "probe.cjs")],
       environment,
     ),
     grantsFrame([runtimeDirectory, supervisorDirectory]),
