@@ -17,13 +17,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import {
-  grantsFrame,
-  header,
-  launchFrame,
-  openFrame,
-} from "../lib/windows-supervisor-protocol.mjs";
-
-import {
   GRANT_READ,
   grantsFrame,
   launchFrame,

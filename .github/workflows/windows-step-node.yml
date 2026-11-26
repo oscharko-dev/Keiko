@@ -20,7 +20,7 @@ on:
       - ".github/workflows/windows-step-node.yml"
       - "scripts/testing/test-windows-step-node.mjs"
       - "scripts/write-windows-step-node-receipt.mjs"
-      - "scripts/lib/windows-supervisor-protocol.mjs"
+      - "scripts/testing/lib/windows-relay-frames.mjs"
   workflow_dispatch:
 
 permissions: {}
@@ -123,6 +123,8 @@ jobs:
         with:
           node-version: "26.13.1"
           package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Record the official Node.js used as the stock control
         run: |
           $stock = (Get-Command node).Source

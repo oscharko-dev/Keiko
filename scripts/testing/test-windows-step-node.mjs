@@ -19,11 +19,12 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import {
+  GRANT_READ,
   grantsFrame,
-  header,
   launchFrame,
   openFrame,
-} from "../lib/windows-supervisor-protocol.mjs";
+  terminateFrame,
+} from "./lib/windows-relay-frames.mjs";
 
 const PROBE_DEADLINE_MS = 240_000;
 const STOCK_DEADLINE_MS = 60_000;
@@ -128,7 +129,9 @@ function stageRun(helper, nodeExecutable, root, gatewayPort) {
       [join(runtimeDirectory, "probe.cjs")],
       environment,
     ),
-    grantsFrame([runtimeDirectory, supervisorDirectory]),
+    grantsFrame(
+      [runtimeDirectory, supervisorDirectory].map((path) => ({ access: GRANT_READ, path })),
+    ),
     openFrame(handle, gatewayPort),
   ]);
   return { supervisor, frames };
@@ -217,7 +220,7 @@ async function terminate(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const closed = new Promise((resolve) => child.once("close", resolve));
   const control = child.stdio[3];
-  if (control.writable) control.write(header("KRC1", 3, 0));
+  if (control.writable) control.write(terminateFrame());
   const timer = setTimeout(() => child.kill(), 30_000);
   await closed;
   clearTimeout(timer);
