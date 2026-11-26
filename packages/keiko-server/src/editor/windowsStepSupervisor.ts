@@ -264,7 +264,7 @@ function readRootRefusal(
   // A folder that cannot be listed cannot be shown free of credentials, so it is refused.
   const names = host.entryNames(root);
   if (names === undefined) return "unlistable";
-  return names.some(isCredentialNamedSegment) ? "credential" : undefined;
+  return names.some((name) => isCredentialNamedSegment(name)) ? "credential" : undefined;
 }
 
 type ReadRootAdmission = (root: string) => {
