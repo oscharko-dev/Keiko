@@ -4862,6 +4862,79 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7126818488",
         "rationale": "On 2026-11-24 the repository owner ordered every proposal of the work-ending limits review implemented in one pull request, raised the command ceiling of the terminal, task runs, container runs and the Authority Envelope to 30 minutes, and approved releasing Keiko 1.5.8 once that pull request is merged, followed by a customer-style test of the published release and the npm folder packages. 1.5.8 also carries #4548. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-26-keiko-1.5.9-windows-standard-user",
+      "packageVersion": "1.5.9",
+      "releaseTag": "v1.5.9",
+      "supportedFrom": [
+        "0.2.0",
+        "1.5.0",
+        "1.5.1",
+        "1.5.2",
+        "1.5.3",
+        "1.5.4",
+        "1.5.5",
+        "1.5.6",
+        "1.5.7",
+        "1.5.8"
+      ],
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Windows standard users without a container runtime run Coding Workbench tasks with confined verification steps in all three modes, on OpenCode 2.4.2 on macOS and Windows. Chat can read a connected folder through one tool, Windows search reads large and changing folders reliably, model answers and reasoning are shown whole, and the update notice, stale tabs after an upgrade and repository search results are repaired.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "UI schema 84 rebuilds the coding run snapshot table so that it can record the closed causes runtime-supervisor-no-desktop and runtime-supervisor-image-path of the Windows step supervisor, carrying the verification_gap column forward. Rows, references and indexes carry forward. A downgrade uses its matching pre-update backup.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Windows for a standard user: without administrator rights or a container runtime, Coding Workbench verification steps run confined in an AppContainer with only the run's private copy writable, the toolchain folders readable and no network; credential stores, the Maven settings and whole drives are never granted. Runs end succeeded in Ask for approval, Supervised workspace and Full access, in the npm and the Standalone form. #4491",
+        "OpenCode 2.4.2 is the one Coding runtime on macOS and Windows, with the coding runtime packages 1.1.9. #4546",
+        "Chat on a connected folder can list, search and read the folder through one read-only tool, several times in one turn. #4535",
+        "Windows search over large folders: bounded code index parsing, locked and changing entries skipped, CRLF files read like LF, case-insensitive globs and .gitignore. #4483",
+        "The Coding Workbench shows the model's answers and reasoning whole, tool rows say what happened, and the timeline follows steadily. #4558",
+        "After an upgrade a stale tab offers Reload Keiko instead of failing, Files hand-offs reach Git, Git refreshes after agent edits, and a refused debug start explains itself. #4553 #4555",
+        "The startup update notice stays readable when the system forces colours, and a repository search returns its correct hits where one changed file used to fail the whole search. #4103"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-26",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7199992729",
+        "rationale": "On 2026-11-26 the repository owner ordered pull request #4562 (Windows Milestone 1 closure, carrying #4556) merged into dev, a new Keiko release, and a test of the published release on macOS and Windows. 1.5.9 also carries #4483, #4535, #4551, #4553, #4555 and #4558, merged since 1.5.8. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
+      }
     }
   ]
 }

@@ -582,8 +582,29 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
   catalog.entries.forEach((entry, _index) => {
     if (!currentPackageEntry(entry, rootManifest)) return;
     validateCurrentEntry(entry, rootManifest, failures);
+    validateRuntimeApprovalReference(entry, rootManifest, failures);
     validateStagingContract(entry, failures);
   });
+}
+
+// The update preflight admits a target release only when its reviewed record carries an approval
+// reference of exactly this form (`RUNTIME_APPROVAL_REFERENCE_PATTERN` in
+// packages/keiko-server/src/update-preflight-impact.ts). A stable release whose entry used any other
+// form would tell every updating installation that its impact metadata is missing (#4491, 1.5.9).
+const runtimeApprovalReferencePattern =
+  /^github-(?:pr-review|issue-comment):([^#/\s]+\/[^#/\s]+)#\d+#\d+$/u;
+
+function validateRuntimeApprovalReference(entry, rootManifest, failures) {
+  if (expectedDistTagForVersion(rootManifest.version) !== "latest") return;
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  if (nonEmptyString(reference) && runtimeApprovalReferencePattern.test(reference)) return;
+  failures.push(
+    failure(
+      `${rootManifest.name}@${rootManifest.version} review.approvalReference must use the ` +
+        "github-issue-comment:<owner>/<repo>#<issue>#<comment> or " +
+        "github-pr-review:<owner>/<repo>#<pr>#<review> form the update preflight admits.",
+    ),
+  );
 }
 
 // Stable versions publish under the latest dist-tag; prerelease versions (semver with a
