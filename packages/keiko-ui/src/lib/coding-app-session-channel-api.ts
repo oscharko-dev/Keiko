@@ -1,11 +1,14 @@
 "use client";
 
 import type {
+  CodingAppSessionAnswerResponse,
   CodingAppSessionChannelSnapshot,
+  CodingSafeActivityTextPart,
   CodingWorkbenchValidationResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
+  validateCodingAppSessionAnswerResponse,
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
@@ -16,6 +19,7 @@ import { bffFetchJson, newClientCorrelationId, CORRELATION_HEADER } from "./http
 
 const CHANNEL_PATH = "/api/coding-workbench/app-session/channel";
 const CHANNEL_STREAM_PATH = `${CHANNEL_PATH}/stream`;
+const CHANNEL_ANSWER_PATH = `${CHANNEL_PATH}/answer`;
 const MAX_STREAM_BUFFER_CHARS = CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES * 2;
 
 // KEIKO-0308 — the server heartbeats this stream every 15s even when it has nothing to deliver
@@ -47,6 +51,47 @@ export function getCodingAppSessionChannelSnapshot(
     CHANNEL_PATH,
     { cache: "no-store", ...(signal === undefined ? {} : { signal }) },
     { validator: channelValidator },
+  );
+}
+
+function answerValidator(path: string, value: unknown): CodingAppSessionAnswerResponse {
+  const result: CodingWorkbenchValidationResult<CodingAppSessionAnswerResponse> =
+    validateCodingAppSessionAnswerResponse(value);
+  if (result.ok) return result.value;
+  throw new ApiError(
+    "CONTRACT_VALIDATION_FAILED",
+    `BFF response for ${path} failed contract validation.`,
+    502,
+  );
+}
+
+/** Which page of which retained answer to read; ids and offset only, never content. */
+export interface CodingAppSessionAnswerPageRequest {
+  readonly runId: string;
+  readonly messageId: string;
+  /** The answer (default) or the model's reasoning. */
+  readonly part?: CodingSafeActivityTextPart;
+  readonly offset: number;
+}
+
+/**
+ * Read one page of an assistant answer the feed names as longer than it carries (`fullAnswer`).
+ * The authority is the app-session cookie; the query names only the run, the message and an offset.
+ */
+export function getCodingAppSessionAnswerPage(
+  request: CodingAppSessionAnswerPageRequest,
+  signal?: AbortSignal,
+): Promise<CodingAppSessionAnswerResponse> {
+  const query = new URLSearchParams({
+    runId: request.runId,
+    messageId: request.messageId,
+    part: request.part ?? "answer",
+    offset: String(request.offset),
+  });
+  return bffFetchJson(
+    `${CHANNEL_ANSWER_PATH}?${query.toString()}`,
+    { cache: "no-store", ...(signal === undefined ? {} : { signal }) },
+    { validator: answerValidator },
   );
 }
 

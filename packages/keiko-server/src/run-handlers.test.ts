@@ -69,7 +69,10 @@ import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.j
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
-import { contentFreeCodingAppSessionChannelSnapshot } from "./coding-app-session/channelContract.js";
+import {
+  contentFreeCodingAppSessionAnswerResponse,
+  contentFreeCodingAppSessionChannelSnapshot,
+} from "./coding-app-session/channelContract.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { reserveAgentRunBudget } from "./agent-run-governance.js";
 
@@ -179,6 +182,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
     ensureLocalSession: () =>
       paired ? { status: "active", maxAgeSeconds: 3600 } : { status: "unavailable" },
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
+    answerPage: () => contentFreeCodingAppSessionAnswerResponse(),
     rotate: () => ({ rotated: false }),
     signOut: () => false,
     sessionCount: () => (paired ? 1 : 0),

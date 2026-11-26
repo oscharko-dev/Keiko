@@ -176,8 +176,6 @@ describe("Coding Workbench translations", () => {
 
   it.each([
     "codingWorkbench.activity.reasoning.title",
-    "codingWorkbench.activity.exitCode",
-    "codingWorkbench.activity.toolError",
     "codingWorkbench.activity.toolState.waiting-for-trust",
     "codingWorkbench.activity.toolState.no-runnable-steps",
     "codingWorkbench.activity.toolState.not-run",

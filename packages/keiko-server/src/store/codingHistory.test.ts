@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryUiStore, type UiStore } from "./index.js";
+import { CODING_HISTORY_MESSAGE_MAX_CHARS, codingHistoryChunkSourceId } from "./codingHistory.js";
 
 let root: string;
 let store: UiStore;
@@ -418,5 +419,85 @@ describe("the skill a coding run's task turn is bound to (#4025)", () => {
     expect(store.markdownSkills.forTurn(first ?? "")?.digest).toBe(skill.digest);
     expect(store.markdownSkills.forTurn(second ?? "")).toBeUndefined();
     expect(history.intentMessageId("run-unknown")).toBeUndefined();
+  });
+
+  // A long message is stored as consecutive chunks; the conversation shows it as one message, and
+  // a chunk joins only the start its own source id names.
+  describe("long messages stored as chunks", () => {
+    const MAX = CODING_HISTORY_MESSAGE_MAX_CHARS;
+
+    function chunkedTask(): {
+      readonly history: ReturnType<typeof codingHistory>;
+      readonly id: string;
+    } {
+      const history = codingHistory();
+      const task = history.create({
+        projectPath: root,
+        title: "Long answer",
+        modelId: "coding",
+        workspaceId: "ws_long",
+        taskId: "task_long",
+        branch: "keiko/task/long",
+        operatorDigest: "a".repeat(64),
+      });
+      history.bindRun(task.id, "run-long");
+      history.append(task.id, "run-long", "intent", "user", "Review it");
+      return { history, id: task.id };
+    }
+
+    function shown(history: ReturnType<typeof codingHistory>, id: string): string[][] {
+      return (history.detail(id, "a".repeat(64))?.messages ?? []).map(({ role, content }) => [
+        role,
+        content,
+      ]);
+    }
+
+    it("joins the chunks of one answer back into the answer", () => {
+      const { history, id } = chunkedTask();
+      const answer = "x".repeat(MAX) + "y".repeat(MAX) + "z".repeat(10);
+      for (let offset = 0; offset < answer.length; offset += MAX) {
+        history.upsert(
+          id,
+          "run-long",
+          codingHistoryChunkSourceId("msg_answer", offset),
+          "assistant",
+          answer.slice(offset, offset + MAX),
+        );
+      }
+      expect(shown(history, id)).toEqual([
+        ["user", "Review it"],
+        ["assistant", answer],
+      ]);
+    });
+
+    it("never joins a chunk to another message that happens to end at its offset", () => {
+      const { history, id } = chunkedTask();
+      history.upsert(id, "run-long", "msg_a", "assistant", "a".repeat(MAX));
+      // Chunk 1 of a different message whose first chunk the store does not hold.
+      history.upsert(
+        id,
+        "run-long",
+        codingHistoryChunkSourceId("msg_b", MAX),
+        "assistant",
+        "b".repeat(5),
+      );
+      expect(shown(history, id)).toEqual([
+        ["user", "Review it"],
+        ["assistant", "a".repeat(MAX)],
+        ["assistant", "b".repeat(5)],
+      ]);
+    });
+
+    it("grows a stored chunk in place when a later capture extends it", () => {
+      const { history, id } = chunkedTask();
+      const source = codingHistoryChunkSourceId("msg_answer", 0);
+      expect(history.upsert(id, "run-long", source, "assistant", "Partial")).toBe(true);
+      expect(history.upsert(id, "run-long", source, "assistant", "Partial answer.")).toBe(true);
+      expect(history.upsert(id, "run-long", source, "assistant", "Partial answer.")).toBe(false);
+      expect(shown(history, id)).toEqual([
+        ["user", "Review it"],
+        ["assistant", "Partial answer."],
+      ]);
+    });
   });
 });
