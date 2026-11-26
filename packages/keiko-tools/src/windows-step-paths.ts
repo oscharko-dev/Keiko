@@ -6,7 +6,9 @@ import { win32 } from "node:path";
 /** Whether `path` is `root` or lies inside it, comparing by Windows rules (case-insensitive). */
 export function windowsPathContains(root: string, path: string): boolean {
   const relative = win32.relative(root, path);
-  return relative === "" || (!relative.startsWith("..") && !win32.isAbsolute(relative));
+  // Only a real parent step leaves the folder: a child may be named `..step-node`.
+  const leaves = relative === ".." || relative.startsWith("..\\");
+  return !leaves && !win32.isAbsolute(relative);
 }
 
 // One search-path entry as Windows reads it for a comparison: quotes dropped, separators unified,

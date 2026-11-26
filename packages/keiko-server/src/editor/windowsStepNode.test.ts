@@ -267,16 +267,12 @@ describe("the runtime's step Node.js (#4492)", () => {
       overrides: Partial<{
         size: number;
         nlink: number;
-        mtimeMs: number;
-        ino: number;
         file: boolean;
       }> = {},
     ): Stats {
       return {
         size: PIN.sizeBytes,
         nlink: 1,
-        mtimeMs: 1000,
-        ino: 7,
         isFile: () => overrides.file ?? true,
         ...overrides,
       } as unknown as Stats;
@@ -290,7 +286,6 @@ describe("the runtime's step Node.js (#4492)", () => {
       return {
         lstat: (path) => (path === folder ? stat() : entry),
         readdir: () => ["node.exe"],
-        realpath: (path) => path,
         sha256: (): string => {
           hashes.count++;
           return PIN.sha256;
@@ -299,14 +294,13 @@ describe("the runtime's step Node.js (#4492)", () => {
       };
     }
 
-    function run(fs: StepNodeFs, cache = new Set<string>()): ReturnType<typeof resolveStepNode> {
+    function run(fs: StepNodeFs): ReturnType<typeof resolveStepNode> {
       return resolveStepNode({
         supervisorPath,
         pin: PIN,
         isDirectory: () => true,
         correlationId: "step-node-fs",
         fs,
-        cache,
       });
     }
 
@@ -343,58 +337,31 @@ describe("the runtime's step Node.js (#4492)", () => {
       expect(run(fakeFs(stat({ file: false }), { count: 0 }))).toEqual({ outcome: "mismatch" });
     });
 
-    it("hashes once and trusts the same (path, size, mtime, inode) afterwards", () => {
+    // Metadata can be restored after a rewrite (the owner of the folder can set every timestamp),
+    // so a match on path, size, times and inode proves nothing about the bytes.
+    it("hashes on every resolution and refuses bytes rewritten under unchanged metadata", () => {
       const hashes = { count: 0 };
-      const cache = new Set<string>();
-      const fs = fakeFs(stat(), hashes);
-      expect(run(fs, cache)).toMatchObject({ outcome: "patched" });
-      expect(run(fs, cache)).toMatchObject({ outcome: "patched" });
-      expect(hashes.count).toBe(1);
-    });
-
-    it.each([
-      ["mtime", { mtimeMs: 2000 }],
-      ["inode", { ino: 8 }],
-    ])("hashes again when the %s changed", (_label, change) => {
-      const hashes = { count: 0 };
-      const cache = new Set<string>();
-      run(fakeFs(stat(), hashes), cache);
-      run(fakeFs(stat(change), hashes), cache);
+      let digest = PIN.sha256;
+      const fs = fakeFs(stat(), hashes, { sha256: () => (hashes.count++, digest) });
+      expect(run(fs)).toMatchObject({ outcome: "patched" });
+      digest = "0".repeat(64);
+      expect(run(fs)).toEqual({ outcome: "mismatch" });
       expect(hashes.count).toBe(2);
     });
 
-    it("hashes again when the size changed, and then refuses the wrong size", () => {
+    it("checks the digest against the pin it is given", () => {
       const hashes = { count: 0 };
-      const cache = new Set<string>();
-      run(fakeFs(stat(), hashes), cache);
-      expect(run(fakeFs(stat({ size: PIN.sizeBytes + 5 }), hashes), cache)).toEqual({
-        outcome: "mismatch",
-      });
-    });
-
-    it("never caches a file whose digest missed the pin", () => {
-      const hashes = { count: 0 };
-      const cache = new Set<string>();
-      const wrong = fakeFs(stat(), hashes, { sha256: () => (hashes.count++, "0".repeat(64)) });
-      expect(run(wrong, cache)).toEqual({ outcome: "mismatch" });
-      expect(run(wrong, cache)).toEqual({ outcome: "mismatch" });
-      expect(hashes.count).toBe(2);
-      expect(cache.size).toBe(0);
-    });
-
-    it("hashes again for another pin digest", () => {
-      const hashes = { count: 0 };
-      const cache = new Set<string>();
       const fs = fakeFs(stat(), hashes);
-      run(fs, cache);
-      resolveStepNode({
-        supervisorPath,
-        pin: { ...PIN, sha256: "f".repeat(64) },
-        isDirectory: () => true,
-        correlationId: undefined,
-        fs,
-        cache,
-      });
+      expect(run(fs)).toMatchObject({ outcome: "patched" });
+      expect(
+        resolveStepNode({
+          supervisorPath,
+          pin: { ...PIN, sha256: "f".repeat(64) },
+          isDirectory: () => true,
+          correlationId: undefined,
+          fs,
+        }),
+      ).toEqual({ outcome: "mismatch" });
       expect(hashes.count).toBe(2);
     });
   });

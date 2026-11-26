@@ -6,7 +6,7 @@
 // verified one a step runs exactly as it did before, and the log says so. Closed values only: never
 // a path.
 
-import { lstatSync, readdirSync, realpathSync, type Stats } from "node:fs";
+import { lstatSync, readdirSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   activityLogEvent,
@@ -85,21 +85,14 @@ export function windowsStepNodePin(): NpmLaneStepNodeApproval | undefined {
 export interface StepNodeFs {
   readonly lstat: (path: string) => Stats | undefined;
   readonly readdir: (path: string) => readonly string[];
-  readonly realpath: (path: string) => string;
   readonly sha256: (path: string) => string;
 }
 
 const nodeStepNodeFs: StepNodeFs = {
   lstat: (path) => lstatSync(path, { throwIfNoEntry: false }),
   readdir: (path) => readdirSync(path),
-  realpath: (path) => realpathSync.native(path),
   sha256: sha256FileSync,
 };
-
-// Verified files by (realpath, size, mtimeMs, ino, pin) for the server's lifetime: a verification
-// run resolves twice, and hashing 100 MB each time is wasted work. Any change to the key, such as a
-// rewritten file with a new mtime or size, is verified again.
-const verifiedFiles = new Set<string>();
 
 // A lstat of a link reports `isFile() === false`, so the link case needs no condition of its own.
 // The size and the single link count are checked on their own: a hard link shares the pinned
@@ -108,28 +101,13 @@ function isOrdinaryFile(entry: Stats | undefined, sizeBytes: number): entry is S
   return entry !== undefined && entry.isFile() && entry.nlink === 1 && entry.size === sizeBytes;
 }
 
-function verifiedBytes(
-  executable: string,
-  entry: Stats,
-  pin: NpmLaneStepNodeApproval,
-  fs: StepNodeFs,
-  cache: Set<string>,
-): boolean {
-  const key = [fs.realpath(executable), entry.size, entry.mtimeMs, entry.ino, pin.sha256].join("|");
-  if (cache.has(key)) return true;
-  if (fs.sha256(executable) !== pin.sha256) return false;
-  cache.add(key);
-  return true;
-}
-
 interface ResolveStepNodeInput {
   readonly supervisorPath: string | undefined;
   readonly pin: NpmLaneStepNodeApproval | undefined;
   readonly isDirectory: (path: string) => boolean;
   readonly correlationId: string | undefined;
-  /** Hermetic test seams. */
+  /** Hermetic test seam. */
   readonly fs?: StepNodeFs | undefined;
-  readonly cache?: Set<string> | undefined;
 }
 
 function inspect(
@@ -145,7 +123,9 @@ function inspect(
     input.isDirectory(directory) &&
     fs.readdir(directory).length === 1 &&
     isOrdinaryFile(entry, pin.sizeBytes) &&
-    verifiedBytes(executable, entry, pin, fs, input.cache ?? verifiedFiles);
+    // Hashed on every resolution: the folder's owner can restore every timestamp after a rewrite,
+    // so no metadata match proves the bytes are still the pinned build.
+    fs.sha256(executable) === pin.sha256;
   return exact ? { outcome: "patched", directory, executable } : { outcome: "mismatch" };
 }
 

@@ -630,8 +630,8 @@ required contract vocabulary.
       },
       "archive": {
         "url": "https://opencode.ai/files/bin/2.4.2/opencode-windows-x64.zip",
-        "sizeBytes": 90799413,
-        "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d",
+        "sizeBytes": 132591757,
+        "sha256": "a8ab3034ca5b3ec8476e9ee73b1dc334b6d8e93edaaf224b3d2a5205e2cbfb99",
         "platformTarget": "windows-x64"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
@@ -859,8 +859,8 @@ required contract vocabulary.
           "archive": {
             "platformTarget": "windows-x64",
             "url": "https://opencode.ai/files/bin/2.4.2/opencode-windows-x64.zip",
-            "sizeBytes": 90799413,
-            "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d"
+            "sizeBytes": 132591757,
+            "sha256": "a8ab3034ca5b3ec8476e9ee73b1dc334b6d8e93edaaf224b3d2a5205e2cbfb99"
           },
           "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
           "executableTreeSha256": "d340f0ec1e6a40325355aede405fd77577f2589d82d06dd40dadd4bd54e1c4b5",

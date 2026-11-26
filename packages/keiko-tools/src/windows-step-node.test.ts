@@ -242,6 +242,19 @@ describe("prependWindowsSearchPath (#4492)", () => {
     expect(windowsPathContains(String.raw`C:\A`, String.raw`C:\AB`)).toBe(false);
     expect(windowsPathContains(String.raw`C:\A`, String.raw`D:\A`)).toBe(false);
   });
+
+  // A child whose name merely starts with two dots lies inside the folder; only a real parent
+  // step (`..` or `..\`) or another drive leaves it.
+  it("keeps a child named like ..step-node inside and every escape outside", () => {
+    const root = String.raw`C:\Keiko\runtime`;
+    expect(windowsPathContains(root, root)).toBe(true);
+    expect(windowsPathContains(root, String.raw`C:\Keiko\runtime\..step-node`)).toBe(true);
+    expect(windowsPathContains(root, String.raw`C:\Keiko\runtime\..step-node\node.exe`)).toBe(true);
+    expect(windowsPathContains(root, String.raw`C:\Keiko`)).toBe(false);
+    expect(windowsPathContains(root, String.raw`C:\Keiko\other`)).toBe(false);
+    expect(windowsPathContains(root, String.raw`C:\Keiko\runtime\..\other`)).toBe(false);
+    expect(windowsPathContains(root, String.raw`D:\Keiko\runtime\step-node`)).toBe(false);
+  });
 });
 
 describe("the step Node.js in the launch frames (#4492)", () => {
