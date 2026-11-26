@@ -134,7 +134,14 @@ export function selectStepNodePackage(document, openCodeVersion) {
         candidate.target === STEP_NODE_PLATFORM_TARGET &&
         candidate.opencodeVersion === openCodeVersion,
     );
-    if (entry !== undefined) return { ...entry, version };
+    if (entry === undefined) continue;
+    // The name becomes a cache path and a release asset name: one plain file name only.
+    if (typeof entry.tarball !== "string" || basename(entry.tarball) !== entry.tarball) {
+      throw new Error(
+        `reviewed ${STEP_NODE_PLATFORM_TARGET} package ${version} names no plain file`,
+      );
+    }
+    return { ...entry, version };
   }
   throw new Error(
     `no reviewed ${STEP_NODE_PLATFORM_TARGET} runtime package carries OpenCode ${openCodeVersion}`,

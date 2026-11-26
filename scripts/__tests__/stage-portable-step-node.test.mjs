@@ -399,6 +399,26 @@ describe("the reviewed package the bytes come from", () => {
     };
     expect(selectStepNodePackage(document, "9.9.9").version).toBe("1.1.10");
   });
+
+  it("refuses a reviewed entry whose tarball name is a path, not a plain file name", () => {
+    const name = "@oscharko-dev/keiko-coding-runtime-win32-x64/../escape";
+    const document = {
+      schemaVersion: 1,
+      releases: {
+        "1.1.10": {
+          "windows-x64": {
+            name,
+            opencodeVersion: "9.9.9",
+            tarball: `${name.slice(1).replace("/", "-")}-1.1.10.tgz`,
+            sizeBytes: 10,
+            sha256: "a".repeat(64),
+            integrity: `sha512-${"A".repeat(86)}==`,
+          },
+        },
+      },
+    };
+    expect(() => selectStepNodePackage(document, "9.9.9")).toThrow("names no plain file");
+  });
 });
 
 describe("obtaining the package tarball", () => {

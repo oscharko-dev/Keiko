@@ -162,7 +162,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
 function rebindNativeTools(stageRoot, manifest, resourceRoot) {
   if (manifest.nativeTools === undefined) return;
   if (!nativeToolSetIsValid(manifest.nativeTools)) {
-    fail("signed payload must contain exactly one native tool");
+    fail("signed payload must contain ripgrep, optionally followed by the step Node.js");
   }
   for (const tool of manifest.nativeTools) rebindNativeTool(stageRoot, resourceRoot, tool);
 }

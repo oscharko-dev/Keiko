@@ -29,11 +29,19 @@ export interface PortableRuntimeRecordEntries {
   readonly prefixes: readonly string[];
 }
 
-function collectEntry(entry: unknown, files: Set<string>, prefixes: Set<string>): void {
+function collectEntry(
+  entry: unknown,
+  files: Set<string>,
+  prefixes: Set<string>,
+  windows: boolean,
+): void {
   if (!isJsonRecord(entry)) return;
   for (const key of ["executablePath", "licensePath"] as const) {
     const value = entry[key];
-    if (typeof value === "string" && (RUNTIME_FILE.test(value) || value === STEP_NODE_FILE)) {
+    if (
+      typeof value === "string" &&
+      (RUNTIME_FILE.test(value) || (windows && value === STEP_NODE_FILE))
+    ) {
       files.add(value);
     }
   }
@@ -50,10 +58,13 @@ export function portableRuntimeRecordEntries(resourceRoot: string): PortableRunt
   const prefixes = new Set<string>();
   const record = readPayloadJson(resourceRoot, RUNTIME_ACTIVATION_RECORD_PATH);
   if (isJsonRecord(record)) {
+    // Only a Windows payload carries the step Node.js.
+    const windows = record.platformTarget === "windows-x64";
     for (const section of RECORD_SECTIONS) {
       const entries = record[section];
       if (!Array.isArray(entries)) continue;
-      for (const entry of entries as readonly unknown[]) collectEntry(entry, files, prefixes);
+      for (const entry of entries as readonly unknown[])
+        collectEntry(entry, files, prefixes, windows);
     }
   }
   return { files, prefixes: [...prefixes] };

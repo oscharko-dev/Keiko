@@ -425,7 +425,7 @@ export async function rebindArchive(stageRoot, manifest, archiveAdapter = window
 function markNativeToolsVerified(manifest) {
   if (manifest.nativeTools === undefined) return;
   if (!nativeToolSetIsValid(manifest.nativeTools)) {
-    fail("manifest must contain exactly one native tool");
+    fail("manifest must contain ripgrep, optionally followed by the step Node.js");
   }
   manifest.nativeTools[0].signing = {
     signatureKind: "authenticode",

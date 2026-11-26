@@ -985,7 +985,7 @@ describe("Windows portable PE signing inventory", () => {
 
     manifest.nativeTools.push({ name: "other" });
     expect(() => bindRuntimeAttestation(fixture.stage, manifest)).toThrow(
-      /exactly one native tool/u,
+      /ripgrep, optionally followed by the step Node.js/u,
     );
   });
 
