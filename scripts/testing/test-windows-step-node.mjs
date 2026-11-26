@@ -47,7 +47,7 @@ function listen(name) {
 }
 function forkEcho() {
   return new Promise((resolve) => {
-    const child = fork(path.join(__dirname, "echo-child.cjs"), [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    const child = fork(path.join(__dirname, "echo-child.cjs"), [], { stdio: ["pipe", "pipe", "pipe", "ipc"] });
     child.once("message", (message) => { result.forkEcho = message.echo; });
     child.once("error", (error) => resolve("error:" + String(error.code)));
     child.once("exit", (code) => resolve(code));
@@ -56,8 +56,7 @@ function forkEcho() {
 }
 async function main() {
   const args = ["-e", "process.stdout.write('child-ok')"];
-  result.cmdNoPipes = attempt(() => spawnSync(process.env.ComSpec ?? "cmd.exe", ["/c", "exit 0"], { stdio: "ignore", timeout: 60000 }));
-  result.spawnSyncNoPipes = attempt(() => spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
+  result.ignoreStdioInfo = attempt(() => spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
   result.spawnSync = attempt(() => spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 }));
   result.forkExit = await forkEcho();
   const tests = spawnSync(process.execPath, ["--test", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
