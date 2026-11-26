@@ -32,8 +32,15 @@ test("window chunk @smoke — a chunk request that never answers offers a reload
     await route.fulfill({ response });
   });
 
-  await openChatComposer(page);
+  try {
+    await openChatComposer(page);
 
-  expect(lost).toBe(1);
-  await expect(page.locator("[data-window-chunk]")).toHaveCount(0);
+    expect(lost).toBe(1);
+    await expect(page.locator("[data-window-chunk]")).toHaveCount(0);
+  } finally {
+    // Chunk requests may still be in flight when the journey ends; a handler whose route.fetch then
+    // fails on the closed page would surface as an error outside any test and fail the shard
+    // (WebKit smoke on #4566).
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
 });
