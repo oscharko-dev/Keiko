@@ -1414,4 +1414,13 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     sockets, routes or pipes could not be set up and `0xE04B0002` when the runtime could not be
     created. The number on `runtime.confinement.tree-reaped` is the closed value that names them;
     the run settles with the supervisor's generic refusal.
+  - **Proofs.** The whole path of a start without a desktop is pinned through the real native tree:
+    refusal 18 settles the run with `runtime-supervisor-no-desktop` and names
+    `supervisor-no-desktop` on the `coding-runtime.exit` line (`codingRuntimeManager.test.ts`),
+    and the Workbench words that code as a signed-in desktop session
+    (`codingWorkbenchLabels.test.ts`). `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
+    `error_code` of `keiko_runtime_supervisor.c` and fails when one lacks its own word, shares a
+    word, or does not reach a run failure code the Workbench can word. The profile sweep's counts are
+    pinned from the launch response (`nativeRuntimeProcessBackend.windows-grants.test.ts`) and the
+    sweep itself by `gateway_profiles.test.c` on the Windows job.
 - **Scope.** D13 still holds.

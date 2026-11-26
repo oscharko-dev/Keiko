@@ -351,6 +351,29 @@ describe("eventDetail auxiliary outcome", () => {
     expect(eventDetail(settled, t)).toBe(key);
   });
 
+  // #4495 AC1, Workbench half: the closed code a start without an interactive desktop settles with
+  // (codingRuntimeManager.test.ts drives the real native tree to it) is shown, in the person's
+  // language, as the sentence that says what to do, never as the internal-error sentence.
+  it.each([
+    ["en", "signed-in desktop session"],
+    ["de", "angemeldeten Desktop-Sitzung"],
+  ] as const)("tells a %s reader a run without a desktop session needs one", (language, words) => {
+    const translate: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench(language, key, values);
+    const noDesktop = runtimeEvent({
+      kind: "status",
+      state: "failed",
+      failureCode: "runtime-supervisor-no-desktop",
+    });
+    const internal = runtimeEvent({
+      kind: "status",
+      state: "failed",
+      failureCode: "runtime-failed",
+    });
+    expect(eventDetail(noDesktop, translate)).toContain(words);
+    expect(eventDetail(noDesktop, translate)).not.toBe(eventDetail(internal, translate));
+  });
+
   // Keiko does not limit tokens (#4346): a run settled by an older Keiko with the retired
   // `prompt-allowance-exhausted` code still decodes and renders the generic sentence, never an
   // internal error and never the retired allowance copy.

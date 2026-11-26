@@ -329,6 +329,12 @@ describe("a confined Windows launch", () => {
       rootExitCode: code,
     });
     expect(line).not.toContain("helper");
+    // A number and a closed backend word only: no message text, path or command line rides along.
+    expect(event.extra).toMatchObject({ backend: "windows-appcontainer", rootExitCode: code });
+    for (const field of ["message", "path", "commandLine", "stderr"]) {
+      expect(event.extra).not.toHaveProperty(field);
+    }
+    expect(line).not.toMatch(/[\\/]/u);
   });
 
   it.each([

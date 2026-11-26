@@ -880,7 +880,8 @@ removed or failed to remove something, and a failed count is a diagnostic.
 reaped tree; `0xE04B0001` (3763011585) and `0xE04B0002` (3763011586) are the relay root's own
 failures (its routes could not be set up, the runtime could not be created). A refused start names
 its step on the `coding-runtime.exit` diagnostic, for example `supervisor-no-desktop` (started from
-an SSH or service session).
+an SSH or service session); the refusal words are one per supervisor error code and
+`nativeRuntimeProcessTree.refusal-codes.test.ts` fails when a code lacks its own.
 
 ## Coding Workbench request deadlines, Editor and window binding
 

@@ -46,6 +46,7 @@ import {
   type OpenCodeLifecycleAdapter,
   type ReviewedCodexEgressPolicy,
 } from "./codingRuntimeManager.js";
+import { NativeRuntimeTree } from "./nativeRuntimeProcessTree.js";
 import {
   createRuntimeProcessSupervisor,
   verifyRuntimeReapReceipt,
@@ -4640,6 +4641,94 @@ describe("coding runtime manager", () => {
       ),
     ).resolves.toEqual({ ok: false, failureCode: code, retryable: false });
     expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  // #4495 AC1: the whole path of a start without an interactive desktop, through the real native
+  // tree and not a handle that merely carries a refusal word. The supervisor's refusal 18 on the
+  // control pipe must settle the run with the closed code the Workbench words as "start Keiko in a
+  // signed-in desktop session" (codingWorkbenchLabels.test.ts renders that sentence for this code)
+  // and name the same closed reason on the run's exit line, with no path or Windows text. Red
+  // before: with refusal 18 unnamed the tree reads `supervisor-unknown`, the run settles with the
+  // generic `runtime-supervisor-refused` and the exit line shows no reason of its own.
+  it("settles a start without an interactive desktop with its closed reason and the Workbench code", async () => {
+    const fixture = createManagedFixture();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const controlOutput = new PassThrough();
+    const helper = {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      controlInput: new PassThrough(),
+      controlOutput,
+      onExit: (): void => undefined,
+      onError: (): void => undefined,
+    };
+    const refusal = Buffer.alloc(14);
+    refusal.write("KRS1", 0, "ascii");
+    refusal.writeUInt16LE(1, 4);
+    refusal.writeUInt16LE(3, 6);
+    refusal.writeUInt32LE(2, 8);
+    refusal.writeUInt16LE(18, 12);
+    const trees: NativeRuntimeTree[] = [];
+    const backend: RuntimeProcessBackend = {
+      identity: {
+        platform: TEST_QUALIFICATION.platform,
+        arch: TEST_QUALIFICATION.arch,
+        backend: TEST_QUALIFICATION.backend,
+      },
+      spawnOwnedTree: (request) => {
+        const tree = new NativeRuntimeTree(request.recoveryHandle, helper, "win32");
+        trees.push(tree);
+        return tree;
+      },
+      signalTree: (): void => undefined,
+      // The refused helper is gone, so its stdio pipes close once the proof is read.
+      waitForCompleteTreeExit: async (tree, timeoutMs) => {
+        const proved =
+          (await trees.find((candidate) => candidate === tree)?.waitForProof(timeoutMs)) === true;
+        helper.stdout.end();
+        helper.stderr.end();
+        return proved;
+      },
+      reconcileTreeExit: () => Promise.resolve(true),
+    };
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      diagnostics,
+      supervisor: createRuntimeProcessSupervisor({
+        backend,
+        qualifications: [TEST_QUALIFICATION],
+        planSandbox: testSandboxPlanner,
+      }),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => {
+          controlOutput.write(refusal);
+          return new Promise<{ readonly ok: false; readonly reason: string }>((resolve) => {
+            setTimeout(() => {
+              resolve({ ok: false, reason: "readiness-failed" });
+            }, 0);
+          });
+        }),
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-supervisor-no-desktop",
+      retryable: false,
+    });
+    const exitLines = diagnostics.record.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.operation === "coding-runtime.exit");
+    expect(exitLines).toEqual([
+      expect.objectContaining({ correlationId: "run-1988", code: "supervisor-no-desktop" }),
+    ]);
+    expect(JSON.stringify(exitLines)).not.toContain(fixture.workspaceRoot);
   });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {
