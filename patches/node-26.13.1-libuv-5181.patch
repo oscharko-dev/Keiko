@@ -1,0 +1,66 @@
+Keiko patch: libuv#5181 for Node.js v26.13.1 (deps/uv 1.52.1), confined Windows step runtime only.
+Upstream: https://github.com/libuv/libuv/pull/5181 (merge commit 2cadaa40167050baf7c6905ac897e6fb57afb2c6,
+"win: fix unique named pipes to work inside Windows AppContainer", released in libuv 1.53.0).
+Source hunk: src/win/pipe.c only, byte-for-byte the upstream change. The upstream test and CI changes are
+not carried. The version.h hunk is Keiko's own: it makes process.versions.uv read "1.52.1-keiko.5181".
+Apply from the Node source root with: patch -p1 < patches/node-26.13.1-libuv-5181.patch
+
+--- a/deps/uv/include/uv/version.h
++++ b/deps/uv/include/uv/version.h
+@@ -33,8 +33,8 @@
+ #define UV_VERSION_MAJOR 1
+ #define UV_VERSION_MINOR 52
+ #define UV_VERSION_PATCH 1
+-#define UV_VERSION_IS_RELEASE 1
+-#define UV_VERSION_SUFFIX ""
++#define UV_VERSION_IS_RELEASE 0
++#define UV_VERSION_SUFFIX "keiko.5181"
+
+ #define UV_VERSION_HEX  ((UV_VERSION_MAJOR << 16) | \
+                          (UV_VERSION_MINOR <<  8) | \
+--- a/deps/uv/src/win/pipe.c
++++ b/deps/uv/src/win/pipe.c
+@@ -106,8 +106,42 @@
+ }
+
+
++static int uv_is_app_container_;
++static uv_once_t uv_is_app_container_guard_ = UV_ONCE_INIT;
++
++
++/* Is this process running under Windows AppContainer? */
++/* Detection algorithm from https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-for-legacy-applications- */
++static void uv__init__is_app_container(void) {
++  HANDLE token;
++  DWORD ac;
++  DWORD len;
++  int ok;
++
++  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
++    uv_is_app_container_ = 0;
++    return;
++  }
++  ac = 0;
++  len = sizeof(ac);
++  ok = GetTokenInformation(token, TokenIsAppContainer, &ac, len, &len);
++  CloseHandle(token);
++  uv_is_app_container_ = ok && ac != 0;
++}
++
++
++/* Is this process running under Windows AppContainer? */
++/* Cached form for repeated use in the process. */
++static int uv__is_appcontainer(void) {
++  uv_once(&uv_is_app_container_guard_, uv__init__is_app_container);
++  return uv_is_app_container_;
++}
++
++
+ static void uv__unique_pipe_name(unsigned long long ptr, char* name, size_t size) {
+-  snprintf(name, size, "\\\\?\\pipe\\uv\\%llu-%lu", ptr, GetCurrentProcessId());
++  snprintf(name, size, "\\\\?\\pipe\\%suv\\%llu-%lu",
++           uv__is_appcontainer() ? "LOCAL\\" : "",
++           ptr, GetCurrentProcessId());
+ }
+
+
