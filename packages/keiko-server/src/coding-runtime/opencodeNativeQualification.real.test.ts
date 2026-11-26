@@ -4740,6 +4740,13 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
           run,
           create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
         );
+        // A task is retained once its turn has settled: the runtime reports no active session.
+        await expect
+          .poll(async () => Object.keys(await run.client.active()).length, {
+            timeout: 30_000,
+            interval: 250,
+          })
+          .toBe(0);
         const storeRoot = mkdtempSync(join(tmpdir(), "keiko-wake-store-"));
         try {
           const store = createRetainedSessionStore({ root: storeRoot });
