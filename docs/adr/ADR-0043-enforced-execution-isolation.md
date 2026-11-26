@@ -1325,6 +1325,8 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     #4496 the supervisor waited for the job to empty, so a test command that left a daemon behind
     held the step until its timeout (measured 2026-11-26, Windows 11 ARM64 guest, standard user:
     the canary in `scripts/testing/test-windows-step-confinement.mjs` received no REAPED answer).
+    The supervisor ships inside the coding-runtime package, so the rule reaches an installation
+    with runtime 1.1.9; the published 1.1.8 still waits for the job to empty.
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
     modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight

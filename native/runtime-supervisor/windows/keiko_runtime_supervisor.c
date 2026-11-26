@@ -587,6 +587,8 @@ static void end_tree_after_root(HANDLE job, HANDLE root, int *ended) {
  * the reap proof. It used to be discarded here and the proof hard-coded a literal 0, which made
  * the harness's "Job Object must report zero active processes" assertion read a constant the
  * producer wrote rather than anything the Job Object said — an assertion that could not fail.
+ * #4496: once the root has exited, end_tree_after_root terminates what is left, so the wait ends
+ * with the root rather than with the last detached descendant.
  */
 static int wait_for_zero_active(HANDLE job, HANDLE completion_port, HANDLE root,
                                 uint32_t *observed) {

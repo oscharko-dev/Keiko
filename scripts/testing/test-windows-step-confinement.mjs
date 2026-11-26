@@ -11,15 +11,22 @@
 //
 // Canaries for the #4496 acceptance criteria, each printed as a body-free PASS/FAIL line and, with
 // `--json <file>`, written as booleans and error codes only:
-//   (a) from inside a step the internet, the host's loopback and another process's named pipe are
-//       refused;
+//   (a) from inside a step the internet (a TEST-NET address, so no outside host is touched), the
+//       host's loopback and another process's named pipe are refused with an error code, and the
+//       loopback listener and the pipe server, each reached once by the harness as a positive
+//       control, see no connection from the step;
 //   (b) a detached child and an `fs.watch` watcher a step started are gone when the step ends,
-//       whether it exited by itself or KRC1 ended it;
+//       whether it exited by itself or KRC1 ended it; `tasklist` first finds a running process and
+//       the children before KRC1, so "gone" is a state it can tell apart;
 //   (c) a file outside the execution root and the private state can be neither read nor written,
 //       and the credential-named files of the workspace stay out of reach. The product never grants
 //       a credential-named file: keiko-server runs steps in a private copy of the workspace that
-//       leaves every credential-named entry out (`windowsStepWorkspace.ts`, ADR-0043 D21), so the
-//       canary places such files in the real workspace next to that copy, as the product does.
+//       leaves every credential-named entry out (`windowsStepWorkspace.ts`, ADR-0043 D21, proven by
+//       its unit tests), so the canary places such files in the real workspace next to that copy,
+//       as the product does, and proves the step reaches neither.
+//
+// The `relay-confinement` job of `windows-gateway-confinement.yml` runs it on a hosted runner with
+// the supervisor built as the release builds it; the standard-user proof runs in a Windows guest.
 //
 //   node scripts/testing/test-windows-step-confinement.mjs --helper <keiko-runtime-supervisor.exe> [--json <file>]
 import assert from "node:assert/strict";
@@ -116,7 +123,7 @@ async function startChildren() {
     credentialWrite: write(env.KEIKO_STEP_CREDENTIAL),
     keyRead: read(env.KEIKO_STEP_KEY),
     keyWrite: write(env.KEIKO_STEP_KEY),
-    internet: await tcp("1.1.1.1", 443),
+    internet: await tcp("192.0.2.1", 443),
     loopback: await tcp("127.0.0.1", Number(env.KEIKO_STEP_HOST_PORT)),
     pipe: await pipe(env.KEIKO_STEP_PIPE),
   };
@@ -169,9 +176,25 @@ function jsonArgument() {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-function startHostListener() {
-  const server = createServer((socket) => socket.destroy());
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+// The host's loopback listener: it counts every connection it accepts.
+async function startHostListener() {
+  const state = { connections: 0 };
+  state.server = createServer((socket) => {
+    state.connections += 1;
+    socket.destroy();
+  });
+  await new Promise((resolve) => state.server.listen(0, "127.0.0.1", resolve));
+  state.port = state.server.address().port;
+  // Positive control: the harness itself reaches the listener, so a refusal later is the step's.
+  await new Promise((resolve) => {
+    const control = connect({ host: "127.0.0.1", port: state.port });
+    control.on("connect", () => control.destroy());
+    control.on("error", resolve);
+    control.on("close", resolve);
+  });
+  check("loopback-positive-control", "(a)", state.connections === 1);
+  state.connections = 0;
+  return state;
 }
 
 // Another process's named pipe: it counts every connection it accepts.
@@ -365,14 +388,23 @@ function stepAnswer({ code, stdout, received }) {
     undefined,
     `the step reported its probes (supervisor ${String(code)}, answers ${describe(received)})`,
   );
-  return JSON.parse(line.slice(5));
+  try {
+    return JSON.parse(line.slice(5));
+  } catch (error) {
+    // The step's output is not echoed: a malformed report is a closed failure.
+    if (error instanceof SyntaxError)
+      throw new Error("the step's report is not JSON", { cause: error });
+    throw error;
+  }
 }
 
 const fileText = (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
 
-function checkNetwork(answer, pipe) {
-  check("internet-refused", "(a)", answer.internet !== "connected", answer.internet);
-  check("loopback-refused", "(a)", answer.loopback !== "connected", answer.loopback);
+// A refusal is an error code the step saw; a probe that only timed out proves nothing.
+function checkNetwork(answer, host, pipe) {
+  check("internet-refused", "(a)", refused(answer.internet), answer.internet);
+  check("loopback-refused", "(a)", refused(answer.loopback), answer.loopback);
+  check("loopback-listener-saw-no-connection", "(a)", host.connections === 0);
   check("pipe-refused", "(a)", refused(answer.pipe), answer.pipe);
   check("pipe-server-saw-no-connection", "(a)", pipe.connections === 0);
 }
@@ -408,18 +440,13 @@ function checkCredentials(answer, staged) {
     fileText(join(staged.workspace, ".env")) === "SECRET=1" &&
       fileText(join(staged.workspace, "id_rsa")) === "key",
   );
-  check(
-    "granted-root-holds-no-credential-file",
-    "(c)",
-    !existsSync(join(staged.execution, ".env")) && !existsSync(join(staged.execution, "id_rsa")),
-  );
 }
 
 async function boundaries(helper, root, context, drives) {
   const staged = stage(helper, join(root, "a"), context, drives);
   const outcome = await run(staged.supervisor, staged.frames);
   const answer = stepAnswer(outcome);
-  checkNetwork(answer, context.pipe);
+  checkNetwork(answer, context.host, context.pipe);
   checkOutside(answer, staged);
   checkCredentials(answer, staged);
   check("step-exit-code-reported", "(c)", reapedExit(outcome.received) === STEP_EXIT);
@@ -432,7 +459,7 @@ function childPid(execution, name) {
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-// Whether `pid` is still a process of this host, from `tasklist`.
+// Whether `pid` is still a process of this host, from `tasklist`; `undefined` when it gave no listing.
 function processAlive(pid) {
   const command = join(
     process.env.SystemRoot ?? String.raw`C:\Windows`,
@@ -441,8 +468,26 @@ function processAlive(pid) {
   );
   const listing = spawnSync(command, ["/FI", `PID eq ${String(pid)}`, "/FO", "CSV", "/NH"], {
     encoding: "utf8",
+    windowsHide: true,
   });
+  if (listing.status !== 0) return undefined;
   return listing.stdout.includes(`,"${String(pid)}",`);
+}
+
+// Polls until `pid` is gone, so the verdict is a state reached, not one time-sampled read.
+async function processGone(pid) {
+  for (let poll = 0; poll < OBSERVE_SAMPLES; poll += 1) {
+    const alive = processAlive(pid);
+    if (alive === false) return true;
+    if (alive === undefined) return false;
+    await new Promise((resolve) => setTimeout(resolve, OBSERVE_INTERVAL_MS)); // NOSONAR javascript:S9382 -- each poll waits for the child to end.
+  }
+  return false;
+}
+
+// Positive control: `tasklist` finds a process that runs, so "gone" later is the child's state.
+function checkTasklistControl() {
+  check("tasklist-positive-control", "(b)", processAlive(process.pid) === true);
 }
 
 // After the step ended: both children started, then neither runs and neither file grows any more.
@@ -462,7 +507,7 @@ async function observeChildren(label, execution, answer) {
   }
   check(`${label}-heartbeat-stopped`, "(b)", !grew);
   for (const [name, pid] of Object.entries(pids)) {
-    check(`${label}-${name}-process-gone`, "(b)", pid !== undefined && !processAlive(pid));
+    check(`${label}-${name}-process-gone`, "(b)", pid !== undefined && (await processGone(pid)));
   }
 }
 
@@ -493,6 +538,15 @@ async function endedByControl(helper, root, context, drives, argument) {
     await new Promise((resolve) => setTimeout(resolve, 100)); // NOSONAR javascript:S9382 -- each check waits for the previous answer.
   }
   const answer = argument === "forever" ? undefined : await untilReported(started);
+  if (answer !== undefined) {
+    // Positive control: the children run before KRC1, so their absence afterwards is its effect.
+    const alive = ["heartbeat", "watcher"].map((name) => childPid(staged.execution, name));
+    check(
+      "killed-children-alive-before-krc1",
+      "(b)",
+      alive.every((pid) => pid !== undefined && processAlive(pid) === true),
+    );
+  }
   started.child.stdio[3].write(terminateFrame());
   await started.closed;
   return { exit: reapedExit(started.received), staged, answer };
@@ -512,6 +566,7 @@ async function killedStep(helper, root, context, drives) {
 
 async function suite(helper, root, context, drives) {
   copyStepNode(root);
+  checkTasklistControl();
   await boundaries(helper, root, context, drives);
   const plain = await endedByControl(helper, root, context, drives, "forever");
   check("kill-ends-step-with-137", "(c)", plain.exit === 137, String(plain.exit));
@@ -542,12 +597,12 @@ async function main() {
   const pipe = await startPipeServer();
   const drives = [];
   try {
-    await suite(helper, root, { hostPort: host.address().port, pipe }, drives);
+    await suite(helper, root, { hostPort: host.port, host, pipe }, drives);
   } catch (error) {
     check("harness-completed", "harness", false, error instanceof Error ? error.name : undefined);
     console.log(`windows-step-confinement: ${error instanceof Error ? error.message : "failed"}`);
   } finally {
-    host.close();
+    host.server.close();
     pipe.server.close();
     for (const drive of drives) drive.release();
     rmSync(root, { force: true, recursive: true, maxRetries: 5 });

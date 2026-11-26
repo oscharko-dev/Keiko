@@ -92,6 +92,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Prove a relayed tree end to end
         run: node scripts/testing/test-windows-relay-confinement.mjs --helper relay-out/keiko-runtime-supervisor.exe
+      - name: Prove a governed step's confinement canaries
+        run: node scripts/testing/test-windows-step-confinement.mjs --helper relay-out/keiko-runtime-supervisor.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: relay-runtime-supervisor-windows-x64

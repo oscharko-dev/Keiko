@@ -230,7 +230,9 @@ The existing KRP1/KRC1/KRS1 native supervisor is staged as
 named Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, observes the Job Object
 completion port, and resumes only after assignment. Stop, takeover, crash, shutdown, and update
 revoke authority before terminating the Job Object. A reusable slot requires the
-`ACTIVE_PROCESS_ZERO` accounting proof.
+`ACTIVE_PROCESS_ZERO` accounting proof. Every supervised tree ends with its root: once the root
+has exited, the supervisor terminates what is left in the job and reports the root's exit code, as
+macOS stops the scope when its root is reaped (ADR-0043 D21, #4496; runtime 1.1.9 onward).
 
 The production qualification executes the exact shipped helper against a root process that creates
 a descendant, proves both exit after supervisor termination, proves control-channel loss fails
