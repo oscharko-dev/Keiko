@@ -185,6 +185,27 @@ facts instead of trusting `certifiesPromise`, and it names every precondition th
 fails on any string that is not a closed token (a path, a task text or a model answer), and on any
 key that names content, naming the JSON pointer and never the value (#4492 AC6).
 
+**Windows preconditions (#4492 AC3).** Schema version 5 of the evidence also describes a Windows
+run, and the harness refuses to certify one unless all three preconditions hold. The probe is
+[`windowsAcceptancePreconditions.ts`](../../packages/keiko-server/src/test-support/windowsAcceptancePreconditions.ts),
+which takes its machine reads as injectable seams so every branch is unit-tested on macOS and
+Linux. Each unmet precondition is its own closed code, the evidence and the checker name every
+failed one (not just the first), and a probe that cannot run is its own code, never a pass:
+
+| Code                             | Refused when                                                                                                                                                                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `administrator`                  | `whoami /groups /fo csv` lists `S-1-5-32-544` (BUILTIN\Administrators) in any state, or a mandatory integrity level of High or above. A split-token administrator's filtered token lists the group as deny-only, so it fails too: the promise is for a standard user. |
+| `container-runtime-present`      | `docker`, `podman`, `nerdctl`, `colima` or `limactl` on `PATH`; `DOCKER_HOST` or `CONTAINER_HOST` set; the pipe `\\.\pipe\docker_engine` or `\\.\pipe\podman-machine-default`; or an install folder of Docker, Podman, Podman Desktop or Rancher Desktop.             |
+| `service-installed`              | the `KeikoRuntimeGateway` service (ADR-0043 D19) answers `sc query`, or any service whose name starts with `Keiko` is listed by `sc query type= service state= all`.                                                                                                  |
+| `administrator-probe-failed`     | `whoami` cannot run, or its output is not a group list.                                                                                                                                                                                                               |
+| `container-runtime-probe-failed` | a container-runtime read throws; the signs are then unrecorded, which the checker also counts as present.                                                                                                                                                             |
+| `service-probe-failed`           | `sc.exe` cannot run or answers with a status other than installed or not found.                                                                                                                                                                                       |
+
+The Windows evidence records booleans and counts only (`userClass`, the container-runtime signs, and
+`services.keikoGatewayServiceInstalled` and `services.keikoServiceCount`): never a path, a user
+name, a SID or a service name. The suite itself still runs on macOS only; the Windows cases follow
+in the later children of #4491, and this probe is what their evidence is certified against.
+
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)
 runs the whole set on a hosted macOS 15 runner (#4519). The runner's account is an administrator,
@@ -314,7 +335,9 @@ gate:
 | W6          | the small task set (read-only analysis, focused fix, edit/test/repair) in all three modes                               | the right fix in all three modes; read-only analysis is not part of this task     |
 | W8          | a real failing-test, repair, green loop in all three modes; denied, skipped, stale or failed checks never become a pass | the right fix in all three modes, and the failed, skipped, stale and denied cases |
 
-W8's Windows shell paths (cmd, PowerShell, `npm.cmd`) belong to the Windows half of #4492.
+W8's Windows shell paths (cmd, PowerShell, `npm.cmd`) belong to the Windows half of #4492. Its
+certification preconditions (standard user, no container runtime, no installed Keiko service) are
+described under "Windows preconditions" above.
 
 ## Baseline on macOS, 2026-11-22
 

@@ -20,11 +20,11 @@ const NO_RUNTIME = {
 };
 
 const CERTIFYING = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   issue: 4492,
   platform: "darwin",
   arch: "arm64",
-  darwinRelease: "24.6.0",
+  osRelease: "24.6.0",
   node: "26.13.1",
   opencode: "2.2.5",
   userClass: "standard",
@@ -122,15 +122,15 @@ describe("acceptanceEvidenceFailures (#4519)", () => {
 
   it("refuses evidence without its facts, another platform or another schema", () => {
     expect(acceptanceEvidenceFailures(null)).toEqual(["evidence-unreadable"]);
-    const bare = { schemaVersion: 4, platform: "darwin", userClass: "standard" };
+    const bare = { schemaVersion: 5, platform: "darwin", userClass: "standard" };
     expect(acceptanceEvidenceFailures(bare)).toEqual([
       "container-runtime-present",
       "unrecorded",
       "case-set-incomplete",
       "case-not-met",
     ]);
-    expect(acceptanceEvidenceFailures({ ...CERTIFYING, platform: "win32" })).toEqual(["platform"]);
-    expect(acceptanceEvidenceFailures({ ...CERTIFYING, schemaVersion: 3 })).toEqual([
+    expect(acceptanceEvidenceFailures({ ...CERTIFYING, platform: "linux" })).toEqual(["platform"]);
+    expect(acceptanceEvidenceFailures({ ...CERTIFYING, schemaVersion: 4 })).toEqual([
       "schema-version",
     ]);
   });
@@ -254,6 +254,130 @@ describe("acceptanceEvidenceFailures body-free scan (#4492 AC6)", () => {
     expect(lines.error).toEqual([
       "check-acceptance-evidence: FAIL does not certify the promise: body-free:/cases/0/observed/state",
     ]);
+  });
+});
+
+// The shape the Windows run writes (windowsAcceptancePreconditions.ts, #4492 AC3).
+const WINDOWS_NO_RUNTIME = {
+  dockerOnPath: false,
+  podmanOnPath: false,
+  otherClientOnPath: false,
+  dockerHostConfigured: false,
+  runtimePipePresent: false,
+  applicationPresent: false,
+};
+const WINDOWS_CERTIFYING = {
+  ...CERTIFYING,
+  platform: "win32",
+  osRelease: "10.0.26100",
+  containerRuntime: WINDOWS_NO_RUNTIME,
+  services: { keikoGatewayServiceInstalled: false, keikoServiceCount: 0 },
+};
+
+describe("acceptanceEvidenceFailures on Windows (#4492 AC3)", () => {
+  it("certifies a standard user without a container runtime or a Keiko service", () => {
+    expect(acceptanceEvidenceFailures(WINDOWS_CERTIFYING)).toEqual([]);
+  });
+
+  it("names an administrator alone", () => {
+    const evidence = { ...WINDOWS_CERTIFYING, userClass: "administrator" };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual(["administrator"]);
+  });
+
+  it("names a reachable container runtime alone", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      containerRuntime: { ...WINDOWS_NO_RUNTIME, runtimePipePresent: true },
+    };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual(["container-runtime-present"]);
+  });
+
+  it.each([
+    ["the gateway service", { keikoGatewayServiceInstalled: true, keikoServiceCount: 1 }],
+    ["a Keiko-prefixed service", { keikoGatewayServiceInstalled: false, keikoServiceCount: 2 }],
+  ])("names %s alone", (_name, services) => {
+    expect(acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, services })).toEqual([
+      "service-installed",
+    ]);
+  });
+
+  it("names every failed precondition, not only the first", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      userClass: "administrator",
+      containerRuntime: { ...WINDOWS_NO_RUNTIME, dockerOnPath: true },
+      services: { keikoGatewayServiceInstalled: true, keikoServiceCount: 1 },
+      unmetPreconditions: ["administrator", "container-runtime-present", "service-installed"],
+      certifiesPromise: false,
+    };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual([
+      "administrator",
+      "container-runtime-present",
+      "service-installed",
+    ]);
+  });
+
+  it("refuses a probe that could not run, as its own code", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      userClass: "unknown",
+      containerRuntime: {},
+      services: undefined,
+      unmetPreconditions: [
+        "administrator-probe-failed",
+        "container-runtime-probe-failed",
+        "service-probe-failed",
+      ],
+      certifiesPromise: false,
+    };
+    const failures = acceptanceEvidenceFailures(evidence);
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        "administrator-probe-failed",
+        "container-runtime-probe-failed",
+        "service-probe-failed",
+        "service-installed",
+      ]),
+    );
+    expect(failures).not.toContain("administrator");
+  });
+
+  it("refuses Windows evidence that does not record the services at all", () => {
+    const { services: _dropped, ...bare } = WINDOWS_CERTIFYING;
+    expect(acceptanceEvidenceFailures(bare)).toEqual(["service-installed"]);
+  });
+
+  it("counts a Windows sign the evidence no longer records as present", () => {
+    const { runtimePipePresent: _dropped, ...shrunk } = WINDOWS_NO_RUNTIME;
+    expect(acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, containerRuntime: shrunk })).toEqual(
+      ["container-runtime-present"],
+    );
+  });
+
+  it("does not certify macOS-shaped signs on Windows", () => {
+    expect(
+      acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, containerRuntime: NO_RUNTIME }),
+    ).toEqual(["container-runtime-present"]);
+  });
+
+  it("prints the Windows facts and the PASS line, naming the service check", () => {
+    const lines = { log: [], error: [] };
+    const directory = mkdtempSync(join(tmpdir(), "win-evidence-"));
+    const file = join(directory, "evidence.json");
+    writeFileSync(file, JSON.stringify(WINDOWS_CERTIFYING));
+    try {
+      expect(
+        runCheck(["node", "check", file], {
+          log: (line) => lines.log.push(line),
+          error: (line) => lines.error.push(line),
+        }),
+      ).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    expect(lines.log).toContain("check-acceptance-evidence: platform win32 10.0.26100 arm64");
+    expect(lines.log).toContain("check-acceptance-evidence: keiko service signs: none");
+    expect(lines.log.at(-1)).toContain("or Keiko service");
   });
 });
 

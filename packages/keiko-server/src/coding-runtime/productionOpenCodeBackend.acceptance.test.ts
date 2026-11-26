@@ -76,6 +76,7 @@ import {
   type FunctionalDiscoveryServer,
 } from "../test-support/functional-bff-server.js";
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import { probeWindowsPreconditions } from "../test-support/windowsAcceptancePreconditions.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {
@@ -1517,15 +1518,34 @@ function stepList(steps: unknown): readonly unknown[] {
   return Array.isArray(steps) ? steps : [];
 }
 
-function acceptanceEvidence(): Record<string, unknown> {
+interface PreconditionFacts {
+  readonly userClass: string;
+  readonly containerRuntime: Readonly<Record<string, boolean>>;
+  readonly services?: object | undefined;
+  readonly unmetPreconditions: readonly string[];
+}
+
+/**
+ * The promise is for a standard user on a machine without a container runtime (and, on Windows,
+ * without an installed Keiko service); evidence taken anywhere else describes the product, but it
+ * does not certify that promise.
+ */
+function preconditionFacts(): PreconditionFacts {
+  if (process.platform === "win32") return probeWindowsPreconditions();
   const administrator = process.getuid?.() === 0 || groups().includes("admin");
   const containerRuntime = containerRuntimeFacts();
-  // The promise is for a standard user on a machine without a container runtime; evidence taken
-  // anywhere else describes the product, but it does not certify that promise.
-  const unmetPreconditions = [
-    ...(administrator ? ["administrator"] : []),
-    ...(Object.values(containerRuntime).some(Boolean) ? ["container-runtime-present"] : []),
-  ];
+  return {
+    userClass: administrator ? "administrator" : "standard",
+    containerRuntime,
+    unmetPreconditions: [
+      ...(administrator ? ["administrator"] : []),
+      ...(Object.values(containerRuntime).some(Boolean) ? ["container-runtime-present"] : []),
+    ],
+  };
+}
+
+function acceptanceEvidence(): Record<string, unknown> {
+  const { userClass, containerRuntime, services, unmetPreconditions } = preconditionFacts();
   // Nor does a partial run (a filtered or interrupted suite) or one with a case that failed.
   const recorded = new Set(evidence.map((entry) => entry.caseId));
   const caseSetComplete =
@@ -1535,15 +1555,16 @@ function acceptanceEvidence(): Record<string, unknown> {
     (entry) => "metExpectation" in entry && entry.metExpectation,
   );
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     issue: 4492,
     platform: process.platform,
     arch: process.arch,
-    darwinRelease: release(),
+    osRelease: release(),
     node: process.versions.node,
     opencode: OPENCODE_PINNED_VERSION,
-    userClass: administrator ? "administrator" : "standard",
+    userClass,
     containerRuntime,
+    ...(services === undefined ? {} : { services }),
     caseSetComplete,
     everyCaseMetExpectation,
     certifiesPromise: unmetPreconditions.length === 0 && caseSetComplete && everyCaseMetExpectation,

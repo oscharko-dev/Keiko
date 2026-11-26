@@ -22,7 +22,9 @@ broader Workbench acceptance group.
 Epic [#4491](https://github.com/oscharko-dev/Keiko/issues/4491) measures every platform with one
 [acceptance task](coding-acceptance-task.md) (#4492): repair a failing test and verify it with the
 project's own tests. Its macOS baseline is recorded there. The Windows half runs after the macOS
-gate.
+gate, and the harness already refuses to certify a Windows result for an administrator, a reachable
+container runtime or an installed Keiko service, naming each failed precondition (#4492 AC3; see
+"Windows preconditions" in the acceptance task).
 
 ## Evidence pins released on 2026-11-02
 
