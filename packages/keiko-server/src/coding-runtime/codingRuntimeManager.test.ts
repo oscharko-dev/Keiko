@@ -1,7 +1,10 @@
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { decideOpenCodeNativePolicy } from "./opencodeNativePolicy.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
@@ -20,7 +23,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { closeFileServerLogSinks } from "../observability/index.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
@@ -4652,7 +4656,17 @@ describe("coding runtime manager", () => {
   // generic `runtime-supervisor-refused` and the exit line shows no reason of its own.
   it("settles a start without an interactive desktop with its closed reason and the Workbench code", async () => {
     const fixture = createManagedFixture();
-    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    // The manager's exit line goes through the production file writer, so the run's analyzer
+    // timeline (the view `keiko support analyze` projects) is read back, not the recorded call.
+    const stateDir = tempDir("keiko-4495-log-");
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+    resetServerLogger();
+    const diagnostics = {
+      record: vi.fn<(record: ServerDiagnosticRecord) => void>((record) => {
+        defaultServerDiagnosticSink.record(record);
+      }),
+    };
     const controlOutput = new PassThrough();
     const helper = {
       stdin: new PassThrough(),
@@ -4729,6 +4743,20 @@ describe("coding runtime manager", () => {
       expect.objectContaining({ correlationId: "run-1988", code: "supervisor-no-desktop" }),
     ]);
     expect(JSON.stringify(exitLines)).not.toContain(fixture.workspaceRoot);
+
+    try {
+      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+      expect(analyzed.evidence.classification).toBe("supported");
+      const persisted = analyzed.timelines
+        .find((timeline) => timeline.correlationId === "run-1988")
+        ?.lines.filter((line) => line.extra?.diagnosticOperation === "coding-runtime.exit");
+      expect(persisted?.map((line) => line.extra?.code)).toEqual(["supervisor-no-desktop"]);
+      expect(JSON.stringify(persisted)).not.toContain(fixture.workspaceRoot);
+    } finally {
+      closeFileServerLogSinks();
+      resetServerLogger();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {

@@ -15,11 +15,16 @@ import {
   planWindowsGatewayRuntimeSandbox,
 } from "@oscharko-dev/keiko-sandbox";
 
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { closeFileServerLogSinks, createFileServerLogSink } from "../observability/index.js";
 import {
   createNativeRuntimeProcessBackend,
   type NativeRuntimeHelperProcess,
@@ -228,13 +233,23 @@ describe("a confined Windows launch", () => {
 
   // #4068 B1 crash rule: the supervisor's launch response states what its stale-grant sweep
   // removed; the host records it as counts, and records nothing for a sweep that found nothing.
-  function spawnConfined(): {
+  function spawnConfined(persisted?: ServerLogSink): {
     readonly helper: FakeHelper;
     readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
   } {
     const paths = fixture();
     const helper = new FakeHelper();
-    const activityLog = createBufferedServerLogSink();
+    const buffered = createBufferedServerLogSink();
+    const activityLog =
+      persisted === undefined
+        ? buffered
+        : {
+            ...buffered,
+            write: (event: Parameters<ServerLogSink["write"]>[0]): void => {
+              buffered.write(event);
+              persisted.write(event);
+            },
+          };
     const request = launch(paths.runtime, paths.workspace);
     const supervisor = createRuntimeProcessSupervisor({
       backend: createNativeRuntimeProcessBackend({
@@ -306,6 +321,44 @@ describe("a confined Windows launch", () => {
         formatActivityLogProofLine(event),
       ),
     ).toMatchObject({ correlationId: "run-4068", backend: "windows-appcontainer", ...expected });
+  });
+
+  // #4495 AC3/AC5: the backend's own wiring carries both statements through the production file
+  // writer to the run's analyzer timeline (the view `keiko support analyze` projects). Each count
+  // is distinct, so a swapped or misread field cannot pass.
+  it("carries the sweep counts and the root exit code through the real writer to the timeline", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-4495-backend-log-"));
+    roots.push(stateDir);
+    try {
+      const { helper } = spawnConfined(
+        createFileServerLogSink(stateDir, { env: { KEIKO_LOG_LEVEL: "debug" } }),
+      );
+      helper.controlOutput.write(answer(1, [2, 3, 5, 7]));
+      helper.controlOutput.write(answer(2, [0xc0000142, 0]));
+      await new Promise((settle) => setImmediate(settle));
+
+      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+      expect(analyzed.evidence.classification).toBe("supported");
+      const lines =
+        analyzed.timelines.find((timeline) => timeline.correlationId === "run-4068")?.lines ?? [];
+      const extraOf = (op: string): Readonly<Record<string, unknown>> | undefined =>
+        lines.find((line) => line.op === op)?.extra;
+      expect(extraOf("runtime.confinement.stale-grants-swept")).toMatchObject({
+        backend: "windows-appcontainer",
+        removedEntryCount: 2,
+        failedCount: 3,
+        removedProfileCount: 5,
+        failedProfileCount: 7,
+      });
+      expect(extraOf("runtime.confinement.tree-reaped")).toMatchObject({
+        backend: "windows-appcontainer",
+        rootExitCode: 0xc0000142,
+      });
+      expect(JSON.stringify(lines)).not.toContain(stateDir);
+      expect(JSON.stringify(lines)).not.toContain(CAPABILITY);
+    } finally {
+      closeFileServerLogSinks();
+    }
   });
 
   // #4495: the reap proof's root exit code reaches the run's log as a number, for a normal and an
