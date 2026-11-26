@@ -98,6 +98,9 @@ async function startChildren() {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   outcome.ready = ready();
+  // Which of the children's files never appeared, as a closed code ("none" when all did).
+  outcome.missing = ["heartbeat.pid", "watcher.pid", "heartbeat.txt", "watcher.txt"]
+    .filter((name) => !fs.existsSync(name)).map((name) => name.replace(".", "_")).join("-") || "none";
   return outcome;
 }
 (async () => {
@@ -496,6 +499,14 @@ function checkTasklistControl() {
   check("tasklist-positive-control", "(b)", processAlive(process.pid) === true);
 }
 
+// The spawn outcome and the files that never appeared, so a start that failed says how.
+function checkChildrenStarted(label, answer, started) {
+  const children = answer.children ?? {};
+  check(`${label}-heartbeat-spawned`, "(b)", children.heartbeat === "ok", children.heartbeat);
+  check(`${label}-watcher-spawned`, "(b)", children.watcher === "ok", children.watcher);
+  check(`${label}-children-started`, "(b)", started, children.missing);
+}
+
 // After the step ended: both children started, then neither runs and neither file grows any more.
 async function observeChildren(label, execution, answer) {
   const pids = {
@@ -504,7 +515,7 @@ async function observeChildren(label, execution, answer) {
   };
   const before = CHILD_FILES.map((name) => sizeOf(join(execution, name)));
   const started = answer.children?.ready === true && !Object.values(pids).includes(undefined);
-  check(`${label}-children-started`, "(b)", started);
+  checkChildrenStarted(label, answer, started);
   let grew = false;
   for (let sample = 0; sample < OBSERVE_SAMPLES; sample += 1) {
     await new Promise((resolve) => setTimeout(resolve, OBSERVE_INTERVAL_MS)); // NOSONAR javascript:S9382 -- a bounded observation window after the reaped answer.
