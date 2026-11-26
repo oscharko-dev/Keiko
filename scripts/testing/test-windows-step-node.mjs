@@ -35,7 +35,8 @@ const PROBE_SOURCE = String.raw`const { spawnSync, fork } = require("node:child_
 const net = require("node:net");
 const path = require("node:path");
 console.log("${"KEIKO_STEP_NODE_PROBE_START"}");
-const result = { uv: process.versions.uv, node: process.versions.node };
+const result = { uv: process.versions.uv, node: process.versions.node, exec: process.execPath };
+const brief = (r) => ({ status: r.status, stdout: r.stdout, error: r.error ? String(r.error.code) + "/" + String(r.error.syscall) : undefined });
 function listen(name) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -47,16 +48,18 @@ function forkEcho() {
   return new Promise((resolve) => {
     const child = fork(path.join(__dirname, "echo-child.cjs"), [], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
     child.once("message", (message) => { result.forkEcho = message.echo; });
+    child.once("error", (error) => resolve("error:" + String(error.code)));
     child.once("exit", (code) => resolve(code));
     child.send({ ping: 1 });
   });
 }
 async function main() {
-  const spawned = spawnSync(process.execPath, ["-e", "process.stdout.write('child-ok')"], { encoding: "utf8", timeout: 60000 });
-  result.spawnSync = { status: spawned.status, stdout: spawned.stdout };
+  const args = ["-e", "process.stdout.write('child-ok')"];
+  result.spawnSyncNoPipes = brief(spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
+  result.spawnSync = brief(spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 }));
   result.forkExit = await forkEcho();
   const tests = spawnSync(process.execPath, ["--test", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
-  result.nodeTest = { status: tests.status, passes: (tests.stdout.match(/^# pass (\d+)/mu) ?? [])[1] };
+  result.nodeTest = { status: tests.status, error: brief(tests).error, passes: ((tests.stdout ?? "").match(/^# pass (\d+)/mu) ?? [])[1] };
   const stamp = String(process.pid);
   result.globalPipe = await listen("\\\\.\\pipe\\keiko-step-node-global-" + stamp);
   result.localPipe = await listen("\\\\.\\pipe\\LOCAL\\keiko-step-node-local-" + stamp);
@@ -186,7 +189,11 @@ function assertPatchedResult(outcome) {
   assert.notEqual(outcome.result, undefined, `the probe finished: ${outcome.stdout.slice(0, 400)}`);
   const result = outcome.result;
   assert.match(result.uv, PATCHED_UV, "process.versions.uv names the patched libuv");
-  assert.deepEqual(result.spawnSync, { status: 0, stdout: "child-ok" }, "spawnSync child exits");
+  assert.deepEqual(
+    result.spawnSync,
+    { status: 0, stdout: "child-ok" },
+    `spawnSync child exits: ${JSON.stringify(result)}`,
+  );
   assert.equal(result.forkExit, 0, "fork with IPC exits");
   assert.equal(result.forkEcho, 1, "the IPC round trip answered");
   assert.equal(result.nodeTest.status, 0, "node --test over two files exits clean");
