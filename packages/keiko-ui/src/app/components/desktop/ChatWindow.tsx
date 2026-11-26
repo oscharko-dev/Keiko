@@ -96,6 +96,7 @@ import {
 import { MarkdownSkillControl } from "./skills/MarkdownSkillControl";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
+import { AnswerCopyButton } from "./AnswerCopyButton";
 import KeikoSelect from "./KeikoSelect";
 import { requestGatewayModelCatalogRefresh } from "./widgets/shared/gatewaySetupBus";
 import {
@@ -196,7 +197,6 @@ import { ApiError, fetchFilesSearch } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
-import { copyTextToClipboard } from "@/lib/clipboard";
 
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { ComposerShell, composerEnterSubmits } from "./composer/ComposerShell";
@@ -242,7 +242,6 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const CopyIcon = Icons.copy;
 const ChevronIcon = Icons.chevron;
 const CloseIcon = Icons.close;
 const MicIcon = Icons.mic;
@@ -731,9 +730,9 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
   );
 }
 
-// uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
-// responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
-// non-secure contexts and announced status (WCAG 4.1.3).
+// uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant responses, shared with the
+// Coding Workbench (AnswerCopyButton). The copied text drops the citation markers the grounded
+// answer's references cannot resolve.
 function MessageCopyButton({
   content,
   citationCeiling,
@@ -744,47 +743,27 @@ function MessageCopyButton({
   readonly grounded: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const [status, setStatus] = useState("");
-
-  const handleCopy = useCallback(() => {
-    const subject = { content, citationCeiling, grounded };
-    void copyTextToClipboard(copyableMessageText(content, citationCeiling)).then(
-      () => {
-        reportAnswerCopy(subject);
-        setCopyState("copied");
-        setStatus(t("chat.copy.copiedStatus"));
-        setTimeout(() => {
-          setCopyState("idle");
-          setStatus("");
-        }, 1500);
-      },
-      (error: unknown) => {
-        reportAnswerCopy(subject, error);
-        setCopyState("failed");
-        setStatus(t("chat.copy.failedStatus"));
-      },
-    );
-  }, [citationCeiling, content, grounded, t]);
-
-  const copied = copyState === "copied";
-  const failed = copyState === "failed";
-
+  const labels = useMemo(
+    () => ({
+      copy: t("chat.copy.message"),
+      copied: t("chat.copy.copied"),
+      copiedStatus: t("chat.copy.copiedStatus"),
+      failedStatus: t("chat.copy.failedStatus"),
+    }),
+    [t],
+  );
+  const onOutcome = useCallback(
+    (error?: unknown) => {
+      reportAnswerCopy({ content, citationCeiling, grounded }, error);
+    },
+    [citationCeiling, content, grounded],
+  );
   return (
-    <div className="chat-msg-copy-wrap">
-      <button
-        type="button"
-        className="chat-msg-copy"
-        aria-label={copied ? t("chat.copy.copied") : t("chat.copy.message")}
-        title={copied ? t("chat.copy.copied") : t("chat.copy.message")}
-        data-copied={copied ? "true" : "false"}
-        data-failed={failed ? "true" : "false"}
-        onClick={handleCopy}
-      >
-        <CopyIcon size={20} aria-hidden="true" />
-      </button>
-      <output className="chat-msg-copy-status">{status}</output>
-    </div>
+    <AnswerCopyButton
+      text={copyableMessageText(content, citationCeiling)}
+      labels={labels}
+      onOutcome={onOutcome}
+    />
   );
 }
 

@@ -126,6 +126,7 @@ import {
 import {
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityToolRefusalCause,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -5208,8 +5209,23 @@ function settleDecidedTool(
   decision: OpenCodeV2ApprovalDecision,
 ): void {
   const state = DECIDED_TOOL_STATES[decision.outcome];
-  if (state !== undefined) settleSafeTool(settleTool, decision.actionId, state);
+  if (state === undefined) return;
+  const refusalCause = DECIDED_REFUSAL_CAUSES[decision.outcome];
+  settleSafeTool(
+    settleTool,
+    decision.actionId,
+    state,
+    refusalCause === undefined ? undefined : { failureOrigin: "keiko-refused", refusalCause },
+  );
 }
+
+// The step's row says Keiko held it back and why: a person declined it or nobody decided in time.
+const DECIDED_REFUSAL_CAUSES: Readonly<
+  Partial<Record<OpenCodeV2ApprovalOutcome, CodingSafeActivityToolRefusalCause>>
+> = {
+  denied: "approval-declined",
+  expired: "approval-expired",
+};
 
 // A step the human declined, or nobody decided in time, answers 409 with the call's own result,
 // which the plugin hands to the model in place of the call, so the run goes on without it (owner

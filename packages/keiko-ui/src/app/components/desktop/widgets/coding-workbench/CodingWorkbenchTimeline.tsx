@@ -6,20 +6,24 @@ import {
   memo,
   useCallback,
   useContext,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
+  type SyntheticEvent,
   type RefCallback,
   type RefObject,
   type UIEvent,
 } from "react";
 import type {
   CodingSafeActivityMessage,
+  CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
   CodingSafeActivityTool,
+  CodingSafeActivityToolFailureOrigin,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -29,6 +33,12 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import type {
+  CodingWorkbenchAnswerText,
+  CodingWorkbenchAnswers,
+} from "@/lib/useCodingWorkbenchAnswers";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
@@ -36,6 +46,8 @@ import {
 import { useLocale, type Locale } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { AnswerCopyButton, type AnswerCopyButtonLabels } from "../../AnswerCopyButton";
+import { ListFollowContext } from "./CodingWorkbenchJumpToLatest";
 import { SupportReportButton } from "../../SupportReportButton";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -49,13 +61,30 @@ import {
   eventOffersRunCheck,
   eventTitle,
 } from "./codingWorkbenchLabels";
-import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
+import {
+  formatRunDuration,
+  modelGatewayRetrying,
+  settledRunState,
+} from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingWorkbenchWindow.module.css";
+import { useSecondClock } from "./useSecondClock";
+import {
+  moveRowFocus,
+  opensWithFailure,
+  ToolCommandPreview,
+  ToolDuration,
+  ToolFailureExplanation,
+  ToolFailureLabel,
+  ToolTextDetail,
+  toolFailureOrigin,
+  toolGroupSummary,
+} from "./CodingWorkbenchToolDetail";
 
-const VIRTUAL_THRESHOLD = 100;
+// A long run's timeline windows its rows from about one screen and a half of them on.
+const VIRTUAL_THRESHOLD = 60;
 const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
 // Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
@@ -94,7 +123,9 @@ const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>>
   skill: "codingWorkbench.timeline.tool.skill",
   subagent: "codingWorkbench.timeline.tool.subagent",
   todo: "codingWorkbench.timeline.tool.todo",
+  todowrite: "codingWorkbench.timeline.tool.todo",
   question: "codingWorkbench.timeline.tool.question",
+  execute: "codingWorkbench.timeline.tool.execute",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -188,6 +219,42 @@ export interface CodingWorkbenchTimelineProps {
 // timeline, and none of those rows otherwise carries an action.
 const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 
+// The complete answers read beside the bounded feed reach each message row the same way.
+// The complete model texts read beside the bounded feed reach each message row the same way, with
+// the reasoning blocks the person opened, so a row the virtual list remounts keeps its state.
+interface ModelTextsView {
+  readonly answers: CodingWorkbenchAnswers;
+  readonly reasoning: CodingWorkbenchAnswers;
+  readonly readReasoning: (messageId: string) => void;
+  readonly retryText: (part: CodingSafeActivityTextPart, messageId: string) => void;
+  readonly openReasoning: Set<string>;
+}
+
+const NO_ANSWERS: CodingWorkbenchAnswers = new Map();
+const NO_MODEL_TEXTS: ModelTextsView = {
+  answers: NO_ANSWERS,
+  reasoning: NO_ANSWERS,
+  readReasoning: () => undefined,
+  retryText: () => undefined,
+  openReasoning: new Set(),
+};
+const ModelTextsContext = createContext<ModelTextsView>(NO_MODEL_TEXTS);
+
+function useModelTextsView(activity: UseCodingWorkbenchSafeActivityResult): ModelTextsView {
+  const openReasoning = useRef(new Set<string>()).current;
+  const { answers, reasoning, readReasoning, retryText } = activity;
+  return useMemo(
+    () => ({
+      answers: answers ?? NO_ANSWERS,
+      reasoning: reasoning ?? NO_ANSWERS,
+      readReasoning: readReasoning ?? NO_MODEL_TEXTS.readReasoning,
+      retryText: retryText ?? NO_MODEL_TEXTS.retryText,
+      openReasoning,
+    }),
+    [answers, reasoning, readReasoning, retryText, openReasoning],
+  );
+}
+
 export function Timeline({
   active = false,
   generating = active,
@@ -205,29 +272,80 @@ export function Timeline({
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
   const attention = useShownActivityAttention(activity);
+  const modelTexts = useModelTextsView(activity);
   if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
     <RunCheckContext.Provider value={onRunCheck}>
-      <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-        <TimelineHeading titleRef={titleRef} t={t} />
-        <ActivityStatus activity={activity} attention={attention} t={t} />
-        <RunDetailsToggle
-          visible={events.length > 0}
-          expanded={showEvents}
-          onToggle={() => setShowEvents(!showEvents)}
-          t={t}
-        />
-        <QuestionSummary questions={questions} />
-        <TimelineContent
-          items={items}
-          timeline={timeline}
-          questions={questions}
-          restoreFocusRef={titleRef}
-          t={t}
-        />
-      </section>
+      <ModelTextsContext.Provider value={modelTexts}>
+        <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+          <TimelineHeading titleRef={titleRef} t={t} />
+          <ActivityStatus activity={activity} attention={attention} t={t} />
+          <RunDetailsToggle
+            visible={events.length > 0}
+            expanded={showEvents}
+            onToggle={() => setShowEvents(!showEvents)}
+            t={t}
+          />
+          <QuestionSummary questions={questions} />
+          <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
+          <TimelineContent
+            items={items}
+            timeline={timeline}
+            questions={questions}
+            restoreFocusRef={titleRef}
+            t={t}
+          />
+        </section>
+      </ModelTextsContext.Provider>
     </RunCheckContext.Provider>
+  );
+}
+
+/** After this long without the model's first step, the wait says the model is slow. */
+const SLOW_FIRST_STEP_MS = 10_000;
+
+// The turn whose first step the run still waits for: a generating run whose newest turn holds no
+// answer and no tool call yet. Undefined once the model did something, or when nothing generates.
+function awaitedFirstStep(
+  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  generating: boolean,
+): string | undefined {
+  if (!generating) return undefined;
+  const turn = feed?.turns.at(-1);
+  if (turn === undefined) return "run-start";
+  const answered =
+    turn.tools.length > 0 || turn.messages.some((message) => message.role === "assistant");
+  return answered ? undefined : turn.turnId;
+}
+
+// A run between the person's request and the model's first step says it waits, and after ten
+// seconds that the model is slow, so a quiet stream never reads as a stuck Workbench.
+function FirstStepWait({
+  waitKey,
+  t,
+}: {
+  readonly waitKey: string | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const [slowKey, setSlowKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (waitKey === undefined) return undefined;
+    const timer = setTimeout(() => {
+      setSlowKey(waitKey);
+    }, SLOW_FIRST_STEP_MS);
+    return (): void => {
+      clearTimeout(timer);
+    };
+  }, [waitKey]);
+  if (waitKey === undefined) return null;
+  return (
+    <output className={styles.cmpFirstStepWait}>
+      <span className={styles.cmpFirstStepPulse} aria-hidden="true" />
+      {slowKey === waitKey
+        ? t("codingWorkbench.activity.firstStep.slow")
+        : t("codingWorkbench.activity.firstStep.waiting")}
+    </output>
   );
 }
 
@@ -436,6 +554,8 @@ function timelineItems(
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
+    message.fullAnswer !== undefined ||
+    message.fullReasoning !== undefined ||
     message.reasoning !== undefined ||
     message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
   );
@@ -614,12 +734,24 @@ function useVirtualListFollow(
     ? `${String(items.length)}:${items.at(-1)?.id ?? ""}:${String(totalHeight)}:${questionKey}`
     : "short";
   const follow = useFollowNewest(scrollRef, growthKey);
-  const { resume } = follow;
+  const { resume, paused } = follow;
   // A question is a decision the run waits for: a new one brings the list to its end even when the
   // reader had scrolled up, as the stream itself does for the run's own prompts.
   useEffect(() => {
     if (virtual && questionKey !== "") resume();
   }, [virtual, questionKey, resume]);
+  // The stream's way back to the newest row shows while this list stopped following, and resumes it.
+  const reportList = useContext(ListFollowContext);
+  const listPaused = virtual && paused;
+  useEffect(() => {
+    reportList?.({ paused: listPaused, resume });
+  }, [reportList, listPaused, resume]);
+  useEffect(
+    () => (): void => {
+      reportList?.({ paused: false, resume: () => undefined });
+    },
+    [reportList],
+  );
   return { listRef: follow.regionRef, onScroll: follow.onScroll };
 }
 
@@ -826,6 +958,7 @@ function TimelineList({
       aria-describedby={virtual ? "coding-workbench-timeline-instructions" : undefined}
       tabIndex={virtual ? 0 : undefined}
       onScroll={onScroll}
+      data-timeline-rows=""
     >
       {virtual && spacerBefore > 0 ? <TimelineSpacer size={spacerBefore} /> : null}
       <TimelineRows timeline={timeline} total={total} t={t} />
@@ -974,8 +1107,9 @@ function MessageRow({
           <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
             {t(`codingWorkbench.activity.role.${item.message.role}`)}
           </p>
-          {item.message.reasoning === undefined ? null : (
-            <ModelReasoning reasoning={item.message.reasoning} t={t} />
+          {item.message.reasoning === undefined &&
+          item.message.fullReasoning === undefined ? null : (
+            <ModelReasoning message={item.message} live={item.live} t={t} />
           )}
           <div className={styles.messageText}>
             <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -1017,31 +1151,71 @@ function KeikoNote({
 // owner: less is more). The timeline's boundary sentence still says it is unverified. It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
-// reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
-// the reader needs (#3873 review). A collapsed block exposes only its summary; an opened one keeps
-// its streaming text out of the announcement with a nested `aria-live="off"`. The collapsed state
-// is never driven from the run's state, so every toggle is the reader's and is reported.
+// reader reads out, and unverified reasoning would crowd out the answer the reader needs (#3873
+// review). A collapsed block exposes only its summary; an opened one keeps its streaming text out of
+// the announcement with a nested `aria-live="off"`. The collapsed state is never driven from the
+// run's state, so every toggle is the reader's and is reported, and it is remembered for the run.
+// The reasoning is never cut to fit the feed (owner decision "Work-ending limits"): the block shows
+// it whole, and the part the feed does not carry is read only once the reader opens it.
 function ModelReasoning({
-  reasoning,
+  message,
+  live,
   t,
 }: {
-  readonly reasoning: NonNullable<CodingSafeActivityMessage["reasoning"]>;
+  readonly message: CodingSafeActivityMessage;
+  readonly live: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const texts = useContext(ModelTextsContext);
+  const { messageId } = message;
+  const shown = shownText(
+    message.reasoning?.text ?? "",
+    message.reasoning?.truncated === true,
+    message.fullReasoning,
+    texts.reasoning.get(messageId),
+  );
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
+    if (event.currentTarget.open) {
+      texts.openReasoning.add(messageId);
+      texts.readReasoning(messageId);
+    } else texts.openReasoning.delete(messageId);
+  };
   return (
-    <details className={styles.cmpReasoning} aria-live="off">
+    <details
+      className={styles.cmpReasoning}
+      aria-live="off"
+      open={texts.openReasoning.has(messageId)}
+      onToggle={onToggle}
+    >
       <summary
         className={styles.cmpActivitySummary}
         onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
       >
-        <span>{t("codingWorkbench.activity.reasoning.title")}</span>
+        <span>{t(reasoningTitle(message, live))}</span>
       </summary>
       <p className={styles.cmpReasoningText}>
-        {reasoning.text}
-        {reasoning.truncated ? <TruncationMark t={t} /> : null}
+        {shown.source}
+        <TextTrailing
+          state={shown.state}
+          onRetry={() => texts.retryText("reasoning", messageId)}
+          t={t}
+        />
       </p>
     </details>
   );
+}
+
+// "Thinking…" while the model still thinks: its message is live and no answer text arrived yet;
+// "Thought" once it answers or moves on. The feed carries no reasoning timestamps, so the summary
+// names no duration it could not prove.
+function reasoningTitle(
+  message: CodingSafeActivityMessage,
+  live: boolean,
+): "codingWorkbench.activity.reasoning.thinking" | "codingWorkbench.activity.reasoning.title" {
+  const answering = message.segments.some((segment) => segment.text.trim() !== "");
+  return live && !answering
+    ? "codingWorkbench.activity.reasoning.thinking"
+    : "codingWorkbench.activity.reasoning.title";
 }
 
 function MessageContent({
@@ -1055,21 +1229,8 @@ function MessageContent({
   readonly runId: string;
   readonly live: boolean;
 }): ReactNode {
-  if (message.role === "assistant") {
-    // While the answer still streams, SafeMarkdown renders its code without highlighting or list
-    // evidence on every update; the finished answer renders in full as soon as it is finished — also
-    // while the run waits for the operator's decision.
-    return (
-      <SafeMarkdownBoundary
-        source={message.segments.map((segment) => segment.text).join("")}
-        streaming={live}
-        diagnosticCorrelationId={runId}
-        diagnosticMessageId={message.messageId}
-        trailing={truncationFor(message, t)}
-        richContent={CODING_WORKBENCH_RICH_CONTENT}
-      />
-    );
-  }
+  if (message.role === "assistant")
+    return <AssistantAnswer message={message} runId={runId} live={live} t={t} />;
   // Segments are the feed's transport bound (4,096 characters each), not paragraphs: a long prompt
   // is one text, so it renders as one block. A paragraph per segment opened a gap at an arbitrary
   // character, mid-word or between the CR and LF of a Windows line ending (#4068 W12).
@@ -1079,6 +1240,184 @@ function MessageContent({
       {truncationFor(message, t) ?? null}
     </p>
   );
+}
+
+// What an answer shows: its complete Markdown source once read, otherwise the part the feed carries.
+// A model's answer is never cut to fit the bounded feed, so the truncation mark appears only for a
+// real cut — the server's memory bound, or a failed read of the rest — and a still-loading rest is
+// said as such, never marked as cut.
+interface ShownAnswer {
+  readonly source: string;
+  /** `failed`: reading the rest failed, so the cut is marked and a retry is offered. */
+  readonly state: "whole" | "loading" | "cut" | "failed";
+}
+
+// The same rule for the answer and the reasoning: the carried part, or the longer held text.
+function shownText(
+  carried: string,
+  carriedCut: boolean,
+  full: CodingSafeActivityMessage["fullAnswer"],
+  held: CodingWorkbenchAnswerText | undefined,
+): ShownAnswer {
+  if (full === undefined) return { source: carried, state: carriedCut ? "cut" : "whole" };
+  if (held === undefined) {
+    return { source: carried, state: wholeOrCut(carried, full, false) };
+  }
+  const source = held.text.length >= carried.length ? held.text : carried;
+  if (held.failed) return { source, state: "failed" };
+  // A newer page can report the cut before the next feed update does: either source marks it.
+  return { source, state: wholeOrCut(source, full, held.truncated) };
+}
+
+function wholeOrCut(
+  source: string,
+  full: NonNullable<CodingSafeActivityMessage["fullAnswer"]>,
+  heldCut: boolean,
+): ShownAnswer["state"] {
+  if (source.length < full.length) return "loading";
+  return full.truncated || heldCut ? "cut" : "whole";
+}
+
+function shownAnswer(
+  message: CodingSafeActivityMessage,
+  answer: CodingWorkbenchAnswerText | undefined,
+): ShownAnswer {
+  return shownText(
+    message.segments.map((segment) => segment.text).join(""),
+    message.truncated || message.segments.some((segment) => segment.truncated),
+    message.fullAnswer,
+    answer,
+  );
+}
+
+function AssistantAnswer({
+  message,
+  runId,
+  live,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+  readonly runId: string;
+  readonly live: boolean;
+}): ReactNode {
+  const texts = useContext(ModelTextsContext);
+  const shown = shownAnswer(message, texts.answers.get(message.messageId));
+  // A streaming answer re-renders as a whole on every delta. Parsing is linear (about 18 ms per
+  // 100 KB), but a long answer's deltas can arrive faster than it renders: the deferred source lets
+  // React skip the stale ones and keep the window responsive, and always settles on the newest.
+  const deferredSource = useDeferredValue(shown.source);
+  const source = live ? deferredSource : shown.source;
+  // While the answer still streams, SafeMarkdown renders its code without highlighting or list
+  // evidence on every update; the finished answer renders in full as soon as it is finished — also
+  // while the run waits for the operator's decision.
+  return (
+    <>
+      <SafeMarkdownBoundary
+        source={source}
+        streaming={live}
+        diagnosticCorrelationId={runId}
+        diagnosticMessageId={message.messageId}
+        trailing={
+          shown.state === "whole" ? undefined : (
+            <TextTrailing
+              state={shown.state}
+              onRetry={() => texts.retryText("answer", message.messageId)}
+              t={t}
+            />
+          )
+        }
+        richContent={CODING_WORKBENCH_RICH_CONTENT}
+      />
+      {live || shown.source.trim().length === 0 ? null : (
+        <div className={styles.cmpMessageActions}>
+          <WorkbenchAnswerCopyButton
+            text={shown.source}
+            partial={shown.state !== "whole"}
+            runId={runId}
+            t={t}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+// The end of a model text that is not shown whole: still loading, cut, or a failed read with its
+// next action.
+function TextTrailing({
+  state,
+  onRetry,
+  t,
+}: {
+  readonly state: ShownAnswer["state"];
+  readonly onRetry: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (state === "whole") return null;
+  if (state === "cut") return <TruncationMark t={t} />;
+  if (state === "loading")
+    return (
+      <span className={styles.cmpAnswerLoading}>{t("codingWorkbench.activity.answerLoading")}</span>
+    );
+  return (
+    <span className={styles.truncationMark}>
+      … {t("codingWorkbench.activity.textReadFailed")}{" "}
+      <button type="button" className={styles.cmpTextRetry} onClick={onRetry}>
+        {t("codingWorkbench.activity.textRetry")}
+      </button>
+    </span>
+  );
+}
+
+// The answer's own Markdown source, as the model wrote it, is what lands on the clipboard. The
+// outcome is recorded body-free under the run's correlation: never the copied text.
+function WorkbenchAnswerCopyButton({
+  text,
+  partial,
+  runId,
+  t,
+}: {
+  readonly text: string;
+  /** A cut, failed or still loading answer is never copied as if it were the model's full text. */
+  readonly partial: boolean;
+  readonly runId: string;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const labels = useMemo<AnswerCopyButtonLabels>(
+    () => ({
+      copy: t("codingWorkbench.activity.copy.answer"),
+      copied: t("codingWorkbench.activity.copy.copied"),
+      copiedStatus: t("codingWorkbench.activity.copy.copiedStatus"),
+      failedStatus: t("codingWorkbench.activity.copy.failedStatus"),
+    }),
+    [t],
+  );
+  const onOutcome = useCallback(
+    (error?: unknown) => {
+      reportWorkbenchAnswerCopy(runId, error);
+    },
+    [runId],
+  );
+  return <AnswerCopyButton text={text} labels={labels} onOutcome={onOutcome} partial={partial} />;
+}
+
+function reportWorkbenchAnswerCopy(runId: string, error?: unknown): void {
+  const correlationId = isActivityLogCorrelationId(runId) ? runId : undefined;
+  const evidence = { grounded: false, strippedGroupCount: 0, keptGroupCount: 0 } as const;
+  if (error === undefined) {
+    reportClientDiagnostic("Keiko Coding Workbench answer copied.", {
+      correlationId,
+      answerCopy: { outcome: "copied", ...evidence },
+    });
+    return;
+  }
+  reportClientDiagnostic("Keiko Coding Workbench answer copy failed.", {
+    correlationId,
+    answerCopy: { outcome: "failed", ...evidence },
+    errorKind: "unavailable",
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function truncationFor(
@@ -1101,43 +1440,165 @@ function ToolRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
-  const shownState = shownToolState(item.tool);
+  const { tool } = item;
+  const shownState = shownToolState(tool);
+  const origin = toolFailureOrigin(tool);
   return (
     <li
       ref={rowRef}
       className={styles.timelineItem}
       aria-posinset={position}
       aria-setsize={total}
+      aria-busy={tool.state === "running" || tool.state === "pending"}
       data-timeline-kind="tool"
     >
       <details
         className={styles.toolCard}
         data-tool-state={shownState}
-        open={OPEN_WITH_REASON_STATES.has(shownState)}
+        {...(origin === undefined ? {} : { "data-failure-origin": origin })}
+        open={opensWithFailure(origin) || OPEN_WITH_REASON_STATES.has(shownState)}
       >
         <summary
           className={styles.cmpActivitySummary}
+          data-timeline-row=""
+          onKeyDown={moveRowFocus}
           onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
         >
           <span className={styles.toolIcon} aria-hidden="true" />
-          <div className={styles.toolMeta}>
-            <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
-            {item.tool.presentation?.relativePath === undefined ? null : (
-              <code className={styles.toolName}>{item.tool.presentation.relativePath}</code>
-            )}
-          </div>
+          <ToolRowTitle tool={tool} t={t} />
           {item.count > 1 ? (
             <span className={styles.toolCount}>
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
             </span>
           ) : null}
-          <ToolStateBadge tool={item.tool} state={shownState} t={t} />
+          <ToolSummaryEnd tool={tool} state={shownState} origin={origin} t={t} />
         </summary>
-        <ToolOutcome tool={item.tool} t={t} />
-        <code className={styles.toolName}>{item.tool.tool}</code>
-        <ToolPresentationDetails tool={item.tool} t={t} />
+        <ToolRowBody tool={tool} origin={origin} t={t} />
       </details>
     </li>
+  );
+}
+
+// The row's name in words, with the raw tool id only as a tooltip, and what it is about.
+function ToolRowTitle({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <div className={styles.toolMeta}>
+      <p className={styles.timelineTitle} title={tool.tool}>
+        {humanizeToolName(tool.tool, t)}
+      </p>
+      <ToolSubject tool={tool} />
+    </div>
+  );
+}
+
+// An opened row: a failure's plain explanation and duration first, then the call's own text.
+function ToolRowBody({
+  tool,
+  origin,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      {origin === undefined ? (
+        <ToolOutcome tool={tool} t={t} />
+      ) : (
+        <>
+          <ToolFailureExplanation tool={tool} origin={origin} t={t} />
+          <ToolRowDuration tool={tool} t={t} />
+        </>
+      )}
+      <ToolTextDetail tool={tool} t={t} />
+      <ToolPresentationDetails tool={tool} t={t} />
+    </>
+  );
+}
+
+// What the row is about: a shell call's command line, else the file a read returned.
+function ToolSubject({ tool }: { readonly tool: CodingSafeActivityTool }): ReactNode {
+  const command = tool.presentation?.command;
+  if (command !== undefined) return <ToolCommandPreview command={command} />;
+  const path = tool.presentation?.relativePath;
+  return path === undefined ? null : <code className={styles.toolName}>{path}</code>;
+}
+
+function ToolRowDuration({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const locale = useLocale();
+  return (
+    <ToolDuration
+      durationMs={tool.presentation?.durationMs ?? tool.presentation?.bridgeDurationMs}
+      t={t}
+      format={(durationMs) =>
+        durationMs < 60_000
+          ? formatDurationMs(durationMs, locale)
+          : formatRunDuration(durationMs, t)
+      }
+    />
+  );
+}
+
+// The row's end: who caused a failure; a quiet check and the duration for a success, no word; the
+// state badge for anything still open or unfinished.
+function ToolSummaryEnd({
+  tool,
+  state,
+  origin,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly state: ShownToolState;
+  readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (origin !== undefined) return <ToolFailureLabel tool={tool} origin={origin} t={t} />;
+  if (state === "succeeded") {
+    return (
+      <>
+        <span className="sr-only">{t("codingWorkbench.activity.toolState.succeeded")}</span>
+        <ToolRowDuration tool={tool} t={t} />
+      </>
+    );
+  }
+  return (
+    <>
+      <ToolStateBadge tool={tool} state={state} t={t} />
+      {state === "running" ? <RunningFor since={tool.occurredAt} t={t} /> : null}
+    </>
+  );
+}
+
+// How long a call has been running, from one second on. It ticks silently: a timer is no live
+// region, so a screen reader is never interrupted once a second.
+function RunningFor({
+  since,
+  t,
+}: {
+  readonly since: string;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const now = useSecondClock(true);
+  const started = Date.parse(since);
+  const elapsed = Number.isNaN(started) ? 0 : now - started;
+  if (elapsed < 1_000) return null;
+  return (
+    <span className={styles.cmpToolDuration} role="timer">
+      {formatRunDuration(elapsed, t)}
+    </span>
   );
 }
 
@@ -1241,14 +1702,6 @@ function ToolOutcome({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const exitCode = tool.presentation?.exitCode;
-  if (exitCode !== undefined) {
-    return (
-      <p className={styles.cmpToolOutcome}>
-        {t("codingWorkbench.activity.exitCode", { code: exitCode })}
-      </p>
-    );
-  }
   const verificationOutcome = tool.presentation?.verificationOutcome;
   if (verificationOutcome !== undefined) {
     return (
@@ -1265,16 +1718,12 @@ function toolOutcomeSentence(
   tool: CodingSafeActivityTool,
   t: CodingWorkbenchTranslate,
 ): string | undefined {
-  // The runtime left a file that is not UTF-8 text unchanged instead of corrupting it (#4546).
-  if (tool.presentation?.refusalReason === "FILE_NOT_UTF8") {
-    return t("codingWorkbench.activity.editRefusalNotUtf8");
-  }
   // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;
   if (gitOutcome !== undefined && gitOutcome !== "completed") {
     return t(`codingWorkbench.activity.git.${gitOutcome}`);
   }
-  return tool.state === "failed" ? t("codingWorkbench.activity.toolError") : undefined;
+  return undefined;
 }
 
 function ToolPresentationDetails({
@@ -1284,7 +1733,6 @@ function ToolPresentationDetails({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const locale = useLocale();
   const facts = tool.presentation;
   if (facts === undefined) return null;
   return (
@@ -1303,17 +1751,10 @@ function ToolPresentationDetails({
         <p>{t("codingWorkbench.activity.returnedPaths", { count: facts.returnedPathCount })}</p>
       )}
       {facts.refusalReason === undefined || facts.refusalReason === "FILE_NOT_UTF8" ? null : (
-        <p>{t("codingWorkbench.activity.editRefusal", { reason: facts.refusalReason })}</p>
+        <p>{t(`codingWorkbench.activity.editRefusal.${facts.refusalReason}`)}</p>
       )}
       {facts.affectedRelativePath === undefined ? null : (
         <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
-      )}
-      {facts.bridgeDurationMs === undefined ? null : (
-        <p>
-          {t("codingWorkbench.activity.serviceDuration", {
-            duration: formatDurationMs(facts.bridgeDurationMs, locale),
-          })}
-        </p>
       )}
     </div>
   );
@@ -1329,7 +1770,9 @@ function ToolGroupRow({
   measure,
 }: RowProps<Extract<TimelineItem, { kind: "group" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
-  const count = item.tools.reduce((sum, tool) => sum + tool.count, 0);
+  // A closed group renders no rows: they mount the first time a reader opens it and stay mounted,
+  // so a long run's folded work costs nothing until someone looks at it.
+  const [opened, setOpened] = useState(false);
   return (
     <li
       ref={rowRef}
@@ -1338,45 +1781,69 @@ function ToolGroupRow({
       aria-setsize={total}
       data-timeline-kind="group"
     >
-      <details className={styles.cmpToolGroup}>
+      <details
+        className={styles.cmpToolGroup}
+        onToggle={(event) => {
+          if (event.currentTarget.open) setOpened(true);
+        }}
+      >
         <summary
           className={styles.cmpActivitySummary}
-          onClick={(event) => reportCodingWorkbenchSummaryActivated("activity-group", event)}
+          data-timeline-row=""
+          onKeyDown={moveRowFocus}
+          onClick={(event) => {
+            setOpened(true);
+            reportCodingWorkbenchSummaryActivated("activity-group", event);
+          }}
         >
-          {t("codingWorkbench.activity.groupCount", { count })}
+          {toolGroupSummary(item.tools, t)}
         </summary>
-        <ol className={styles.cmpGroupedTools}>
-          {item.tools.map((tool, index) => (
-            <ToolRow
-              grouped
-              key={tool.id}
-              item={tool}
-              position={index + 1}
-              total={item.tools.length}
-              t={t}
-              measureRow={measureRow}
-              hasMeasured={hasMeasured}
-              measure={false}
-            />
-          ))}
-        </ol>
+        {opened ? (
+          <GroupedTools item={item} t={t} measureRow={measureRow} hasMeasured={hasMeasured} />
+        ) : null}
       </details>
     </li>
   );
 }
 
-function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
+function GroupedTools({
+  item,
+  t,
+  measureRow,
+  hasMeasured,
+}: Pick<
+  RowProps<Extract<TimelineItem, { kind: "group" }>>,
+  "item" | "t" | "measureRow" | "hasMeasured"
+>): ReactNode {
+  return (
+    <ol className={styles.cmpGroupedTools}>
+      {item.tools.map((tool, index) => (
+        <ToolRow
+          grouped
+          key={tool.id}
+          item={tool}
+          position={index + 1}
+          total={item.tools.length}
+          t={t}
+          measureRow={measureRow}
+          hasMeasured={hasMeasured}
+          measure={false}
+        />
+      ))}
+    </ol>
+  );
+}
+
+/** The catalog key of a tool's name in words; undefined for a tool Keiko has no name for. */
+export function toolLabelKey(tool: string): CodingWorkbenchMessageKey | undefined {
   // The id is runtime text: `constructor` must not resolve to a member inherited from Object.
-  const knownKey = Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool)
-    ? KNOWN_TOOL_LABEL_KEYS[tool]
-    : undefined;
-  if (knownKey !== undefined) return t(knownKey);
-  return tool
-    .replace(/^keiko[_-]/u, "")
-    .split(/[_\-.]+/u)
-    .filter((part) => part.length > 0)
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
+  return Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool) ? KNOWN_TOOL_LABEL_KEYS[tool] : undefined;
+}
+
+// A tool Keiko has no name for (an MCP server's, a newer runtime's) is a "Tool"; its raw id stays
+// in the row's tooltip, never in the row's text.
+function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
+  return t(toolLabelKey(tool) ?? "codingWorkbench.timeline.tool.unknown");
 }
 
 function PlanRow({

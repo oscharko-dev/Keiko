@@ -1,0 +1,295 @@
+import {
+  CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+  CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
+  type CodingSafeActivityAnswerPage,
+  type CodingSafeActivityFullAnswer,
+  type CodingSafeActivityTextDelta,
+  type CodingSafeActivityTextPart,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+
+// No model text is cut to fit the bounded safe-activity feed (owner decision "Work-ending limits").
+// The feed stays the small live picture the authenticated channel sends whole on every update; the
+// complete text of every assistant answer and reasoning the feed lists is kept here, beside it. A
+// live update carries what each text gained since the previous one as an append-only delta, and a
+// reader that missed some reads it page by page. The only bound is the run's memory bound, and its
+// cut is shown on the message; reasoning may fill at most half of it, so it never crowds out an
+// answer.
+
+/** The complete text of one assistant answer or reasoning, as the model streamed it. */
+export interface RetainedText {
+  readonly messageId: string;
+  readonly part: CodingSafeActivityTextPart;
+  text: string;
+  /** A high surrogate whose pair has not arrived yet; held back so no reader ever splits a pair. */
+  pendingHighSurrogate: string;
+  /** The run's memory bound left part of the text out. */
+  truncated: boolean;
+  /** The feed takes no more of this text: it holds a prefix of it, or nothing. */
+  feedClosed: boolean;
+  /** The feed has named this text as longer than it carries at least once. */
+  named: boolean;
+  /** Characters a live update has already announced as deltas. */
+  published: number;
+}
+
+/** Per-part counts of texts the feed named and texts the memory bound cut, for body-free lines. */
+export interface RetainedTextCounts {
+  named: number;
+  clipped: number;
+  /** Texts the source showed only a prefix of (a live part bound), so the held text is cut. */
+  sourceCut: number;
+}
+
+export interface RetainedTexts {
+  readonly byKey: Map<string, RetainedText>;
+  readonly maxChars: number;
+  /** UTF-16 code units held across all texts of the run. */
+  chars: number;
+  /** UTF-16 code units held across the run's reasoning, which may use at most half the bound. */
+  reasoningChars: number;
+  readonly counts: Record<CodingSafeActivityTextPart, RetainedTextCounts>;
+}
+
+/** The largest full-text naming the feed can carry, so a fitting message stays fitting once named. */
+export const FULL_TEXT_RESERVE: CodingSafeActivityFullAnswer = {
+  length: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
+  truncated: false,
+};
+
+export function createRetainedTexts(maxChars: number): RetainedTexts {
+  return {
+    byKey: new Map(),
+    maxChars,
+    chars: 0,
+    reasoningChars: 0,
+    counts: {
+      answer: { named: 0, clipped: 0, sourceCut: 0 },
+      reasoning: { named: 0, clipped: 0, sourceCut: 0 },
+    },
+  };
+}
+
+/** An independent copy for a rollback; the strings are shared, never copied. */
+export function cloneRetainedTexts(store: RetainedTexts): RetainedTexts {
+  return {
+    byKey: new Map([...store.byKey].map(([key, text]) => [key, { ...text }])),
+    maxChars: store.maxChars,
+    chars: store.chars,
+    reasoningChars: store.reasoningChars,
+    counts: { answer: { ...store.counts.answer }, reasoning: { ...store.counts.reasoning } },
+  };
+}
+
+/** Puts `source`'s state back into `target`, keeping `target`'s identity. */
+export function restoreRetainedTexts(target: RetainedTexts, source: RetainedTexts): void {
+  target.byKey.clear();
+  for (const [key, text] of source.byKey) target.byKey.set(key, text);
+  target.chars = source.chars;
+  target.reasoningChars = source.reasoningChars;
+  target.counts.answer = source.counts.answer;
+  target.counts.reasoning = source.counts.reasoning;
+}
+
+function textKey(part: CodingSafeActivityTextPart, messageId: string): string {
+  return `${part}\u0000${messageId}`;
+}
+
+export function retainedText(
+  store: RetainedTexts,
+  part: CodingSafeActivityTextPart,
+  messageId: string,
+): RetainedText | undefined {
+  return store.byKey.get(textKey(part, messageId));
+}
+
+/**
+ * Appends a streamed piece to the text, inside the run's memory bound, and returns the part kept.
+ * Once the bound cut a text it takes nothing more, so what it holds is a true prefix. A trailing
+ * high surrogate waits for its pair, so the held text never ends in half a character.
+ */
+export function retainText(
+  store: RetainedTexts,
+  part: CodingSafeActivityTextPart,
+  messageId: string,
+  piece: string,
+): { readonly retained: RetainedText; readonly kept: string } {
+  const key = textKey(part, messageId);
+  let retained = store.byKey.get(key);
+  if (retained === undefined) {
+    retained = {
+      messageId,
+      part,
+      text: "",
+      pendingHighSurrogate: "",
+      truncated: false,
+      feedClosed: false,
+      named: false,
+      published: 0,
+    };
+    store.byKey.set(key, retained);
+  }
+  if (retained.truncated) return { retained, kept: "" };
+  const { whole, pending } = splitPendingSurrogate(retained.pendingHighSurrogate + piece);
+  retained.pendingHighSurrogate = pending;
+  const room = roomFor(store, part);
+  const kept = whole.length <= room ? whole : whole.slice(0, wholeCharacterCut(whole, room));
+  retained.text += kept;
+  store.chars += kept.length;
+  if (part === "reasoning") store.reasoningChars += kept.length;
+  if (kept.length < whole.length) {
+    retained.truncated = true;
+    retained.pendingHighSurrogate = "";
+    store.counts[part].clipped += 1;
+  }
+  return { retained, kept };
+}
+
+// The room a text has left. Reasoning may take at most half the run's bound, so however long a model
+// thinks, half of the bound stays for its answers.
+function roomFor(store: RetainedTexts, part: CodingSafeActivityTextPart): number {
+  const room = store.maxChars - store.chars;
+  if (part === "answer") return room;
+  return Math.max(0, Math.min(room, Math.floor(store.maxChars / 2) - store.reasoningChars));
+}
+
+function splitPendingSurrogate(text: string): { readonly whole: string; readonly pending: string } {
+  // The last unit has nothing after it, so its code point is the unit itself.
+  const last = text.codePointAt(text.length - 1) ?? 0;
+  return isHighSurrogate(last)
+    ? { whole: text.slice(0, -1), pending: text.slice(-1) }
+    : { whole: text, pending: "" };
+}
+
+/**
+ * Marks a held text cut by its source: nothing more of it arrives, and the feed shows the cut. True
+ * the first time, so the cut is counted once.
+ */
+export function markSourceCut(store: RetainedTexts, retained: RetainedText): boolean {
+  if (retained.truncated) return false;
+  retained.truncated = true;
+  retained.pendingHighSurrogate = "";
+  store.counts[retained.part].sourceCut += 1;
+  return true;
+}
+
+/** Releases the texts of messages the feed no longer lists (an evicted turn or message). */
+export function releaseUnlistedTexts(
+  store: RetainedTexts,
+  listed: (messageId: string) => boolean,
+): void {
+  for (const [key, retained] of store.byKey) {
+    if (listed(retained.messageId)) continue;
+    store.chars -= retained.text.length;
+    if (retained.part === "reasoning") store.reasoningChars -= retained.text.length;
+    store.byKey.delete(key);
+  }
+}
+
+/**
+ * The full-text naming a message's feed part needs: absent when the carried part is the whole text,
+ * otherwise the text's whole length and whether the memory bound cut it. A text the bound cut to
+ * nothing is still named, at length 0, so the cut stays visible. `firstNamed` is true the first time
+ * the text is named, for its single body-free record.
+ */
+export function fullTextFor(
+  carried: number,
+  retained: RetainedText,
+): { readonly full: CodingSafeActivityFullAnswer | undefined; readonly firstNamed: boolean } {
+  const { length } = retained.text;
+  if (!retained.truncated && (length === 0 || length <= carried)) {
+    return { full: undefined, firstNamed: false };
+  }
+  const firstNamed = !retained.named;
+  retained.named = true;
+  return { full: { length, truncated: retained.truncated }, firstNamed };
+}
+
+/**
+ * One page of a retained text from `offset`, or null when there is no such text or the offset does
+ * not lie on a whole character inside it. A page ends on a whole character.
+ */
+export function retainedTextPage(
+  store: RetainedTexts,
+  runId: string,
+  request: {
+    readonly messageId: string;
+    readonly part: CodingSafeActivityTextPart;
+    readonly offset: number;
+  },
+): CodingSafeActivityAnswerPage | null {
+  const retained = retainedText(store, request.part, request.messageId);
+  if (retained === undefined || retained.text.length === 0) return null;
+  const { text } = retained;
+  const { offset } = request;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length) return null;
+  if (splitsSurrogatePair(text, offset)) return null;
+  const end = wholeCharacterCut(text, offset + CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
+  return {
+    schemaVersion: CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
+    runId,
+    messageId: request.messageId,
+    part: request.part,
+    offset,
+    text: text.slice(offset, end),
+    length: text.length,
+    truncated: retained.truncated,
+  };
+}
+
+/**
+ * What every listed text gained since the previous live update, within `budgetBytes` of serialized
+ * deltas. Every text counts as announced afterwards: a gain left out — over the budget, over the
+ * delta count, or longer than a delta may be — reaches the reader as pages, never as a gap it cannot
+ * see.
+ */
+export function takeTextDeltas(
+  store: RetainedTexts,
+  listed: (messageId: string) => boolean,
+  budgetBytes: number,
+): readonly CodingSafeActivityTextDelta[] {
+  const deltas: CodingSafeActivityTextDelta[] = [];
+  let used = 0;
+  for (const retained of store.byKey.values()) {
+    const offset = retained.published;
+    retained.published = retained.text.length;
+    if (offset >= retained.text.length || !listed(retained.messageId)) continue;
+    // A gain too long for a delta, or past the delta count, is read as pages: decided before its
+    // text is sliced or serialized, so a multi-megabyte gain costs nothing here.
+    if (retained.text.length - offset > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS) continue;
+    if (deltas.length >= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS) continue;
+    const delta: CodingSafeActivityTextDelta = {
+      messageId: retained.messageId,
+      part: retained.part,
+      offset,
+      text: retained.text.slice(offset),
+    };
+    const cost = utf8.encode(JSON.stringify(delta)).length + 1;
+    if (used + cost > budgetBytes) continue;
+    deltas.push(delta);
+    used += cost;
+  }
+  return deltas;
+}
+
+const utf8 = new TextEncoder();
+
+// The largest cut at or before `index` that leaves no surrogate pair split in two.
+function wholeCharacterCut(text: string, index: number): number {
+  if (index >= text.length) return text.length;
+  if (index <= 0) return 0;
+  return splitsSurrogatePair(text, index) ? index - 1 : index;
+}
+
+function splitsSurrogatePair(text: string, index: number): boolean {
+  if (index <= 0 || index >= text.length) return false;
+  // A code point above the BMP starts at `index - 1` exactly when a high and a low surrogate meet
+  // across the cut.
+  return (text.codePointAt(index - 1) ?? 0) > 0xff_ff;
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd8_00 && code <= 0xdb_ff;
+}

@@ -4522,7 +4522,10 @@ export class CodingRuntimeOrchestrator {
   }
 
   private captureHistory(runId: string): void {
-    this.deps.history?.capture(runId, this.deps.safeActivityProjection?.currentContent());
+    const projection = this.deps.safeActivityProjection;
+    this.deps.history?.capture(runId, projection?.currentContent(), (messageId) =>
+      projection?.answerText(runId, messageId),
+    );
   }
 
   private beginHistory(

@@ -38,6 +38,7 @@ import {
   isOpenCodeToolExecutionFailure,
 } from "./opencodeNativeTools.js";
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
+import { openCodeToolDetail } from "./codingSafeActivityToolDetail.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 import { ConversationLedger } from "./opencodeV2HistoryConversation.js";
@@ -678,14 +679,21 @@ function toolState(
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
   const exit = name === "shell" ? shellExitEvidence(state) : {};
+  const displayState = displayToolState(name, state);
+  // What the row shows beside its state: the command, the error, the output's ends and the origin
+  // of a failure (owner order 2026-11-25). Credential floor only; never logged or stored.
+  const detail = openCodeToolDetail(name, part, state, displayState);
+  // #4546: an edit the runtime refused because the file is not UTF-8 names that closed reason in
+  // place of the runtime's own error text, which repeats it with the file's path.
+  const presentation = nativeEditNotUtf8(name, state) ? notUtf8Refusal(detail) : detail;
   return {
     kind: "tool",
     messageId,
     callId: id,
     tool: name,
-    state: displayToolState(name, state),
+    state: displayState,
     occurredAt: toolOccurredAt(part),
-    ...(nativeEditNotUtf8(name, state) ? { presentation: { refusalReason: "FILE_NOT_UTF8" } } : {}),
+    ...(Object.keys(presentation).length === 0 ? {} : { presentation }),
     ...exit,
   };
 }
@@ -715,6 +723,13 @@ function toolErrorClass(part: Readonly<Record<string, unknown>>): Pick<Candidate
         ? "invalid-arguments"
         : "other",
   };
+}
+
+function notUtf8Refusal(detail: ReturnType<typeof openCodeToolDetail>): typeof detail & {
+  readonly refusalReason: "FILE_NOT_UTF8";
+} {
+  const { errorText: _runtimeText, ...rest } = detail;
+  return { ...rest, refusalReason: "FILE_NOT_UTF8" };
 }
 
 function nativeEditNotUtf8(name: string, state: Readonly<Record<string, unknown>>): boolean {
@@ -872,23 +887,80 @@ interface LivePartContext {
 // the live text is spent, so nothing is appended twice. The shown text never shrinks and is always a
 // prefix of the next one: a complete text that does not extend what was already shown keeps the
 // shown text (counted), because the timeline cannot take words back.
+// What the timeline shows of a part, and whether the live overlay's bound left text out of it.
+interface ShownPart {
+  readonly text: string;
+  readonly cut: boolean;
+}
+
 function shownPartText(
   context: LivePartContext,
   messageId: string,
   kind: LiveTextKind,
   durable: string,
-): string {
+): ShownPart {
   const ordinal = context.ordinals[kind];
   context.ordinals[kind] += 1;
   const liveText = context.live.textOf(messageId, kind, ordinal);
-  if (liveText === undefined || liveText.length === 0) return durable;
-  if (durable.length === 0) return liveText;
+  if (liveText === undefined || liveText.length === 0) return { text: durable, cut: false };
+  const live = (): ShownPart => ({
+    text: liveText,
+    cut: context.live.cutOf(messageId, kind, ordinal),
+  });
+  if (durable.length === 0) return live();
   if (durable.startsWith(liveText)) {
     context.live.retire(messageId, kind, ordinal);
-    return durable;
+    return { text: durable, cut: false };
   }
   if (!liveText.startsWith(durable)) context.live.markDiverged(messageId, kind, ordinal);
-  return liveText;
+  return live();
+}
+
+// A part the timeline shows only a prefix of (its live text reached the overlay's bound, or its
+// persisted text is longer than the part bound) is named as cut, so the cut is shown, never silent
+// (owner decision "Work-ending limits"). Coding History still captures the persisted part whole.
+function withSourceCut(
+  candidates: readonly Candidate[],
+  messageId: string,
+  index: number,
+  part: "answer" | "reasoning",
+  cut: boolean,
+  occurredAt: string,
+): readonly Candidate[] {
+  if (!cut) return candidates;
+  const signal: CodingSafeActivitySignal = { kind: "text-cut", messageId, part, occurredAt };
+  return [
+    ...candidates,
+    candidate(`${messageId}:${part}-cut:${String(index)}`, "observation", true, signal),
+  ];
+}
+
+function textPartCandidates(
+  text: string,
+  messageId: string,
+  index: number,
+  occurredAt: string,
+  context: LivePartContext,
+): readonly Candidate[] {
+  const source = shownPartText(context, messageId, "text", text);
+  // The timeline shows an answer up to the part bound; Coding History keeps the part whole.
+  const shown = boundedPartText(source.text, MAX_LIVE_TEXT_UTF8_BYTES);
+  const cut = source.cut || shown.length < source.text.length;
+  const candidates = [textCandidate(messageId, index, shown, occurredAt, text)];
+  return withSourceCut(candidates, messageId, index, "answer", cut, occurredAt);
+}
+
+function reasoningPartCandidates(
+  text: string,
+  messageId: string,
+  index: number,
+  occurredAt: string,
+  context: LivePartContext,
+): readonly Candidate[] {
+  const source = shownPartText(context, messageId, "reasoning", text);
+  const cut = source.cut || Buffer.byteLength(source.text, "utf8") > MAX_LIVE_REASONING_UTF8_BYTES;
+  const candidates = [reasoningCandidate(messageId, index, source.text, occurredAt)];
+  return withSourceCut(candidates, messageId, index, "reasoning", cut, occurredAt);
 }
 
 function assistantPartCandidates(
@@ -900,16 +972,10 @@ function assistantPartCandidates(
 ): readonly Candidate[] {
   const part = record(value);
   if (part?.type === "text" && typeof part.text === "string") {
-    // The timeline shows an answer up to the part bound; Coding History keeps the part whole.
-    const shown = boundedPartText(
-      shownPartText(context, messageId, "text", part.text),
-      MAX_LIVE_TEXT_UTF8_BYTES,
-    );
-    return [textCandidate(messageId, index, shown, occurredAt, part.text)];
+    return textPartCandidates(part.text, messageId, index, occurredAt, context);
   }
   if (part?.type === "reasoning" && typeof part.text === "string") {
-    const shown = shownPartText(context, messageId, "reasoning", part.text);
-    return [reasoningCandidate(messageId, index, shown, occurredAt)];
+    return reasoningPartCandidates(part.text, messageId, index, occurredAt, context);
   }
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId, context.toolProfile);

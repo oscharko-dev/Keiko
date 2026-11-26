@@ -396,6 +396,8 @@ describe("OpenCode V2 native tool history", () => {
       tool: "question",
       state,
       occurredAt: "1970-01-01T00:00:00.002Z",
+      // A failed call names where it failed; its arguments and answer still never leave.
+      ...(state === "failed" ? { presentation: { failureOrigin: "tool-error" } } : {}),
     });
     expect(JSON.stringify({ events, signals })).not.toContain("PRIVATE_");
   });
@@ -1001,6 +1003,19 @@ describe("OpenCode V2 live streamed text", () => {
 
       expect(Buffer.byteLength(shown, "utf8")).toBe(65_536);
       expect(live.pull([part("text", "a".repeat(65_536))])).toEqual([]);
+    });
+
+    it("names an answer the bound cut while it streams, once, and one that fits never", () => {
+      const live = streaming();
+      live.start("text", 0);
+      live.delta("text", 0, "a".repeat(65_536));
+      expect(live.pull([empty("text")]).some((signal) => signal.kind === "text-cut")).toBe(false);
+      live.delta("text", 0, "b");
+      expect(live.pull([empty("text")])).toEqual([
+        expect.objectContaining({ kind: "text-cut", part: "answer" }),
+      ]);
+      live.delta("text", 0, "c");
+      expect(live.pull([empty("text")])).toEqual([]);
     });
 
     it("cuts a finished answer longer than the part bound where the stream stopped and never fails the read", () => {
@@ -2002,7 +2017,21 @@ describe("OpenCode 2.1.4 message type coverage (#3897)", () => {
     ]);
     expect(signals).toContainEqual(expect.objectContaining({ kind: "text", text: "Answer" }));
     expect(events.at(-1)?.kind).toBe("terminal-failure");
-    expect(JSON.stringify({ events, signals })).not.toContain("PRIVATE");
+    // The failed call carries the message its tool handed the model, as its row's text; the error's
+    // type, status, provider body, the call's metadata and a non-shell tool's output never leave.
+    const failed = signals.find((signal) => signal?.kind === "tool" && signal.state === "failed");
+    expect(failed).toMatchObject({
+      presentation: {
+        failureOrigin: "tool-error",
+        errorText: { text: "PRIVATE_PROVIDER_MESSAGE", truncated: false },
+      },
+    });
+    const serialized = JSON.stringify({ events, signals }).replace(
+      '"errorText":{"text":"PRIVATE_PROVIDER_MESSAGE","truncated":false}',
+      "",
+    );
+    expect(serialized).not.toContain("PRIVATE");
+    expect(serialized).not.toContain("ProviderError");
   });
 
   it.each(history.map((message) => [message.type as string, message] as const))(
@@ -2050,9 +2079,14 @@ describe("OpenCode V2 assistant text over the part bound (#3897)", () => {
       const long = character.repeat(70_000);
 
       const events = projection.project("ses_long", [user, answer(long)], undefined);
-      const text = events
-        .map((event) => projection.takeSignal(event))
-        .find((signal) => signal?.kind === "text" && signal.messageId === "msg_assistant");
+      const signals = events.map((event) => projection.takeSignal(event));
+      const text = signals.find(
+        (signal) => signal?.kind === "text" && signal.messageId === "msg_assistant",
+      );
+      // The timeline shows a prefix, so it names the answer as cut: the cut is shown, never silent.
+      expect(signals.filter((signal) => signal?.kind === "text-cut")).toEqual([
+        expect.objectContaining({ kind: "text-cut", messageId: "msg_assistant", part: "answer" }),
+      ]);
 
       const bytes = text?.kind === "text" ? Buffer.byteLength(text.text, "utf8") : 0;
       expect(bytes).toBeLessThanOrEqual(65_536);
@@ -2175,6 +2209,7 @@ describe("OpenCode 2.1.4 Code Mode execute outcome (#3897)", () => {
       tool: "execute",
       state: "failed",
       occurredAt: "1970-01-01T00:00:00.005Z",
+      presentation: { failureOrigin: "tool-error", durationMs: 1 },
     });
     expect(JSON.stringify({ events, signals })).not.toContain("PRIVATE_");
   });
@@ -2780,7 +2815,12 @@ describe("OpenCode 2.4.1 background shell commands (#4546)", () => {
     expect(tools).toEqual([expect.objectContaining({ callId: "call_msg_a1", state: "succeeded" })]);
     expect(tools[0]).not.toHaveProperty("exitCode");
     expect(tools[0]).not.toHaveProperty("exitStatusCheck");
-    expect(JSON.stringify(signals)).not.toContain("PRIVATE_");
+    // The row shows what the tool returned, its notice that the check moved on (owner order
+    // 2026-11-25); nothing else of the run reaches the signals.
+    expect(tools[0]).toMatchObject({ presentation: { output: { head: "PRIVATE_MOVED_NOTICE" } } });
+    expect(JSON.stringify(signals).replaceAll("PRIVATE_MOVED_NOTICE", "")).not.toContain(
+      "PRIVATE_",
+    );
   });
 });
 
@@ -3019,10 +3059,11 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
   });
 
   // #4068 W12: Windows console output (CRLF, bare-CR progress rewrites, a megabyte-long line and
-  // replacement characters) never becomes timeline text: the call projects its state and exit
-  // status alone, whatever the runtime kept of its output.
-  it("projects no part of a large Windows-shaped shell output", () => {
-    const output = `PRIVATE_OUT\r\n[##  ] 50%\r[####] 100%\r\n${"y".repeat(1_048_576)}\uFFFD\r\n`;
+  // replacement characters) reaches the timeline only as a bounded, readable preview: each line
+  // shows what the console finally showed, and the megabyte line never arrives whole. The owner's
+  // order of 2026-11-25 replaced "no part of it" with this preview, so a failed command can be read.
+  it("projects a large Windows-shaped shell output as a bounded console preview", () => {
+    const output = `FIRST_LINE\r\n[##  ] 50%\r[####] 100%\r\n${"y".repeat(1_048_576)}\uFFFD\r\n`;
     const history = shellHistory({
       status: "completed",
       input: { command: "npm install" },
@@ -3041,9 +3082,14 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(signals.filter((signal) => signal.kind === "tool")).toEqual([
       expect.objectContaining({ callId: "call_shell", state: "succeeded", exitCode: 0 }),
     ]);
+    const [tool] = signals.filter((signal) => signal.kind === "tool");
+    const preview = tool?.kind === "tool" ? tool.presentation?.output : undefined;
+    expect(preview).toMatchObject({ lineCount: 3, hiddenLineCount: 0, truncated: true });
+    expect(preview?.head.startsWith("FIRST_LINE\n[####] 100%\n")).toBe(true);
     const serialized = JSON.stringify(signals);
-    expect(serialized).not.toContain("PRIVATE_OUT");
-    expect(serialized).not.toContain("100%");
+    // The progress rewrite keeps only what the line finally showed.
+    expect(serialized).not.toContain("50%");
+    expect(serialized).not.toContain("\r");
     expect(serialized.length).toBeLessThan(4_096);
   });
 
@@ -3066,23 +3112,48 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
   it.each([
     [
       "the closed permission.rejected token",
-      { type: "permission.rejected", message: "PRIVATE_X" },
+      { type: "permission.rejected", message: "TOOL_MESSAGE" },
       "denied",
+      "keiko-refused",
     ],
-    ["another error type", { type: "tool.failed", message: "PRIVATE_X" }, "failed"],
-    ["a near-miss token", { type: "permission.rejected.other", message: "PRIVATE_X" }, "failed"],
-    ["no error type", { message: "PRIVATE_X" }, "failed"],
-    ["a bare string error", "permission.rejected", "failed"],
-  ])("projects a command whose part errored with %s as %s", (_name, error, state) => {
+    [
+      "another error type",
+      { type: "tool.failed", message: "TOOL_MESSAGE" },
+      "failed",
+      "tool-error",
+    ],
+    [
+      "a near-miss token",
+      { type: "permission.rejected.other", message: "TOOL_MESSAGE" },
+      "failed",
+      "tool-error",
+    ],
+    ["no error type", { message: "TOOL_MESSAGE" }, "failed", "tool-error"],
+    ["a bare string error", "permission.rejected", "failed", "tool-error"],
+  ])("projects a command whose part errored with %s as %s", (_name, error, state, origin) => {
     const signals = toolSignals(
       shellHistory({
         status: "error",
         input: { command: "cd .. && ls", workdir: "/private/workspace" },
-        error,
+        error: typeof error === "string" ? error : { ...error, response: { body: "PRIVATE_BODY" } },
       }),
     );
-    expect(signals).toEqual([expect.objectContaining({ callId: "call_shell", state })]);
-    expect(JSON.stringify(signals)).not.toMatch(/PRIVATE_|external_directory|workspace/u);
+    // The row names the origin, the command and the message the agent was handed; the error's
+    // type, its provider body and the call's working directory never leave the runtime.
+    expect(signals).toEqual([
+      expect.objectContaining({
+        callId: "call_shell",
+        state,
+        presentation: {
+          failureOrigin: origin,
+          command: { text: "cd .. && ls", truncated: false },
+          errorText: { text: typeof error === "string" ? error : "TOOL_MESSAGE", truncated: false },
+        },
+      }),
+    ]);
+    expect(JSON.stringify(signals)).not.toMatch(
+      /PRIVATE_|external_directory|workspace|tool\.failed/u,
+    );
   });
 
   it("projects a command that exited zero as succeeded with its exit status", () => {
@@ -3133,9 +3204,11 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
       expect(signal).toMatchObject({ state: "succeeded" });
       expect(signal).not.toHaveProperty("exitCode");
     }
-    expect(JSON.stringify(toolSignals(shellHistory(completed(3))))).not.toContain(
-      "PRIVATE_SHELL_OUTPUT",
-    );
+    // A failed command's output reaches its row as the bounded preview, and only there.
+    const [failed] = toolSignals(shellHistory(completed(3)));
+    expect(failed).toMatchObject({ presentation: { output: { head: "PRIVATE_SHELL_OUTPUT" } } });
+    const { presentation: _shown, ...rest } = failed as Record<string, unknown>;
+    expect(JSON.stringify(rest)).not.toContain("PRIVATE_SHELL_OUTPUT");
   });
 });
 
@@ -3414,7 +3487,7 @@ describe("a native edit the runtime refused because the file is not UTF-8", () =
       expect.objectContaining({
         callId: "call_edit",
         state: "failed",
-        presentation: { refusalReason: "FILE_NOT_UTF8" },
+        presentation: { failureOrigin: "tool-error", refusalReason: "FILE_NOT_UTF8" },
       }),
     ]);
     expect(line).toMatchObject({ editRefusalCount: 1 });
@@ -3430,7 +3503,7 @@ describe("a native edit the runtime refused because the file is not UTF-8", () =
     ],
   ])("adds no refusal for %s", (_name, state) => {
     const { signals, line } = project(state);
-    expect(signals[0]).not.toHaveProperty("presentation");
+    expect(signals[0]).not.toHaveProperty("presentation.refusalReason");
     expect(line).not.toHaveProperty("editRefusalCount");
   });
 

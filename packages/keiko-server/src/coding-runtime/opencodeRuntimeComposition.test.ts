@@ -2916,7 +2916,13 @@ describe("private OpenCode run control", () => {
       // #3612: the refused call is settled with the human's verdict, never left to OpenCode's
       // generic failure that read "Failed" for a denial.
       expect(recorder.settlements).toEqual([
-        { actionId: "ses_tool:call_1", state: "denied", occurredAt: expect.any(String) as string },
+        {
+          actionId: "ses_tool:call_1",
+          state: "denied",
+          occurredAt: expect.any(String) as string,
+          // The row names Keiko as the origin and the person's own decline as its cause.
+          presentation: { failureOrigin: "keiko-refused", refusalCause: "approval-declined" },
+        },
       ]);
     } finally {
       await fixture.stop();
@@ -2990,6 +2996,7 @@ describe("private OpenCode run control", () => {
           actionId: "ses_tool:call_expired",
           state: "cancelled",
           occurredAt: expect.any(String) as string,
+          presentation: { failureOrigin: "keiko-refused", refusalCause: "approval-expired" },
         },
       ]);
     } finally {
@@ -5553,11 +5560,27 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         expect(terminal).not.toHaveProperty("exitCode");
         expect(terminal).not.toHaveProperty("exitStatusCheck");
         expect(terminal).not.toHaveProperty("ownWorkdir");
-        // The timeline says why a command failed: its exit status, a number, and nothing else.
-        expect(terminal).toHaveProperty("presentation", { exitCode });
+        // The timeline says why a command failed: its exit status, the command, the bounded ends
+        // of what it printed and how long it ran. The check evidence and the workdir stay out.
+        const presentation = {
+          exitCode,
+          ...(exitCode === 0 ? {} : { failureOrigin: "command-failed" }),
+          durationMs: 1,
+          command: { text: "npm test", truncated: false },
+          output: {
+            head: "Synthetic check",
+            tail: "",
+            lineCount: 1,
+            hiddenLineCount: 0,
+            truncated: false,
+          },
+        };
+        expect(terminal).toHaveProperty("presentation", presentation);
         const feed = projection.currentContent()?.feed;
         const projected = feed?.availability === "available" ? feed.turns[0]?.tools[0] : undefined;
-        expect(projected?.presentation).toEqual({ exitCode });
+        expect(projected?.presentation).toEqual(
+          exitCode === 0 ? presentation : { ...presentation, failureCount: 1 },
+        );
       } finally {
         await fixture.stop();
       }

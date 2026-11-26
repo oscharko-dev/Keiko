@@ -1603,11 +1603,19 @@ export type {
   CodingSafeActivityMessageOrigin,
   CodingSafeActivityMessageRole,
   CodingSafeActivityPlan,
+  CodingSafeActivityAnswerPage,
+  CodingSafeActivityFullAnswer,
+  CodingSafeActivityTextDelta,
+  CodingSafeActivityTextPart,
   CodingSafeActivityPlanStep,
   CodingSafeActivityPlanStepState,
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
+  CodingSafeActivityToolFailureOrigin,
+  CodingSafeActivityToolOutput,
+  CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolState,
+  CodingSafeActivityToolText,
   CodingSafeActivityTurn,
   UnavailableCodingSafeActivityFeed,
 } from "./coding-safe-activity.js";
@@ -1634,6 +1642,7 @@ export type {
 } from "./coding-safe-activity.js";
 export type {
   CodingAppSessionAcknowledgement,
+  CodingAppSessionAnswerResponse,
   CodingAppSessionChannelContent,
   CodingAppSessionChannelSnapshot,
   CodingAppSessionSafeActivityContent,

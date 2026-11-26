@@ -777,6 +777,8 @@ function fakeSafeActivityProjection(): CodingSafeActivityProjection {
     interrupt: vi.fn(),
     currentContent: vi.fn(() => null),
     subscribeContent: vi.fn(() => ({ admitted: true, detach: vi.fn() })),
+    answerText: vi.fn(() => undefined),
+    answerPage: vi.fn(() => null),
   };
 }
 

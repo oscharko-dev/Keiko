@@ -637,7 +637,22 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Unverified evaluation runtime — no platform signature",
   "codingWorkbench.readiness.runtime.unavailable": "Coding runtime unavailable",
   "codingWorkbench.timeline.details": "Run details",
-  "codingWorkbench.activity.groupCount": "{count} actions completed",
+  "codingWorkbench.activity.group.read": "Read {count} files",
+  "codingWorkbench.activity.group.read.one": "Read 1 file",
+  "codingWorkbench.activity.group.search": "Ran {count} searches",
+  "codingWorkbench.activity.group.search.one": "Ran 1 search",
+  "codingWorkbench.activity.group.edit": "Edited {count} files",
+  "codingWorkbench.activity.group.edit.one": "Edited 1 file",
+  "codingWorkbench.activity.group.command": "Ran {count} commands",
+  "codingWorkbench.activity.group.command.one": "Ran 1 command",
+  "codingWorkbench.activity.group.git": "Ran {count} Git steps",
+  "codingWorkbench.activity.group.git.one": "Ran 1 Git step",
+  "codingWorkbench.activity.group.web": "Fetched {count} pages",
+  "codingWorkbench.activity.group.web.one": "Fetched 1 page",
+  "codingWorkbench.activity.group.plan": "Updated the task list {count} times",
+  "codingWorkbench.activity.group.plan.one": "Updated the task list",
+  "codingWorkbench.activity.group.other": "{count} other steps",
+  "codingWorkbench.activity.group.other.one": "1 other step",
   "codingWorkbench.timeline.title": "Activity",
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
@@ -653,6 +668,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.edit": "Edit file",
   "codingWorkbench.timeline.tool.write": "Write file",
   "codingWorkbench.timeline.tool.patch": "Apply patch",
+  "codingWorkbench.timeline.tool.execute": "Program",
+  "codingWorkbench.timeline.tool.unknown": "Tool",
   "codingWorkbench.timeline.tool.shell": "Shell command",
   "codingWorkbench.timeline.tool.webfetch": "Web fetch",
   "codingWorkbench.timeline.tool.websearch": "Web search",
@@ -740,7 +757,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The diagram could not be drawn, so its source is shown as written.",
   "codingWorkbench.activity.reasoningBoundary":
     "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning, which is unverified and never kept in history or evidence.",
-  "codingWorkbench.activity.reasoning.title": "Thinking",
+  "codingWorkbench.activity.reasoning.title": "Thought",
+  "codingWorkbench.activity.reasoning.thinking": "Thinking…",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -755,6 +773,14 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Activity truncated.",
   "codingWorkbench.activity.dropped": "{count} update(s) omitted.",
   "codingWorkbench.activity.truncationMark": "Output truncated",
+  "codingWorkbench.activity.answerLoading": "Loading the rest…",
+  "codingWorkbench.activity.textReadFailed": "The rest could not be loaded.",
+  "codingWorkbench.activity.textRetry": "Retry",
+  "codingWorkbench.activity.copy.answer": "Copy answer as Markdown",
+  "codingWorkbench.activity.copy.copied": "Copied",
+  "codingWorkbench.activity.copy.copiedStatus": "Answer copied as Markdown",
+  "codingWorkbench.activity.copy.failedStatus":
+    "Clipboard access failed. Select the answer manually and copy it.",
   "codingWorkbench.activity.role.user": "You",
   "codingWorkbench.activity.role.assistant": "Coding agent",
   "codingWorkbench.activity.role.keiko": "Keiko",
@@ -1385,13 +1411,90 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
   "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
-  "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
   "codingWorkbench.activity.editRefusalNotUtf8":
     "The file was left unchanged because it is not saved as UTF-8 text.",
+  "codingWorkbench.activity.editRefusal.DIRTY":
+    "The file has unsaved changes in the editor, so the edit was not applied.",
+  "codingWorkbench.activity.editRefusal.VERSION_MISMATCH":
+    "The file changed since the agent read it, so the edit was not applied.",
+  "codingWorkbench.activity.editRefusal.CONTENT_HASH_MISMATCH":
+    "The file changed since the agent read it, so the edit was not applied.",
+  "codingWorkbench.activity.editRefusal.NO_ACTIVE_SESSION":
+    "No editor session was open for this file.",
+  "codingWorkbench.activity.editRefusal.NO_ACTIVE_BRIDGE":
+    "The editor was not connected, so the edit was not applied.",
+  "codingWorkbench.activity.editRefusal.INVALID_EDITS": "The requested edit did not fit the file.",
+  "codingWorkbench.activity.editRefusal.OUT_OF_SCOPE":
+    "The file is outside the folder this task may change.",
+  "codingWorkbench.activity.editRefusal.DECOMPOSE_PER_ROOT":
+    "The edit touched more than one folder and has to be split.",
+  "codingWorkbench.activity.editRefusal.PRECONDITION_REQUIRED":
+    "The edit named no version of the file to change.",
+  "codingWorkbench.activity.editRefusal.POLICY_DENIED": "Keiko's rules do not allow this edit.",
+  "codingWorkbench.activity.editRefusal.APPROVAL_REQUIRED": "This edit needs your approval first.",
+  "codingWorkbench.activity.editRefusal.TIMED_OUT": "The edit took too long and was stopped.",
+  "codingWorkbench.activity.editRefusal.QUEUE_FULL":
+    "Too many edits were waiting, so this one was not taken.",
+  "codingWorkbench.activity.editRefusal.CANCELLED": "The edit was cancelled.",
+  "codingWorkbench.activity.editRefusal.PROVIDER_UNAVAILABLE":
+    "The editor service was not available.",
+  "codingWorkbench.activity.editRefusal.UNSUPPORTED_OPERATION":
+    "The editor cannot make this kind of change.",
+  "codingWorkbench.activity.editRefusal.LIMIT_EXCEEDED": "The edit was larger than allowed.",
+  "codingWorkbench.activity.editRefusal.DUPLICATE_ACTION": "The same edit was already requested.",
+  "codingWorkbench.activity.editRefusal.MUTATION_IN_FLIGHT":
+    "Another edit to this file was still being applied.",
+  "codingWorkbench.activity.editRefusal.RESPONSE_TOO_LARGE": "The editor's answer was too large.",
+  "codingWorkbench.activity.editRefusal.TRANSPORT_FAILURE": "The connection to the editor failed.",
+  "codingWorkbench.activity.editRefusal.REDIRECT_BLOCKED":
+    "The edit was redirected, which Keiko does not follow.",
+  "codingWorkbench.activity.editRefusal.EDIT_TRANSPORT_ERROR":
+    "The edit could not reach the editor.",
+  "codingWorkbench.activity.editRefusal.EDIT_PREPARE_FAILED": "The edit could not be prepared.",
+  "codingWorkbench.activity.editRefusal.WORKSPACE_ACCESS_LOST":
+    "Keiko lost access to the workspace folder.",
+  "codingWorkbench.activity.editRefusal.EDIT_MUTATION_FAILED":
+    "Writing the change to the file failed.",
+  "codingWorkbench.activity.editRefusal.ci-observation-required":
+    "The change waits for the CI result first.",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
-  "codingWorkbench.activity.serviceDuration": "Duration: {duration}",
-  "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
-  "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
+  "codingWorkbench.activity.failureOrigin.keiko-refused": "Blocked by Keiko",
+  "codingWorkbench.activity.failureOrigin.command-failed": "Command failed",
+  "codingWorkbench.activity.failureOrigin.tool-error": "Tool error",
+  "codingWorkbench.activity.failureOrigin.timed-out": "Timed out",
+  "codingWorkbench.activity.failureOrigin.invalid-arguments": "Invalid arguments",
+  "codingWorkbench.activity.failureOrigin.cancelled": "Stopped",
+  "codingWorkbench.activity.failure.command-failed":
+    "The command did not finish successfully (exit code {code}).",
+  "codingWorkbench.activity.failure.command-failed-unknown":
+    "The command did not finish successfully.",
+  "codingWorkbench.activity.failure.tool-error": "The tool could not complete this step.",
+  "codingWorkbench.activity.failure.keiko-refused": "Keiko did not allow this step.",
+  "codingWorkbench.activity.failure.timed-out": "The command ran out of time.",
+  "codingWorkbench.activity.failure.invalid-arguments":
+    "The call's arguments could not be read, so the tool did not run.",
+  "codingWorkbench.activity.failure.cancelled": "This step was stopped.",
+  "codingWorkbench.activity.failure.agentRetries":
+    "The agent sees this result and can continue from it.",
+  "codingWorkbench.activity.refusalCause.approval-declined": "You declined it.",
+  "codingWorkbench.activity.refusalCause.approval-expired": "Nobody decided in time.",
+  "codingWorkbench.runStatus.failedCommands": "{count} commands failed",
+  "codingWorkbench.runStatus.failedCommands.one": "1 command failed",
+  "codingWorkbench.stream.jumpToLatest": "Jump to latest",
+  "codingWorkbench.stream.jumpToLatestNew": "{count} new steps · Jump to latest",
+  "codingWorkbench.stream.jumpToLatestNew.one": "1 new step · Jump to latest",
+  "codingWorkbench.activity.firstStep.waiting": "Waiting for the model's first step…",
+  "codingWorkbench.activity.firstStep.slow": "Still working — the model is slow to answer.",
+  "codingWorkbench.activity.failedTimes": "Failed {count} times in this run",
+  "codingWorkbench.activity.took": "Took {duration}",
+  "codingWorkbench.activity.command": "Command",
+  "codingWorkbench.activity.agentMessage": "Message to the agent",
+  "codingWorkbench.activity.output": "Output",
+  "codingWorkbench.activity.hiddenLines": "{count} lines hidden",
+  "codingWorkbench.activity.hiddenLines.one": "1 line hidden",
+  "codingWorkbench.activity.linesShortened": "Long lines were shortened.",
+  "codingWorkbench.activity.textShortened": "The text was shortened.",
+  "codingWorkbench.activity.detailOmitted": "The command and its output are no longer shown live.",
   "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",
   "codingWorkbench.activity.verification.failed-check":
     "A verification check ran and failed. The model received the failing locations.",

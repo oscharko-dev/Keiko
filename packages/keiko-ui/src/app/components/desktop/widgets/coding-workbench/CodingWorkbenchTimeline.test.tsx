@@ -19,7 +19,7 @@ import {
 } from "@/lib/install-client-diagnostics";
 import * as reportApi from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
-import { Timeline } from "./CodingWorkbenchTimeline";
+import { Timeline, toolLabelKey } from "./CodingWorkbenchTimeline";
 import { eventsWithRestoredSettlement } from "./codingWorkbenchRestoredRun";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -403,16 +403,21 @@ describe("CodingWorkbenchTimeline", () => {
     );
     expect(legacy).not.toHaveTextContent("reported an error");
     expect(legacy).not.toHaveTextContent("FILE_NOT_UTF8");
+    // A call the tool itself could not complete says so, names its origin and what happens next;
+    // it never blames the model with "reported an error to the model".
     expect(execute?.open).toBe(true);
-    expect(execute).toHaveTextContent("Failed");
-    expect(execute).toHaveTextContent("The tool reported an error to the model.");
-    expect(execute).not.toHaveTextContent("exited with code");
-    // A command that ran and returned non-zero shows its exit code, as OpenCode reports it, not a
-    // red "Failed"; it still opens to the reason (#4098 acceptance).
+    expect(execute?.dataset.failureOrigin).toBe("tool-error");
+    expect(execute).toHaveTextContent("Tool error");
+    expect(execute).toHaveTextContent("The tool could not complete this step.");
+    expect(execute).toHaveTextContent("The agent sees this result and can continue from it.");
+    expect(execute).not.toHaveTextContent("reported an error");
+    // A command that ran and returned non-zero is the command's failure, not a red "Failed": its row
+    // names the origin and the exit code, and still opens to the reason (#4098 acceptance).
     const shell = container.querySelector<HTMLDetailsElement>('[data-tool-state="exited"]');
     expect(shell?.open).toBe(true);
-    expect(shell?.querySelector('[data-state="exited"]')).toHaveTextContent("Exit code 1");
-    expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell?.dataset.failureOrigin).toBe("command-failed");
+    expect(shell).toHaveTextContent("Command failed");
+    expect(shell).toHaveTextContent("The command did not finish successfully (exit code 1).");
     expect(shell).not.toHaveTextContent("Failed");
     expect(shell).not.toHaveTextContent("reported an error");
   });
@@ -707,8 +712,13 @@ describe("CodingWorkbenchTimeline", () => {
     expect(screen.getByText("packages/ui/deep/Second.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read: 120 bytes · Whole file: 800 lines")).toBeInTheDocument();
     expect(screen.getByText("Returned paths: 2")).toBeInTheDocument();
-    expect(screen.getByText("Duration: 15 ms")).toBeInTheDocument();
-    expect(screen.getByText("Edit refusal: CONTENT_HASH_MISMATCH")).toBeInTheDocument();
+    // A call shorter than a second names no duration (owner order 2026-11-25: from 1 s on).
+    expect(container).not.toHaveTextContent("15 ms");
+    // The refusal reads as a sentence, never the raw code.
+    expect(
+      screen.getByText("The file changed since the agent read it, so the edit was not applied."),
+    ).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("CONTENT_HASH_MISMATCH");
     expect(screen.getByText("Affected file: packages/ui/deep/Conflict.tsx")).toBeInTheDocument();
     expect(container.querySelectorAll('[data-timeline-kind="tool"]')).toHaveLength(4);
   });
@@ -881,7 +891,8 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Workspace discovery");
     expect(rows[0]).toHaveTextContent("2 calls");
-    expect(rows[1]).toHaveTextContent("Failed");
+    // The failure stays a row of its own and names its origin.
+    expect(rows[1]).toHaveTextContent("Tool error");
   });
 
   it("shows a failed run separately from earlier successful workspace calls", () => {
@@ -1099,7 +1110,9 @@ describe("CodingWorkbenchTimeline", () => {
     );
     const group = container.querySelector('[data-timeline-kind="group"] details');
     expect(group).not.toHaveAttribute("open");
-    expect(group).toHaveTextContent("2 actions completed");
+    // The group says what the agent did, in verbs, instead of how many rows it folded.
+    expect(group).toHaveTextContent("Ran 1 search · Ran 1 Git step");
+    expect(group).not.toHaveTextContent("actions completed");
     expect(group).not.toHaveTextContent("Failed");
     expect(container.querySelector('[data-tool-state="failed"]')).toBeVisible();
     expect(container.querySelector('[data-event-tone="routine"]')).toBeNull();
@@ -1164,7 +1177,12 @@ describe("CodingWorkbenchTimeline", () => {
     const detail = rows[0] as HTMLDetailsElement;
     detail.open = true;
     fireEvent(detail, new Event("toggle"));
-    expect(detail).toHaveTextContent("keiko_workspace_discover");
+    // The raw tool id is the title's tooltip, never row text (owner order 2026-11-25).
+    expect(detail).not.toHaveTextContent("keiko_workspace_discover");
+    expect(detail.querySelector("summary [title]")).toHaveAttribute(
+      "title",
+      "keiko_workspace_discover",
+    );
   });
 
   it("reports a tool disclosure only when the reader activates its summary", () => {
@@ -1361,7 +1379,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
 
   const THOUGHT = { text: "The quoted field splits on its comma.", truncated: false };
 
-  it("shows the model's reasoning under a plain Thinking summary, apart from the answer", () => {
+  it("shows the model's reasoning under a plain Thought summary, apart from the answer", () => {
     const { container } = render(
       <Timeline
         active
@@ -1375,14 +1393,37 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     // there read as a failed check on every step (#3897, owner). #3907 (owner: less is more): the
     // block holds the model's own text and nothing Keiko adds to it; the timeline's boundary
     // sentence states that reasoning is unverified.
-    expect(block.querySelector("summary")?.textContent).toBe("Thinking");
-    expect(block.textContent).toBe(`Thinking${THOUGHT.text}`);
+    expect(block.querySelector("summary")?.textContent).toBe("Thought");
+    expect(block.textContent).toBe(`Thought${THOUGHT.text}`);
     expect(container).toHaveTextContent(/reasoning, which is unverified/u);
     const answer = container.querySelector(
       `[data-message-role="assistant"] .${styles.messageText}`,
     );
     expect(answer).toHaveTextContent("Fixed the parser.");
     expect(answer).not.toHaveTextContent(THOUGHT.text);
+  });
+
+  it("says Thinking… while the model still thinks and Thought once it answers", () => {
+    const { container, rerender } = render(
+      <Timeline
+        active
+        generating
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT, ""))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(reasoningBlock(container).querySelector("summary")).toHaveTextContent("Thinking…");
+    rerender(
+      <Timeline
+        active
+        generating
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT, "Fixing"))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(reasoningBlock(container).querySelector("summary")?.textContent).toBe("Thought");
   });
 
   it("is collapsed by default, also while its turn streams, and never opens by itself", () => {
@@ -2078,7 +2119,8 @@ describe("timeline facts remain scoped to their run", () => {
 
 // #3897 review: the native OpenCode tools (read, glob, edit, shell, webfetch, ...) used to show the
 // capitalised raw id ("Webfetch", "Glob") in English even in a German session. Each now resolves
-// through the localized catalog; an unknown or MCP tool keeps the humanized fallback.
+// through the localized catalog. An unknown or MCP tool reads "Tool" (owner order 2026-11-25: the raw
+// id stays behind the row's tooltip), so no runtime id is ever dressed up as a product label.
 describe("CodingWorkbenchTimeline native tool labels", () => {
   afterEach(() => {
     cleanup();
@@ -2239,23 +2281,49 @@ describe("CodingWorkbenchTimeline native tool labels", () => {
     expect(titles(await renderIn("de", ["keiko_git_branch"]))).toEqual(["Aufgaben-Branch anlegen"]);
   });
 
-  it("humanizes an unknown or MCP tool id instead of inventing a localized label", async () => {
+  it("names an unknown or MCP tool a Tool and keeps its id in the tooltip only", async () => {
     const container = await renderIn("de", ["linear.create_issue", "keiko_run_command"]);
 
-    expect(titles(container)).toEqual(["Linear Create Issue", "Run Command"]);
+    expect(titles(container)).toEqual(["Werkzeug", "Werkzeug"]);
+    const tooltips = [...container.querySelectorAll("[data-timeline-kind='tool'] summary [title]")];
+    expect(tooltips.map((node) => node.getAttribute("title"))).toEqual([
+      "linear.create_issue",
+      "keiko_run_command",
+    ]);
+  });
+
+  // Every tool the server registers for the model has a name in words, in both catalogs: read from
+  // the server's own registries, so a new tool without a label turns this red.
+  it("names every registered Keiko and native tool", () => {
+    const server = join(
+      import.meta.dirname,
+      "../../../../../../../keiko-server/src/coding-runtime",
+    );
+    const schemas = readFileSync(join(server, "opencodeToolSchemas.ts"), "utf8");
+    const keikoTools = [...schemas.matchAll(/\{ name: "(keiko_[a-z_]+)", parameters:/gu)].map(
+      (match) => match[1] ?? "",
+    );
+    const native = readFileSync(join(server, "opencodeNativeTools.ts"), "utf8");
+    const nativeTools = [...native.matchAll(/\["([a-z_]+)", "[a-z_]+", false\]/gu)].map(
+      (match) => match[1] ?? "",
+    );
+    expect(keikoTools.length).toBeGreaterThan(15);
+    expect(nativeTools.length).toBeGreaterThan(10);
+    for (const tool of [...keikoTools, ...nativeTools, "execute"]) {
+      expect(toolLabelKey(tool), tool).toBeDefined();
+    }
   });
 
   // The lookup used a plain object: a tool called `constructor` resolved to Object's constructor
   // function and `t(function)` rendered nonsense instead of falling back to the humanized id.
-  it.each([
-    ["constructor", "Constructor"],
-    ["toString", "ToString"],
-    ["hasOwnProperty", "HasOwnProperty"],
-  ])("never resolves the inherited name %s to a prototype member", async (tool, humanized) => {
-    const container = await renderIn("en", [tool]);
+  it.each(["constructor", "toString", "hasOwnProperty"])(
+    "never resolves the inherited name %s to a prototype member",
+    async (tool) => {
+      const container = await renderIn("en", [tool]);
 
-    expect(titles(container)).toEqual([humanized]);
-  });
+      expect(titles(container)).toEqual(["Tool"]);
+    },
+  );
 });
 
 // #3897 review: the plan card was a <details> keyed by the plan REVISION, so every todo update

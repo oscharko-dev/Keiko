@@ -11,6 +11,7 @@ import type { ChatMessage, CodingHistoryDetail } from "@oscharko-dev/keiko-contr
 import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
@@ -365,9 +366,9 @@ describe("restoreConversation bounds and truncation", () => {
     expectContractValid(feed);
   });
 
-  it("cuts a message above the contract's byte bound and says so on the message and its turn", () => {
+  it("cuts a prompt above the contract's byte bound and says so on the message and its turn", () => {
     const feed = restored([
-      message("m-1", "run-7", "assistant", "The parser splits on commas. ".repeat(2_300)),
+      message("m-1", "run-7", "user", "The parser splits on commas. ".repeat(2_300)),
     ]);
     const [cut] = restoredMessages(feed);
     expect(cut?.truncated).toBe(true);
@@ -382,6 +383,50 @@ describe("restoreConversation bounds and truncation", () => {
     expect(feed.turns[0]?.truncated).toBe(true);
     expect(feed.truncated).toBe(false);
     expectContractValid(feed);
+  });
+
+  // Owner decision "Work-ending limits": a model's answer is never cut. An answer above the byte
+  // bound keeps a prefix in the feed, names its whole length, and the restoration hands the timeline
+  // the whole text Coding History holds — nothing reads as truncated.
+  it("names an answer above the contract's byte bound and hands over its whole text", () => {
+    const text = `${"The parser splits on commas. ".repeat(4_000)}final-line`;
+    const { feed, answers } = restoration([message("m-1", "run-7", "assistant", text)]);
+    const [named] = restoredMessages(feed);
+    expect(text.length).toBeGreaterThan(100 * 1024);
+    expect(named?.truncated).toBe(false);
+    expect(named?.segments.some((segment) => segment.truncated)).toBe(false);
+    expect(named?.fullAnswer).toEqual({ length: text.length, truncated: false });
+    expect(text.startsWith(restoredText(named))).toBe(true);
+    expect(answers.get("m-1")).toEqual({ text, complete: true, truncated: false, failed: false });
+    expect(feed.turns[0]?.truncated).toBe(false);
+    expect(new TextEncoder().encode(JSON.stringify(named)).length).toBeLessThanOrEqual(
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+    );
+    expectContractValid(feed);
+  });
+
+  // The run's memory bound is the one cut an answer can show: a restored answer above it names the
+  // bound, marks the cut and hands over the text up to it, on a whole character.
+  it("cuts a restored answer only at the memory bound, on a whole character, and marks it", () => {
+    const bound = CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS;
+    const text = `${"a".repeat(bound - 1)}\u{1F600}tail`;
+    const { feed, answers } = restoration([message("m-1", "run-7", "assistant", text)]);
+    const [named] = restoredMessages(feed);
+    expect(named?.fullAnswer).toEqual({ length: bound - 1, truncated: true });
+    expect(named?.truncated).toBe(true);
+    expect(answers.get("m-1")).toEqual({
+      text: "a".repeat(bound - 1),
+      complete: true,
+      truncated: true,
+      failed: false,
+    });
+    expectContractValid(feed);
+  });
+
+  it("hands over no answer text the feed already carries whole", () => {
+    const { feed, answers } = restoration([message("m-1", "run-7", "assistant", "Short answer")]);
+    expect(restoredMessages(feed)[0]?.fullAnswer).toBeUndefined();
+    expect(answers.size).toBe(0);
   });
 
   it("keeps as much of a cut message as the bound admits, from its start", () => {
@@ -581,13 +626,11 @@ describe("restoreConversation bounds and truncation", () => {
   it("counts the restoration in messages, turns and bytes, never in text", () => {
     const cutText = "The parser splits on commas. ".repeat(2_300);
     const { feed, counts } = restoration(
-      [
-        message("m-1", "run-7", "user", "Repair the parser"),
-        message("m-2", "run-7", "assistant", cutText),
-      ],
+      [message("m-1", "run-7", "user", cutText), message("m-2", "run-7", "assistant", cutText)],
       true,
     );
 
+    // The prompt is cut; the answer is named whole (`fullAnswer`), so it is no cut.
     expect(counts).toEqual({
       timelineCount: 2,
       transcriptCount: 0,
