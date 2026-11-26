@@ -575,12 +575,15 @@ describe("the run set of the uninstall", () => {
 
   it("keeps the files of the real runtime payload outside runtime/node out of the run set", () => {
     const files = writePortableRuntimePayload(newRoot(), "windows-x64");
-    // the helpers, the vector add-on and the search tool (`runtime/native`), their licenses and the
-    // coding sidecar are loaded by the product, not by the uninstall command
+    // the helpers, the vector add-on and the search tool (`runtime/native`), their licenses, the
+    // coding sidecar and the patched step Node.js of the Windows Coding Workbench
+    // (`runtime/step-node/node.exe`, #4492) are loaded by the product, not by the uninstall command
     const outside = files.filter((file) => !file.startsWith("runtime/node/"));
     expect(outside.length).toBeGreaterThan(0);
     for (const file of outside) {
-      expect(file).toMatch(/^runtime\/(native|licenses|sidecars)\//u);
+      expect(file).toMatch(
+        /^runtime\/(native|licenses|sidecars)\/|^runtime\/step-node\/node\.exe$/u,
+      );
     }
   });
 });

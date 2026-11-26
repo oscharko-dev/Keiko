@@ -14,9 +14,12 @@ const RECORD_SECTIONS = [
   "sidecarRuntimes",
 ] as const;
 const SEGMENT = "[A-Za-z0-9][A-Za-z0-9._-]*";
-// A record may name files below these three runtime folders and nothing else: it can never widen
-// what a managed install may hold outside them.
+// A record may name files below these three runtime folders, and the fixed step Node.js path below,
+// and nothing else: it can never widen what a managed install may hold outside them.
 const RUNTIME_FILE = new RegExp(`^runtime/(?:native|licenses|sidecars)(?:/${SEGMENT}){1,8}$`, "u");
+// The patched Node.js a Windows payload carries for its confined Coding steps (#4492): the one file
+// the record may name outside those folders, at its fixed path.
+const STEP_NODE_FILE = "runtime/step-node/node.exe";
 const SIDECAR_ROOT = new RegExp(`^runtime/sidecars/${SEGMENT}$`, "u");
 
 export interface PortableRuntimeRecordEntries {
@@ -30,7 +33,9 @@ function collectEntry(entry: unknown, files: Set<string>, prefixes: Set<string>)
   if (!isJsonRecord(entry)) return;
   for (const key of ["executablePath", "licensePath"] as const) {
     const value = entry[key];
-    if (typeof value === "string" && RUNTIME_FILE.test(value)) files.add(value);
+    if (typeof value === "string" && (RUNTIME_FILE.test(value) || value === STEP_NODE_FILE)) {
+      files.add(value);
+    }
   }
   const root = entry.payloadRootPath;
   if (typeof root === "string" && SIDECAR_ROOT.test(root)) prefixes.add(`${root}/`);

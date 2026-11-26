@@ -989,6 +989,54 @@ describe("Windows portable PE signing inventory", () => {
     );
   });
 
+  it("leaves the step Node.js entry exactly as it was staged when the tools are marked verified", () => {
+    // #4492: the server pins the step Node.js by its exact bytes, so no signature may touch it.
+    const fixture = windowsPrepareStage();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    write(
+      join(fixture.stage, "payload", "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
+      portableExecutable(10),
+    );
+    const stagedSigning = {
+      signatureKind: "authenticode",
+      verificationStatus: "unsigned-non-production",
+      signatureVerified: false,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    };
+    manifest.nativeTools = [
+      { name: "ripgrep", executablePath: "runtime/native/rg.exe", signing: {} },
+      { name: "step-node", executablePath: "runtime/step-node/node.exe", signing: stagedSigning },
+    ];
+    bindRuntimeAttestation(fixture.stage, manifest);
+
+    expect(manifest.nativeTools[0].signing.verificationStatus).toBe("verified-production");
+    expect(manifest.nativeTools[1].signing).toEqual(stagedSigning);
+    expect(manifest.releaseImpact.reviewedBinding.nativeTools).toEqual(manifest.nativeTools);
+  });
+
+  it("keeps the step Node.js out of the PE inventory that the signer reads, but still checks it is a PE", () => {
+    const fixture = windowsPrepareStage();
+    const resourceRoot = join(fixture.stage, "payload", "Keiko");
+    const stepNode = join(resourceRoot, "runtime", "step-node", "node.exe");
+    write(stepNode, portableExecutable(11));
+
+    const paths = inventoryWindowsPortablePeFiles(resourceRoot).files.map(
+      (file) => file.relativePath,
+    );
+    expect(paths).toContain("runtime/native/keiko-runtime-supervisor.exe");
+    expect(paths).not.toContain("runtime/step-node/node.exe");
+    const stagePaths = inventoryWindowsPortableStagePeFiles(fixture.stage).files.map(
+      (file) => file.relativePath,
+    );
+    expect(stagePaths).not.toContain("payload/Keiko/runtime/step-node/node.exe");
+
+    write(stepNode, "not a portable executable");
+    expect(() => inventoryWindowsPortablePeFiles(resourceRoot)).toThrow(
+      "an executable-named payload file is not valid PE",
+    );
+  });
+
   it("rejects a missing or aliased Windows runtime attestation carrier", () => {
     const fixture = windowsPrepareStage();
     const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));

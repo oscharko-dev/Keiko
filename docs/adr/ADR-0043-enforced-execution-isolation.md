@@ -93,6 +93,11 @@ folder's drive letter.
 of its own inside the execution root, with the person's `%USERPROFILE%\.m2\repository` chained
 read-only behind it; every other backend keeps the project's closed "no script" skip.
 
+1.17 — #4492 amends D21 (2026-11-26): the Standalone/portable Windows payload carries the same
+patched step Node.js as the npm runtime package, at `runtime/step-node/node.exe`, staged from the
+digest-pinned `win32-x64` runtime package and verified against the same server pin; no signing lane
+signs it.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1377,8 +1382,10 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     its child pipes uniquely in the global pipe namespace, `CreateNamedPipeW` answers access denied
     there, and libuv reads that as a name collision and retries forever (libuv#5181, fixed in libuv
     1.53; no official Node.js carries it yet, nodejs/node#66282). Until one does, the Windows
-    runtime package carries `runtime/step-node/node.exe`, the official 26.13.1 source plus exactly
-    that fix, built by `.github/workflows/windows-step-node.yml` from
+    runtime package and the Standalone/portable Windows payload carry `runtime/step-node/node.exe`
+    (the payload takes it from that package; its manifest names it as the second `nativeTools` entry
+    and no signing lane signs it, because a signature would change the pinned bytes), the official
+    26.13.1 source plus exactly that fix, built by `.github/workflows/windows-step-node.yml` from
     `patches/node-26.13.1-libuv-5181.patch` and `patches/node-26.13.1-win-crates-synchronization.patch`
     (the provenance of the pin), pinned by digest, size, source digest and patch digests in
     `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build, by the package

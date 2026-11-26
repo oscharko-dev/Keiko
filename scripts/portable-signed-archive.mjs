@@ -14,6 +14,7 @@ import {
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
 import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 
 export class PortableSignedArchiveError extends Error {}
@@ -160,10 +161,13 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
 // one matching SBOM component.
 function rebindNativeTools(stageRoot, manifest, resourceRoot) {
   if (manifest.nativeTools === undefined) return;
-  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+  if (!nativeToolSetIsValid(manifest.nativeTools)) {
     fail("signed payload must contain exactly one native tool");
   }
-  const tool = manifest.nativeTools[0];
+  for (const tool of manifest.nativeTools) rebindNativeTool(stageRoot, resourceRoot, tool);
+}
+
+function rebindNativeTool(stageRoot, resourceRoot, tool) {
   const executable = containedToolPath(resourceRoot, tool);
   const entry = lstatSync(executable);
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
