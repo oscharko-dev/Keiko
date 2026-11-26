@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
+import { emitRuntimeExitDiagnostic } from "../../packages/keiko-server/src/coding-runtime/codingRuntimeManager.js";
 import { defaultServerDiagnosticSink } from "../../packages/keiko-server/src/diagnostics-log.js";
 import {
   NativeRuntimeTree,
@@ -33,6 +34,7 @@ const LEAK_PATTERN = /[\\/]|[A-Z]:|\.exe|\s--|Access is denied|0x[0-9a-f]{8}/iu;
 
 interface TimelineLine {
   readonly op?: string | undefined;
+  readonly frames?: readonly string[] | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
 }
 
@@ -110,16 +112,9 @@ describe("Windows supervisor boundary in the Activity Log and the support analyz
     return timeline.lines;
   }
 
+  // The manager's own emitter writes the line; only the refusal word comes from the tree.
   function exitLineOf(runId: string, word: string): void {
-    defaultServerDiagnosticSink.record({
-      correlationId: runId,
-      timestamp: new Date().toISOString(),
-      operation: "coding-runtime.exit",
-      source: "coding-runtime-manager.exit",
-      errorClass: "RuntimeUnexpectedExit",
-      message: "runtime-exit-code",
-      code: word,
-    });
+    emitRuntimeExitDiagnostic(defaultServerDiagnosticSink, runId, null, Date.now, word);
   }
 
   // The manager writes the refusal word of the real tree on the exit line; here the tree is driven
@@ -144,7 +139,14 @@ describe("Windows supervisor boundary in the Activity Log and the support analyz
     );
     expect(lines).toHaveLength(1);
     expect(lines[0]?.extra?.code).toBe(word);
-    expect(JSON.stringify(lines)).not.toMatch(LEAK_PATTERN);
+    expect(JSON.stringify(lines.map((line) => line.extra))).not.toMatch(LEAK_PATTERN);
+    // The only path on the line is the repository-relative Keiko frame of the exit handler
+    // (ADR-0173 D3), never an absolute or machine path.
+    expect(lines[0]?.frames).toEqual([
+      expect.stringMatching(
+        /^packages\/keiko-server\/src\/coding-runtime\/codingRuntimeManager\.ts:\d+:\d+$/u,
+      ),
+    ]);
   });
 
   it("keeps each refusal word distinct across runs in one log", () => {
