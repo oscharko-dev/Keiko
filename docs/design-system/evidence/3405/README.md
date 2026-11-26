@@ -931,3 +931,15 @@ the original nine Chromium cases passed in 1.7 minutes in the Linux gates image 
 and Node 26.13.1, and `npm run check:update-ui-evidence` passes. Only the three producer records
 were kept; the fourteen committed captures, updater assertions and harness inputs retain their
 existing values.
+
+## Notice specificity on the merged M1 head — 2026-11-26 (#4103, #4491)
+
+#4556 is carried on the Milestone 1 pull request #4562. A review found that the notice's own
+forced-colours rule tied the critical notice's rule in `globals.css` at specificity (0,2,0), so in
+the critical severity the result still depended on the stylesheet order. The rule now uses the
+doubled class (0,3,0). On 2026-11-26 (UTC), on the merged sources, the notice's a11y smoke passed in
+Chromium and Firefox (six cases each), the original nine updater cases passed in 1.6 minutes in the
+Linux gates image with an init process, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
+`npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed there. Only
+the three producer records were kept; the fourteen committed captures, updater assertions and
+harness inputs retain their existing values.
