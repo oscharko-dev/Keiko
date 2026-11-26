@@ -206,7 +206,8 @@ function assertPatchedResult(outcome) {
   assert.equal(result.nodeTest.passes, "2", "both test files ran");
   assert.match(
     result.globalPipe,
-    /^error:(EACCES|EPERM)$/u,
+    // libuv reports ERROR_ACCESS_DENIED from CreateNamedPipe as EADDRINUSE on a pipe bind.
+    /^error:(EACCES|EPERM|EADDRINUSE)$/u,
     `a global pipe is still refused: ${JSON.stringify(result)}`,
   );
   assert.equal(result.localPipe, "listening", "a LOCAL pipe is allowed (positive control)");
