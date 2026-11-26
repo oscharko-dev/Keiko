@@ -120,6 +120,11 @@ async function startChildren() {
   const env = process.env;
   const answer = {
     write: write("written.txt"),
+    systemChild: (() => {
+      const cmd = (env.SystemRoot || "C:\\Windows") + "\\System32\\cmd.exe";
+      const result = spawnSync(cmd, ["/d", "/c", "exit 7"], { stdio: "ignore", windowsHide: true, cwd: env.SystemRoot });
+      return result.error === undefined ? "exit:" + String(result.status) : "error:" + result.error.code;
+    })(),
     child: (() => {
       const result = spawnSync(process.execPath, ["-e", "process.exitCode = 7"], { stdio: "ignore", windowsHide: true });
       return result.error === undefined ? "exit:" + String(result.status) : "error:" + result.error.code;
@@ -426,6 +431,7 @@ function checkOutside(answer, staged) {
   check("write-into-root-allowed", "(c)", answer.write === "ok", answer.write);
   // A test command starts children (Maven starts Java): a plain child of the step runs.
   check("plain-child-runs", "(b)", answer.child === "exit:7", answer.child);
+  check("system-child-runs", "(b)", answer.systemChild === "exit:7", answer.systemChild);
   check("write-landed-in-root", "(c)", existsSync(join(staged.execution, "written.txt")));
   check("outside-read-refused", "(c)", refused(answer.outside), answer.outside);
   check("outside-write-refused", "(c)", refused(answer.outsideWrite), answer.outsideWrite);
