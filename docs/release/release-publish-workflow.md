@@ -629,11 +629,11 @@ as in step 3 of the publication order; the customer-shape qualifier drops its `K
 same change.
 
 The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, which was then the one OpenCode every Keiko
-channel ran (2.4.1 since #4546; its runtime packages follow when the owner publishes them).
+channel ran (2.4.1 with the 1.1.8 packages, 2.4.2 with the 1.1.9 packages since #4546).
 Their reviewed entry is in `docs/release/coding-runtime-npm-packages.json` for `macos-arm64` and
 `macos-x64`. The Windows package's reviewed entry is under 1.1.7 (see "The Windows package is
-published" above); the registry holds it since 2026-11-20 and the root manifest selects
-it. Build each macOS
+published" above); the registry holds it since 2026-11-20, and the root manifest selected it
+until the 1.1.8 change. Build each macOS
 target as above at 1.1.5 from a clean `dev` checkout: first the three-argument build, which writes
 the package directory (`node scripts/build-coding-runtime-npm-package.mjs <target> 1.1.5 <package dir>`),
 then `--pack`, then `--verify`; `--pack` and `--verify` only inspect an existing package directory.
@@ -641,7 +641,8 @@ A fresh clone must `git fetch origin <helperSourceCommit>` first (the commit nam
 `NPM_LANE_RUNTIME_APPROVALS`): `--pack` compares `native/secure-workspace-read` with it and stops with
 a bare exit 128 when the object is missing. The prerelease `coding-runtime-1.1.5` carries each
 tarball under its pinned name and each `receipt.json` renamed `<tarball without .tgz>.receipt.json`.
-Both macOS 1.1.5 packages are published, and the root manifest and lockfile select 1.1.5.
+Both macOS 1.1.5 packages are published, and the root manifest and lockfile selected 1.1.5 until
+the 1.1.8 change.
 `release-publish.mjs` refuses a product release while a root runtime pin carries another OpenCode
 than `portable-runtime-approvals.json` approves, so a retired package carrying OpenCode 2.1.4
 cannot ship by accident.
