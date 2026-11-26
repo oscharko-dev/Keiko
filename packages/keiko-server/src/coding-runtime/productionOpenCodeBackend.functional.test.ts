@@ -641,6 +641,15 @@ async function runProductiveScenario(
     pipeline.verification.events.find((event) => event.kind === "run-completed"),
   ).toMatchObject({ report: { overallStatus: "passed" } });
   pipeline.deps.codingSafeActivityProjection?.recordDrop(run.runId, "validation-rejected");
+  // A Stop on a run that already settled dismisses its feed; a Stop that still cancels a live run
+  // keeps it (owner decision 2026-10-30, #3907). The real child may report the verification before
+  // the run settles, so wait for the settlement this pin is about instead of racing it.
+  await vi.waitFor(
+    () => {
+      expect(pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("succeeded");
+    },
+    { timeout: 30_000, interval: 100 },
+  );
   await stopRun(pipeline.baseUrl, run.runId);
   await expect(codingAppSessionSnapshot(pipeline.baseUrl, sessionCookie)).resolves.toEqual({
     schemaVersion: "1",
