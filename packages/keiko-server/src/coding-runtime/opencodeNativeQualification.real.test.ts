@@ -530,8 +530,15 @@ function boundConfigurationEnv(
   const content = env.OPENCODE_CONFIG_CONTENT;
   // The launch profile decides which runs carry the binding (`launchEnvironment`: the native
   // profile, or a run whose model needs its reasoning continued); a run it gave none keeps its
-  // whole configuration in the private file, whatever its profile is called.
-  if (content === undefined) return {};
+  // whole configuration in the private file. This fixture's geometry asks for no reasoning
+  // continuation, so only the native profile must carry it: a native launch without it is a lost
+  // server-owned binding, never a run to qualify.
+  if (content === undefined) {
+    if ((options.toolProfile ?? "native") === "native") {
+      throw new Error("fixture-config-content-missing");
+    }
+    return {};
+  }
   const bound = JSON.parse(content) as Record<string, unknown>;
   const alias = options.modelAlias;
   return {
