@@ -117,6 +117,9 @@ export default defineConfig({
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
     timeout: 600_000,
+    // A live qualification reaches the operator's real Model Gateway, so it is not hermetic
+    // (AGENTS.md §7): the server keeps the operator's own outbound settings, and the hermetic pin
+    // exempts the configs of `:live` scripts.
     env: {
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_UI_PORT: String(publicPort),

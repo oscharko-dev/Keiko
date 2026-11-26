@@ -9864,6 +9864,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      staleHitsSkipped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      misplacedHitsSkipped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      unreadableHitsSkipped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       resultPathSha256: {
         type: "string-array",
         dataClass: "digest",
@@ -17323,6 +17338,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["pending", "running", "failed", "succeeded", "denied"],
+      },
+      refusedFromState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["absent", "pending", "running", "succeeded", "failed", "denied", "cancelled"],
+      },
+      refusedToState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["pending", "running", "succeeded", "failed", "denied", "cancelled"],
+      },
+      refusedSignalSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["opencode", "keiko"],
       },
       rejection: {
         type: "string",

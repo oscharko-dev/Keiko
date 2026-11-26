@@ -71,4 +71,46 @@ describe("codingSafeActivityProjection finalizeIngest invariant-violation purge 
     });
     expect(JSON.stringify(records)).not.toContain("msg_user_0");
   });
+
+  it("applies a signal again after a capacity rollback refused it", async () => {
+    validateMock.mockReset();
+    const { validateCodingSafeActivityFeed: realValidate } = await vi.importActual<
+      typeof import("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity")
+    >("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity");
+    validateMock.mockImplementation(realValidate);
+    const { createCodingSafeActivityProjection } =
+      await import("./codingSafeActivityProjection.js");
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      // One turn is already near the turn limit, so the next signal takes a rollback snapshot.
+      limits: { maxTurns: 1 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, {
+      kind: "message",
+      messageId: "msg_user_0",
+      role: "user",
+      occurredAt: "2026-07-18T17:00:00.000Z",
+    });
+    const answer = {
+      kind: "message",
+      signalId: "signal-answer",
+      messageId: "msg_answer",
+      role: "assistant",
+      parentMessageId: "msg_user_0",
+      occurredAt: "2026-07-18T17:00:00.001Z",
+    } as const;
+    validateMock.mockReturnValueOnce({ ok: false, value: undefined, errors: ["forced for test"] });
+
+    expect(projection.ingest(RUN_ID, answer)).toBe(false);
+    expect(JSON.stringify(projection.currentContent())).not.toContain("msg_answer");
+    // The rolled-back signal was never applied, so its redelivery is applied, not deduplicated.
+    expect(projection.ingest(RUN_ID, answer)).toBe(true);
+    expect(JSON.stringify(projection.currentContent())).toContain("msg_answer");
+  });
 });

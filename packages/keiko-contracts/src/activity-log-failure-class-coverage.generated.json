@@ -11592,6 +11592,12 @@
               "required": false
             },
             {
+              "name": "misplacedHitsSkipped",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outputBytes",
               "type": "integer",
               "dataClass": "count",
@@ -11646,6 +11652,12 @@
               "required": false
             },
             {
+              "name": "staleHitsSkipped",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "state",
               "type": "string",
               "dataClass": "closed-enum",
@@ -11665,6 +11677,12 @@
             },
             {
               "name": "unreadableFilesSkipped",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "unreadableHitsSkipped",
               "type": "integer",
               "dataClass": "count",
               "required": false
@@ -20027,6 +20045,24 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "refusedFromState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusedSignalSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusedToState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "rejection",

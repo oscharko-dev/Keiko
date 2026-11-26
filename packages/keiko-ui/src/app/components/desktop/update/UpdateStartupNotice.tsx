@@ -10,6 +10,7 @@ import type { UpdateStartupNoticeContentProps } from "./UpdateStartupNoticeConte
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { hasStartupUpdateSignal, startupUpdateNoticeKind } from "./update-copy";
+import noticeStyles from "./UpdateStartupNotice.module.css";
 
 const NoticeContent = dynamic(
   () =>
@@ -34,14 +35,17 @@ function NoticeLoadFailure({
 }: UpdateStartupNoticeContentProps): ReactNode {
   const t = useTranslate();
   return (
-    <output className="update-notice" aria-label={t("window.type.updates.title")}>
+    <output
+      className={`update-notice ${noticeStyles.cmpNotice}`}
+      aria-label={t("window.type.updates.title")}
+    >
       <span className="update-notice-body">
-        <span>{t("updates.notice.loadFailed")}</span>
+        <span className={noticeStyles.cmpNoticeText}>{t("updates.notice.loadFailed")}</span>
       </span>
       <span className="update-notice-actions">
         <button
           type="button"
-          className="update-notice-primary"
+          className={`update-notice-primary ${noticeStyles.cmpNoticeAction}`}
           onClick={() => {
             dismiss(report);
             openUpdates();
@@ -51,7 +55,7 @@ function NoticeLoadFailure({
         </button>
         <button
           type="button"
-          className="update-notice-dismiss"
+          className={`update-notice-dismiss ${noticeStyles.cmpNoticeAction}`}
           onClick={() => {
             dismiss(report);
           }}

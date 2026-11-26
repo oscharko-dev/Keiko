@@ -5,6 +5,7 @@ import {
   REAL_BINARY_DEFAULT_UI_PORT,
   realBinaryStateDir,
 } from "../support/coding-runtime-2483-real-binary.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #2483 — the #2386 Milestone-1 browser journey, now against the staged approved OpenCode
 // payload. The web server supplies no resolver, ports, supervisor, or KEIKO_OPENCODE_REAL_* seam;
@@ -60,6 +61,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 600_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_E2E_STATE_DIR: stateDir,
       KEIKO_E2E_UI_PORT: String(publicPort),

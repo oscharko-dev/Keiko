@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
-import { devServerEnv } from "./support/dev-server-env.js";
+import { devServerEnv, HERMETIC_OUTBOUND_ENV } from "./support/dev-server-env.js";
 import { e2eStateDir } from "./support/e2e-state-dir.js";
 
 const root = process.cwd();
@@ -49,7 +49,11 @@ export default defineConfig({
       url: `http://127.0.0.1:${String(modelPort)}/healthz`,
       reuseExistingServer: false,
       timeout: 30_000,
-      env: { KEIKO_OS_KEYCHAIN: "off", KEIKO_E2E_MODEL_PORT: String(modelPort) },
+      env: {
+        ...HERMETIC_OUTBOUND_ENV,
+        KEIKO_OS_KEYCHAIN: "off",
+        KEIKO_E2E_MODEL_PORT: String(modelPort),
+      },
     },
     {
       cwd: root,

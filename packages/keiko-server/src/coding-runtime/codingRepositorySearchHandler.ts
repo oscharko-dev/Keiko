@@ -135,6 +135,9 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
     binaryFilesSkipped: { type: "integer", dataClass: "count", required: false },
     oversizedFilesSkipped: { type: "integer", dataClass: "count", required: false },
     unreadableFilesSkipped: { type: "integer", dataClass: "count", required: false },
+    staleHitsSkipped: { type: "integer", dataClass: "count", required: false },
+    misplacedHitsSkipped: { type: "integer", dataClass: "count", required: false },
+    unreadableHitsSkipped: { type: "integer", dataClass: "count", required: false },
     resultPathSha256: {
       type: "string-array",
       dataClass: "digest",

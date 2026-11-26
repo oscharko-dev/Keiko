@@ -22,6 +22,7 @@ const REQUIRED_SURFACE_IDS = [
   "editor",
   "git-window",
   "delete-confirm",
+  "update-notice",
 ] as const;
 
 describe("a11y smoke coverage contract", () => {
@@ -59,6 +60,12 @@ describe("a11y smoke spec wiring", () => {
     expect(specSource).toContain("for (const surface of A11Y_SURFACES)");
     expect(specSource).toContain("for (const theme of A11Y_THEMES)");
     expect(specSource).toContain("for (const mode of A11Y_CONTRAST_MODES)");
+  });
+
+  it("measures the startup update notice in every contrast mode", () => {
+    // The hermetic smoke server never reports a newer release, so the notice is pinned in the page;
+    // without the contrast-mode case its light, high-contrast and forced-colors palette went unmeasured.
+    expect(specSource).toContain("startup update notice holds up across contrast modes");
   });
 
   it("registers an opener for every contracted surface", () => {

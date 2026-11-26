@@ -491,6 +491,10 @@ describe("canonical catalog facade bridge", () => {
     ["TIMED_OUT", "timeout", "deadline-exceeded"],
     ["CANCELLED", "cancelled", "explicit-cancellation"],
     ["WORKSPACE_ACCESS_LOST", "denied", "workspace-denied"],
+    // #4130 lab: a refused discovery is the model's own request, never a handler fault.
+    ["WORKSPACE_DISCOVERY_SCOPE_DENIED", "denied", "workspace-denied"],
+    ["WORKSPACE_DISCOVERY_INVALID_REQUEST", "invalid", "invalid-arguments"],
+    ["WORKSPACE_DISCOVERY_TIMEOUT", "timeout", "deadline-exceeded"],
   ] as const)(
     "settles a %s refusal as %s / %s below error level and keeps the handler result",
     async (code, status, reason) => {

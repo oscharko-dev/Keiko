@@ -1,0 +1,29 @@
+/* Forced colours: the notice's gradient and its buttons' mixed tints are authored colours the UA
+   only partly replaces. In a dark theme the buttons and the notice text kept their light colour over
+   a forced white face (1.08:1). Defer the notice, its text and its buttons to system colours. The
+   [data-severity] forms match the critical notice's own selectors, so they hold in both severities. */
+@media (forced-colors: active) {
+  .cmpNotice,
+  .cmpNotice[data-severity] {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  /* The doubled class outranks the critical icon rule in globals.css (0,3,0), so the result does
+     not depend on which stylesheet the page loads last. */
+  .cmpNotice .cmpNoticeText,
+  .cmpNotice[data-severity] .cmpNoticeText.cmpNoticeText {
+    color: CanvasText;
+  }
+
+  /* Canvas/CanvasText, not ButtonFace/ButtonText: only that pair is a guaranteed contrast pair in
+     every engine. WebKit resolves ButtonFace/ButtonText from the colour scheme, and in the dark
+     theme their contrast fell below 4.5:1. The :hover form outranks the hover rules in globals.css. */
+  .cmpNotice .cmpNoticeAction,
+  .cmpNotice .cmpNoticeAction:hover {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}

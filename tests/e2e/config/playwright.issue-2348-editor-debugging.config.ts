@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createE2eDapOperatorProvisioning } from "../support/dapOperatorProvisioning.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 const root = process.cwd();
 const port = Number(process.env.KEIKO_E2E_DEBUG_UI_PORT ?? "32283");
@@ -46,6 +47,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 240_000,
     env: {
+      ...HERMETIC_OUTBOUND_ENV,
       KEIKO_OS_KEYCHAIN: "off",
       KEIKO_DAP_OPERATOR_PROVISIONING_JSON: provisioning,
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),

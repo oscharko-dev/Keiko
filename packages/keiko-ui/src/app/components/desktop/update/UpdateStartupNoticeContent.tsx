@@ -8,6 +8,7 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
+import noticeStyles from "./UpdateStartupNotice.module.css";
 import {
   startupUpdateNoticeKind,
   isPortableBootstrapSetupRequired,
@@ -73,7 +74,7 @@ function NoticeActions({
     <div className="update-notice-actions">
       <button
         type="button"
-        className="update-notice-primary"
+        className={`update-notice-primary ${noticeStyles.cmpNoticeAction}`}
         onClick={() => {
           dismiss(report);
           openUpdates();
@@ -83,7 +84,7 @@ function NoticeActions({
       </button>
       <button
         type="button"
-        className="update-notice-dismiss"
+        className={`update-notice-dismiss ${noticeStyles.cmpNoticeAction}`}
         onClick={() => {
           dismiss(report);
         }}
@@ -101,18 +102,20 @@ export function UpdateStartupNoticeContent(props: UpdateStartupNoticeContentProp
   const targetVersion = report.targetVersion ?? t("updates.versionUnknown");
   return (
     <aside
-      className="update-notice"
+      className={`update-notice ${noticeStyles.cmpNotice}`}
       data-severity={critical ? "critical" : "normal"}
       role={critical ? "alert" : "status"}
       aria-live={critical ? "assertive" : "polite"}
       aria-label={t("updates.notice.aria")}
     >
-      <span className="update-notice-icon" aria-hidden="true">
+      <span className={`update-notice-icon ${noticeStyles.cmpNoticeText}`} aria-hidden="true">
         {critical ? <InfoIcon size={17} /> : <ActivityIcon size={17} />}
       </span>
       <div className="update-notice-body">
-        <strong>{t(NOTICE_TITLE_KEYS[startupUpdateNoticeKind(report)])}</strong>
-        <span>{noticeBody(report, targetVersion, t)}</span>
+        <strong className={noticeStyles.cmpNoticeText}>
+          {t(NOTICE_TITLE_KEYS[startupUpdateNoticeKind(report)])}
+        </strong>
+        <span className={noticeStyles.cmpNoticeText}>{noticeBody(report, targetVersion, t)}</span>
       </div>
       <NoticeActions {...props} t={t} />
     </aside>
