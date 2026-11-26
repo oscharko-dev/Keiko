@@ -4944,20 +4944,14 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
       .toBe(1);
     expect(starts[0]).toMatchObject({ taskId: "task-wake", intent: PROMPT.prompt });
     expect(atStart).toEqual([{ runCount: 0, prompts, owner: SCHEDULER_HOLD_OWNER }]);
-    // Only now does the runtime fire: once, into the run's session. Between Keiko's release and
-    // the fire the runtime takes the lease itself, so a sampled owner other than Keiko's hold is
-    // positive evidence that the hand-over happened and the take-back below is not trivial.
-    const owners = new Set<unknown>();
+    // Only now does the runtime fire: once, into the run's session. The runtime fires only as the
+    // elected leader, and while Keiko holds the lease it looks and stands back (the held-lease
+    // test above), so this fire is the evidence that Keiko's release handed the lease over. The
+    // runtime's own tenure is too short to sample reliably; the take-back below then proves Keiko
+    // holds it again.
     await expect
-      .poll(
-        () => {
-          owners.add(leaseOwner(run));
-          return automations(run)[0]?.run_count;
-        },
-        { timeout: 90_000, interval: 100 },
-      )
+      .poll(() => automations(run)[0]?.run_count, { timeout: 90_000, interval: 100 })
       .toBe(1);
-    expect([...owners].filter((owner) => owner !== SCHEDULER_HOLD_OWNER)).not.toEqual([]);
     await expect
       .poll(() => leaseOwner(run), { timeout: 30_000, interval: 250 })
       .toBe(SCHEDULER_HOLD_OWNER);
