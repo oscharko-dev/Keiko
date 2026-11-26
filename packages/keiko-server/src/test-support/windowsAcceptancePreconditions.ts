@@ -7,7 +7,7 @@
 // booleans and counts only: never a path, a user name, a SID or a service name of the person.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { win32 } from "node:path";
 
 import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
@@ -93,8 +93,11 @@ const TOOL_TIMEOUT_MS = 10_000;
 const KEIKO_SERVICE_PREFIX = "Keiko";
 /** `sc.exe` status for a service that does not exist (ERROR_SERVICE_DOES_NOT_EXIST). */
 const SC_SERVICE_DOES_NOT_EXIST = 1060;
-/** The folder of named pipes, listed with `cmd.exe /c dir /b`: no `catch`, no pipe opened. */
-const PIPE_DIRECTORY = String.raw`\\.\pipe`;
+/**
+ * The named-pipe namespace, read as a directory so no pipe is opened and no server sees a client.
+ * `cmd.exe /c dir` cannot list it: on Windows 11 it answers "syntax is incorrect" (2026-11-26).
+ */
+const PIPE_DIRECTORY = `${String.raw`\\.\pipe`}${win32.sep}`;
 const CONTAINER_PIPES = ["docker_engine", "podman-machine-default"];
 const CONTAINER_APPLICATION_FOLDERS = [
   "Docker",
@@ -286,21 +289,23 @@ function runSystemTool(
   return { status: result.status, stdout: result.stdout };
 }
 
+/** The pipe names, or no answer when the namespace cannot be read, which the checker names. */
+function listPipes(): readonly string[] | undefined {
+  try {
+    return readdirSync(PIPE_DIRECTORY);
+  } catch (error) {
+    // A namespace the system refuses is a failed probe; anything else is a defect of the probe.
+    if (error instanceof Error && "code" in error) return undefined;
+    throw error;
+  }
+}
+
 /** The seams bound to this machine; only meaningful on Windows. */
 export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): WindowsProbeSeams {
   return {
     env,
     exists: (path) => existsSync(path),
-    pipes: (): readonly string[] | undefined => {
-      const { status, stdout } = runSystemTool(env, "cmd.exe", [
-        "/d",
-        "/c",
-        "dir",
-        "/b",
-        PIPE_DIRECTORY,
-      ]);
-      return status === 0 ? stdout.split(/\r?\n/u).filter((name) => name !== "") : undefined;
-    },
+    pipes: () => listPipes(),
     onPath: (program): boolean | undefined => {
       const { status } = runSystemTool(env, "where.exe", [program]);
       // `where.exe` answers 1 for a program that is not found; no status at all means it never ran.
