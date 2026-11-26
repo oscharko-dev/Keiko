@@ -528,11 +528,10 @@ function boundConfigurationEnv(
   options: LaunchOptions,
 ): Readonly<Record<string, string>> {
   const content = env.OPENCODE_CONFIG_CONTENT;
-  if (content === undefined) {
-    if ((options.toolProfile ?? "native") === "native")
-      throw new Error("fixture-config-content-missing");
-    return {};
-  }
+  // The launch profile decides which runs carry the binding (`launchEnvironment`: the native
+  // profile, or a run whose model needs its reasoning continued); a run it gave none keeps its
+  // whole configuration in the private file, whatever its profile is called.
+  if (content === undefined) return {};
   const bound = JSON.parse(content) as Record<string, unknown>;
   const alias = options.modelAlias;
   return {
@@ -4421,7 +4420,10 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     return join(run.fixture.state, "state", "opencode.db");
   }
 
-  /** Checks of half a second each: 35 s, past the producer's heartbeat and longest timer sleep. */
+  /**
+   * Checks of half a second each: 35 s, past the producer's lease heartbeat (20 s, a third of its
+   * 60 s lease) and its longest timer sleep (30 s).
+   */
   const HELD_LEASE_CHECKS = 70;
 
   /** The owner named in the producer's scheduler election row, read-only. */
@@ -4457,8 +4459,8 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
   // (code-mode) profile, each with the whole configuration in the run's private file.
   const NON_NATIVE_PROFILES = ["direct", "code-mode"] as const;
   const FOREIGN_PROMPT = "A foreign automation woke this session.";
-  /** Checks of half a second each: 35 s, past the producer's heartbeat and longest timer sleep. */
-  const UNFIRED_CHECKS = HELD_LEASE_CHECKS;
+  /** Checks of half a second each: 70 s, past two of the producer's longest timer sleeps (30 s). */
+  const UNFIRED_CHECKS = 140;
 
   /**
    * A due row as an older runtime or a foreign write leaves it, in the run's own database: the
@@ -4538,7 +4540,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
         seedForeignDueAutomation(run);
         const prompts = run.gateway.requests.length;
         const messages = (await run.client.messages(run.sessionId)).length;
-        // Re-checked for longer than the producer's heartbeat and its longest timer sleep: the row
+        // Re-checked for longer than two of the producer's longest timer sleeps: the row
         // stays active and unfired, no prompt reaches the model and the session gains no message.
         for (let check = 0; check < UNFIRED_CHECKS; check += 1) {
           await new Promise((resolve) => setTimeout(resolve, 500));
@@ -4553,7 +4555,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
         }
       });
     },
-    120_000,
+    180_000,
   );
 
   // The control of the two cases above: with the scheduler on, the same API call creates an
@@ -4696,7 +4698,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
           create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
         );
         const prompts = run.gateway.requests.length;
-        // Re-checked for longer than the producer's lease heartbeat (10 s) and its longest timer
+        // Re-checked for longer than the producer's lease heartbeat (20 s) and its longest timer
         // sleep (30 s): the automation stays unfired, no prompt reaches the model, and the lease
         // row still names Keiko, so the runtime looked and stood back rather than never looking.
         for (let check = 0; check < HELD_LEASE_CHECKS; check += 1) {
@@ -4740,29 +4742,10 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
           run,
           create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
         );
-        // A task is retained once its turn has settled: the runtime reports no active session.
-        await expect
-          .poll(async () => Object.keys(await run.client.active()).length, {
-            timeout: 30_000,
-            interval: 250,
-          })
-          .toBe(0);
         const storeRoot = mkdtempSync(join(tmpdir(), "keiko-wake-store-"));
         try {
           const store = createRetainedSessionStore({ root: storeRoot });
-          const retained = store.retain({
-            binding: {
-              taskId: "task-wake",
-              workspaceKey: createHash("sha256").update("wake").digest("hex"),
-              runtimeVersion: OPENCODE_PINNED_VERSION,
-              maxInputTokens: 24_000,
-            },
-            sessionId: run.sessionId,
-            directory: run.fixture.workspace,
-            sourceDatabase: database(run),
-            scheduleConsentMode: "autonomous-delivery",
-          });
-          expect(retained).toMatchObject({ ok: true });
+          await retainWakeTask(run, store);
           await wakeThroughKeiko(run, store);
         } finally {
           rmSync(storeRoot, { recursive: true, force: true });
@@ -4771,6 +4754,32 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     },
     240_000,
   );
+
+  /** Retains the run's task as Coding History does once a turn settled: no active session. */
+  async function retainWakeTask(
+    run: Run,
+    store: ReturnType<typeof createRetainedSessionStore>,
+  ): Promise<void> {
+    await expect
+      .poll(async () => Object.keys(await run.client.active()).length, {
+        timeout: 30_000,
+        interval: 250,
+      })
+      .toBe(0);
+    const retained = store.retain({
+      binding: {
+        taskId: "task-wake",
+        workspaceKey: createHash("sha256").update("wake").digest("hex"),
+        runtimeVersion: OPENCODE_PINNED_VERSION,
+        maxInputTokens: 24_000,
+      },
+      sessionId: run.sessionId,
+      directory: run.fixture.workspace,
+      sourceDatabase: database(run),
+      scheduleConsentMode: "autonomous-delivery",
+    });
+    expect(retained).toMatchObject({ ok: true });
+  }
 
   interface WakeObservation {
     readonly starts: ScheduledWakePlan[];
@@ -4846,10 +4855,20 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
       .toBe(1);
     expect(starts[0]).toMatchObject({ taskId: "task-wake", intent: PROMPT.prompt });
     expect(atStart).toEqual([{ runCount: 0, prompts, owner: SCHEDULER_HOLD_OWNER }]);
-    // Only now does the runtime fire: once, into the run's session, and Keiko takes the lease back.
+    // Only now does the runtime fire: once, into the run's session. Between Keiko's release and
+    // the fire the runtime takes the lease itself, so a sampled owner other than Keiko's hold is
+    // positive evidence that the hand-over happened and the take-back below is not trivial.
+    const owners = new Set<unknown>();
     await expect
-      .poll(() => automations(run)[0]?.run_count, { timeout: 90_000, interval: 500 })
+      .poll(
+        () => {
+          owners.add(leaseOwner(run));
+          return automations(run)[0]?.run_count;
+        },
+        { timeout: 90_000, interval: 100 },
+      )
       .toBe(1);
+    expect([...owners].filter((owner) => owner !== SCHEDULER_HOLD_OWNER)).not.toEqual([]);
     await expect
       .poll(() => leaseOwner(run), { timeout: 30_000, interval: 250 })
       .toBe(SCHEDULER_HOLD_OWNER);
@@ -4866,6 +4885,15 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
       .filter((event) => event.op === "coding-runtime.schedule.wake")
       .map((event) => event.extra?.outcome);
     expect(wakeOutcomes).toContain("started");
+    // The next look settles the wake against the entry its run retained: the schedule fired.
+    await retainWakeTask(run, store);
+    await wakes.tick();
+    const settled = sink.events.filter(
+      (event) => event.op === "coding-runtime.schedule.wake" && event.extra?.outcome === "fired",
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.extra?.firedCount).toBe(1);
+    expect(starts).toHaveLength(1);
   }
 });
 

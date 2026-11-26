@@ -17,6 +17,8 @@ vi.mock("@/lib/coding-app-session-client", () => ({
 vi.mock("@/lib/http", () => ({ bffFetchJson: vi.fn() }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
+// The route root of `coding-schedules-api.ts` (not exported there). The real API module sits under
+// the component, so a drift fails here: the simulated server only answers paths under this root.
 const ROOT = "/api/coding-workbench/runtime/schedules";
 const DUE = "2026-11-26T09:30:00.000Z";
 
