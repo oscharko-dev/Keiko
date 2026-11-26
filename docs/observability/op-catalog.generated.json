@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6e4919e9a10a3b1e9f52135b570bbe502d3ff6c8fadc361f4aabc6828ceb3f93",
+    "catalogDigest": "4cdbd6af33d5eb5c127f79a170e74b2eaf0f93f6e21f30a2cadbd1e5512e2963",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22461,7 +22461,7 @@
         "proofIds": ["editor.verification.windows-step-node.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/windowsStepNode.ts:23",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepNode.ts:194"]
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepNode.ts:174"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -127832,7 +127832,7 @@
     {
       "op": "editor.verification.windows-step-supervisor.step-node-unreadable",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepNode.ts:174",
+      "site": "packages/keiko-server/src/editor/windowsStepNode.ts:154",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
