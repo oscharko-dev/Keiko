@@ -244,12 +244,8 @@ function projectionObservation(
 interface ProjectionState {
   readonly matcher: ReturnType<typeof buildMatcher>;
   readonly query: RetrievalQuery;
-  /**
-   * The most recently projected files, so a file's hits share one read, one redaction and one line
-   * index. Bounded: each entry holds up to several copies of a file of up to 2 MiB.
-   */
-  readonly sources: Map<string, ProjectedSource>;
-  hits: CodingRepositoryHit[];
+  /** The projected hit of each atom, by the atom's position in the scan's ranked order. */
+  readonly hits: (CodingRepositoryHit | undefined)[];
   staleHits: number;
   misplacedHits: number;
   unreadableHits: number;
@@ -272,17 +268,19 @@ async function projectSearchHits(
   const state: ProjectionState = {
     matcher: buildMatcher(query, literal ? { kind: "literal" } : undefined),
     query,
-    sources: new Map(),
     hits: [],
     staleHits: 0,
     misplacedHits: 0,
     unreadableHits: 0,
   };
-  for (const atom of atoms) {
+  // A file's hits are projected together, from one read, one redaction and one line index, so
+  // ranked hits of several files never read a file twice and only one file is held at a time.
+  // Files go in the order of their best-ranked hit; the hits keep the scan's ranked order.
+  for (const file of atomsByFile(atoms)) {
     assertStructuralExecutionActive(context.control);
     try {
       assertStructuralExecutionActive(control);
-      await projectAtom(projection, state, atom);
+      await projectFile(projection, state, file);
     } catch (error) {
       assertStructuralExecutionActive(context.control);
       if (error instanceof StructuralExecutionStoppedError && error.reason === "timeout") {
@@ -296,7 +294,7 @@ async function projectSearchHits(
 
 function projectedHits(state: ProjectionState): Omit<ProjectedSearchHits, "truncated"> {
   return {
-    hits: state.hits,
+    hits: state.hits.filter((hit): hit is CodingRepositoryHit => hit !== undefined),
     staleHits: state.staleHits,
     misplacedHits: state.misplacedHits,
     unreadableHits: state.unreadableHits,
@@ -309,31 +307,58 @@ interface ProjectedSearchHits {
   /** Hits whose file no longer holds the match at all: it changed after the scan. */
   readonly staleHits: number;
   /**
-   * Hits whose file still holds the match, but not at the reported lines. With an unchanged file
-   * that is a defect in the scan's line selection, so it is counted apart from a stale hit.
+   * Hits whose file still holds the match, but not at the reported lines, or that carry no lines.
+   * With an unchanged file that is a defect in the scan, so it is counted apart from a stale hit.
    */
   readonly misplacedHits: number;
   /** Hits whose file could no longer be read after the scan. */
   readonly unreadableHits: number;
 }
 
-async function projectAtom(
+interface FileAtoms {
+  readonly path: string;
+  readonly atoms: { readonly position: number; readonly atom: EvidenceAtom }[];
+}
+
+function atomsByFile(atoms: readonly EvidenceAtom[]): readonly FileAtoms[] {
+  const files = new Map<string, FileAtoms>();
+  atoms.forEach((atom, position) => {
+    const file = files.get(atom.scopePath) ?? { path: atom.scopePath, atoms: [] };
+    file.atoms.push({ position, atom });
+    files.set(atom.scopePath, file);
+  });
+  return [...files.values()];
+}
+
+async function projectFile(
   context: CodingRepositoryContext,
   state: ProjectionState,
-  atom: EvidenceAtom,
+  file: FileAtoms,
 ): Promise<void> {
-  const hit = await projectSearchHit(context, state, atom).catch((error: unknown): "unreadable" => {
-    // A file the projection can no longer read (it vanished, its identity changed, it is no
-    // longer text or exceeds the size cap) loses its hits alone; nothing of it is shown. Denied and
-    // escaping paths, timeouts and cancellation are other error classes and still end the search.
-    if (error instanceof WorkspaceReadError || error instanceof FileTooLargeError)
-      return "unreadable";
-    throw error;
-  });
-  if (hit === "unreadable") state.unreadableHits += 1;
-  else if (hit === "stale") state.staleHits += 1;
-  else if (hit === "misplaced") state.misplacedHits += 1;
-  else state.hits.push(hit);
+  const source = await projectedSource(context, state, file.path).catch(
+    (error: unknown): undefined => {
+      // A file the projection can no longer read (it vanished, its identity changed, it is no
+      // longer text or exceeds the size cap) loses its hits alone; nothing of it is shown. Denied
+      // and escaping paths, timeouts and cancellation are other error classes and still end the
+      // search: a file swapped for a link after the scan is refused, never skipped.
+      if (error instanceof WorkspaceReadError || error instanceof FileTooLargeError)
+        return undefined;
+      throw error;
+    },
+  );
+  if (source === undefined) {
+    state.unreadableHits += file.atoms.length;
+    return;
+  }
+  let holdsMatch: boolean | undefined;
+  const matchesAnywhere = (): boolean =>
+    (holdsMatch ??= matchesWithin(state, source, 0, source.physicalLines.length - 1));
+  for (const { position, atom } of file.atoms) {
+    const hit = projectSearchHit(state, source, atom, matchesAnywhere);
+    if (hit === "stale") state.staleHits += 1;
+    else if (hit === "misplaced") state.misplacedHits += 1;
+    else state.hits[position] = hit;
+  }
 }
 
 function searchObservation(
@@ -452,8 +477,6 @@ export async function executeCodingRepositoryRequest(
   }
 }
 
-const PROJECTED_SOURCE_CACHE_FILES = 4;
-
 function matchesWithin(
   state: ProjectionState,
   source: ProjectedSource,
@@ -473,26 +496,13 @@ async function projectedSource(
   state: ProjectionState,
   path: string,
 ): Promise<ProjectedSource> {
-  const cached = state.sources.get(path);
-  if (cached !== undefined) {
-    // Most recently used last, so the bound below evicts the file used longest ago.
-    state.sources.delete(path);
-    state.sources.set(path, cached);
-    return cached;
-  }
   const text = await readCodingText(context, path);
-  const source: ProjectedSource = {
+  return {
     prepared: prepareCodingRepositorySource(text),
     physicalLines: repositoryPhysicalLines(text),
     sourceLines:
       state.query.kind === "natural-language" ? repositorySourceLines(text, path) : undefined,
   };
-  state.sources.set(path, source);
-  for (const oldest of state.sources.keys()) {
-    if (state.sources.size <= PROJECTED_SOURCE_CACHE_FILES) break;
-    state.sources.delete(oldest);
-  }
-  return source;
 }
 
 /**
@@ -500,18 +510,16 @@ async function projectedSource(
  * it only outside the reported lines (`misplaced`). Such a hit is never shown, and it no longer
  * fails the search and every other hit with it.
  */
-async function projectSearchHit(
-  context: CodingRepositoryContext,
+function projectSearchHit(
   state: ProjectionState,
+  source: ProjectedSource,
   atom: EvidenceAtom,
-): Promise<CodingRepositoryHit | "stale" | "misplaced"> {
+  matchesAnywhere: () => boolean,
+): CodingRepositoryHit | "stale" | "misplaced" {
   const range = atom.lineRange;
   if (range === undefined) return "misplaced";
-  const source = await projectedSource(context, state, atom.scopePath);
-  const firstIndex = range.startLine - 1;
-  const lastIndex = range.endLine - 1;
-  if (!matchesWithin(state, source, firstIndex, lastIndex)) {
-    return matchesWithin(state, source, 0, source.physicalLines.length - 1) ? "misplaced" : "stale";
+  if (!matchesWithin(state, source, range.startLine - 1, range.endLine - 1)) {
+    return matchesAnywhere() ? "misplaced" : "stale";
   }
   return codingRepositorySourceExcerpt(
     atom.scopePath,

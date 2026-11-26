@@ -363,23 +363,89 @@ describe("coding repository search completeness", () => {
     });
   });
 
-  it("returns every hit when more files hold hits than the projection keeps at once", async () => {
+  it("reads each of many files with several hits once", async () => {
     const files = Object.fromEntries(
       Array.from({ length: 6 }, (_, index) => [
         `file-${String(index)}.html`,
-        `CodingCoverageProbe ${String(index)}\nfiller\nCodingCoverageProbe again`,
+        `CodingCoverageProbe CodingCoverageProbe CodingCoverageProbe ${String(index)}\nfiller\nCodingCoverageProbe`,
       ]),
     );
+    const base = memFs(ROOT, files);
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    const reads = new Map<string, number>();
     const result = await executeCodingRepositoryRequest(workspace, request, {
-      fs: memFs(ROOT, files),
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> => {
+          reads.set(path, (reads.get(path) ?? 0) + 1);
+          return read(path, ...args);
+        },
+      },
     });
     if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
     expect(result.hits).toHaveLength(12);
-    expect(new Set(result.hits.map((hit) => hit.path)).size).toBe(6);
+    // One read by the scan, one by the projection, however the ranked hits interleave.
+    expect([...reads.values()]).toEqual(Array.from({ length: 6 }, () => 2));
     expect(result.diagnostics).toMatchObject({
       staleHitsSkipped: 0,
       misplacedHitsSkipped: 0,
       unreadableHitsSkipped: 0,
     });
+  });
+
+  it("reads a vanished file once and leaves out all of its hits", async () => {
+    const base = memFs(ROOT, {
+      "kept.html": "CodingCoverageProbe kept",
+      "gone.html": "CodingCoverageProbe one\nCodingCoverageProbe two\nCodingCoverageProbe three",
+    });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let goneReads = 0;
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> => {
+          if (!path.endsWith("/gone.html")) return read(path, ...args);
+          goneReads += 1;
+          return goneReads > 1
+            ? Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" }))
+            : read(path, ...args);
+        },
+      },
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    expect(result.hits.map((hit) => hit.path)).toEqual(["kept.html"]);
+    expect(goneReads).toBe(2);
+    expect(result.diagnostics).toMatchObject({ unreadableHitsSkipped: 3, staleHitsSkipped: 0 });
+  });
+
+  it("still refuses the search when a file becomes a hard-linked alias after the scan", async () => {
+    const base = memFs(ROOT, {
+      "kept.html": "CodingCoverageProbe kept",
+      "aliased.html": "CodingCoverageProbe aliased",
+    });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    let aliasedReads = 0;
+    const search = executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: (path, ...args): Promise<Uint8Array> => {
+          if (path.endsWith("/aliased.html")) aliasedReads += 1;
+          return read(path, ...args);
+        },
+        // From the projection's read on, the file is a hard-linked alias. The workspace boundary
+        // refuses it, and that refusal is a trust signal, never a skipped hit.
+        stat: (path) => {
+          const stat = base.stat(path);
+          return aliasedReads >= 2 && path.endsWith("/aliased.html")
+            ? { ...stat, hardLinkCount: 2 }
+            : stat;
+        },
+      },
+    });
+    await expect(search).rejects.toMatchObject({ reason: "scope-denied" });
+    expect(aliasedReads).toBe(2);
   });
 });

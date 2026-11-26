@@ -129,8 +129,8 @@ export interface CodingRepositorySearchObservation {
     readonly unreadableFilesSkipped: number;
     /**
      * Hits left out after the scan: their file no longer holds the match (`staleHitsSkipped`),
-     * holds it only outside the reported lines (`misplacedHitsSkipped`; with an unchanged file a
-     * line-selection defect), or could no longer be read (`unreadableHitsSkipped`). Such a hit is
+     * holds it only outside the reported lines or the hit carries no lines (`misplacedHitsSkipped`;
+     * with an unchanged file a defect in the scan), or could no longer be read (`unreadableHitsSkipped`). Such a hit is
      * never shown; the search keeps its others.
      */
     readonly staleHitsSkipped: number;

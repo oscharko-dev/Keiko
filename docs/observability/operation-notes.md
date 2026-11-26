@@ -749,11 +749,13 @@ regression without the call id or any tool content.
 
 `coding-repository-handler.settled` counts the hits a repository search left out after the scan:
 `staleHitsSkipped` for a file that no longer held the match, `misplacedHitsSkipped` for one that
-held it only outside the reported lines, `unreadableHitsSkipped` for one that could no longer be
-read. A `misplacedHitsSkipped` above zero on a file nobody changed is a defect in the scan's line
-selection. Such a hit is never shown and no longer fails the search: its other
-hits are returned with the `io-error` truncation reason. The projection reads, redacts and indexes
-each file once, however many hits it holds.
+held it only outside the reported lines (or a hit without lines), `unreadableHitsSkipped` for one
+that could no longer be read. A `misplacedHitsSkipped` above zero on a file nobody changed is a
+defect in the scan. Such a hit is never shown and no longer fails the search: its other hits are
+returned with the `io-error` truncation reason. A path the workspace boundary refuses after the
+scan still fails the search (`scope-denied`). The projection reads, redacts and indexes each file
+once, however many hits it holds and however the ranked hits of several files interleave, and holds
+one file at a time.
 
 `coding-runtime.tool.failed` records one line per tool call that failed, under the run's id, also
 for a call the bounded feed had no room for; a call an explicit Stop or takeover cancelled is not a

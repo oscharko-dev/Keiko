@@ -1029,7 +1029,7 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
   // #4130 lab: a refused discovery reached the model as a bare code, and it retried the same call.
   discover: {
     [WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED]:
-      "This directory is outside what the run may read or is excluded. Do not retry it or route around the denial; discover in another directory of the workspace.",
+      "This directory is outside what the run may read or is excluded, or the workspace root changed during the discovery. Do not retry it or route around the denial; discover in another directory of the workspace.",
     [WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST]:
       "These discovery arguments are invalid. Pass directory as an existing folder relative to the workspace root (empty for the root, never an absolute path or ..), query as a non-empty glob or keywords, and maxResults as a whole number within the limit. Fix the arguments instead of retrying the same call.",
     [WORKSPACE_DISCOVERY_REFUSAL_CODES.TIMEOUT]:
