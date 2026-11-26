@@ -85,6 +85,25 @@ describe("selectEnforcingBackend", () => {
     ).toBe("container-podman");
   });
 
+  it("runs a Windows execution-root step under the pinned supervisor without a container (#4496)", () => {
+    const windows = { ...NONE, windowsAppContainer: true };
+    expect(selectEnforcingBackend("win32", windows, "execution-root")).toBe("windows-appcontainer");
+    // A present container runtime keeps the step, exactly as before, with or without the supervisor.
+    expect(selectEnforcingBackend("win32", { ...windows, docker: true }, "execution-root")).toBe(
+      "container-docker",
+    );
+    expect(selectEnforcingBackend("win32", { ...windows, podman: true }, "execution-root")).toBe(
+      "container-podman",
+    );
+    expect(selectEnforcingBackend("win32", { ...NONE, docker: true }, "execution-root")).toBe(
+      "container-docker",
+    );
+    // The supervisor confines execution-root steps only, and only on Windows.
+    expect(selectEnforcingBackend("win32", windows, "inherit")).toBe("none");
+    expect(selectEnforcingBackend("linux", windows, "execution-root")).toBe("none");
+    expect(selectEnforcingBackend("darwin", windows, "execution-root")).toBe("none");
+  });
+
   it("retains native macOS confinement for ordinary network-only runs", () => {
     expect(
       selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "inherit"),

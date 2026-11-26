@@ -171,6 +171,10 @@ export function holdRunScheduler(
     if (options.required === true && !existsSync(database))
       throw new Error("The runtime database holding the scheduler is missing.");
     const held = holdSchedulerLease(database);
+    // A native runtime's bound database has the scheduler tables; without them it could create
+    // them later and lead unheld, so that run fails its readiness too.
+    if (options.required === true && !held)
+      throw new Error("The runtime database has no scheduler for Keiko to hold.");
     recordScheduleLease(activityLog, {
       runId: run.runId,
       action,

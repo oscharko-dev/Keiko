@@ -97,10 +97,9 @@ async function listen(server) {
   return address.port;
 }
 
-// The fixture provider (`provider.invalid`) cannot be probed; since #3895 a Code run is admitted
-// only against a conversation the automatic readiness probe has verified, so the fixture answers
-// that one probe itself through the readiness egress seam, handed to the builder because that
-// probe starts during construction. Every productive turn still flows through the streaming seam
+// The fixture provider (`provider.invalid`) cannot be probed; a Code run is admitted only against
+// a conversation a readiness probe has verified (#3895), so the fixture answers that probe itself
+// through the readiness egress seam handed to the builder. Every productive turn still flows through the streaming seam
 // below; nothing reaches a network.
 function readinessProbeFetch() {
   return () =>
@@ -191,6 +190,18 @@ async function request(context, path, body) {
   return reply;
 }
 
+// Startup checks no model since 1.5.2 (ADR-0171 D2, amended 2026-11-16), and a run is admitted
+// only after a positive observation of its model. The fixture checks its model once, the way
+// Settings > Models does, before any timed step; the readiness seam answers that probe.
+async function checkModel(context) {
+  const report = await request(context, "/api/gateway/readiness", {
+    modelId: "functional-model",
+    options: { probes: ["chat"] },
+  }).then((reply) => reply.json());
+  if (report.overallStatus !== "ready")
+    throw new Error(`fixture-model-check-${String(report.overallStatus)}`);
+}
+
 async function prepare(context, repository, modules) {
   const paired = await request(
     context,
@@ -204,6 +215,7 @@ async function prepare(context, repository, modules) {
   const cookie = paired.headers.getSetCookie().at(0)?.split(";").at(0);
   if (cookie === undefined) throw new Error("fixture-pairing-cookie-missing");
   context.cookie = cookie;
+  await checkModel(context);
   const provisioned = await request(context, "/api/task-workspaces", {
     root: repository,
     taskId: "coding-performance",

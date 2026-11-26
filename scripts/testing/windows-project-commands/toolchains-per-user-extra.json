@@ -1,0 +1,99 @@
+{
+  "note": "Per-user JDK 21, PowerShell 7, Maven, Yarn and Scoop (run setup-toolchains.ps1 with -Scoop first); one read grant on %LOCALAPPDATA%\\Programs, the Maven project writable, its repository readable only.",
+  "path": [
+    "${home}\\AppData\\Local\\Programs\\jdk-21\\bin",
+    "${home}\\AppData\\Local\\Programs\\maven\\bin",
+    "${home}\\AppData\\Local\\Programs\\nodejs",
+    "${home}\\AppData\\Local\\Programs\\yarn"
+  ],
+  "env": {
+    "JAVA_HOME": "${home}\\AppData\\Local\\Programs\\jdk-21",
+    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main"
+  },
+  "grants": [
+    {
+      "access": "read",
+      "path": "${home}\\AppData\\Local\\Programs"
+    },
+    {
+      "access": "read",
+      "path": "${home}\\scoop"
+    },
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\mvn-ws"
+    },
+    {
+      "access": "read",
+      "path": "${home}\\keiko-4493-m2"
+    }
+  ],
+  "steps": [
+    {
+      "id": "java-version",
+      "file": "${home}\\AppData\\Local\\Programs\\jdk-21\\bin\\java.exe",
+      "args": ["-version"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "javac-release-21",
+      "file": "${home}\\AppData\\Local\\Programs\\jdk-21\\bin\\javac.exe",
+      "args": [
+        "--release",
+        "21",
+        "-d",
+        "${home}\\keiko-4493\\mvn-ws\\javac-out",
+        "${home}\\keiko-4493\\mvn-ws\\src\\main\\java\\probe\\Sum.java"
+      ],
+      "timeoutMs": 300000
+    },
+    {
+      "id": "pwsh7-version",
+      "file": "${home}\\AppData\\Local\\Programs\\pwsh-7\\pwsh.exe",
+      "args": ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "pwsh7-child-output",
+      "file": "${home}\\AppData\\Local\\Programs\\pwsh-7\\pwsh.exe",
+      "args": ["-NoProfile", "-NonInteractive", "-Command", "(cmd.exe /d /c ver) -join ' '"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "yarn-version",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "yarn.cmd --version"],
+      "timeoutMs": 120000
+    },
+    {
+      "id": "scoop-node",
+      "file": "${home}\\scoop\\apps\\nodejs-lts\\current\\node.exe",
+      "args": ["-v"],
+      "timeoutMs": 60000
+    },
+    {
+      "id": "scoop-shim-7z",
+      "file": "${home}\\scoop\\shims\\7z.exe",
+      "args": ["i"],
+      "timeoutMs": 60000
+    },
+    {
+      "id": "maven-version",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "mvn.cmd -v"],
+      "timeoutMs": 180000
+    },
+    {
+      "id": "maven-offline-verify",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "mvn.cmd -B -o -Dmaven.repo.local=${home}\\keiko-4493-m2 verify"],
+      "cwd": "${home}\\keiko-4493\\mvn-ws",
+      "timeoutMs": 900000
+    },
+    {
+      "id": "maven-test-report",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\mvn-ws\\target\\surefire-reports\\TEST-probe.SumTest.xml"
+    }
+  ]
+}

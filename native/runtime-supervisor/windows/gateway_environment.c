@@ -150,7 +150,7 @@ static int same_holder(const struct keiko_environment_holder *left,
 
 /* A process that cannot be opened for a reason other than its absence counts as alive, so an
  * unproven death never reopens the key. */
-static int holder_alive(const struct keiko_environment_holder *holder) {
+int keiko_environment_holder_alive(_In_ const struct keiko_environment_holder *holder) {
   FILETIME created, exited, kernel, user;
   DWORD code = 0;
   int alive;
@@ -168,7 +168,9 @@ static void prune(struct record *record, const struct keiko_environment_holder *
   DWORD kept = 0;
   for (DWORD index = 0; index < record->holder_count; index++) {
     const struct keiko_environment_holder *holder = &record->holders[index];
-    if ((leaving != NULL && same_holder(holder, leaving)) || !holder_alive(holder)) continue;
+    if ((leaving != NULL && same_holder(holder, leaving)) ||
+        !keiko_environment_holder_alive(holder))
+      continue;
     record->holders[kept++] = *holder;
   }
   record->holder_count = kept;

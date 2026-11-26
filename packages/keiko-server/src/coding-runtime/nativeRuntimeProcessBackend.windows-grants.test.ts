@@ -228,13 +228,10 @@ describe("a confined Windows launch", () => {
 
   // #4068 B1 crash rule: the supervisor's launch response states what its stale-grant sweep
   // removed; the host records it as counts, and records nothing for a sweep that found nothing.
-  it.each([
-    [
-      { removed: 2, failed: 1 },
-      { removedEntryCount: 2, failedCount: 1 },
-    ],
-    [{ removed: 0, failed: 0 }, undefined],
-  ])("records the stale-grant sweep %o of the launch response", async (sweep, expected) => {
+  function spawnConfined(): {
+    readonly helper: FakeHelper;
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+  } {
     const paths = fixture();
     const helper = new FakeHelper();
     const activityLog = createBufferedServerLogSink();
@@ -265,14 +262,34 @@ describe("a confined Windows launch", () => {
       planSandbox: planWindowsGatewayRuntimeSandbox,
     });
     expect(supervisor.spawnOwnedTree(request)).toMatchObject({ ok: true });
-    const response = Buffer.alloc(20);
+    return { helper, activityLog };
+  }
+
+  function answer(kind: number, words: readonly number[]): Buffer {
+    const response = Buffer.alloc(12 + 4 * words.length);
     response.write("KRS1", 0, "ascii");
     response.writeUInt16LE(1, 4);
-    response.writeUInt16LE(1, 6);
-    response.writeUInt32LE(8, 8);
-    response.writeUInt32LE(sweep.removed, 12);
-    response.writeUInt32LE(sweep.failed, 16);
-    helper.controlOutput.write(response);
+    response.writeUInt16LE(kind, 6);
+    response.writeUInt32LE(4 * words.length, 8);
+    words.forEach((word, index) => response.writeUInt32LE(word, 12 + 4 * index));
+    return response;
+  }
+
+  // The launch response carries the sweeps' counts: stale tree entries (#4068) and the profiles of
+  // runs whose supervisor is gone (#4495). Nothing is recorded for sweeps that found nothing.
+  it.each([
+    [
+      [2, 1, 3, 0],
+      { removedEntryCount: 2, failedCount: 1, removedProfileCount: 3, failedProfileCount: 0 },
+    ],
+    [
+      [0, 0, 0, 1],
+      { removedEntryCount: 0, failedCount: 0, removedProfileCount: 0, failedProfileCount: 1 },
+    ],
+    [[0, 0, 0, 0], undefined],
+  ])("records the sweeps %o of the launch response", async (counts, expected) => {
+    const { helper, activityLog } = spawnConfined();
+    helper.controlOutput.write(answer(1, counts));
     await new Promise((settle) => setImmediate(settle));
 
     const event = activityLog.events.find(
@@ -289,6 +306,29 @@ describe("a confined Windows launch", () => {
         formatActivityLogProofLine(event),
       ),
     ).toMatchObject({ correlationId: "run-4068", backend: "windows-appcontainer", ...expected });
+  });
+
+  // #4495: the reap proof's root exit code reaches the run's log as a number, for a normal and an
+  // abnormal end; nothing else of the tree is recorded with it.
+  it.each([0, 137, 0xc0000142])("records root exit code %i of the reaped tree", async (code) => {
+    const { helper, activityLog } = spawnConfined();
+    helper.controlOutput.write(answer(1, [0, 0, 0, 0]));
+    helper.controlOutput.write(answer(2, [code, 0]));
+    await new Promise((settle) => setImmediate(settle));
+
+    const event = activityLog.events.find(
+      (record) => record.op === "runtime.confinement.tree-reaped",
+    );
+    if (event === undefined) throw new Error("expected tree-reaped evidence");
+    const line = formatActivityLogProofLine(event);
+    expect(
+      expectActivityLogProof("runtime.confinement.tree-reaped.emitted-line", line),
+    ).toMatchObject({
+      correlationId: "run-4068",
+      backend: "windows-appcontainer",
+      rootExitCode: code,
+    });
+    expect(line).not.toContain("helper");
   });
 
   it.each([

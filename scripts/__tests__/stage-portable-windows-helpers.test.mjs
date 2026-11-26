@@ -10,18 +10,19 @@ import {
 // #4068: the 1.5.4 release build compiled the unchanged secure-read source on an updated Windows
 // runner image into new bytes. The server's pin still named the earlier image's bytes, so every
 // Windows installation of 1.5.4 refused to start a Coding run ("gateway-service-unqualified"),
-// and nothing in the build noticed. These are the two helper sets of that incident.
+// and nothing in the build noticed. These are the two helper sets of that incident; the supervisor
+// is the step-mode build (#4496) the server pins now, compiled by the same CI path.
 const RELEASE_154_SECURE_READ = {
   name: "keiko-secure-workspace-read",
   unsignedSha256: "8699612eabadc70f95ab969ed259edca8b18a5381c2c577acd2ca835c226ac64",
   sizeBytes: 128_512,
 };
-const RELEASE_154_SUPERVISOR = {
+const CURRENT_SUPERVISOR = {
   name: "keiko-runtime-supervisor",
-  unsignedSha256: "8966ba374943d8b0f7dce4bdee296084802783cda0e4a191666a0c4cd16616fb",
-  sizeBytes: 252_416,
+  unsignedSha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+  sizeBytes: 255_488,
 };
-const RELEASE_154_HELPERS = [RELEASE_154_SECURE_READ, RELEASE_154_SUPERVISOR];
+const RELEASE_HELPERS = [RELEASE_154_SECURE_READ, CURRENT_SUPERVISOR];
 const PIN_BEFORE_THE_FIX = {
   ...WINDOWS_PORTABLE_RUNTIME_APPROVAL,
   helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
@@ -45,14 +46,14 @@ function helpersMatching(approval) {
 
 describe("Windows native helper approval at staging", () => {
   it("names the secure-read helper the 1.5.4 build shipped against the pin it had then", () => {
-    expect(windowsNativeHelperApprovalFailures(RELEASE_154_HELPERS, PIN_BEFORE_THE_FIX)).toEqual([
+    expect(windowsNativeHelperApprovalFailures(RELEASE_HELPERS, PIN_BEFORE_THE_FIX)).toEqual([
       "keiko-secure-workspace-read: built 8699612eabadc70f95ab969ed259edca8b18a5381c2c577acd2ca835c226ac64 (128512 bytes), approved 65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6 (129024 bytes)",
     ]);
   });
 
   it("accepts the bytes a release ships under the server's current pin", () => {
     expect(
-      windowsNativeHelperApprovalFailures(RELEASE_154_HELPERS, WINDOWS_PORTABLE_RUNTIME_APPROVAL),
+      windowsNativeHelperApprovalFailures(RELEASE_HELPERS, WINDOWS_PORTABLE_RUNTIME_APPROVAL),
     ).toEqual([]);
   });
 
@@ -77,7 +78,7 @@ describe("Windows native helper approval at staging", () => {
   it("stops a Windows stage whose helpers differ and never loads a pin for other targets", async () => {
     const onFailure = vi.fn();
     await expect(
-      verifyWindowsNativeHelpers(portableTargetByName("windows-x64"), RELEASE_154_HELPERS, {
+      verifyWindowsNativeHelpers(portableTargetByName("windows-x64"), RELEASE_HELPERS, {
         loadApproval: async () => PIN_BEFORE_THE_FIX,
         onFailure,
       }),

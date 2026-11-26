@@ -15,6 +15,8 @@ export type SupervisorRefusalFailureCode = Extract<
   | "runtime-supervisor-grants-capability"
   | "runtime-supervisor-gateway-connect"
   | "runtime-supervisor-gateway-admit"
+  | "runtime-supervisor-no-desktop"
+  | "runtime-supervisor-image-path"
   | "runtime-supervisor-refused"
 >;
 
@@ -26,6 +28,9 @@ const SPECIFIC_REFUSALS: ReadonlyMap<string, SupervisorRefusalFailureCode> = new
   ["supervisor-grants-capability", "runtime-supervisor-grants-capability"],
   ["supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
   ["supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+  // #4495: refused before anything was created (supervisor refusals 18 and 19).
+  ["supervisor-no-desktop", "runtime-supervisor-no-desktop"],
+  ["supervisor-image-path", "runtime-supervisor-image-path"],
 ]);
 
 const SUPERVISOR_REFUSAL_FAILURE_CODES: ReadonlySet<string> = new Set([

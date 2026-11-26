@@ -208,10 +208,10 @@ is the only promotion path and preserves the current complete install on failure
 Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
 manager launches only manifest-verified sidecar payloads from the attested managed install root.
 
-The schema-v2 OpenCode approval binds version `2.2.5` to commit
-`9bbb8ce18c80f099e0e448775f59d965ead40a21` and HTTP/SSE compatibility to the raw bytes of
+The schema-v2 OpenCode approval binds version `2.4.1` to commit
+`6f0514052a3c859894ad01bb14cc14dda1e44b96` and HTTP/SSE compatibility to the raw bytes of
 `packages/protocol/openapi.json` at that commit (SHA-256
-`92cc33ef9a107c8af6295e6fcbdf6d339d4374955910924456bd91a76844a5db`). Reformatted JSON does not
+`e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b`). Reformatted JSON does not
 satisfy this provenance. Codex is not an approved payload or support claim: pending redistribution
 or subscription-auth approval yields `redistribution-unapproved`, with no global-install fallback.
 
@@ -340,10 +340,13 @@ published, a Windows npm installation reports `npm-runtime-package-missing`.
 
 **One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
 carries exactly the Windows helper and supervisor of the portable release. The secure-read helper
-`8699612e…` (128,512 bytes) and the pipe-relay supervisor `8966ba37…` (252,416 bytes, source tree
-`718efc73…`) are the bytes the 1.5.4 release build shipped at `d88ac1cb8…` (runner image
-`windows-2025-vs2026` 20261116, `/Brepro`); the supervisor was first built by the
-`relay-confinement` job of `windows-gateway-confinement.yml` (#4068). `npmLaneRuntimeApprovals.ts`
+`8699612e…` (128,512 bytes) is the helper the 1.5.4 release build shipped at `d88ac1cb8…` (runner
+image `windows-2025-vs2026` 20261116, `/Brepro`). The supervisor was first built by the
+`relay-confinement` job of `windows-gateway-confinement.yml` (#4068); its step mode (#4496) changed
+its source, and so did its profile sweep and session check (#4495): the pin `d45a4d8d…` (255,488
+bytes, source tree `57054c1e…`) is the byte set the `portable-assets.yml` evaluation build compiled
+at `939da9f07`. A Windows runtime package that
+carries it must be published before an npm installation can use it. `npmLaneRuntimeApprovals.ts`
 pins the npm lane and the desktop package to those bytes, and `npmLaneRuntimeApprovals.test.ts`
 fails when the npm and portable Windows pins diverge.
 
@@ -600,7 +603,8 @@ search from the republished packages. Republish every target with the pinned rip
 as in step 3 of the publication order; the customer-shape qualifier drops its `KEIKO_RIPGREP_BINARY_PATH` hand-off in that
 same change.
 
-The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, the one OpenCode every Keiko channel runs.
+The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, which was then the one OpenCode every Keiko
+channel ran (2.4.1 since #4546; its runtime packages follow when the owner publishes them).
 Their reviewed entry is in `docs/release/coding-runtime-npm-packages.json` for `macos-arm64` and
 `macos-x64`. The Windows package's reviewed entry is under 1.1.7 (see "The Windows package is
 published" above); the registry holds it since 2026-11-20 and the root manifest selects

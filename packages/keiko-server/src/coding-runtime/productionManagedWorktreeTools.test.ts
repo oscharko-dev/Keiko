@@ -2071,7 +2071,7 @@ describe("production managed worktree tools", () => {
       status: "failed",
       reasonCode: "VERIFICATION_NOT_RUN",
       detail:
-        "These verification steps did not run: test (the isolated verifier has no running container runtime (Docker or Podman) on this computer; run this check in your own shell).",
+        "These verification steps did not run: test (the isolated verifier has no isolation on this computer (no running container runtime such as Docker or Podman, and on Windows no verified Keiko runtime supervisor); run this check in your own shell).",
     });
     expect(result).toHaveProperty("guidance", expect.stringContaining("in your shell") as unknown);
     expect(codingToolVerificationPresentation(result)).not.toEqual({
@@ -2151,7 +2151,7 @@ describe("production managed worktree tools", () => {
       status: "failed",
       reasonCode: "VERIFICATION_ISOLATION_UNAVAILABLE",
       detail:
-        "These verification steps did not run: test (this computer has no running container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
+        "These verification steps did not run: test (this computer has no isolation for project commands (no running container runtime such as Docker or Podman, and on Windows no verified Keiko runtime supervisor), so Keiko cannot run them safely here).",
     });
   });
 
@@ -2208,7 +2208,7 @@ describe("production managed worktree tools", () => {
       status: "failed",
       reasonCode: "VERIFICATION_ISOLATION_UNAVAILABLE",
       detail:
-        "These verification steps did not run: test (this computer has no running container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
+        "These verification steps did not run: test (this computer has no isolation for project commands (no running container runtime such as Docker or Podman, and on Windows no verified Keiko runtime supervisor), so Keiko cannot run them safely here).",
     });
     expect(result).not.toHaveProperty("verificationFailure");
     expect(codingToolVerificationPresentation(result)).toEqual({

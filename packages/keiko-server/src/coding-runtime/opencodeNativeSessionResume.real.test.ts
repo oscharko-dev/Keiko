@@ -1,3 +1,4 @@
+import { CODING_WORKBENCH_BUILT_IN_SUBAGENTS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import {
   existsSync,
@@ -119,6 +120,10 @@ interface Recorded {
 
 interface Stub {
   replyText?: string | undefined;
+  /** The agent a delegating turn's `subagent` call names (#4546). */
+  subagent?: string | undefined;
+  /** Read calls still to issue in a row before the next plain answer (#4546 AC7). */
+  toolChain?: number | undefined;
   readonly server: Server;
   port: number;
   readonly requests: Recorded[];
@@ -206,7 +211,44 @@ function streamedText(response: ServerResponse, text: string): void {
   );
 }
 
-/** Answers every model request with a plain text turn that names how many it has seen. */
+function streamedReadCall(response: ServerResponse, id: string): void {
+  streamedToolCall(response, id, "read", { path: "notes.txt" });
+}
+
+function streamedToolCall(
+  response: ServerResponse,
+  id: string,
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+): void {
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  const call = {
+    index: 0,
+    id,
+    type: "function",
+    function: { name, arguments: JSON.stringify(args) },
+  };
+  response.write(
+    frame({
+      id: "native-resume",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { tool_calls: [call] }, finish_reason: null }],
+    }),
+  );
+  response.end(
+    frame({
+      id: "native-resume",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }) + "data: [DONE]\n\n",
+  );
+}
+
+/**
+ * Answers every model request with a plain text turn that names how many it has seen, or, while a
+ * tool chain is pending, with the next read call.
+ */
 async function startGateway(): Promise<Stub> {
   return await startStub((self, recorded, response) => {
     if (recorded.url.startsWith("/facade/")) {
@@ -224,8 +266,41 @@ async function startGateway(): Promise<Stub> {
       response.flushHeaders();
       return;
     }
+    if (subagentTurn(self, recorded, response)) return;
+    if ((self.toolChain ?? 0) > 0) {
+      self.toolChain = (self.toolChain ?? 0) - 1;
+      streamedReadCall(response, `call_resume_${String(self.requests.length)}`);
+      return;
+    }
     streamedText(response, self.replyText ?? `Answer number ${String(self.requests.length)}.`);
   });
+}
+
+const SUBAGENT_TURN = "FIXTURE-SUBAGENT-TURN";
+const CHILD_TASK = "CHILD-TASK-4546 read notes.txt";
+const CHILD_REPORT = "CHILD-REPORT-4546";
+
+/**
+ * A turn that delegates to a subagent: the parent calls the runtime's `subagent` tool once, the
+ * child answers with its report, and the parent answers plainly after each tool result.
+ */
+function subagentTurn(stub: Stub, recorded: Recorded, response: ServerResponse): boolean {
+  if (requestHasUserText(recorded, CHILD_TASK)) {
+    streamedText(response, CHILD_REPORT);
+    return true;
+  }
+  if (!requestHasUserText(recorded, SUBAGENT_TURN)) return false;
+  if (modelMessages(recorded).at(-1)?.role === "tool") {
+    streamedText(response, "The parent continued.");
+    return true;
+  }
+  if (userTexts(recorded).at(-1) !== SUBAGENT_TURN) return false;
+  streamedToolCall(response, `call_subagent_${String(stub.requests.length)}`, "subagent", {
+    agent: stub.subagent ?? "explore",
+    description: "Synthetic child",
+    prompt: CHILD_TASK,
+  });
+  return true;
 }
 
 async function startFacade(): Promise<Stub> {
@@ -525,6 +600,37 @@ async function settledRun(
   });
   if (!retained.ok) throw new Error(`fixture-retain-refused:${retained.reason}`);
   return { sessionId, messageCount: retained.messageCount };
+}
+
+/** A settled run whose one turn delegated to `agent`, retained with the child's session. */
+async function settledSubagentRun(world: World, agent: string): Promise<string> {
+  let sessionId = "";
+  world.gateway.subagent = agent;
+  await withRuntime(world, "subagent-run", undefined, async ({ client, gateway }) => {
+    sessionId = String((await client.createSession(world.fixture.workspace)).id);
+    await client.prompt(sessionId, SUBAGENT_TURN);
+    await expect
+      .poll(
+        async () =>
+          Object.keys(await client.active()).length === 0 &&
+          gateway.requests.some(
+            (request) =>
+              !requestHasUserText(request, CHILD_TASK) &&
+              JSON.stringify(request.body).includes(CHILD_REPORT),
+          ),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+    expect(gateway.requests.some((request) => requestHasUserText(request, CHILD_TASK))).toBe(true);
+  });
+  const retained = world.store.retain({
+    binding: binding(),
+    sessionId,
+    directory: world.fixture.workspace,
+    sourceDatabase: join(world.fixture.root, "subagent-run", "state", "opencode.db"),
+  });
+  expect(retained).toMatchObject({ ok: true, subagentSessionCount: 1 });
+  return sessionId;
 }
 
 async function terminalHistoryRun(
@@ -900,6 +1006,130 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
                 (content) => typeof content === "string" && content.startsWith("Answer number"),
               ),
             ).toHaveLength(2);
+          },
+        );
+      });
+    },
+    240_000,
+  );
+
+  // A turn that ran a subagent leaves the child's own session in the runtime database. The task
+  // keeps its native session all the same, and the resumed runtime replays the parent's turns,
+  // the subagent call and its report included (#4546).
+  it.skipIf(skip).each(CODING_WORKBENCH_BUILT_IN_SUBAGENTS.map((agent) => agent.name))(
+    "retains and resumes a task whose turn ran the %s subagent",
+    async (agent) => {
+      await withWorld(async (world) => {
+        const sessionId = await settledSubagentRun(world, agent);
+        await withRuntime(
+          world,
+          "subagent-resume",
+          (database) => {
+            expect(checkoutInto(world, database)).toMatchObject({ ok: true, sessionId });
+          },
+          async ({ client, gateway }) => {
+            const bound = await bindContinuedSession(
+              client,
+              continuation(sessionId, { kind: "resume", taskId: TASK_ID }),
+              world.fixture.workspace,
+              undefined,
+            );
+            expect(bound).toMatchObject({ ok: true, sessionId });
+            await turn(client, sessionId, "AFTER-SUBAGENT-TURN");
+            const request = gateway.requests.at(-1);
+            expect(userTexts(request).at(-1)).toBe("AFTER-SUBAGENT-TURN");
+            expect(requestHasUserText(request, SUBAGENT_TURN)).toBe(true);
+            expect(JSON.stringify(request?.body)).toContain(CHILD_REPORT);
+          },
+        );
+      });
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "forks a task whose turn ran a subagent and leaves the fork the run's one top-level session",
+    async () => {
+      await withWorld(async (world) => {
+        const sessionId = await settledSubagentRun(world, "general");
+        await withRuntime(
+          world,
+          "subagent-fork",
+          (database) => {
+            expect(checkoutInto(world, database)).toMatchObject({ ok: true, sessionId });
+          },
+          async ({ client, gateway }) => {
+            const forked = await bindContinuedSession(
+              client,
+              continuation(sessionId, {
+                kind: "fork",
+                sourceTaskId: TASK_ID,
+                boundary: { kind: "end" },
+              }),
+              world.fixture.workspace,
+              undefined,
+            );
+            if (!forked.ok) throw new Error(`fixture-fork-refused:${forked.reason}`);
+            // Removing the fork's source removes the subagent session under it too.
+            expect((await client.sessions()).map((session) => session.id)).toEqual([
+              forked.sessionId,
+            ]);
+            await turn(client, forked.sessionId, "FORK-AFTER-SUBAGENT");
+            const request = gateway.requests.at(-1);
+            expect(userTexts(request).at(-1)).toBe("FORK-AFTER-SUBAGENT");
+            expect(requestHasUserText(request, SUBAGENT_TURN)).toBe(true);
+          },
+        );
+      });
+    },
+    240_000,
+  );
+
+  // #4546 AC7: 2.4.x stores a message's parts as rows of their own. A retained session whose turn
+  // made many tool calls passes the audit, and the resumed runtime replays every call and result.
+  it.skipIf(skip)(
+    "resumes a retained session whose turn made many tool calls, with every call in the model request",
+    async () => {
+      await withWorld(async (world) => {
+        const TOOL_CALLS = 40;
+        let sessionId = "";
+        await withRuntime(world, "first-run", undefined, async ({ client, gateway }) => {
+          const created = await client.createSession(world.fixture.workspace);
+          sessionId = String(created.id);
+          gateway.toolChain = TOOL_CALLS;
+          await turn(client, sessionId, "TOOL-CHAIN-QUESTION");
+          expect(gateway.toolChain).toBe(0);
+        });
+        const retained = world.store.retain({
+          binding: binding(),
+          sessionId,
+          directory: world.fixture.workspace,
+          sourceDatabase: join(world.fixture.root, "first-run", "state", "opencode.db"),
+        });
+        if (!retained.ok) throw new Error(`fixture-retain-refused:${retained.reason}`);
+        expect(retained.messageCount).toBeGreaterThan(TOOL_CALLS);
+
+        await withRuntime(
+          world,
+          "second-run",
+          (database) => {
+            expect(checkoutInto(world, database)).toMatchObject({ ok: true, sessionId });
+          },
+          async ({ client, gateway }) => {
+            const bound = await bindContinuedSession(
+              client,
+              continuation(sessionId, { kind: "resume", taskId: TASK_ID }),
+              world.fixture.workspace,
+              undefined,
+            );
+            expect(bound).toMatchObject({ ok: true, sessionId });
+            await turn(client, sessionId, "AFTER-TOOL-CHAIN");
+            const messages = modelMessages(gateway.requests.at(-1));
+            expect(messages.filter((message) => message.role === "tool")).toHaveLength(TOOL_CALLS);
+            expect(userTexts(gateway.requests.at(-1))).toEqual([
+              "TOOL-CHAIN-QUESTION",
+              "AFTER-TOOL-CHAIN",
+            ]);
           },
         );
       });

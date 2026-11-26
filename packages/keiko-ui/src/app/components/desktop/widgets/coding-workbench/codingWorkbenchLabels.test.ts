@@ -336,6 +336,14 @@ describe("eventDetail auxiliary outcome", () => {
       "runtime-supervisor-gateway-admit",
       "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
     ],
+    [
+      "runtime-supervisor-no-desktop",
+      "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
+    ],
+    [
+      "runtime-supervisor-image-path",
+      "codingWorkbench.event.failure.runtime-supervisor-image-path",
+    ],
     ["runtime-supervisor-refused", "codingWorkbench.event.failure.runtime-supervisor-refused"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });

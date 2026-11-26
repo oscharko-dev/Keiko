@@ -6,8 +6,7 @@ import {
   portableHandoffOperationFrom,
   type PortableHandoffOperationOptions,
 } from "./update-portable-handoff-tree.js";
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type {
   UpdatePortableSidecarFailureCode,
@@ -17,6 +16,7 @@ import {
   PortableSidecarVerificationError,
   type PortableSidecarRuntimeVerification,
 } from "./update-portable-sidecar-verification.js";
+import { sha256FileSync } from "./file-sha256.js";
 
 function failedSummary(
   summary: UpdatePortableSidecarSummary,
@@ -56,14 +56,6 @@ function assertFile(
   }
 }
 
-function sha256Buffer(buffer: Buffer): string {
-  return createHash("sha256").update(buffer).digest("hex");
-}
-
-function sha256File(path: string): string {
-  return sha256Buffer(readFileSync(path));
-}
-
 function listFiles(root: string, sidecar: PortableSidecarRuntimeVerification): readonly string[] {
   if (!existsSync(root) || !statSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) {
     fail("sidecar-payload-missing", "sidecar payload root is missing", sidecar);
@@ -88,7 +80,7 @@ function hashDirectoryTree(
   return computePortableSidecarPayloadTreeDigest(
     listFiles(root, sidecar).map((file) => ({
       relativePath: relative(root, file).split(sep).join("/"),
-      sha256: cachedDigests.get(file) ?? sha256File(file),
+      sha256: cachedDigests.get(file) ?? sha256FileSync(file),
     })),
   );
 }
@@ -123,7 +115,7 @@ export function inspectStagedSidecarPayload(
     const payloadRoot = resolvedContainedPath(resourceRoot, sidecar.payloadRootPath, sidecar);
     const executablePath = resolvedContainedPath(resourceRoot, sidecar.executablePath, sidecar);
     assertFile(executablePath, sidecar, "sidecar-payload-missing");
-    const executableSha256 = sha256File(executablePath);
+    const executableSha256 = sha256FileSync(executablePath);
     const executableTreeSha256 = hashExecutableTree(executablePath, payloadRoot, executableSha256);
     return {
       payloadPresent: true,
@@ -176,9 +168,9 @@ function verifySidecarFiles(
   assertFile(executablePath, sidecar, "sidecar-payload-missing");
   assertFile(licensePath, sidecar, "sidecar-license-evidence-incomplete");
   assertFile(sbomPath, sidecar, "sidecar-sbom-evidence-incomplete");
-  const executableSha256 = sha256File(executablePath);
-  const licenseSha256 = sha256File(licensePath);
-  const sbomSha256 = sha256File(sbomPath);
+  const executableSha256 = sha256FileSync(executablePath);
+  const licenseSha256 = sha256FileSync(licensePath);
+  const sbomSha256 = sha256FileSync(sbomPath);
   if (licenseSha256 !== sidecar.licenseEvidenceSha256) {
     fail("sidecar-license-evidence-incomplete", "sidecar license digest mismatch", sidecar);
   }

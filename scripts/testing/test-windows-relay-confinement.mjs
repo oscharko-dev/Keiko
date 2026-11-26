@@ -17,6 +17,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 
+import {
+  GRANT_READ,
+  grantsFrame,
+  launchFrame,
+  openFrame,
+  terminateFrame,
+} from "./lib/windows-relay-frames.mjs";
+
 const REQUEST_BYTES = 200_000;
 const RESPONSE_BYTES = 300_000;
 const HOST_REQUESTS = 2;
@@ -50,49 +58,6 @@ function helperArgument() {
   const helper = index === -1 ? undefined : process.argv[index + 1];
   if (helper === undefined) throw new Error("usage: --helper <keiko-runtime-supervisor.exe>");
   return helper;
-}
-
-function header(magic, kind, length) {
-  const frame = Buffer.alloc(12);
-  frame.write(magic, 0, "ascii");
-  frame.writeUInt16LE(1, 4);
-  frame.writeUInt16LE(kind, 6);
-  frame.writeUInt32LE(length, 8);
-  return frame;
-}
-
-function lengthPrefixed(value, terminated) {
-  const encoded = Buffer.from(value, "utf8");
-  const length = Buffer.alloc(4);
-  length.writeUInt32LE(encoded.length);
-  return Buffer.concat([length, encoded, ...(terminated ? [Buffer.alloc(1)] : [])]);
-}
-
-function launchFrame(handle, executable, cwd, args, environment) {
-  const counts = Buffer.alloc(4);
-  counts.writeUInt16LE(args.length, 0);
-  counts.writeUInt16LE(environment.length, 2);
-  const values = [handle, executable, cwd, ...args, ...environment.flat()];
-  const payload = Buffer.concat([counts, ...values.map((value) => lengthPrefixed(value, true))]);
-  return Buffer.concat([header("KRP1", 1, payload.length), payload]);
-}
-
-function grantsFrame(paths) {
-  const count = Buffer.alloc(2);
-  count.writeUInt16LE(paths.length);
-  // Each grant: access read (1), principal tree (1), then the path.
-  const grants = paths.map((path) => Buffer.concat([Buffer.from([1, 1]), lengthPrefixed(path)]));
-  const payload = Buffer.concat([count, ...grants]);
-  return Buffer.concat([header("KGG1", 1, payload.length), payload]);
-}
-
-function openFrame(handle, gatewayPort) {
-  const frame = Buffer.alloc(540);
-  header("KGB1", 1, 528).copy(frame);
-  frame.write(handle, 44, "ascii");
-  frame.writeUInt16LE(2, 84);
-  frame.writeUInt16LE(gatewayPort, 86);
-  return frame;
 }
 
 function startGateway() {
@@ -177,7 +142,9 @@ function stageRun(helper, root, gatewayPort) {
   ].sort(([left], [right]) => left.localeCompare(right));
   const frames = Buffer.concat([
     launchFrame(handle, join(runtimeDirectory, "node.exe"), runtimeDirectory, args, environment),
-    grantsFrame([runtimeDirectory, supervisorDirectory]),
+    grantsFrame(
+      [runtimeDirectory, supervisorDirectory].map((path) => ({ access: GRANT_READ, path })),
+    ),
     openFrame(handle, gatewayPort),
   ]);
   return { supervisor, frames };
@@ -188,7 +155,7 @@ async function superviseRun(child, frames, gatewayPort) {
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   const answers = await exercise(child, gatewayPort);
   const exited = new Promise((resolve) => child.once("exit", resolve));
-  child.stdio[3].write(header("KRC1", 3, 0));
+  child.stdio[3].write(terminateFrame());
   const code = await exited;
   clearTimeout(deadline);
   assert.equal(code, 0, "the supervisor reaps the tree and exits cleanly");

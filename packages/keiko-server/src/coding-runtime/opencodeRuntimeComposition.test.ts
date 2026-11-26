@@ -263,6 +263,16 @@ const OPENAPI: unknown = JSON.parse(
   ),
 );
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(OPENAPI).digest;
+// The pinned runtime's migrated tables, as its captured persistence schema names their columns.
+const PERSISTENCE_SCHEMA = JSON.parse(
+  readFileSync(
+    new URL(
+      `./opencodePersistenceSchema.opencode-${OPENCODE_PINNED_VERSION}.fixture.json`,
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as Readonly<Record<string, readonly string[]>>;
 
 function materializedV2PluginPaths(runRoot: string): readonly string[] {
   return Object.keys(createGeneratedOpenCodeV2Plugins()).map((name) =>
@@ -1343,14 +1353,26 @@ function fixtureContextGeometry(control: StartBridgeControl | undefined): Fixtur
 }
 
 /**
- * The pinned runtime creates its database when it starts, before a session is bound; a native run
- * holds its scheduler there and fails readiness without it (#4271). An inherited database is kept.
+ * The pinned runtime creates and migrates its database when it starts, before a session is bound;
+ * a native run holds its scheduler there and fails readiness without it (#4271, #4546). The
+ * scheduler's tables take their columns from the pinned persistence schema. An inherited database
+ * is kept.
  */
 function createRuntimeDatabase(runRoot: string): void {
-  const database = join(runRoot, "state", "opencode.db");
-  if (existsSync(database)) return;
+  const path = join(runRoot, "state", "opencode.db");
+  if (existsSync(path)) return;
   mkdirSync(join(runRoot, "state"), { recursive: true });
-  new DatabaseSync(database).close();
+  const database = new DatabaseSync(path);
+  try {
+    for (const table of ["kv", "automation"]) {
+      const columns = PERSISTENCE_SCHEMA[table];
+      if (columns === undefined) throw new Error(`the pinned schema has no ${table} table`);
+      const keyed = columns.map((column) => (column === "key" ? "key TEXT PRIMARY KEY" : column));
+      database.exec(`CREATE TABLE ${table} (${keyed.join(", ")})`);
+    }
+  } finally {
+    database.close();
+  }
 }
 
 function buildSettingsHomeOption(control: StartBridgeControl | undefined): {
@@ -4500,6 +4522,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
           admitted
             ? {
                 type: "remote",
+                // A run never shares its MCP connection with another project (#4546).
+                pool: false,
                 url: "https://issues.example.test/mcp",
                 oauth: { auth_server_metadata_url: METADATA_URL },
               }
@@ -12035,6 +12059,7 @@ describe.each(["native", "direct", "code-mode"] as const)("%s session continuity
             ok: true,
             databaseBytes: 4096,
             messageCount: 6,
+            subagentSessionCount: 0,
             entryCount: 1,
             prunedCount: 0,
             blockedCount: 0,
@@ -12497,7 +12522,7 @@ describe("the program card follows the verified runtime's pin (#4359)", () => {
   }
 
   it.each(["governed-assist", "supervised-coding"] as const)(
-    "lets a program of a verified 2.2.5 run pass without a card in %s",
+    "lets a program of a run on a pin that decides nested effects pass without a card in %s",
     async (mode) => {
       await expect(runProgram(mode, false)).resolves.toEqual({ answered: true, asked: false });
     },

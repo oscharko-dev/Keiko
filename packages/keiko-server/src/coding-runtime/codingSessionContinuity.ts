@@ -287,6 +287,7 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
       values: [
         "kv-rows",
         "workspace-rows",
+        "machine-rows",
         "job-rows",
         "blob-rows",
         "copy-unreadable",
@@ -305,6 +306,8 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
     },
     databaseBytes: { type: "integer", dataClass: "count", required: false },
     messageCount: { type: "integer", dataClass: "count", required: false },
+    // The subagent sessions a retained task carries under its own session (#4546).
+    subagentSessionCount: { type: "integer", dataClass: "count", required: false },
     entryCount: { type: "integer", dataClass: "count", required: false },
     prunedCount: { type: "integer", dataClass: "count", required: false },
     ageMs: { type: "integer", dataClass: "duration", required: false },
@@ -346,6 +349,7 @@ export interface SessionContinuityRecord {
   readonly relocated?: boolean;
   readonly databaseBytes?: number;
   readonly messageCount?: number;
+  readonly subagentSessionCount?: number;
   readonly entryCount?: number;
   readonly prunedCount?: number;
   readonly blockedCount?: number;

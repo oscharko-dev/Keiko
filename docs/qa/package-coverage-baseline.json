@@ -90,7 +90,7 @@
       }
     },
     "keiko-git": {
-      "files": 9,
+      "files": 10,
       "uncoveredFiles": 0,
       "uncoveredLines": 8,
       "totalLines": 376,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1254,
+      "files": 1260,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-tools": {
-      "files": 72,
+      "files": 73,
       "uncoveredFiles": 0,
       "uncoveredLines": 382,
       "totalLines": 5339,
@@ -306,7 +306,7 @@
       }
     },
     "keiko-verification": {
-      "files": 18,
+      "files": 19,
       "uncoveredFiles": 0,
       "uncoveredLines": 31,
       "totalLines": 1168,

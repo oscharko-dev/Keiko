@@ -561,8 +561,8 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     for (const operation of ["create", "pause", "resume", "delete"]) {
       const resources =
         operation === "create"
-          ? [operation, 'when:{"type":"in","in":"30m"}']
-          : [operation, "sch_1"];
+          ? [operation, 'when:{"type":"every","every":"30 minutes"}']
+          : [operation, "aut_1"];
       expect(effectOf("governed-assist", "opencode_schedule", resources), operation).toBe("ask");
       expect(effectOf("supervised-coding", "opencode_schedule", resources), operation).toBe("ask");
       expect(effectOf("autonomous-delivery", "opencode_schedule", resources), operation).toBe(
@@ -577,18 +577,45 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     }
   });
 
-  it("refuses a schedule gated by a check, and an unknown schedule operation, in every mode", () => {
+  // #4546: a shell action, a Code Mode program and an MCP-event trigger run outside any human run.
+  it("refuses an automation that is no scheduled wake, and an unknown operation, in every mode", () => {
     for (const mode of MODES)
       for (const resources of [
-        ["create", "condition:if"],
-        ["create", "condition:until"],
+        ["create", "refused:trigger"],
+        ["create", "refused:action"],
+        ["create", "refused:target"],
+        ["create", "refused:shape"],
+        ["create", "refused:other"],
         ["list"],
         [],
-        ["fire", "sch_1"],
+        ["fire", "aut_1"],
       ])
         expect(effectOf(mode, "opencode_schedule", resources), `${mode} ${resources.join()}`).toBe(
           "deny:unsupported-action",
         );
+  });
+
+  // #4546 (policy audit): only the plugin's marker right after the operation is a refusal; a prompt
+  // line that happens to start like one is text the schedule would send, decided as any other.
+  it("decides a schedule whose prompt has a line that looks like a refusal marker", () => {
+    const resources = ["create", 'when:{"type":"at","at":"in 1m"}', "refused:shape"];
+    expect(effectOf("supervised-coding", "opencode_schedule", resources)).toBe("ask");
+    expect(effectOf("autonomous-delivery", "opencode_schedule", resources)).toBe("allow");
+  });
+
+  it("names why an automation is refused, without echoing the request", () => {
+    const messages = ["trigger", "action", "target", "shape", "other"].map((kind) => {
+      const decision = decide("autonomous-delivery", "opencode_schedule", [
+        "create",
+        `refused:${kind}`,
+      ]);
+      return decision.effect === "deny" ? decision.message : undefined;
+    });
+    expect(new Set(messages).size).toBe(5);
+    for (const message of messages.slice(0, 4))
+      expect(message).toMatch(/^Keiko refused this automation: /u);
+    // An unknown refusal falls back to the generic sentence, never to an allow.
+    expect(messages[4]).toBe("Keiko refused this action: it is not a schedule change Keiko knows.");
   });
 
   it("refuses a worktree without one plain name", () => {

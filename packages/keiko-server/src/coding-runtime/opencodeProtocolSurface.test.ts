@@ -145,6 +145,49 @@ function dig(value: unknown, ...keys: readonly string[]): unknown {
   return current;
 }
 
+// A payload field may share its name with an OpenAPI annotation: 2.4.1's compaction messages carry
+// a `summary` field and its subagent job a `description` (#4546). Only annotations are documentation;
+// a field named like one is structure, so its schema stays in the digest.
+describe("payload fields named like OpenAPI annotations", () => {
+  function withField(type: string): Record<string, unknown> {
+    const base = document();
+    const schemas = (base.components as { schemas: Record<string, unknown> }).schemas;
+    schemas.Session = {
+      type: "object",
+      description: "annotation drift",
+      required: ["id", "summary", "description"],
+      properties: {
+        id: { type: "string", description: "annotation" },
+        summary: { type },
+        description: { type: "string" },
+      },
+    };
+    return base;
+  }
+
+  it("keeps such a field under properties and still strips the annotations", async () => {
+    const surface = await protocolSurfaceModule();
+    const { projection } = surface.projectOpenCodeProtocolSurface(withField("string"));
+    const session = dig(projection, "components", "schemas", "Session");
+    expect(session).toEqual({
+      type: "object",
+      required: ["id", "summary", "description"],
+      properties: {
+        id: { type: "string" },
+        summary: { type: "string" },
+        description: { type: "string" },
+      },
+    });
+  });
+
+  it("changes the digest when such a field changes its type", async () => {
+    const surface = await protocolSurfaceModule();
+    expect(surface.projectOpenCodeProtocolSurface(withField("string")).digest).not.toBe(
+      surface.projectOpenCodeProtocolSurface(withField("integer")).digest,
+    );
+  });
+});
+
 describe("the pinned OpenCode admitted V2 protocol surface", () => {
   const fixture: unknown = JSON.parse(
     readFileSync(

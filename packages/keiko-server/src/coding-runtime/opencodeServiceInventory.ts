@@ -579,19 +579,53 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
       "experimental.media.get",
     ],
   ),
-  // #4271: the model creates a schedule with the native tool; the human lists, pauses, resumes and
-  // deletes a task's schedules in the Workbench, and Keiko wakes the task at the due time.
+  // #4271, #4546: the model creates a scheduled wake with the native automation tool (a prompt into
+  // its own session on a time, an interval or a cron); the human lists, pauses, resumes and deletes
+  // a task's wakes in the Workbench, and Keiko wakes the task at the due time. 2.3.1 replaced the
+  // schedule operations with these.
   keikoOperation(
     "Coding Workbench scheduled wakes",
     "coding-runtime/codingScheduledWakes.ts",
     ["C09"],
     [
-      "experimental.schedule.create",
-      "experimental.schedule.delete",
-      "experimental.schedule.get",
-      "experimental.schedule.list",
-      "experimental.schedule.pause",
-      "experimental.schedule.resume",
+      "experimental.automation.create",
+      "experimental.automation.delete",
+      "experimental.automation.get",
+      "experimental.automation.list",
+      "experimental.automation.pause",
+      "experimental.automation.resume",
+    ],
+  ),
+  // #4546: 2.4.x surfaces with no owner in Keiko yet; their plugins are withheld and their
+  // experimental switches stated off (`opencodeLaunchProfile.ts`).
+  refused(
+    "experimental-unadmitted",
+    4546,
+    ["S14"],
+    [
+      "experimental.blob.get",
+      "experimental.generate.video.create",
+      "experimental.generate.video.get",
+    ],
+  ),
+  // #4546: a background subagent or shell job of the run. Keiko settles a run only after its jobs
+  // ended or it stopped them; the hardening pull request owns that proof.
+  refused(
+    "not-yet-implemented",
+    4546,
+    ["T13", "T16"],
+    ["experimental.job.cancel", "experimental.job.list"],
+  ),
+  // #4546: links the runtime to another machine.
+  refused(
+    "leaves-machine",
+    4546,
+    ["S18"],
+    [
+      "experimental.machine.add",
+      "experimental.machine.link",
+      "experimental.machine.list",
+      "experimental.machine.remove",
     ],
   ),
   refused(
@@ -786,6 +820,7 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry
   ),
   refused("not-yet-implemented", 3904, ["S02"], ["session delete"]),
   refused("leaves-machine", 3904, ["S06"], ["upgrade"]),
+  refused("leaves-machine", 4546, ["S18"], ["machine add", "machine list", "machine remove"]),
 ]);
 
 /**
@@ -808,6 +843,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     [
       "compaction",
       "compaction.auto",
+      "compaction.background",
       "compaction.buffer",
       "compaction.keep",
       "compaction.keep.tokens",
@@ -822,8 +858,26 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     ["C05"],
     ["experimental.artifacts", "experimental.image_generate", "experimental.media_blob", "plugins"],
   ),
-  // #4271: on for the native profile, whose wake run alone releases the scheduler lease.
-  keikoSet(["C09"], ["experimental.schedules"]),
+  // #4546: stated closed, so a changed producer default cannot open one; the plugins are withheld.
+  keikoSet(["C05"], ["experimental.all_flags"]),
+  keikoSet(
+    ["T21"],
+    [
+      "experimental.codemode_vm",
+      "experimental.full_codemode",
+      "experimental.opencode_api",
+      "experimental.recommended_api",
+    ],
+  ),
+  keikoSet(["C06"], ["experimental.console_watches", "experimental.project_overlay"]),
+  keikoSet(["C03"], ["experimental.home_memory"]),
+  keikoSet(["S18"], ["experimental.machines"]),
+  keikoSet(["S11"], ["experimental.model_speeds"]),
+  keikoSet(["S01"], ["experimental.sqlite_fts"]),
+  keikoSet(["S14"], ["experimental.video_generate"]),
+  // #4271, #4546: on for the native profile, whose wake run alone releases the scheduler lease, and
+  // off in every other profile.
+  keikoSet(["C09"], ["automations"]),
   keikoSet(
     ["C04"],
     [
@@ -841,6 +895,8 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "mcp.servers.*.oauth.auth_server_metadata_url",
       "mcp.servers.*.oauth.client_id",
       "mcp.servers.*.oauth.scope",
+      // #4546: one connection per run, never shared across projects.
+      "mcp.servers.*.pool",
       "mcp.servers.*.type",
       "mcp.servers.*.url",
     ],
@@ -1060,7 +1116,41 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   refused("keiko-owns-configuration", 3900, ["C06"], ["watcher", "watcher.ignore"]),
   refused("leaves-machine", 3900, ["T15"], ["websearch", "websearch.provider"]),
   refused("keiko-owns-workspace-binding", 3902, ["S17"], ["worktree", "worktree.directory"]),
-  refused("experimental-unadmitted", 3904, ["S08"], ["experimental.background_compaction"]),
+  // #4546: the producer's storage format for assistant parts, not a capability; its default stands.
+  refused("experimental-unadmitted", 4546, ["S01"], ["experimental.part_rows"]),
+  // #4546: video generation is closed (`experimental.video_generate`), so its model has no owner.
+  refused(
+    "keiko-owns-configuration",
+    4546,
+    ["S11"],
+    [
+      "experimental.video_generate.model",
+      "experimental.video_generate.model.model",
+      "experimental.video_generate.model.providerID",
+      "experimental.video_generate.model.variant",
+      // The gateway binding states the model's capabilities; cache warming would spend tokens on
+      // requests no run made.
+      "providers.*.models.*.capabilities.freeform",
+      "providers.*.models.*.settings.cache.warming",
+      "providers.*.models.*.settings.cache.warming.duration",
+      "providers.*.models.*.settings.cache.warming.interval",
+      "providers.*.settings.cache.warming",
+      "providers.*.settings.cache.warming.duration",
+      "providers.*.settings.cache.warming.interval",
+    ],
+  ),
+  // #4546: a client certificate and its key are credentials; the gateway binding carries none.
+  refused(
+    "keiko-owns-credentials",
+    4546,
+    ["S11"],
+    [
+      "providers.*.settings.tls",
+      "providers.*.settings.tls.cert",
+      "providers.*.settings.tls.key",
+      "providers.*.settings.tls.passphrase",
+    ],
+  ),
   refused("experimental-unadmitted", 3901, ["S16"], ["experimental.portable_shell_scanner"]),
   refused("experimental-unadmitted", 3903, ["T16"], ["experimental.subagent_depth"]),
   refused(
@@ -1239,8 +1329,28 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
     ["C05"],
     ["opencode.tool.artifact", "opencode.tool.image-generate"],
   ),
-  // #4271: native profile only; its create, pause, resume and delete pass `keiko.native-policy`.
-  nativePlugin(["C09"], ["opencode.tool.schedule"]),
+  // #4271, #4546: native profile only; its create, pause, resume and delete pass
+  // `keiko.native-policy`, which admits only a prompt into the run's own session on a time, an
+  // interval or a cron.
+  nativePlugin(["C09"], ["opencode.tool.automation"]),
+  // #4546: starts the full-text session index when `experimental.sqlite_fts` is on (stated off).
+  configurationPlugin("experimental.sqlite_fts", ["S01"], ["opencode.config.session-search"]),
+  // #4546: withheld at the source (`OPENCODE_WITHHELD_BUILT_IN_PLUGINS`) until each has an owner
+  // and a proof. Home memory writes a persistent memory outside the workspace; MCP events are
+  // automation triggers. A fork notice tells the model it runs in a fork; Keiko offers governed
+  // forks through the Workbench (S03), and the notice stays withheld until it has an owner and a
+  // proof of what it adds to such a fork.
+  refused("experimental-unadmitted", 4546, ["S03"], ["opencode.fork-notice"]),
+  refused("experimental-unadmitted", 4546, ["C03"], ["opencode.home-memory"]),
+  refused(
+    "experimental-unadmitted",
+    4546,
+    ["S01"],
+    ["opencode.tool.session-interrupt", "opencode.tool.session-search"],
+  ),
+  refused("experimental-unadmitted", 4546, ["S14"], ["opencode.tool.video-generate"]),
+  refused("experimental-unadmitted", 4546, ["C04", "C09"], ["opencode.tools.mcp-events"]),
+  refused("leaves-machine", 4546, ["S18"], ["opencode.tool.machine"]),
   refused("keiko-owns-configuration", 4271, ["S11"], ["opencode.provider.claude-agent"]),
   refused(
     "leaves-machine",

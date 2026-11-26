@@ -31,6 +31,13 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { isStableVersionString } from "./update-preflight-registry.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = ((): (typeof OPENCODE_RUNTIME_VERSION_PINS)[number] => {
+  const [pin] = OPENCODE_RUNTIME_VERSION_PINS;
+  if (pin === undefined) throw new Error("no OpenCode runtime pin");
+  return pin;
+})();
+
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
 const REVIEWED_COMMIT = "c".repeat(40);
@@ -298,9 +305,9 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.2.5",
-      tag: "v2.2.5",
-      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+      version: PINNED_OPENCODE.version,
+      tag: PINNED_OPENCODE.tag,
+      commit: PINNED_OPENCODE.commit,
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -309,7 +316,7 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
     },
     protocolSchema: {
       path: "packages/protocol/openapi.json",
-      sha256: OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "",
+      sha256: PINNED_OPENCODE.rawSchemaSha256,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1107,7 +1114,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.2.5",
+      upstreamVersion: PINNED_OPENCODE.version,
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),

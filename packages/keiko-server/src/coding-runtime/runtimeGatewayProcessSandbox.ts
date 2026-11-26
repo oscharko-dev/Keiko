@@ -9,8 +9,10 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   RUNTIME_CONFINEMENT_SPAWNED_OPERATION,
   RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION,
+  RUNTIME_CONFINEMENT_TREE_REAPED_OPERATION,
 } from "./codingRuntimeActivityOperations.js";
 import { validateRuntimeGatewayFilesystemRoots } from "./nativeRuntimeProcessPaths.js";
+import type { NativeRuntimeLaunchSweep } from "./nativeRuntimeProcessTree.js";
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
 
 interface RuntimeGatewayProcessSandboxInput {
@@ -114,18 +116,36 @@ export function recordWindowsGatewayConfinementSpawned(
 export function recordWindowsStaleGrantsSwept(
   sink: ServerLogSink,
   runId: string,
-  sweep: { readonly removed: number; readonly failed: number },
+  sweep: NativeRuntimeLaunchSweep,
 ): void {
-  if (sweep.removed === 0 && sweep.failed === 0) return;
+  const { removed, failed, profilesRemoved, profilesFailed } = sweep;
+  if (removed + failed + profilesRemoved + profilesFailed === 0) return;
   sink.write(
     activityLogEvent(
       RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION,
       { correlationId: runId },
       {
         backend: "windows-appcontainer",
-        removedEntryCount: sweep.removed,
-        failedCount: sweep.failed,
+        removedEntryCount: removed,
+        failedCount: failed,
+        removedProfileCount: profilesRemoved,
+        failedProfileCount: profilesFailed,
       },
+    ),
+  );
+}
+
+/** The root exit code of a confined Windows tree, from its reap proof (#4495). */
+export function recordWindowsTreeReaped(
+  sink: ServerLogSink,
+  runId: string,
+  rootExitCode: number,
+): void {
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_TREE_REAPED_OPERATION,
+      { correlationId: runId },
+      { backend: "windows-appcontainer", rootExitCode },
     ),
   );
 }

@@ -5,6 +5,8 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import {
+  OPENCODE_INVALID_ARGUMENTS_PREFIX,
+  OPENCODE_NOT_UTF8_EDIT_REFUSAL,
   OPENCODE_V2_TEXT_PREFIX_INVALID,
   createOpenCodeV2HistoryProjection,
   OPENCODE_V2_STEP_CHANGE_FILES_MAX,
@@ -16,6 +18,7 @@ import { createOpenCodeReconciler } from "./opencodeReconciler.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import { recordContextTelemetry } from "./productionOpenCodeBackend.js";
 import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
+import { projectNativeParentHistory } from "./opencodeNativeSessionTree.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -2452,9 +2455,116 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
     expect(bothReported.at(-1)).toBe("terminal");
   });
 
-  it("owes nothing for a foreground subagent, a launch that failed or a launch naming no child", () => {
+  // 2.4.1 runs every subagent in the background and its subagent tool has no `background`
+  // parameter, so a model's call names none (#4546): such a child still owes its report.
+  it("owes the report of a subagent call that does not say background", () => {
+    expect(
+      kinds([user, launch("ses_child", { background: false }), idle("msg_idle1")]),
+    ).not.toContain("terminal");
+  });
+
+  // 2.4.1 reports each time a child goes idle, so a follow-up (`sessionID`) to a child that already
+  // reported owes one more report.
+  it("owes again after a follow-up to a child that already reported", () => {
+    const first = [user, launch("ses_child"), idle("msg_idle1"), report("ses_child", "msg_r1")];
+    const followUp = [...first, launch("ses_child", { id: "msg_follow" }), idle("msg_idle2")];
+    expect(kinds(followUp).at(-1)).not.toBe("terminal");
+    expect(kinds([...followUp, report("ses_child", "msg_r2"), idle("msg_idle3")]).at(-1)).toBe(
+      "terminal",
+    );
+  });
+
+  // 2.4.1 ends a child's round without an idle message and without a report when the human
+  // dismisses the child's question (#4546). A child that no longer runs and whose newest message is
+  // not an idle message never reports, so it is silent and owes nothing.
+  it("releases a held idle message once every owed child is silent, and counts the release", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const parent = [user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")];
+    const held = projection.project("ses_parent", parent, undefined);
+    expect(held.map((event) => event.kind)).not.toContain("terminal");
+    expect([...projection.owedChildren(parent, held.length - 1)]).toEqual(["ses_child"]);
+    const released = projection.project("ses_parent", parent, held.length - 1, {
+      silentChildren: new Set(["ses_child"]),
+    });
+    expect(released.map((event) => event.kind)).toEqual(["terminal"]);
+    expect(released[0]?.sequence).toBe(held.length);
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines.at(-1)?.extra).toMatchObject({ silentReleaseCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain("ses_child");
+    expectActivityLogProof(
+      "coding-runtime.history-projection.emitted-line",
+      formatActivityLogProofLine(lines.at(-1) ?? {}),
+    );
+  });
+
+  // A sync that reads the launch and the idle message together (the first after a reconnect, or a
+  // burst of events read at once) may be the last: a silent child sends nothing that hints another.
+  it("releases in the one sync that reads the launch and the idle message together", async () => {
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const dismissed = { id: "msg_child", type: "assistant", finish: "error" };
+    const events = await projectNativeParentHistory(
+      {
+        client: {
+          active: () => Promise.resolve({}),
+          recentMessages: () =>
+            Promise.resolve({ messages: [dismissed], truncated: false, anchored: false }),
+        },
+        history: projection,
+        sessionId: "ses_parent",
+        messages: [user, launch("ses_child"), answer("msg_a1"), idle("msg_idle1")],
+        checkpoint: undefined,
+      },
+      undefined,
+    );
+    expect(events.map((event) => event.kind).at(-1)).toBe("terminal");
+  });
+
+  it("keeps holding while one owed child is silent and another still owes its report", () => {
+    const parent = [
+      user,
+      launch("ses_child_a", { id: "msg_launch_a" }),
+      launch("ses_child_b", { id: "msg_launch_b" }),
+      idle("msg_idle1"),
+    ];
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const held = projection.project("ses_parent", parent, undefined);
+    expect(
+      projection
+        .project("ses_parent", parent, held.length - 1, {
+          silentChildren: new Set(["ses_child_a"]),
+        })
+        .map((event) => event.kind),
+    ).not.toContain("terminal");
+  });
+
+  it("owes nothing once a child reported, and nothing is owed before any launch", () => {
+    const owed = (messages: readonly Record<string, unknown>[]): readonly string[] => {
+      const projection = createOpenCodeV2HistoryProjection({
+        runId: "background-run",
+        activityLog: undefined,
+        toolProfile: "native",
+      });
+      return [...projection.owedChildren(messages, undefined)];
+    };
+    expect(owed([user, idle("msg_idle0")])).toEqual([]);
+    expect(owed([user, launch("ses_child"), idle("msg_idle1"), report("ses_child")])).toEqual([]);
+  });
+
+  it("owes nothing for a launch that failed or a launch naming no child", () => {
     for (const launched of [
-      launch("ses_child", { background: false }),
       launch("ses_child", { status: "error" }),
       launch("ses_child", { sessionID: undefined }),
       launch("ses_child", { sessionID: "not-a-session" }),
@@ -2525,6 +2635,192 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
     projection.project("ses_parent", [user, idle("msg_idle1")], undefined);
     const line = sink.events.find((event) => event.op === "coding-runtime.history-projection");
     expect(line?.extra).not.toHaveProperty("heldIdleCount");
+  });
+});
+
+// 2.3.1 moves a shell command still running at its timeout to the background instead of killing
+// it, and a model may start one there. The call completes at once with the command's shell id and
+// no exit status; when the command ends the runtime appends a synthetic message naming the shell id
+// and runs the session again (#4546). Like `opencode run`, the run waits for the commands its current
+// prompt started, and never for one of an earlier prompt.
+describe("OpenCode 2.4.1 background shell commands (#4546)", () => {
+  const user = (id: string): Record<string, unknown> => ({
+    id,
+    type: "user",
+    time: { created: 1 },
+    text: "Run the tests",
+  });
+  const moved = (id: string, shellID: unknown = "sh_job"): Record<string, unknown> =>
+    assistant214({
+      id,
+      content: [
+        {
+          type: "tool",
+          id: `call_${id}`,
+          name: "shell",
+          executed: false,
+          time: { created: 2, ran: 2, completed: 3 },
+          state: {
+            status: "completed",
+            input: { command: "npm test" },
+            content: [{ type: "text", text: "PRIVATE_MOVED_NOTICE" }],
+            metadata: { status: "running", shellID, pid: 4242, truncated: false },
+          },
+        },
+      ],
+    });
+  const idle = (id: string): Record<string, unknown> => ({
+    id,
+    type: "idle",
+    time: { created: 5 },
+    outcome: "succeeded",
+  });
+  const ended = (shellID: string, id = `msg_ended_${shellID}`): Record<string, unknown> => ({
+    id,
+    type: "synthetic",
+    time: { created: 6 },
+    metadata: { source: "shell", shellID, jobID: "job_1", state: "completed", exit: 0 },
+    text: `<background kind="shell" id="job_1" state="completed" command="npm test">PRIVATE_TEST_OUTPUT</background>`,
+    description: "npm test",
+  });
+  const answer = (id: string): Record<string, unknown> =>
+    assistant214({ id, content: [{ type: "text", text: "All tests passed." }] });
+
+  function project(messages: readonly Record<string, unknown>[]): {
+    readonly kinds: readonly string[];
+    readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+    readonly signals: readonly CodingSafeActivitySignal[];
+  } {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-shell-run",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const events = projection.project("ses_parent", messages, undefined);
+    return {
+      kinds: events.map((event) => event.kind),
+      sink,
+      signals: events.flatMap((event) => projection.takeSignal(event) ?? []),
+    };
+  }
+
+  it("holds the idle message while a command of the current prompt runs, and counts the hold", () => {
+    const { kinds, sink } = project([user("msg_u1"), moved("msg_a1"), idle("msg_idle1")]);
+    expect(kinds).not.toContain("terminal");
+    expect(kinds).not.toContain("terminal-failure");
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines.at(-1)?.extra).toMatchObject({ heldIdleCount: 1, backgroundJobHoldCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toMatch(/sh_job|npm test|PRIVATE_/u);
+    expectActivityLogProof(
+      "coding-runtime.history-projection.emitted-line",
+      formatActivityLogProofLine(lines.at(-1) ?? {}),
+    );
+  });
+
+  it("ends the run's work on the idle message after the command reported, not before", () => {
+    const { kinds } = project([
+      user("msg_u1"),
+      moved("msg_a1"),
+      idle("msg_idle1"),
+      ended("sh_job"),
+      answer("msg_a2"),
+      idle("msg_idle2"),
+    ]);
+    expect(kinds.filter((kind) => kind === "terminal")).toHaveLength(1);
+    expect(kinds.at(-1)).toBe("terminal");
+  });
+
+  it("keeps waiting while another command has not reported", () => {
+    const { kinds } = project([
+      user("msg_u1"),
+      moved("msg_a1", "sh_one"),
+      moved("msg_a2", "sh_two"),
+      idle("msg_idle1"),
+      ended("sh_one"),
+      idle("msg_idle2"),
+    ]);
+    expect(kinds).not.toContain("terminal");
+  });
+
+  // `opencode run` never waits for a dev server an earlier prompt started.
+  it("does not wait for a command an earlier prompt started", () => {
+    const { kinds } = project([
+      user("msg_u1"),
+      moved("msg_a1"),
+      user("msg_u2"),
+      answer("msg_a2"),
+      idle("msg_idle1"),
+    ]);
+    expect(kinds.at(-1)).toBe("terminal");
+  });
+
+  it.each([
+    ["a shell id of another shape", "job_1"],
+    ["no shell id", null],
+  ])("does not wait for a running call with %s", (_name, shellID) => {
+    const { kinds } = project([user("msg_u1"), moved("msg_a1", shellID), idle("msg_idle1")]);
+    expect(kinds.at(-1)).toBe("terminal");
+  });
+
+  // A silent child releases a held idle message only while no command of the prompt still runs.
+  it("does not release a silent child's hold while a background command is owed", () => {
+    const launchChild = assistant214({
+      id: "msg_launch",
+      content: [
+        {
+          type: "tool",
+          id: "call_launch",
+          name: "subagent",
+          executed: false,
+          time: { created: 2, ran: 2, completed: 3 },
+          state: {
+            status: "completed",
+            input: { agent: "explore", prompt: "p" },
+            content: [],
+            metadata: { sessionID: "ses_child" },
+          },
+        },
+      ],
+    });
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "background-shell-run",
+      activityLog: undefined,
+      toolProfile: "native",
+    });
+    const kinds = projection
+      .project(
+        "ses_parent",
+        [user("msg_u1"), launchChild, moved("msg_a1"), idle("msg_idle1")],
+        undefined,
+        {
+          silentChildren: new Set(["ses_child"]),
+        },
+      )
+      .map((event) => event.kind);
+    expect(kinds).not.toContain("terminal");
+  });
+
+  // A check that hit its timeout never counts as verification, not even once it reports a zero.
+  it("gives a check that moved to the background no exit status, before or after its report", () => {
+    const { signals } = project([
+      user("msg_u1"),
+      moved("msg_a1"),
+      idle("msg_idle1"),
+      ended("sh_job"),
+      answer("msg_a2"),
+      idle("msg_idle2"),
+    ]);
+    const tools = signals.filter((signal) => signal.kind === "tool");
+    expect(tools).toEqual([expect.objectContaining({ callId: "call_msg_a1", state: "succeeded" })]);
+    expect(tools[0]).not.toHaveProperty("exitCode");
+    expect(tools[0]).not.toHaveProperty("exitStatusCheck");
+    // The row shows what the tool returned, its notice that the check moved on (owner order
+    // 2026-11-25); nothing else of the run reaches the signals.
+    expect(tools[0]).toMatchObject({ presentation: { output: { head: "PRIVATE_MOVED_NOTICE" } } });
+    expect(JSON.stringify(signals).replaceAll("PRIVATE_MOVED_NOTICE", "")).not.toContain(
+      "PRIVATE_",
+    );
   });
 });
 
@@ -3138,5 +3434,122 @@ describe("OpenCode V2 history refusals (#4491 audit)", () => {
     expect(new OpenCodeV2HistoryError(OPENCODE_V2_TEXT_PREFIX_INVALID).permanent).toBe(false);
     for (const code of ["reason=event-unknown:type=unsupported", "reason=argument-bound:x"])
       expect(new OpenCodeV2HistoryError(code).permanent).toBe(true);
+  });
+});
+
+// #4546: 2.4.1 refuses to edit a file that is not UTF-8 and leaves it unchanged; the tool row says
+// so in a closed word, and the projection line counts it.
+describe("a native edit the runtime refused because the file is not UTF-8", () => {
+  const refusal = `Unable to edit PRIVATE_FILE: ${OPENCODE_NOT_UTF8_EDIT_REFUSAL}. It was left unchanged`;
+  const argumentRefusal = `${OPENCODE_INVALID_ARGUMENTS_PREFIX}"edit":\n- oldString: Missing key\n\nUpdate the arguments and call the tool again.`;
+
+  function editHistory(
+    state: Readonly<Record<string, unknown>>,
+  ): readonly Record<string, unknown>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Fix the greeting." },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 2 },
+        content: [{ type: "tool", id: "call_edit", name: "edit", time: { created: 2 }, state }],
+      },
+    ];
+  }
+
+  const errored = (message: unknown): Readonly<Record<string, unknown>> => ({
+    status: "error",
+    input: { path: "PRIVATE_FILE", oldString: "a", newString: "b" },
+    error: { type: "tool.execution", message },
+  });
+
+  function project(state: Readonly<Record<string, unknown>>): {
+    readonly signals: readonly unknown[];
+    readonly line: Readonly<Record<string, unknown>> | undefined;
+  } {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-edit",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const signals = projection
+      .project("ses_edit", editHistory(state), undefined)
+      .flatMap((event) => projection.takeSignal(event) ?? [])
+      .filter((signal) => signal.kind === "tool");
+    const line = sink.events.find((event) => event.op === "coding-runtime.history-projection");
+    return { signals, line: line?.extra };
+  }
+
+  it("marks the failed call with the closed refusal and counts it, never the message", () => {
+    const { signals, line } = project(errored(refusal));
+    expect(signals).toEqual([
+      expect.objectContaining({
+        callId: "call_edit",
+        state: "failed",
+        presentation: { failureOrigin: "tool-error", refusalReason: "FILE_NOT_UTF8" },
+      }),
+    ]);
+    expect(line).toMatchObject({ editRefusalCount: 1 });
+    expect(JSON.stringify(signals)).not.toContain("PRIVATE_FILE");
+  });
+
+  it.each([
+    ["another edit failure", errored("Unable to edit PRIVATE_FILE: oldString not found")],
+    ["a message that is not text", errored(42)],
+    [
+      "a completed edit",
+      { status: "completed", input: { path: "a.ts", oldString: "a", newString: "b" }, content: [] },
+    ],
+  ])("adds no refusal for %s", (_name, state) => {
+    const { signals, line } = project(state);
+    expect(signals[0]).not.toHaveProperty("presentation.refusalReason");
+    expect(line).not.toHaveProperty("editRefusalCount");
+  });
+
+  // #4546: a failed native call reaches the log as a count, and one the runtime refused for its
+  // arguments (the model is asked to call the tool again) as a closed class of its own.
+  it.each([
+    ["the not-UTF-8 refusal", errored(refusal), 0],
+    ["a call the runtime refused for its arguments", errored(argumentRefusal), 1],
+    ["a message that is not text", errored(42), 0],
+  ])("counts %s as a failed native call", (_name, state, argumentErrors) => {
+    const { line } = project(state);
+    expect(line).toMatchObject({ toolErrorCount: 1 });
+    expect(line?.toolArgumentErrorCount).toBe(argumentErrors === 0 ? undefined : argumentErrors);
+    expect(JSON.stringify(line)).not.toContain("PRIVATE_FILE");
+  });
+
+  it("counts a failed call once, in the pass that first sees it, and never again", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-edit",
+      activityLog: sink,
+      toolProfile: "native",
+    });
+    const first = editHistory(errored(argumentRefusal));
+    const events = projection.project("ses_edit", first, undefined);
+    const answer = {
+      id: "msg_answer",
+      type: "assistant",
+      time: { created: 3 },
+      content: [{ type: "text", text: "The edit is done." }],
+    };
+    projection.project("ses_edit", [...first, answer], events.at(-1)?.sequence);
+    const lines = sink.events.filter((event) => event.op === "coding-runtime.history-projection");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.extra).toMatchObject({ toolErrorCount: 1, toolArgumentErrorCount: 1 });
+    expect(lines[1]?.extra).not.toHaveProperty("toolErrorCount");
+    expect(lines[1]?.extra).not.toHaveProperty("toolArgumentErrorCount");
+  });
+
+  it("counts no failed call for a completed edit", () => {
+    const { line } = project({
+      status: "completed",
+      input: { path: "a.ts", oldString: "a", newString: "b" },
+      content: [],
+    });
+    expect(line).not.toHaveProperty("toolErrorCount");
+    expect(line).not.toHaveProperty("toolArgumentErrorCount");
   });
 });

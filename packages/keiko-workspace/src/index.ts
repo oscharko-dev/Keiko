@@ -75,6 +75,7 @@ export {
   compileIgnore,
   compileWorkspaceIgnore,
   DEFAULT_DENY_PATTERNS,
+  isCredentialNamedSegment,
   isDenied,
   isIgnored,
   isRepositoryClaudeSkillPath,

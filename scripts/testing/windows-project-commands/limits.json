@@ -1,0 +1,81 @@
+{
+  "note": "Limits: a path longer than MAX_PATH, junctions inside and out of the workspace, a workspace on a second volume, and a UNC path. Run setup-workspace.ps1 and setup-limits.ps1 -Volume D: first.",
+  "path": ["C:\\Program Files\\nodejs", "C:\\Program Files\\Git\\cmd"],
+  "cwd": "${home}\\keiko-4493\\ws",
+  "env": {
+    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main"
+  },
+  "grants": [
+    {
+      "access": "modify",
+      "path": "${home}\\keiko-4493\\ws"
+    },
+    {
+      "access": "modify",
+      "path": "D:\\keiko-4493-ws"
+    }
+  ],
+  "steps": [
+    {
+      "id": "long-path-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\deep\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\file.txt"
+    },
+    {
+      "id": "long-path-write",
+      "kind": "write",
+      "path": "${home}\\keiko-4493\\ws\\deep\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\written.txt"
+    },
+    {
+      "id": "long-path-cmd-type",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": [
+        "/d",
+        "/s",
+        "/c",
+        "type ${home}\\keiko-4493\\ws\\deep\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\segment-of-forty-characters-for-length\\file.txt"
+      ]
+    },
+    {
+      "id": "long-path-git-status",
+      "file": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "args": ["status", "--porcelain", "--untracked-files=all"]
+    },
+    {
+      "id": "junction-inside-read",
+      "kind": "read",
+      "path": "${home}\\keiko-4493\\ws\\link-inside\\file.txt"
+    },
+    {
+      "id": "junction-outside-list",
+      "kind": "list",
+      "path": "${home}\\keiko-4493\\ws\\link-outside"
+    },
+    {
+      "id": "junction-outside-write",
+      "kind": "write",
+      "path": "${home}\\keiko-4493\\ws\\link-outside\\probe.txt"
+    },
+    {
+      "id": "second-volume-npm-test",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "npm.cmd test"],
+      "cwd": "D:\\keiko-4493-ws"
+    },
+    {
+      "id": "second-volume-output-read",
+      "kind": "read",
+      "path": "D:\\keiko-4493-ws\\out.txt"
+    },
+    {
+      "id": "unc-read",
+      "kind": "read",
+      "path": "\\\\localhost\\k4493\\package.json"
+    },
+    {
+      "id": "unc-cmd-dir",
+      "file": "C:\\Windows\\System32\\cmd.exe",
+      "args": ["/d", "/s", "/c", "dir \\\\localhost\\k4493"]
+    }
+  ]
+}

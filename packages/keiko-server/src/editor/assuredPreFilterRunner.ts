@@ -12,9 +12,7 @@
 // are thin node effects exercised when the feature is enabled on a host with a sandbox backend.
 
 import {
-  cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -46,6 +44,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import { recordAssuredCopyCompleted, type AssuredCopyCounts } from "./assuredCopyEvidence.js";
 import type { AssuredPreFilterOutcome } from "./assuredPreFilter.js";
+import { copyWithoutLinks } from "./linkFreeCopy.js";
 import type { SandboxedCommand, SandboxedRunResult } from "./assuredGateRunner.js";
 import {
   runDisposableAssuredPreFilter,
@@ -350,33 +349,18 @@ function isExcludedFromCopy(src: string): boolean {
   );
 }
 
-// #4429: the disposable root holds no link (symbolic link or Windows directory junction). Node's
-// `cpSync` copies a link differently by path and platform: its native copy turns a junction into a
-// real directory holding the target's files, which copies outside content into the sandbox; the
-// filtered copy re-creates it as an absolute link out of the root, EPERM without the symbolic-link
-// privilege. Every sandbox backend mounts only the disposable root, so a link copied in was never
-// readable there. `lstat` classifies a junction like a symbolic link, so this filter skips each link
-// before `cpSync` acts on it, on every platform; an entry that vanished mid-copy throws.
+// #4429: the disposable root holds no link (`copyWithoutLinks`). Every sandbox backend mounts only
+// the disposable root, so a link copied in was never readable there.
 export function copyIntoDisposableRoot(
   realRoot: string,
   root: string,
   correlationId: string | undefined,
 ): AssuredCopyCounts {
-  let copiedEntryCount = 0;
-  let skippedLinkCount = 0;
-  cpSync(realRoot, root, {
-    recursive: true,
-    dereference: false,
-    filter: (src) => {
-      if (isExcludedFromCopy(src)) return false;
-      if (lstatSync(src).isSymbolicLink()) {
-        skippedLinkCount += 1;
-        return false;
-      }
-      copiedEntryCount += 1;
-      return true;
-    },
-  });
+  const { copiedEntryCount, skippedLinkCount } = copyWithoutLinks(
+    realRoot,
+    root,
+    isExcludedFromCopy,
+  );
   const counts = { copiedEntryCount, skippedLinkCount };
   recordAssuredCopyCompleted(counts, correlationId);
   return counts;

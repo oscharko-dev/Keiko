@@ -45,6 +45,7 @@ import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { detectPackageManager } from "./package-dir.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
+import { isPlannedMavenStep, MAVEN_EXECUTABLE, MAVEN_STEP_ENVIRONMENT } from "./maven.js";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX, NATIVE_SHELL_SKIP_PREFIX } from "./plan.js";
 import type {
   VerificationKind,
@@ -81,6 +82,12 @@ export interface VerificationDeps {
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
   readonly sandboxAvailability?: RunCommandDeps["sandboxAvailability"] | undefined;
   readonly platform?: RunCommandDeps["platform"] | undefined;
+  // #4496: the pinned Windows runtime supervisor, which runs each step in a per-run AppContainer.
+  readonly windowsStepSupervisor?: RunCommandDeps["windowsStepSupervisor"] | undefined;
+  // #4496: the workspace the steps run in, when it is not `workspace` itself: a private copy that
+  // leaves credential-named entries out. Asked for at each step, after the dependency bootstrap
+  // installed into `workspace`, so the first step's request makes the copy and the others share it.
+  readonly stepWorkspace?: (() => WorkspaceInfo) | undefined;
   // Egress-enforcement policy for `network:"none"` steps. Default is "enforce-or-fail-closed": a
   // no-network verification step does not execute unless the caller attests an enforcing backend.
   readonly networkEnforcement?: NetworkEnforcementMode | undefined;
@@ -148,6 +155,25 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     requiredLeadingFlags: Object.freeze(["--test"]),
     denyFlags: Object.freeze(["-e", "--eval", "-p", "--print", "-r", "--require", "--import"]),
   },
+  // A Maven project's own tests on the Windows step backend (#4492): batch mode and offline first,
+  // the test phase only, and never settings, toolchains or a build file other than the project's.
+  // Defense in depth: the orchestrator admits only the exact planned arguments (isPlannedMavenStep).
+  {
+    executable: MAVEN_EXECUTABLE,
+    allowedSubcommands: Object.freeze(["test"]),
+    requiredLeadingFlags: Object.freeze(["-B", "-o"]),
+    denyFlags: Object.freeze([
+      "-s",
+      "--settings",
+      "-gs",
+      "--global-settings",
+      "-t",
+      "--toolchains",
+      "-f",
+      "--file",
+      "--define",
+    ]),
+  },
   ...DEFAULT_COMMAND_RULES,
 ]);
 
@@ -168,9 +194,14 @@ const ALL_STATUSES: readonly VerificationStatus[] = [
 // an enforced "none" run, runCommand wraps the spawn through keiko-sandbox and records the attestation,
 // which `buildAppliedLimits` reports honestly. Repository execution always requests the existing
 // execution-root filesystem boundary, independently of any network compatibility setting.
-function policyForStep(limits: VerificationResourceLimits, network: NetworkPolicy): SandboxPolicy {
+function policyForStep(step: VerificationStep, network: NetworkPolicy): SandboxPolicy {
+  const { limits } = step;
   return {
     ...DEFAULT_SANDBOX_POLICY,
+    // Maven's launcher finds Java and itself through these; the step grants read their folders.
+    ...(step.command === MAVEN_EXECUTABLE
+      ? { envAllowlist: [...DEFAULT_SANDBOX_POLICY.envAllowlist, ...MAVEN_STEP_ENVIRONMENT] }
+      : {}),
     maxOutputBytes: limits.maxOutputBytes,
     defaultTimeoutMs: limits.wallTimeMs,
     network,
@@ -381,6 +412,7 @@ function isValidVerificationStep(step: VerificationStep): boolean {
   if (isGeneratedSkipShape(step)) {
     return true;
   }
+  if (step.command === MAVEN_EXECUTABLE) return isPlannedMavenStep(step);
   return step.kind === "targeted-test" ? isValidTargetedStep(step) : isValidScriptStep(step);
 }
 
@@ -492,8 +524,8 @@ function buildRunDeps(
   network: NetworkPolicy,
 ): RunCommandDeps {
   return {
-    workspace: deps.workspace,
-    policy: policyForStep(step.limits, network),
+    workspace: deps.stepWorkspace?.() ?? deps.workspace,
+    policy: policyForStep(step, network),
     commandRules: VERIFICATION_COMMAND_RULES,
     spawn,
     processEnv: deps.processEnv ?? process.env,
@@ -501,10 +533,22 @@ function buildRunDeps(
     fs: deps.fs ?? nodeWorkspaceFs,
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
     ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    ...hostRunDeps(deps),
+  };
+}
+
+// The host the step runs on: its sandbox availability, platform and Windows supervisor, when given.
+function hostRunDeps(
+  deps: VerificationDeps,
+): Pick<RunCommandDeps, "sandboxAvailability" | "platform" | "windowsStepSupervisor"> {
+  return {
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),
     ...(deps.platform === undefined ? {} : { platform: deps.platform }),
+    ...(deps.windowsStepSupervisor === undefined
+      ? {}
+      : { windowsStepSupervisor: deps.windowsStepSupervisor }),
   };
 }
 

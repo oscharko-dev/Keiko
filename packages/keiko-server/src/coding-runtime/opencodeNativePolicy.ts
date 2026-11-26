@@ -1061,18 +1061,33 @@ const NATIVE_WORKTREE: OpenCodeNativeActionClassification = Object.freeze({
 });
 
 /**
- * A native schedule (#4271): creating, pausing, resuming or deleting a time at which Keiko continues
- * this task on its own, in the mode the human chose for it. That starts later work nobody watches,
- * so it is risky contained work: Ask for approval and Supervised workspace ask, Full access allows
- * (`NATIVE_SCHEDULE`). A schedule gated by an
- * `if`/`until` check is refused in every mode: a shell check runs with the runtime server's whole
- * environment outside the shell scrub, and a Code Mode check would boot a runtime for every poll.
+ * A native schedule (#4271, #4546): creating, pausing, resuming or deleting a time at which Keiko
+ * continues this task on its own, in the mode the human chose for it. That starts later work nobody
+ * watches, so it is risky contained work: Ask for approval and Supervised workspace ask, Full
+ * access allows (`NATIVE_SCHEDULE`). The producer carries it as an automation, which can also run a
+ * shell command or a Code Mode program, or fire on an MCP event. Those are refused in every mode:
+ * they run outside any human run with the runtime server's whole environment, outside the shell
+ * scrub. A prompt that names its own recipient is refused too: it would reach another session or
+ * start a subagent, and Keiko wakes only this task.
  */
-const SCHEDULE_CONDITION_REFUSED = Object.freeze({
-  reason: "unsupported-action" as const,
-  message:
-    "Keiko refused this schedule: Keiko continues a task at a time, in, every or cron, but not on an if or until check. Schedule it by time instead.",
-});
+const SCHEDULE_REFUSALS: ReadonlyMap<string, string> = new Map([
+  [
+    "trigger",
+    "Keiko refused this automation: Keiko continues a task at a time, in an interval or on a cron, but not when an MCP server sends an event. Schedule it by time instead.",
+  ],
+  [
+    "action",
+    "Keiko refused this automation: it may only prompt this task again. A shell command or a Code Mode program would run without a person. Create a prompt automation instead.",
+  ],
+  [
+    "target",
+    "Keiko refused this automation: it prompts this task. Leave out the recipient, so the prompt returns to this session.",
+  ],
+  [
+    "shape",
+    "Keiko refused this automation: it carries a field Keiko does not review. Create it with a name, a time, an interval or a cron, a prompt and, if needed, when it expires.",
+  ],
+]);
 
 const SCHEDULE_OPERATIONS: ReadonlySet<string> = new Set(OPENCODE_CODE_MODE_SCHEDULE_OPERATIONS);
 
@@ -1083,7 +1098,17 @@ function classifySchedule(request: OpenCodeNativePolicyRequest): Classified {
       reason: "unsupported-action",
       message: "Keiko refused this action: it is not a schedule change Keiko knows.",
     };
-  if (rest.some((resource) => resource.startsWith("condition:"))) return SCHEDULE_CONDITION_REFUSED;
+  // The plugin names a refusal alone, right after the operation; a later resource is a line of the
+  // prompt the schedule would send, which is text to decide, never a refusal marker.
+  const [refusal] = rest;
+  if (refusal?.startsWith("refused:") === true) {
+    return {
+      reason: "unsupported-action",
+      message:
+        SCHEDULE_REFUSALS.get(refusal.slice("refused:".length)) ??
+        "Keiko refused this action: it is not a schedule change Keiko knows.",
+    };
+  }
   return NATIVE_SCHEDULE;
 }
 

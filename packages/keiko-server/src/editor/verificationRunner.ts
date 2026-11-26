@@ -33,8 +33,11 @@ import {
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildVerificationPlan,
+  DEFAULT_VERIFICATION_LIMITS,
   detectScripts,
+  isMavenProject,
   planDirectTargetedTests,
+  planMavenSteps,
   planPackageTargetedTests,
   resolveStepNetwork,
   resolveVerificationPackage,
@@ -48,6 +51,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { resolveTrustBasisFact, trustBasisFactsMatch } from "../workspace-script-trust.js";
+import { windowsMavenRepository } from "./windowsStepSupervisor.js";
 import {
   appendEditorVerificationRunEvidence,
   buildEditorVerificationInterruptedEvidenceEntry,
@@ -117,7 +121,7 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["vitest", "jest", "mocha", "node-test", "unknown"],
+      values: ["vitest", "jest", "mocha", "node-test", "maven", "unknown"],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
     metadataOnly: { type: "boolean", dataClass: "closed-enum", required: false },
@@ -423,6 +427,9 @@ export interface VerificationRunnerManagerOptions {
   readonly probeIsolation?:
     | ((cwd: string, correlationId: string | undefined) => Promise<TimedNetworkIsolationProbe>)
     | undefined;
+  // #4492: the person's Maven repository a Maven step on the Windows step backend reads offline;
+  // defaults to `%USERPROFILE%\.m2\repository` when it is a real folder.
+  readonly windowsMavenRepository?: (() => string | undefined) | undefined;
   readonly maxConcurrentRuns?: number | undefined;
   // Issue #2211 fix-up (Epic #2092): the audit-evidence trail, mirroring buildCommandRunner's
   // store/evidence/live-redactor construction pattern. Optional (like CommandRunnerManagerOptions)
@@ -504,11 +511,18 @@ interface ResolvedVerificationWorkspace {
   // PR #3381 review).
 }
 
+// What the run's lines name as its runner: the workspace's test framework, or Maven (#4492).
+interface VerificationRunner {
+  readonly testFramework: WorkspaceInfo["testFramework"] | "maven";
+}
+
+const MAVEN_RUNNER: VerificationRunner = Object.freeze({ testFramework: "maven" });
+
 interface PreparedVerificationRun {
   readonly resolved: ResolvedVerificationWorkspace;
   readonly plan: VerificationPlan;
-  // The workspace whose test framework the run reports: the nested package's when it has one.
-  readonly runnerWorkspace: WorkspaceInfo;
+  // The runner the run reports: the nested package's test framework when it has one.
+  readonly runnerWorkspace: VerificationRunner;
   // The probe the script-trust decision was made on, when one was taken before it (#4519).
   readonly isolation?: TimedNetworkIsolationProbe | undefined;
 }
@@ -527,6 +541,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly now: () => number;
   private readonly executePort: VerificationExecutePort;
   private readonly probeIsolation: VerificationRunnerManagerOptions["probeIsolation"];
+  private readonly mavenRepository: VerificationRunnerManagerOptions["windowsMavenRepository"];
   private readonly maxConcurrentRuns: number;
   private readonly evidenceStore: EvidenceStore | undefined;
   private readonly redactor: (input: string) => string;
@@ -545,6 +560,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.now = opts.now ?? Date.now;
     this.executePort = opts.execute ?? executeVerificationEnforced;
     this.probeIsolation = opts.probeIsolation;
+    this.mavenRepository = opts.windowsMavenRepository;
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
     this.evidenceStore = opts.evidenceStore;
     this.redactor = opts.redactor ?? ((input: string): string => input);
@@ -744,14 +760,14 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       readonly isolation: TimedNetworkIsolationProbe;
     },
   ): PreparedVerificationRun {
-    let workspace: WorkspaceInfo | undefined;
+    let runner: VerificationRunner | undefined;
     const isolationAvailable = probed?.isolation.probe.available;
     try {
       const resolved =
         probed?.resolved ?? this.resolveWorkspace(input.projectId, input.correlationId);
-      workspace = resolved.workspace;
-      const { plan, trust, runnerWorkspace } = this.buildPlan(resolved, input, isolationAvailable);
-      workspace = runnerWorkspace;
+      runner = resolved.workspace;
+      const { plan, trust, runnerWorkspace } = this.buildPlan(resolved, input, probed?.isolation);
+      runner = runnerWorkspace;
       this.recordRunnerSelection(runnerWorkspace, input.correlationId, plan, {
         trust,
         isolation: probed?.isolation.probe,
@@ -765,7 +781,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       );
       return { resolved, plan, runnerWorkspace, isolation: probed?.isolation };
     } catch (error) {
-      this.recordRunnerFailure(workspace, input.correlationId, error);
+      this.recordRunnerFailure(runner, input.correlationId, error);
       throw error;
     }
   }
@@ -809,22 +825,27 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private buildPlan(
     resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-    isolationAvailable: boolean | undefined,
+    isolation: TimedNetworkIsolationProbe | undefined,
   ): {
     readonly plan: VerificationPlan;
     readonly trust: ScriptTrustAdmission | undefined;
-    readonly runnerWorkspace: WorkspaceInfo;
+    readonly runnerWorkspace: VerificationRunner;
   } {
     const { workspace } = resolved;
     const fs = resolved.access.fs;
     const pkg = this.resolvePackage(workspace, input, fs);
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    const scriptSteps = this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    const maven = pkg === undefined && this.runsMaven(workspace, fs, isolation);
+    const scriptSteps = maven
+      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
+          cacheRepository: this.mavenCacheRepository(),
+        })
+      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
     const trust = this.assertWorkspaceTrustForSteps(
       resolved,
       scriptSteps,
       input.autonomyMode,
-      isolationAvailable,
+      isolation?.probe.available,
     );
     const steps = [...scriptSteps, ...this.targetedSteps(workspace, input, fs, pkg)];
     return {
@@ -834,8 +855,24 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         ...(pkg === undefined ? {} : { packageDir: pkg.dir, packageManager: pkg.manager }),
       },
       trust,
-      runnerWorkspace: pkg?.workspace ?? workspace,
+      runnerWorkspace: maven ? MAVEN_RUNNER : (pkg?.workspace ?? workspace),
     };
+  }
+
+  private mavenCacheRepository(): string | undefined {
+    const resolve = this.mavenRepository;
+    return resolve === undefined ? windowsMavenRepository(process.env) : resolve();
+  }
+
+  // A Maven project's tests run on the Windows step backend only (#4492, ADR-0043 D20): it reads the
+  // person's Maven and Java offline from their own folders. Every other backend's image carries no
+  // Maven, so there the project keeps its closed "no script" skip, exactly as before.
+  private runsMaven(
+    workspace: WorkspaceInfo,
+    fs: WorkspaceFs,
+    isolation: TimedNetworkIsolationProbe | undefined,
+  ): boolean {
+    return isolation?.probe.backend === "windows-appcontainer" && isMavenProject(workspace, fs);
   }
 
   // The nested package the run verifies, or undefined for the workspace root (the unchanged path).
@@ -996,7 +1033,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private recordRunnerSelection(
-    workspace: WorkspaceInfo,
+    workspace: VerificationRunner,
     correlationId: string | undefined,
     plan: VerificationPlan,
     admission: {
@@ -1075,7 +1112,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   // #3873), so a 28 s verification of a 236 ms test can be attributed to the probe, the dependency
   // bootstrap or the step from this one persisted line.
   private recordRunnerCompletion(
-    workspace: WorkspaceInfo,
+    workspace: VerificationRunner,
     correlationId: string,
     execution: ExecuteVerificationResult,
   ): void {
@@ -1103,7 +1140,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private recordRunnerFailure(
-    workspace: WorkspaceInfo | undefined,
+    workspace: VerificationRunner | undefined,
     correlationId: string | undefined,
     error: unknown,
     targetedProjectRefused = false,

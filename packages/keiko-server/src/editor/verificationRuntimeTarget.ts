@@ -39,6 +39,8 @@ export interface VerificationRuntimeTargetInput {
   readonly signal: AbortSignal;
   readonly fs?: WorkspaceFs | undefined;
   readonly onTerminated?: RunCommandDeps["onTerminated"];
+  // #4496: the probe runs under the same backend as a step.
+  readonly windowsStepSupervisor?: RunCommandDeps["windowsStepSupervisor"];
 }
 
 export async function resolveVerificationRuntimeTarget(
@@ -77,6 +79,9 @@ export async function resolveVerificationRuntimeTarget(
       now: Date.now,
       ...(input.fs === undefined ? {} : { fs: input.fs }),
       ...(input.onTerminated === undefined ? {} : { onTerminated: input.onTerminated }),
+      ...(input.windowsStepSupervisor === undefined
+        ? {}
+        : { windowsStepSupervisor: input.windowsStepSupervisor }),
     },
   );
   if (input.signal.aborted) throw new CommandCancelledError("Runtime target probe cancelled");

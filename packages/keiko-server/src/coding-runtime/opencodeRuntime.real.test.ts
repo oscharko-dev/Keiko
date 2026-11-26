@@ -31,6 +31,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 import {
+  resolveCodingSafeSidecarGatewayProfile,
   toolCallingConfigurationFingerprint,
   type GatewayConfig,
   type GatewayRequest,
@@ -636,7 +637,7 @@ async function createGatewayHarness(
         capability === MODEL_CAPABILITY && audience === "model-gateway"
           ? { ok: true, binding: { runId: RUN_ID } }
           : { ok: false },
-      reservePromptTokens: () => ({ ok: true, runId: RUN_ID }),
+      admitModelCall: () => ({ ok: true, runId: RUN_ID }),
     },
     openCodeGatewayReadinessRegistry: readiness,
     codingWorkbenchEvidenceStore: {
@@ -782,8 +783,10 @@ function captureGatewayRequestSummary(
 ): void {
   const chunks: Buffer[] = [];
   let bytes = 0;
+  // Every body the gateway itself admits is summarized, so a request near the bound is counted too.
+  const captureLimit = profileInputBounds().maxRequestBytes;
   req.on("data", (chunk: Buffer) => {
-    if (bytes >= 1_048_576) return;
+    if (bytes >= captureLimit) return;
     const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += value.length;
     chunks.push(value);
@@ -1044,22 +1047,40 @@ interface NativeCompactionState {
   roundsInTurn: number;
   readonly assistantContentChars: number;
   readonly turnSize: number;
+  // Read calls per scripted round; each round adds one assistant message and one tool message per call.
+  readonly callsPerRound: number;
+  // The native compactor's summary; an oversized one leaves the recovery request still overflowing.
+  readonly summary: string;
   readonly compactionMessageCounts: number[];
   readonly recoveryMessageCounts: number[];
 }
 
-function batchedReadResponse(round: number, assistantContentChars: number): NormalizedResponse {
+const COMPACTION_SUMMARY = "## Objective\n- Retained verified task state.";
+
+// The profile's input bounds, read from the production projection rather than restated.
+function profileInputBounds(): {
+  readonly maxInputMessages: number;
+  readonly maxRequestBytes: number;
+} {
+  const result = resolveCodingSafeSidecarGatewayProfile(gatewayConfig());
+  if (result.status !== "available") throw new Error("expected an available coding profile");
+  return result.runMetadata;
+}
+
+function profileMaxInputMessages(): number {
+  return profileInputBounds().maxInputMessages;
+}
+
+function batchedReadResponse(round: number, state: NativeCompactionState): NormalizedResponse {
   return {
     ...normalResponse(),
-    content: "x".repeat(assistantContentChars),
+    content: "x".repeat(state.assistantContentChars),
     finishReason: "tool_calls",
-    toolCalls: [
-      {
-        id: `call-${String(round)}`,
-        name: "keiko_workspace_read",
-        arguments: { relativePath: `src/fixture-${String(round)}.ts` },
-      },
-    ],
+    toolCalls: Array.from({ length: state.callsPerRound }, (_, call) => ({
+      id: `call-${String(round)}-${String(call)}`,
+      name: "keiko_workspace_read",
+      arguments: { relativePath: `src/fixture-${String(round)}-${String(call)}.ts` },
+    })),
   };
 }
 
@@ -1076,10 +1097,7 @@ function nativeCompactionResponseScript(state: NativeCompactionState): GatewayRe
       )
     ) {
       state.compactionMessageCounts.push(request.messages.length);
-      return Promise.resolve({
-        ...normalResponse(),
-        content: "## Objective\n- Retained verified task state.",
-      });
+      return Promise.resolve({ ...normalResponse(), content: state.summary });
     }
     if (state.compactionMessageCounts.length > 0) {
       state.recoveryMessageCounts.push(request.messages.length);
@@ -1091,7 +1109,7 @@ function nativeCompactionResponseScript(state: NativeCompactionState): GatewayRe
       state.roundsInTurn = 0;
       return Promise.resolve({ ...normalResponse(), content: "Turn checkpoint complete." });
     }
-    return Promise.resolve(batchedReadResponse(state.rounds, state.assistantContentChars));
+    return Promise.resolve(batchedReadResponse(state.rounds, state));
   };
 }
 
@@ -1184,10 +1202,11 @@ function expectNativeCompactionActivity(harness: NativeCompactionHarness): void 
       formatActivityLogProofLine(event),
     ),
   );
-  expect(records.map((record) => record.event)).toEqual(["started", "completed", "failed"]);
+  // The pinned runtime makes one compaction attempt; its summary cannot fit, so that same
+  // compaction fails and no second attempt follows.
+  expect(records.map((record) => record.event)).toEqual(["started", "failed"]);
   expect(records[0]?.compactionIdSha256).toBe(records[1]?.compactionIdSha256);
-  expect(records[2]?.compactionIdSha256).not.toBe(records[0]?.compactionIdSha256);
-  expect(new Set(records.map((record) => record.compactionIdSha256)).size).toBe(2);
+  expect(new Set(records.map((record) => record.compactionIdSha256)).size).toBe(1);
   for (const record of records) {
     expect(record).not.toHaveProperty("overflow");
     expect(record).not.toHaveProperty("tailStartIdSha256");
@@ -1197,10 +1216,9 @@ function expectNativeCompactionActivity(harness: NativeCompactionHarness): void 
     new Set(records.map((record) => `${String(record.compactionIdSha256)}:${String(record.event)}`))
       .size,
   ).toBe(records.length);
-  // #4271: the 2.2.5 producer says whether the summary kept messages verbatim; the line carries it.
+  // #4271: the producer says whether the summary kept messages verbatim; the line carries it.
   expect(records[0]).toMatchObject({ retainedTail: false });
-  expect(records[1]).toMatchObject({ retainedTail: true });
-  expect(records[2]).toMatchObject({
+  expect(records[1]).toMatchObject({
     compactionErrorKind: "OpenCodeCompactionFailure",
     finishReason: "error",
   });
@@ -1386,17 +1404,29 @@ describe("[functional-only] real staged OpenCode runtime", () => {
   );
 
   it.skipIf(!FUNCTIONAL_ENABLED)(
-    "decodes a 513-message overflow, compacts natively, and completes the retry",
+    "decodes a message-count overflow, compacts natively, and completes the retry",
     async () => {
+      const maxInputMessages = profileMaxInputMessages();
+      const turnSize = 100;
+      // Two turns stay inside the bound and the third crosses it, so compaction and its one
+      // recovery happen in the last turn whatever the profile's bound is.
+      const callsPerRound = Math.ceil(maxInputMessages / (2.5 * turnSize)) - 1;
       const state: NativeCompactionState = {
         rounds: 0,
         roundsInTurn: 0,
         assistantContentChars: 0,
-        turnSize: 100,
+        turnSize,
+        callsPerRound,
+        summary: COMPACTION_SUMMARY,
         compactionMessageCounts: [],
         recoveryMessageCounts: [],
       };
-      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state));
+      // A window far above the record bound, so the message count and not the token count overflows.
+      const harness = await createNativeCompactionHarness(nativeCompactionResponseScript(state), {
+        contextWindowTokens: 1_000_000,
+        maxInputTokens: 995_904,
+        maxOutputTokens: 4_096,
+      });
       try {
         await startNativeCompactionHarness(harness);
         const terminals: OpenCodeTurnOutcome[] = [];
@@ -1421,16 +1451,16 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           `state=${JSON.stringify(state)}:max-messages=${String(Math.max(...messageCounts))}:http-400=${String(harness.gateway.responses().filter((response) => response.endsWith(" 400")).length)}`,
         ).toEqual([true, true, true]);
         expect(
-          messageCounts.includes(513),
+          messageCounts.some((count) => count > maxInputMessages),
           `rounds=${String(state.rounds)}:max-messages=${String(Math.max(...messageCounts))}`,
         ).toBe(true);
         expect(harness.gateway.responses().some((response) => response.endsWith(" 400"))).toBe(
           true,
         );
         expect(state.compactionMessageCounts).toHaveLength(1);
-        expect(state.compactionMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.compactionMessageCounts[0]).toBeLessThanOrEqual(maxInputMessages);
         expect(state.recoveryMessageCounts).toHaveLength(1);
-        expect(state.recoveryMessageCounts[0]).toBeLessThanOrEqual(512);
+        expect(state.recoveryMessageCounts[0]).toBeLessThanOrEqual(maxInputMessages);
         expect(state.rounds).toBeGreaterThan(1);
         expect(harness.productiveActions.length).toBeGreaterThan(0);
         expect(
@@ -1451,6 +1481,9 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         roundsInTurn: 0,
         assistantContentChars: 0,
         turnSize: Number.MAX_SAFE_INTEGER,
+        callsPerRound: 1,
+        // A summary as large as the turn it replaces: the compacted history still overflows.
+        summary: "x".repeat(60_000),
         compactionMessageCounts: [],
         recoveryMessageCounts: [],
       };
@@ -1476,11 +1509,13 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           const count = requestMessageCount(summary);
           return count === undefined ? [] : [count];
         });
-        expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
-        // V2 compacts before its productive request, then permits only one overflow recovery.
-        expect(
-          harness.gateway.responses().filter((response) => response.endsWith(" 400")),
-        ).toHaveLength(1);
+        expect(Math.max(...messageCounts)).toBeLessThanOrEqual(profileMaxInputMessages());
+        // The pinned runtime compacts before its productive request. When the compacted history
+        // still exceeds the window it stops without sending it, so no overflow reaches the gateway
+        // and no second compaction or recovery loop follows.
+        expect(harness.gateway.responses().filter((response) => response.endsWith(" 400"))).toEqual(
+          [],
+        );
         expectNativeCompactionActivity(harness);
         expect(state.compactionMessageCounts).toHaveLength(1);
         expect(state.recoveryMessageCounts).toEqual([]);

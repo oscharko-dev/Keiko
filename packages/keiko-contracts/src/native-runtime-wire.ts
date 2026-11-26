@@ -171,6 +171,65 @@ export function validResponsePayloadLength(bytes: Buffer): number | undefined {
   return payloadLength <= 64 ? payloadLength : undefined;
 }
 
+/**
+ * What the per-tree AppContainer of a confined Windows run may reach on disk (#4068). The tree's own
+ * SID gets the runtime and its private state, and both are revoked when the tree ends. A
+ * Keiko-managed worktree is granted once to a capability derived from its identity, so a run does
+ * not walk the whole repository; only runs of that worktree carry the capability. A governed
+ * verification step (#4496) is encoded the same way; it lives here so keiko-tools can frame it.
+ */
+export type WindowsFilesystemGrant =
+  | {
+      readonly path: string;
+      readonly access: "read" | "modify";
+      readonly principal: "tree";
+    }
+  | {
+      readonly path: string;
+      readonly access: "read";
+      readonly principal: "capability";
+      readonly capability: string;
+    };
+
+export const WINDOWS_FILESYSTEM_GRANTS_MAX = 8;
+const WINDOWS_GRANT_CAPABILITY = /^keiko\.workspace\.[a-f0-9]{32}$/u;
+
+export function validWindowsGrantCapability(value: string): boolean {
+  return WINDOWS_GRANT_CAPABILITY.test(value);
+}
+
+function grantLengthPrefixed(value: string): Buffer {
+  const bytes = Buffer.from(value, "utf8");
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(bytes.length);
+  return Buffer.concat([length, bytes]);
+}
+
+function encodeWindowsGrant(grant: WindowsFilesystemGrant): Buffer {
+  const head = Buffer.from([
+    grant.access === "modify" ? 2 : 1,
+    grant.principal === "capability" ? 2 : 1,
+  ]);
+  return grant.principal === "capability"
+    ? Buffer.concat([head, grantLengthPrefixed(grant.path), grantLengthPrefixed(grant.capability)])
+    : Buffer.concat([head, grantLengthPrefixed(grant.path)]);
+}
+
+/** KGG1 grants, read by gateway_grants.c after the broker named the tree's SID and before the
+ * suspended root exists. An empty list is a valid frame: the confined launch always sends one. */
+export function encodeWindowsGatewayGrants(grants: readonly WindowsFilesystemGrant[]): Buffer {
+  if (grants.length > WINDOWS_FILESYSTEM_GRANTS_MAX) throw new RangeError("windows-grants-invalid");
+  const count = Buffer.alloc(2);
+  count.writeUInt16LE(grants.length);
+  const payload = Buffer.concat([count, ...grants.map((grant) => encodeWindowsGrant(grant))]);
+  const header = Buffer.alloc(12);
+  header.write("KGG1");
+  header.writeUInt16LE(1, 4);
+  header.writeUInt16LE(1, 6);
+  header.writeUInt32LE(payload.length, 8);
+  return Buffer.concat([header, payload]);
+}
+
 function encodeStrings(values: readonly string[], argumentCount: number, envCount: number): Buffer {
   const prefix = Buffer.alloc(4);
   prefix.writeUInt16LE(argumentCount, 0);

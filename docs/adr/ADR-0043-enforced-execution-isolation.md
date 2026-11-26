@@ -69,6 +69,30 @@ own shell runs the checks there, the bootstrap installs for that shell (`host-sh
 `--no-save`, leaves a tree it did not install alone, and refuses with three closed reasons of its
 own what such an install cannot give.
 
+1.13 — #4496 records the owner's Gate G1 approval of 2026-11-25 in D20 and D21: a Windows host
+without a container runtime runs governed verification steps in the pinned supervisor's per-run
+AppContainer (`windows-appcontainer`, step mode), in a private copy of the workspace without
+credential-named entries; a host with a container runtime keeps its container path. The VM
+measurement of the same day replaced the planned isolatedWin32 capabilities, which `CreateProcessW`
+refuses an AppContainer, and the profile list entries with per-step `subst` drive letters, through
+which Node.js and Java steps run.
+
+1.14 — #4495 amends D21 (2026-11-25): a run's profile names the supervisor that created it, and a
+later launch removes the profiles of runs whose supervisor is gone; a launch without an interactive
+desktop and a supervisor path that is too long are refused with closed reasons; the reap proof's
+root exit code reaches the Activity Log, and the relay root's own failures take exit codes of their
+own.
+
+1.15 — #4492 amends D20 (2026-11-25): the step supervisor starts with an empty environment and the
+step's environment travels in its launch frame only; a refusal reaches the Activity Log with its
+closed code; a search-path entry that reaches a granted folder through a junction is named by that
+folder's drive letter.
+
+1.16 — #4492 amends D20 (2026-11-25): a Maven project (a root `pom.xml` and no root
+`package.json`) runs its tests on the step backend as `mvn -B -o test`, offline, into a repository
+of its own inside the execution root, with the person's `%USERPROFILE%\.m2\repository` chained
+read-only behind it; every other backend keeps the project's closed "no script" skip.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1203,29 +1227,43 @@ request correlation with its outcome, exit class and helper digest. The lifecycl
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.
 
-## Addendum — Windows governed verification stays container-backed (2026-11-03)
+## Addendum — Windows governed verification without a container runtime (2026-11-03, amended 2026-11-25)
 
-### D20 — No Windows-native execution-root boundary for repository verification
+### D20 — A Windows execution-root boundary for repository verification
 
-Proposed on 2026-11-03 by the #4068 assignee; pending repository-owner approval. Repository verification always requests the execution-root boundary (D9).
-Windows has no native unprivileged backend for it, so the verifier keeps its present behaviour there:
-its steps run in a container when a runtime is available and are refused when none is. Keiko does not
-build a Windows-native execution-root boundary for verification, and it does not run these steps
-unconfined on the host.
+Proposed on 2026-11-03 by the #4068 assignee as "no Windows-native boundary". The repository owner
+approved the native boundary instead at Gate G1 of #4493 on 2026-11-25 ("Go, Kind 5 starten"), and
+this section records that decision. Repository verification always requests the execution-root
+boundary (D9). On Windows the verifier selects it in this order:
 
-- **Evidence stays separate.** A container run qualifies the container-backed path. It does not
-  certify the native Windows kernel, and it satisfies no acceptance item that requires native
-  execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
-  path below the boundary and does not certify governed verification.
-- **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
-  verification. Such a run is denied and reports no pass. The orchestrator's aggregate `failed`
-  remains a failed gate, while the model and tool card use the existing not-run/denied outcome
-  when no check reached an executed failure. Real step failures, timeouts, resource ceilings and
-  failed dependency bootstrap remain distinct failures. The Workbench summary may carry an
-  optional `deniedCount` subset of its canonical non-passing `failedCount`, so blocked checks do
-  not appear as checks that ran unsuccessfully. Historical summaries without that subset retain
-  their original facts. The existing `coding-runtime.verification` not-run Activity Log evidence
-  records the closed denial reason; neither presentation nor counts grant verification authority.
+1. a container runtime, Docker before Podman, exactly as before: a host that has one keeps its
+   container path unchanged;
+2. without one, the pinned runtime supervisor's step backend (`windows-appcontainer`, D21);
+3. without that supervisor, or when its bytes miss the pin, nothing: the step is refused as
+   isolation unavailable and nothing runs unconfined on the host.
+
+- **Evidence stays separate.** A container run qualifies the container-backed path, and a step-mode
+  run qualifies the native one. Neither certifies the other. The native proof in
+  `windows-verification-loop.real.test.ts` qualifies the Windows shell path below the boundary and
+  does not certify governed verification.
+- **Refusal stays truthful.** A Windows host with neither backend cannot run governed
+  verification. Such a run is denied and reports no pass, and the model, the tool card and the
+  Workbench name both missing backends. The orchestrator's aggregate `failed` remains a failed
+  gate, while the model and tool card use the existing not-run/denied outcome when no check reached
+  an executed failure. Real step failures, timeouts, resource ceilings and failed dependency
+  bootstrap remain distinct failures. The Workbench summary may carry an optional `deniedCount`
+  subset of its canonical non-passing `failedCount`, so blocked checks do not appear as checks that
+  ran unsuccessfully. Historical summaries without that subset retain their original facts. The
+  existing `coding-runtime.verification` not-run Activity Log evidence records the closed denial
+  reason; neither presentation nor counts grant verification authority.
+- **The step's environment (#4492).** The server starts the step supervisor with an empty
+  environment, as every native helper starts. The step's own environment, with its ephemeral home,
+  travels in the launch frame only: Windows expands the per-user LocalAppData folder, where the
+  supervisor's environment-guard lock lives, through the process's `USERPROFILE`, and the step's
+  home there refused every step. A refusal is recorded as `editor.verification.windows-step-refused`
+  (`phase`, `refusalCode`) on the step's correlation. A drive-absolute `PATH` entry that no granted
+  folder names lexically, such as Scoop's `current` junction, is named through its real folder's
+  drive letter; the grants do not change, and relative entries and shares are never resolved.
 - **Scope.** This decides repository verification only. It does not decide the Windows tool profile
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the
@@ -1243,7 +1281,7 @@ every helper change and its loopback exemption each need an administrator.
 Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervised`):
 
 - **No network capability.** The pinned supervisor creates a per-run AppContainer profile
-  (`Keiko.Relay.<32 hex>`) that holds no network capability at all, so Windows itself refuses every
+  (`Keiko.Relay.<owner>-<16 hex>`, below) that holds no network capability at all, so Windows itself refuses every
   connection out of the tree, loopback included. A standard user can create such a profile; no
   service, filter, firewall rule or loopback exemption is installed, and nothing elevates.
 - **The only way out.** For every attested loopback port of the launch (the gateway, the governed
@@ -1275,5 +1313,97 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   (`gateway_relay.test.c`), the grant rules (`gateway_grants.test.c`) and an end-to-end proof
   (`scripts/testing/test-windows-relay-confinement.mjs`): the tree reaches the attested port
   through its pipe and is refused the host gateway port directly and the internet.
-- **Scope.** D20 is unchanged: governed repository verification on Windows stays container-backed,
-  as it is on macOS. D13 still holds.
+- **Step mode (#4496, Gate G1 of #4493, owner approval of 2026-11-25).** The same supervisor runs
+  one governed verification step with `--step-supervised`. keiko-tools frames it a KRP1 launch and
+  KGG1 grants on descriptor 3 and reads KRS1 answers on descriptor 4. The supervisor creates a
+  per-run profile (`Keiko.Step.<owner>-<16 hex>`) without a network capability, so the step reaches neither
+  the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
+  kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
+  - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
+    modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
+    existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
+    grants, and no grant may hold the whole user profile. The step's `TEMP`, `TMP` and npm cache
+    stay inside the execution root.
+  - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows
+    grants an ordinary AppContainer lists `C:\` or `C:\Users` (measured 2026-11-25, ARM64 VM,
+    standard user: `CreateProcessW` refuses a token that carries `isolatedWin32-volumeRootMinimal`
+    or `isolatedWin32-profilesRootMinimal` with `ERROR_INVALID_PARAMETER`, also with the
+    all-application-packages opt-out), and Node.js's `realpath` and Java's `toRealPath` (Maven's
+    start, `javac --release`) walk every parent of a path. Before the supervisor starts, the server
+    therefore gives each granted directory a `subst` drive letter in the user's logon session
+    (`subst.exe` from System32, letters from `Z:` down, a refused letter skipped), and
+    keiko-tools names the image, the working directory, the arguments and every variable through
+    those letters; the grants keep the real paths, where the access entries live. A `.cmd`
+    launcher's command line reaches cmd.exe caret-escaped, so a granted directory that ends an
+    argument is followed by `^"` rather than `"`; it is named through its letter all the same
+    (#4492: Maven's `-Dmaven.repo.local.tail` kept the real profile path, and the resolver's
+    `toRealPath` walk ended in a `NullPointerException`). The walk then starts at the granted
+    directory itself. The letters are removed when the step ends; a step
+    without free letters is refused as isolation unavailable, and
+    `editor.verification.windows-step-drives` records the counts. Measured the same day: Node.js
+    `require` and `realpath`, `npm -v`, `java -version`, `javac --release 21` and an offline
+    `mvn verify` run in the tree; the same build through the real paths fails. A letter of a
+    server that ended without its cleanup stays until the user signs out and names only a folder
+    the user may read anyway.
+  - **Credential-named files.** An access entry cannot keep a credential-named file away from a
+    tree that may modify the workspace (#4493 finding 5). The steps of one run therefore share a
+    private copy of the workspace, made after the dependency bootstrap, that leaves out every entry
+    whose name the shared credential list (`CREDENTIAL_PATH_DENY_PATTERNS`) matches and every link;
+    the run removes it when it ends. The copy is shared with the assured pre-filter
+    (`linkFreeCopy.ts`), and `editor.verification.windows-step-copy` records its counts.
+  - **Closed refusals.** A grant the user may not write (a toolchain an administrator installed
+    outside `Program Files`), a protected environment and a step without free drive letters refuse
+    the step with a closed reason. Windows PowerShell 5.1 and
+    PowerShell 7 fail inside the tree on registry access, and a Node.js child that opens pipes
+    hangs until a Node.js release ships libuv 1.53 (#4493); both are recorded limitations, not
+    silent failures.
+  - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
+    Windows Coding run and hands each step a private copy written from those bytes;
+    `editor.verification.windows-step-supervisor` records whether it is available and whether a
+    Maven step may read the person's repository (never its path).
+  - **Maven projects (#4492).** Without a container runtime a Maven project had no verification
+    step, so its tests never ran. On the step backend the verifier now plans one step for the
+    `test` kind: `mvn -B -o -Dmaven.repo.local=.keiko-maven-repository
+    -Dmaven.repo.local.tail=<repository> -Dmaven.repo.local.tail.ignoreAvailability=true test`.
+    The run resolves into a repository of its own in the execution root and reads the person's
+    `%USERPROFILE%\.m2\repository` read-only behind it, as a Coding run below Full access does
+    (ADR-0184); Maven before 3.9 ignores the tail, and its offline build then fails on the missing
+    artifacts. The supervisor grants that folder only to a step whose executable is an installed
+    Maven launcher outside the execution root, and only when it is a real folder reached through
+    no link: a profile behind a junction, a mapped drive or a `subst` letter gets no grant, and the
+    step runs without the tail. `.m2` itself is never granted, so the person's `settings.xml` and
+    its credentials stay out of the tree, and the step's home lies inside the execution root, so
+    Maven reads no user settings. The step's environment adds `JAVA_HOME`, `MAVEN_HOME` and
+    `M2_HOME`. The orchestrator admits a Maven step only in exactly the planned shape (the planned
+    arguments, or a planned skip without arguments); the command rule, which admits `mvn` with
+    `-B -o` first and the `test` phase only and refuses `-s`, `-gs`, `-t`, `-f` and `--define`, is
+    defense in depth behind it. The step runs the project's own build, including its `.mvn`
+    configuration and extensions, so it asks for the same script trust as an npm script and is
+    contained by the same grants. The other kinds are skipped with a closed reason: Maven has no
+    `typecheck`, `lint` or `build` the verifier could tell apart from the test phase. A person
+    whose settings move the local repository elsewhere gets an offline build that misses those
+    artifacts. Measured 2026-11-25 on the ARM64 VM as a standard user: the tail run ends
+    `BUILD SUCCESS` with Surefire's test run; without the tail the same build fails on the missing
+    resources plugin.
+- **Session, profiles and exit (#4495).**
+  - **Interactive desktop.** An AppContainer process needs the interactive window station: started
+    from an SSH or service session, its root ends with `STATUS_DLL_INIT_FAILED` before it runs a
+    line. A confined launch outside `WinSta0` is therefore refused before anything is created
+    (refusal 18, `runtime-supervisor-no-desktop`). A root that still ends with that status is not
+    read as this cause: the status also follows other DLL initialization failures. Refusal 19 (`runtime-supervisor-image-path`) names a supervisor whose own
+    path is longer than a relayed root may be started from.
+  - **Profile owner.** A profile's name states the supervisor that created it:
+    `<prefix><pid as 8 hex>-<creation time as 16 hex>-<16 random hex>`. Every confined launch
+    removes the Keiko profiles whose supervisor no longer runs, judged as the environment guard
+    judges a holder (an unopenable process counts as alive); the supervisor's kill-on-close Job
+    Object took that run's tree with it. A live run's profile, also another Keiko installation's,
+    and every name outside the grammar (an older Keiko's random name, any other program's profile)
+    are never touched. The launch response carries the counts beside the grant sweep's, and
+    `runtime.confinement.stale-grants-swept` records them.
+  - **Root exit.** The reap proof's first word is the tree root's exit code; the host records it as
+    `runtime.confinement.tree-reaped` for every reaped tree, a number only. The relay root's own
+    failures use the NTSTATUS customer range, which no runtime returns: `0xE04B0001` when its plan,
+    sockets, routes or pipes could not be set up and `0xE04B0002` when the runtime could not be
+    created. The number on `runtime.confinement.tree-reaped` is the closed value that names them;
+    the run settles with the supervisor's generic refusal.
+- **Scope.** D13 still holds.

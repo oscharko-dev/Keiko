@@ -10,6 +10,30 @@
     "url"
   ],
   "account_state": ["active_account_id", "active_org_id", "id"],
+  "automation": [
+    "action",
+    "directory",
+    "event_position",
+    "expires_at",
+    "failures",
+    "id",
+    "last_message_id",
+    "last_outcome",
+    "last_output",
+    "last_run_at",
+    "name",
+    "next_due_at",
+    "project_id",
+    "retry_at",
+    "run_count",
+    "session_id",
+    "state",
+    "status",
+    "time_created",
+    "time_updated",
+    "trigger",
+    "tz"
+  ],
   "blob": ["bytes", "data", "hash", "height", "mime", "time_created", "width"],
   "blob_ref": ["hash", "message_id", "seq", "session_id"],
   "control_account": [
@@ -59,6 +83,7 @@
     "title"
   ],
   "kv": ["key", "time_created", "time_updated", "value"],
+  "machine": ["id", "key", "time_created"],
   "migration": ["id", "time_completed"],
   "permission": ["action", "id", "project_id", "resource", "time_created", "time_updated"],
   "project": [
@@ -78,29 +103,6 @@
     "worktree"
   ],
   "project_directory": ["directory", "project_id", "strategy", "time_created", "type"],
-  "schedule": [
-    "action",
-    "check",
-    "checks",
-    "ends_at",
-    "failures",
-    "id",
-    "last_fired_at",
-    "last_message_id",
-    "last_outcome",
-    "name",
-    "next_due_at",
-    "remaining_runs",
-    "retry_at",
-    "run_count",
-    "session_id",
-    "state",
-    "status",
-    "time_created",
-    "time_updated",
-    "tz",
-    "when"
-  ],
   "session_inbox": [
     "delivery",
     "enqueued_seq",

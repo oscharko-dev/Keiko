@@ -19,7 +19,14 @@ import {
 } from "./coding-runtime/opencodeProtocolSurface.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./coding-runtime/opencodeRuntimeVersions.js";
 
-const OPENCODE_SCHEMA_SHA256 = OPENCODE_RUNTIME_VERSION_PINS[0]?.rawSchemaSha256 ?? "";
+/** The one approved OpenCode pin; every fixture identity derives from it. */
+const PINNED_OPENCODE = ((): (typeof OPENCODE_RUNTIME_VERSION_PINS)[number] => {
+  const [pin] = OPENCODE_RUNTIME_VERSION_PINS;
+  if (pin === undefined) throw new Error("no OpenCode runtime pin");
+  return pin;
+})();
+
+const OPENCODE_SCHEMA_SHA256 = PINNED_OPENCODE.rawSchemaSha256;
 
 function verifiedSidecar(): PortableSidecarRuntimeVerification {
   return {
@@ -38,7 +45,7 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
       name: "opencode-compatible",
       kind: "coding-runtime",
       upstreamName: "opencode",
-      upstreamVersion: "2.2.5",
+      upstreamVersion: PINNED_OPENCODE.version,
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "2",
       protocolVersion: "http-sse",
@@ -166,9 +173,9 @@ function sidecarRuntime(signing: Record<string, unknown>): Record<string, unknow
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "2.2.5",
-      tag: "v2.2.5",
-      commit: "9bbb8ce18c80f099e0e448775f59d965ead40a21",
+      version: PINNED_OPENCODE.version,
+      tag: PINNED_OPENCODE.tag,
+      commit: PINNED_OPENCODE.commit,
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",

@@ -164,7 +164,7 @@ omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
 `ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
 counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
 the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
-source. The pinned runtime reads no `CLAUDE.md`.
+source. Keiko switches off the producer's `CLAUDE.md` fallback (`OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`), at the root and in the `read` walk (real binary, #4546).
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
@@ -803,12 +803,13 @@ outcome as an optional field, declared `diagnosticWhen` for every outcome but `p
 report keeps a verification that did not pass.
 
 A verification step the orchestrator denied for want of an enforcing isolation backend (no container
-runtime on Windows, no bubblewrap, unshare or seatbelt elsewhere; ADR-0043 D20) is a host condition,
+runtime and no verified runtime supervisor on Windows, no bubblewrap, unshare or seatbelt elsewhere;
+ADR-0043 D20) is a host condition,
 not an authority or policy decision. The denial detail carries the closed prefix
 `isolation unavailable: `; the governed tool answers the model with the closed reason
 `VERIFICATION_ISOLATION_UNAVAILABLE` (not the generic `VERIFICATION_NOT_RUN`) and the step reason
 `isolation-unavailable`, and the Workbench says in one sentence that the computer has no container
-runtime, that the change is kept, and that the person can start one and verify again or check the
+runtime (and, on Windows, no verified isolation of Keiko's own), that the change is kept, and that the person can start one and verify again or check the
 change themselves. The same reason enters the run's verification ledger as a run-level blocker, so no
 verification continuation runs: no model turn can change the host. The denial stays fail closed and
 nothing runs unconfined. The run settles through the existing not-verified outcome (`failed` with
@@ -1477,7 +1478,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   **History (#4359, 2026-11-14):** the retired OpenCode 2.1.4 did not decide a nested `fetch`
   (it produced no `webfetch` decision line; only the kernel egress rule stopped it below Full access
   and Full access reached the open internet), so the program card had to stay while that runtime was
-  approved. OpenCode 2.2.5, the one runtime Keiko approves, decides it (the next bullet).
+  approved. OpenCode 2.2.5 decided it, and so does 2.4.1, the one runtime Keiko approves (the next
+  bullet).
 - **The Code Mode program passes without a card on a runtime that decides every nested effect
   (#4359, owner decision of 2026-11-14 with its three conditions).** The program asserts no
   permission and can only call its nested tools, so the card for the program itself reviewed
@@ -1495,7 +1497,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   character review bounds no longer refuse a long program. A runtime whose pin does not say so
   (absent, false, an unknown version) keeps the card exactly as before and refuses a program that
   offers no text to review: the decision fails closed. Hard denials are unchanged
-  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first).
+  (`opencodeCodeModeProgram.test.ts`, one pin per effect kind). Measured 2026-11-14 on OpenCode 2.2.5 from the 1.1.5 npm runtime package (`coding-runtime.native-policy.decided`, closed values only; one program per row and mode, each with the program's own line first), and again on 2.4.1 (2026-11-24, #4546) by the permanent real-binary test in `opencodeNativeQualification.real.test.ts`.
   `fetch` is refused rather than asked below Full access because the run has no route outside the
   machine in those modes: the capability-availability rule of this section's web paragraph and
   ADR-0138 D4 (parity Q5), not a defect. A Jira write is exactly one card: the `mcp` ask is the plain
@@ -2758,11 +2760,26 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     the run, instead of settling and reaping a job that was still working. A success or an interruption settles only when the tree is quiet, confirmed by a
     fresh read at the moment of settlement even when a live hint said otherwise; a failed verdict
     ends the run at once, because settling reaps the tree. The history projection closes the gap
-    between a child's end and its parent's restart without a clock: an idle message of a parent
-    that launched a background child (a completed `subagent` call naming its session) which has
-    not yet reported back is an observation, not the end of the work (`heldIdleCount` on the
-    projection line); a failed idle stays a terminal failure. A child that never reports is bounded
-    by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
+    between a child's end and its parent's restart without a clock. A parent's idle message is an
+    observation, not the end of the work, while a child it called has not reported since that
+    call (`heldIdleCount` on the projection line). A call is a completed `subagent` call naming the
+    child's session: the pinned 2.4.1 runs every subagent in the background and has no
+    `background` parameter, and a follow-up to a child that already reported owes one more report.
+    A failed idle stays a terminal failure. A child that no longer runs and whose newest message
+    is an assistant step that ended in an error (`finish: "error"`) ended its round without the
+    idle after which the runtime reports (2.4.1 does this when a person dismisses the child's
+    question). It is silent, owes nothing, and the held idle is released (`silentReleaseCount`,
+    `projectNativeParentHistory`, #4546). A step that ended normally is never silence: the runtime
+    may stop listing a child a moment before it appends the idle message. The owed children are
+    taken from the messages being projected, so the one sync that reads a launch and the idle
+    message together can release. A shell command of the current prompt that runs in the
+    background (2.3.1 moves one still running at its timeout there; the call completes with a shell
+    id and no exit status) is owed the same way until the synthetic message naming its shell id
+    arrives, so the gap between the job's end and the runtime's wake turn needs no clock either
+    (`backgroundJobHoldCount`, #4546). As `opencode run` does, only the current prompt's commands
+    are owed: a user message clears them. Such a check has no exit status, so it never counts as
+    verification, not even after it reports a zero. Any other
+    child that never reports is bounded by the run's turn deadline (`maxTurnWaitMs`) like any hang. A stop or turn replacement
     interrupts the primary, then every owned child still running, and the primary again when it
     came back to read a report, stops every background job of the run with `shell.remove`
     (`DELETE /api/shell/{id}`), and settles on two consecutive inactive reads; budget exhaustion
@@ -2921,9 +2938,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     root. One entry per task; a new entry replaces the previous one and a run that retains nothing
     removes it. The manifest binds the database's sha256 and size, the task, a digest of the workspace
     identity, the session id, the runtime version and the input window the history was built under.
-    The copy must hold exactly one top-level session and no row in any grant, credential or pending
-    table, no suspended or archived session, no staged revert and an empty permission ruleset;
-    an unknown schema is refused rather than guessed. Because the whole database crosses this
+    The copy must hold exactly one top-level session, the run's own, and no row in any grant,
+    credential or pending table, no suspended or archived session, no staged revert and an empty
+    permission ruleset; an unknown schema is refused rather than guessed. Every other session is a
+    subagent session the run's turns spawned: its parent chain reaches the run's session within the
+    live session tree's depth bound (`NATIVE_SESSION_ANCESTRY_MAX_DEPTH`) and it passes the same
+    checks, so a task that delegated to a subagent keeps its native session (#4546). A subagent
+    whose own session carries a permission ruleset leaves the task unretained (`grant-present`),
+    the same refusal its parent would get; the built-in `general` and `explore` subagents carry
+    none (`opencodeNativeSessionResume.real.test.ts`). A resumed run accepts the same tree from the
+    runtime's session list: one root, the retained session, unique ids, and descendants of it only.
+    A fork removes its source together with the subagent sessions under it, so a forked run starts
+    with one session. A run stopped while a subagent still works is not retained: the runtime leaves the child's
+    job `running` with a recovery record and both sessions suspended, and a resumed runtime could
+    restart that job without the person (`job-rows`, lab T24 on 2.4.1). Its next run starts fresh
+    from Coding History instead. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
     (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
     runtime's own migrations create for the session's runtime version, derived from genuine
@@ -2956,7 +2985,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the
     retained entry is never written by a run. After the handshake the composition binds the run to
-    the one session the database holds, resets its agent to Build (the launch profile's default,
+    the one top-level session the database holds, resets its agent to Build (the launch profile's default,
     which a fresh run also starts under; a read-only Plan run must not silently turn the next task
     into one), and the orchestrator skips the history replay for a resumed run. The gateway readiness challenge of a
     continued run runs in a scratch session that is removed afterwards, so the probe's prompt is not
@@ -3071,6 +3100,38 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
       after it, as its own wake run. A passed repeating slot fires once, late. A wake carries no Jira
       Pod or MCP selection of the run that created the schedule, and it keeps the delivery authority
       of the task it continues.
+
+- **OpenCode 2.4.1 (2026-11-24, #4546).** The pin moves from 2.2.5 to 2.4.1, the newest 2.4.x;
+  the real-binary suites re-proved every paragraph above on it. What changed:
+  - *Automations replace schedules.* 2.3.1 replaced the producer's `schedule` table, `sch_` ids and
+    the `schedule:leader` lease with `automation`, `aut_` ids and `automation:leader`. Keiko's
+    scheduled continuations keep their design on the new rows: Keiko's unexpiring lease is written to
+    `automation:leader`; the Code Mode tools `automation.create/list/pause/resume/delete` are the
+    policy action `native-schedule` (`opencode_schedule`); only a time-based prompt automation to the
+    task's own session is admitted. A shell action, a Code Mode program action, an MCP event trigger
+    and a prompt with its own recipient are refused at creation (the generated hook names them
+    `refused:action`, `refused:trigger`, `refused:target`), because each would run without a person
+    or reach another session. Outside the native profile the producer's own `automations` switch is
+    `false`: measured on 2.4.1, its API then answers 403 and creates nothing, while without the
+    switch an automation fired about a second after creation. The automation plugin is therefore
+    withheld on the direct profile and admitted on the native profile only.
+  - *Retained 2.2.5 schedules.* A session retained under 2.2.5 is refused at checkout as
+    `version-changed` (unchanged); the Workbench lists its schedules as removed by the runtime
+    update, without their prompt, and offers no control for them. The retention ledger still parses
+    a 2.2.5 `sch_` entry so an old manifest does not become unreadable.
+  - *New built-in plugins are withheld* until an owner exists for them: fork notice, home memory,
+    machine, session interrupt, session search, video generation and MCP events. New
+    `experimental` switches stay off (`compaction.background` is `false`, so compaction stays a
+    turn of the run), and a run's MCP server never joins the runtime's shared connection
+    pool (`pool: false`).
+  - *Code Mode namespace.* 2.4.x renames `opencode.session_move` to `opencode.session.move` and adds
+    `opencode.session.rename`; the hook ids are unchanged. The nested-effect measurement of the
+    previous bullets was repeated on 2.4.1 in Ask for approval and Full access and is now a permanent
+    real-binary test: the same effects reach the same decisions, `automation.create` reaches
+    `opencode_schedule`, and `automation.list` decides nothing. The 2.4.1 pin carries
+    `decidesNestedEffects`.
+  - *Shell result text.* The shell output now ends with `Exit code: <n>` (2.2.5:
+    `Exited with code <n>`); Keiko reads the status from the part's metadata, never from this text.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
