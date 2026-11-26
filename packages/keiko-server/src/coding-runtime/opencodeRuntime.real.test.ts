@@ -1393,6 +1393,8 @@ describe("[functional-only] previous OpenCode runtime under the current launch p
         const exited = backend.waitForCompleteTreeExit(lease.tree, 5_000);
         lease.pipe.end();
         await expect(exited).resolves.toBe(true);
+        // A dead process without signals is not yet a clean exit: the runtime must exit with 0.
+        expect(lease.tree.exitCode).toBe(0);
         const pid = lease.tree.child.pid;
         expect(pid !== undefined && isAlive(pid)).toBe(false);
         expect(backend.terminationSignals()).toBe(0);
@@ -1433,6 +1435,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         const exited = harness.backend.waitForCompleteTreeExit(lease.tree, 5_000);
         lease.pipe.end();
         await expect(exited).resolves.toBe(true);
+        expect(lease.tree.exitCode).toBe(0);
         expect(harness.backend.terminationSignals()).toBe(0);
         await expect(client.info()).rejects.toThrow();
       } finally {
