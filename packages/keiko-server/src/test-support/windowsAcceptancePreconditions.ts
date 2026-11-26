@@ -50,13 +50,13 @@ export interface ScResult {
   readonly stdout: string;
 }
 
-/** Everything the probe reads from the machine; a test replaces each seam. */
 /** The container signs that were answered, and whether every probe answered. */
 export interface WindowsContainerRuntimeProbe {
   readonly facts: Readonly<Record<string, boolean>>;
   readonly complete: boolean;
 }
 
+/** Everything the probe reads from the machine; a test replaces each seam. */
 export interface WindowsProbeSeams {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly exists: (path: string) => boolean;

@@ -1325,6 +1325,9 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     #4496 the supervisor waited for the job to empty, so a test command that left a daemon behind
     held the step until its timeout (measured 2026-11-26, Windows 11 ARM64 guest, standard user:
     the canary in `scripts/testing/test-windows-step-confinement.mjs` received no REAPED answer).
+    That canary is a guest proof, run as the standard user on the interactive desktop: a hosted
+    Windows Server 2025 x64 runner refuses every process a step starts with `EPERM`, so it is no
+    lane for it (#4561).
     The supervisor ships inside the coding-runtime package, so the rule reaches an installation
     with runtime 1.1.9; the published 1.1.8 still waits for the job to empty.
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
