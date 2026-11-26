@@ -59,7 +59,7 @@ async function main() {
   result.ignoreStdioInfo = attempt(() => spawnSync(process.execPath, args, { stdio: "ignore", timeout: 60000 }));
   result.spawnSync = attempt(() => spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 }));
   result.forkExit = await forkEcho();
-  const tests = spawnSync(process.execPath, ["--test", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
+  const tests = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "a.test.cjs", "b.test.cjs"], { cwd: __dirname, encoding: "utf8", timeout: 120000 });
   result.nodeTest = { status: tests.status, error: brief(tests).error, passes: ((tests.stdout ?? "").match(/^# pass (\d+)/mu) ?? [])[1] };
   const stamp = String(process.pid);
   result.globalPipe = await listen("\\\\.\\pipe\\keiko-step-node-global-" + stamp);
