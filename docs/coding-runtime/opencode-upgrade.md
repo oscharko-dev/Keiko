@@ -60,6 +60,12 @@ Run them in a clean checkout of the branch that carries the bump.
    the write flags from section 1 set; each fixture's diff against its predecessor is the drift.
    `opencodeRuntime.real.test.ts` and the `[functional-only]` backend suite take the parent of the
    payload as `KEIKO_OPENCODE_REAL_RESOURCE_ROOT`.
+   To prove that the previous runtime still starts under the new profile, set
+   `KEIKO_OPENCODE_PREVIOUS_REAL_BINARY` to the previous payload's `bin/opencode` (and, if the
+   payload is not laid out as `<root>/payload/bin/opencode`, `KEIKO_OPENCODE_PREVIOUS_REAL_RESOURCE_ROOT`
+   to `<root>`); `opencodeRuntime.real.test.ts` then starts it under the current composed launch
+   profile and checks info, the authentication refusal and a clean stdin-EOF exit. Keiko still
+   refuses to admit the earlier package (`runtime-outdated`); the test covers the raw binary only.
 5. Run `opencodeServiceInventory.test.ts`. It refuses an operation without a disposition, a stale
    disposition and an admitted set that differs from the pinned surface.
    `diffOpenCodeServiceOperations` lists the added, removed, moved and breaking operations between
