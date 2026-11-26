@@ -722,15 +722,20 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     enforceFeedBounds(entry, this.limits);
     const finalized = this.finalizeCapacityDrop(runId, entry, { ...prior, capacityDrop });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
-    // Only an applied signal counts as seen: one a capacity rollback refused is applied again when
-    // it is delivered again, so a refused terminal tool state cannot leave its row running.
-    if (finalized && signal.signalId !== undefined) {
-      rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
+    if (finalized) {
+      this.rememberAppliedSignal(entry, signal);
+      this.recordTextFacts(runId, entry, countsBefore);
     }
-    if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     // A call that failed gets its line even when the feed dropped, displaced or refused it.
     this.recordToolFailure(runId, entry);
     return finalized;
+  }
+
+  // Only an applied signal counts as seen: one a capacity rollback refused is applied again when it
+  // is delivered again, so a refused terminal tool state cannot leave its row running.
+  private rememberAppliedSignal(entry: ProjectionEntry, signal: CodingSafeActivitySignal): void {
+    if (signal.signalId === undefined) return;
+    rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
   }
 
   // One body-free line per failed call: where it failed, the tool's closed class, the shell's exit

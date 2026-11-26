@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fb7d2d9d579acebf84211ab62f595e7d1c9ac527c10a50a59928f28ae4124589",
+    "catalogDigest": "3f9c410133213cd6e431a7acf1834845a3e8d812a3ae5f3a992e9f87b49520d6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -14320,7 +14320,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:261",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1132"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1137"
         ]
       },
       {
@@ -18080,11 +18080,11 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:111",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:783",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:938",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1020",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1098",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1153"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:788",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:943",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1025",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1103",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1158"
         ]
       },
       {
@@ -19232,7 +19232,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:292",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:743"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:748"
         ]
       },
       {
@@ -127075,14 +127075,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2380",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2385",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2398",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2403",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
