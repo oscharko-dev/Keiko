@@ -21649,6 +21649,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      readRootRefusedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       mavenRepository: {
         type: "boolean",
         dataClass: "closed-enum",

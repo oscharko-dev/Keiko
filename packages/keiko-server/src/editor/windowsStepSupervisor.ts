@@ -6,7 +6,7 @@
 // they did before and the log names it, so a project that needs no Node.js is unaffected.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import {
   activityLogEvent,
@@ -29,6 +29,7 @@ import {
 } from "../coding-runtime/productionOpenCodeBackend.js";
 import { discoverQualifiedPortableOpenCode } from "../coding-runtime/productionPortableCodingRuntime.js";
 import { CommandDeniedError } from "@oscharko-dev/keiko-security";
+import { isCredentialNamedSegment } from "@oscharko-dev/keiko-workspace";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
 import type { NpmLaneStepNodeApproval } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -57,6 +58,8 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
+    // #4496: toolchain homes left out because they hold or sit in `.m2`, or hold a credential-named entry.
+    readRootRefusedCount: { type: "integer", dataClass: "count", required: true },
     // #4492: whether a Maven step may read the person's repository; never its path.
     mavenRepository: { type: "boolean", dataClass: "closed-enum", required: true },
     // #4492: the runtime's patched Node.js. `absent` runs the steps as before, `mismatch` is a
@@ -114,11 +117,58 @@ function directoryOf(value: string | undefined): string | undefined {
   return statSync(value).isDirectory() ? win32.normalize(value) : undefined;
 }
 
-export function windowsStepReadRoots(env: NodeJS.ProcessEnv): readonly string[] {
-  const roots = READ_ROOT_VARIABLES.map((name) => directoryOf(env[name])).filter(
+/** What the read-root check asks of the file system; injectable so tests need no Windows host. */
+export interface WindowsReadRootHost {
+  readonly directoryOf: (value: string | undefined) => string | undefined;
+  readonly entryNames: (directory: string) => readonly string[];
+}
+
+const NODE_READ_ROOT_HOST: WindowsReadRootHost = {
+  directoryOf,
+  entryNames: (directory) => {
+    try {
+      return readdirSync(directory);
+    } catch {
+      // A home that cannot be listed cannot be shown free of credentials, so it is refused.
+      return [CREDENTIAL_UNLISTABLE_MARKER];
+    }
+  },
+};
+
+// `isCredentialNamedSegment` matches this name, so an unreadable listing refuses the root.
+const CREDENTIAL_UNLISTABLE_MARKER = ".env";
+
+// Whether `child` is `parent` or lies inside it, with Windows' case-insensitive comparison.
+function windowsPathContains(parent: string, child: string): boolean {
+  const relative = win32.relative(parent, child);
+  const leaves = relative === ".." || relative.startsWith("..\\");
+  return !leaves && !win32.isAbsolute(relative);
+}
+
+// A home that holds or sits inside the profile's `.m2` would hand a read of its settings and their
+// credentials to the step; `MAVEN_HOME\conf` (Maven's own global settings) stays readable.
+function readRootIsRefused(
+  root: string,
+  profile: string | undefined,
+  host: WindowsReadRootHost,
+): boolean {
+  if (profile !== undefined && DRIVE_PATH.test(profile)) {
+    const m2 = win32.join(profile, ".m2");
+    if (windowsPathContains(root, m2) || windowsPathContains(m2, root)) return true;
+  }
+  return host.entryNames(root).some(isCredentialNamedSegment);
+}
+
+export function windowsStepReadRoots(
+  env: NodeJS.ProcessEnv,
+  host: WindowsReadRootHost = NODE_READ_ROOT_HOST,
+): { readonly roots: readonly string[]; readonly refusedCount: number } {
+  const homes = READ_ROOT_VARIABLES.map((name) => host.directoryOf(env[name])).filter(
     (root): root is string => root !== undefined,
   );
-  return Object.freeze([...new Set(roots)]);
+  const unique = [...new Set(homes)];
+  const roots = unique.filter((root) => !readRootIsRefused(root, env.USERPROFILE, host));
+  return { roots: Object.freeze(roots), refusedCount: unique.length - roots.length };
 }
 
 /**
@@ -290,7 +340,7 @@ export function resolveWindowsStepSupervisor(
   const binary = supervisorBinary(
     input.runtime === undefined ? discoveredRuntime(env) : input.runtime(),
   );
-  const readRoots = windowsStepReadRoots(env);
+  const { roots: readRoots, refusedCount } = windowsStepReadRoots(env);
   const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);
   const stepNode = verifiedStepNode(binary, input);
   input.activityLog.write(
@@ -300,6 +350,7 @@ export function resolveWindowsStepSupervisor(
       {
         outcome: binary.outcome,
         readRootCount: readRoots.length,
+        readRootRefusedCount: refusedCount,
         mavenRepository: mavenRepository !== undefined,
         stepNode: stepNode.outcome,
       },

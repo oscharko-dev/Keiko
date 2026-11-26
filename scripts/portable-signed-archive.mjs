@@ -17,6 +17,8 @@ import { sha256 } from "./lib/digest.mjs";
 import { nativeToolSetIsValid } from "./lib/portable-step-node.mjs";
 import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 
+const STEP_NODE_PLATFORM_TARGET = "windows-x64";
+
 export class PortableSignedArchiveError extends Error {}
 
 function fail(message) {
@@ -159,9 +161,15 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
 // bytes change while `unsignedSha256` keeps the approved upstream identity. Rebinding it is the
 // same discipline as the addon: contained regular single-link file, fresh digest and size, and the
 // one matching SBOM component.
-function rebindNativeTools(stageRoot, manifest, resourceRoot) {
+function rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget) {
   if (manifest.nativeTools === undefined) return;
-  if (!nativeToolSetIsValid(manifest.nativeTools)) {
+  // Only the Windows x64 payload carries the step Node.js beside ripgrep (ADR-0043 D21); every
+  // other target keeps its exactly-one-tool pin.
+  if (platformTarget !== STEP_NODE_PLATFORM_TARGET) {
+    if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+      fail("signed payload must contain exactly one native tool");
+    }
+  } else if (!nativeToolSetIsValid(manifest.nativeTools)) {
     fail("signed payload must contain ripgrep, optionally followed by the step Node.js");
   }
   for (const tool of manifest.nativeTools) rebindNativeTool(stageRoot, resourceRoot, tool);
@@ -295,7 +303,7 @@ export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
   rebindNativeAddon(stageRoot, manifest, resourceRoot);
-  rebindNativeTools(stageRoot, manifest, resourceRoot);
+  rebindNativeTools(stageRoot, manifest, resourceRoot, platformTarget);
   if (manifest.runtimeActivation !== undefined) {
     writeRuntimeActivationManifest(resourceRoot, manifest);
   }

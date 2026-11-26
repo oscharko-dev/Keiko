@@ -98,6 +98,10 @@ patched step Node.js as the npm runtime package, at `runtime/step-node/node.exe`
 digest-pinned `win32-x64` runtime package and verified against the same server pin; no signing lane
 signs it.
 
+1.18 — #4496 amends D21 (2026-11-26): a toolchain root inside or containing the profile's `.m2` is
+never granted, nor one that directly holds a credential-named entry; `MAVEN_HOME\conf` stays
+readable.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1338,7 +1342,10 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
     modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
-    grants, and no grant may hold the whole user profile. The step's `TEMP`, `TMP` and npm cache
+    grants, and no grant may hold the whole user profile. A toolchain root that is, holds or sits inside the
+    profile's `.m2` (bar its `repository` folder, which a Maven launcher is given explicitly) is
+    never granted, and neither is one that directly holds a credential-named entry; Maven's own
+    global settings in `MAVEN_HOME\conf` stay readable because Maven needs them. The step's `TEMP`, `TMP` and npm cache
     stay inside the execution root.
   - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows
     grants an ordinary AppContainer lists `C:\` or `C:\Users` (measured 2026-11-25, ARM64 VM,
