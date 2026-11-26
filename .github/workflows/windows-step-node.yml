@@ -9,13 +9,14 @@ name: Windows step Node.js build
 #
 # Only node.exe is used by a step, so the npm bundle is not built (`nonpm`: it is JavaScript beside
 # the binary, never part of it, and the C++ test binaries are skipped). OpenSSL is built without assembly so
-# the build needs no NASM; ICU stays Node's default full-ICU build. The artifact is not wired into
+# the build needs no NASM; a second, link-only patch adds synchronization.lib for the runner's Rust
+# standard library; ICU stays Node's default full-ICU build. The artifact is not wired into
 # the product launch path by this workflow.
 
 on:
   push:
     paths:
-      - "patches/node-26.13.1-libuv-5181.patch"
+      - "patches/node-26.13.1-*.patch"
       - ".github/workflows/windows-step-node.yml"
       - "scripts/testing/test-windows-step-node.mjs"
       - "scripts/write-windows-step-node-receipt.mjs"
@@ -66,13 +67,15 @@ jobs:
           tar -xzf C:\n-dl\node.tar.gz -C C:\n --strip-components=1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Get-Content C:\n\deps\uv\include\uv\version.h | Select-String "UV_VERSION_(MAJOR|MINOR|PATCH)"
-      - name: Apply the libuv#5181 patch
+      - name: Apply the patches
         run: |
           Push-Location C:\n
-          git apply --check -p1 "$env:GITHUB_WORKSPACE\patches\node-26.13.1-libuv-5181.patch"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          git apply -p1 "$env:GITHUB_WORKSPACE\patches\node-26.13.1-libuv-5181.patch"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($name in "node-26.13.1-libuv-5181.patch", "node-26.13.1-win-crates-synchronization.patch") {
+            git apply --check -p1 "$env:GITHUB_WORKSPACE\patches\$name"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            git apply -p1 "$env:GITHUB_WORKSPACE\patches\$name"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
           Pop-Location
           if (-not (Select-String -Path C:\n\deps\uv\src\win\pipe.c -Pattern "TokenIsAppContainer" -Quiet)) {
             throw "the patch did not reach deps/uv/src/win/pipe.c"
@@ -100,6 +103,7 @@ jobs:
           $python = (python --version) -join ""
           node scripts/write-windows-step-node-receipt.mjs --exe step-node-out\node.exe `
             --source-sha256 $env:NODE_SOURCE_SHA256 --patch patches\node-26.13.1-libuv-5181.patch `
+            --patch patches\node-26.13.1-win-crates-synchronization.patch `
             --out step-node-out\build-receipt.json `
             --flag "command=vcbuild release x64 nonpm no-cctest openssl-no-asm" `
             --flag "runnerImage=$env:ImageOS $env:ImageVersion" --flag "visualStudio=$vs" `

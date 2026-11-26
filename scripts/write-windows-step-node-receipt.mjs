@@ -6,6 +6,7 @@
 //   node scripts/write-windows-step-node-receipt.mjs --exe <node.exe> --source-sha256 <hex> \
 //     --patch <patch> --out <receipt.json> [--flag <name>=<value>]...
 import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { sha256 } from "./lib/digest.mjs";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
@@ -38,11 +39,11 @@ function main() {
   const receipt = {
     schema: "keiko-windows-step-node-receipt-v1",
     nodeVersion: "26.13.1",
-    patch: {
-      id: "libuv-5181",
-      upstream: "https://github.com/libuv/libuv/pull/5181",
-      sha256: sha256(readFileSync(required("--patch"))),
-    },
+    patches: values("--patch").map((path) => ({
+      name: basename(path),
+      sha256: sha256(readFileSync(path)),
+    })),
+    libuvUpstream: "https://github.com/libuv/libuv/pull/5181",
     source: { archive: "node-v26.13.1.tar.gz", sha256: sourceSha256 },
     executable: {
       path: "node.exe",

@@ -1,0 +1,18 @@
+Keiko build patch for Node.js v26.13.1 on a current hosted Windows runner (not a behaviour change).
+The Rust standard library of the runner's toolchain imports WaitOnAddress, WakeByAddressSingle and
+WakeByAddressAll, which live in synchronization.lib; deps/crates/crates.gyp links only ntdll and
+userenv, so mksnapshot fails at link time with "undefined symbol: __declspec(dllimport) WaitOnAddress".
+Apply from the Node source root with: git apply -p1 patches/node-26.13.1-win-crates-synchronization.patch
+
+--- a/deps/crates/crates.gyp
++++ b/deps/crates/crates.gyp
+@@ -64,7 +64,8 @@
+           ['OS=="win"', {
+             'libraries': [
+               '-lntdll',
+-              '-luserenv'
++              '-luserenv',
++              '-lsynchronization'
+             ],
+           }],
+         ],
