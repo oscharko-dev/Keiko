@@ -1,13 +1,18 @@
-// Certifies the macOS promise of epic #4491 from the coding acceptance task's evidence file (#4519).
+// Certifies the macOS and Windows promise of epic #4491 from the coding acceptance task's evidence
+// file (#4519).
 //
 // The acceptance test writes body-free evidence when `KEIKO_ACCEPTANCE_EVIDENCE_FILE` is set
 // (docs/qa/coding-acceptance-task.md). This prints the facts a reviewer needs to trust the run (the
-// platform, the user class, every sign of a container runtime, the case set) and passes only when
-// the evidence certifies the promise: a standard user, no container runtime, every case recorded and
-// every case as expected. It recomputes each condition instead of trusting `certifiesPromise` alone,
-// and it names every precondition that failed.
+// platform, the user class, every sign of a container runtime, on Windows every sign of an installed
+// Keiko service, the case set) and passes only when the evidence certifies the promise: a standard
+// user, no container runtime, on Windows also no installed Keiko service, every case recorded and
+// every case as expected. It recomputes each condition instead of trusting `certifiesPromise`
+// alone, and it names every precondition that failed.
 //
-//   node scripts/check-acceptance-evidence.mjs <evidence.json>
+// With `--preconditions-only` it checks the preconditions alone, for a machine on which no case was
+// run (the Windows preconditions run, #4492 AC3); it then certifies the machine, never a result.
+//
+//   node scripts/check-acceptance-evidence.mjs <evidence.json> [--preconditions-only]
 
 import { pathToFileURL } from "node:url";
 
@@ -16,28 +21,57 @@ import { containsCredentialShape } from "@oscharko-dev/keiko-security";
 import { readJsonArgument } from "./lib/json-argument.mjs";
 
 const NAME = "check-acceptance-evidence";
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
-// The signs the acceptance test records (`containerRuntimeFacts`). A sign it stopped recording
-// counts as present, so a writer that drops or renames one fails closed instead of shrinking the
-// check; a sign it adds counts whenever it is not `false`, and is printed as `<sign>` unless its
-// key is printable.
-const CONTAINER_RUNTIME_SIGNS = [
-  "dockerOnPath",
-  "podmanOnPath",
-  "otherClientOnPath",
-  "dockerHostConfigured",
-  "dockerSocketPresent",
-  "runtimeStatePresent",
-  "applicationPresent",
-];
+// The signs each platform's producer records: `containerRuntimeFacts` in the macOS acceptance test
+// and `windowsContainerRuntimeFacts` in windowsAcceptancePreconditions.ts. A sign a writer stopped
+// recording counts as present, so a writer that drops or renames one fails closed instead of
+// shrinking the check; a sign it adds counts whenever it is not `false`, and is printed as `<sign>`
+// unless its key is printable. They are signs of an installed or configured runtime, never proof
+// that an engine is reachable.
+const CONTAINER_RUNTIME_SIGNS = {
+  darwin: [
+    "dockerOnPath",
+    "podmanOnPath",
+    "otherClientOnPath",
+    "dockerHostConfigured",
+    "dockerSocketPresent",
+    "runtimeStatePresent",
+    "applicationPresent",
+  ],
+  win32: [
+    "dockerOnPath",
+    "podmanOnPath",
+    "otherClientOnPath",
+    "dockerHostConfigured",
+    "containerServiceInstalled",
+    "runtimePipePresent",
+    "applicationPresent",
+  ],
+};
 
-function presentSigns(containerRuntime) {
+// The Windows promise also needs no installed Keiko service: the gateway service of Keiko 1.5.x or
+// any service named with the Keiko prefix. A fact it stopped recording counts as present.
+function recordedServices(services) {
+  return typeof services === "object" && services !== null;
+}
+
+// A services block that is not recorded at all is a probe that could not run (or a writer that
+// dropped it): it is reported once, as `service-probe-failed`, not also as an installed service.
+function presentServiceSigns(services) {
+  if (!recordedServices(services)) return ["unrecorded"];
+  const signs = [];
+  if (services.keikoGatewayServiceInstalled !== false) signs.push("gatewayServiceInstalled");
+  if (services.keikoServiceCount !== 0) signs.push("keikoServiceCount");
+  return signs;
+}
+
+function presentSigns(containerRuntime, platform = "darwin") {
   if (typeof containerRuntime !== "object" || containerRuntime === null) return ["unrecorded"];
   const recorded = Object.entries(containerRuntime)
     .filter(([, present]) => present !== false)
     .map(([sign]) => (printableKey(sign) ? sign : "<sign>"));
-  const unrecorded = CONTAINER_RUNTIME_SIGNS.filter(
+  const unrecorded = (CONTAINER_RUNTIME_SIGNS[platform] ?? CONTAINER_RUNTIME_SIGNS.darwin).filter(
     (sign) => !Object.hasOwn(containerRuntime, sign),
   );
   return [...recorded, ...unrecorded.map((sign) => `${sign}-unrecorded`)];
@@ -126,14 +160,42 @@ function bodyFreeViolations(node, pointer = "", found = []) {
 }
 
 // Each precondition of the promise, recomputed from the evidence's own facts, in report order.
+// A user class that is neither `standard` nor `unknown` (the probe could not run) is refused as an
+// administrator, so an unrecognized value fails closed.
 const PRECONDITIONS = [
   ["schema-version", (evidence) => evidence.schemaVersion !== SCHEMA_VERSION],
-  ["platform", (evidence) => evidence.platform !== "darwin"],
-  ["administrator", (evidence) => evidence.userClass !== "standard"],
-  ["container-runtime-present", (evidence) => presentSigns(evidence.containerRuntime).length > 0],
+  ["platform", (evidence) => !Object.hasOwn(CONTAINER_RUNTIME_SIGNS, evidence.platform)],
+  [
+    "administrator",
+    (evidence) => evidence.userClass !== "standard" && evidence.userClass !== "unknown",
+  ],
+  ["administrator-probe-failed", (evidence) => evidence.userClass === "unknown"],
+  [
+    "container-runtime-present",
+    (evidence) => presentSigns(evidence.containerRuntime, evidence.platform).length > 0,
+  ],
+  [
+    "service-installed",
+    (evidence) =>
+      evidence.platform === "win32" &&
+      recordedServices(evidence.services) &&
+      presentServiceSigns(evidence.services).length > 0,
+  ],
+  [
+    "service-probe-failed",
+    (evidence) => evidence.platform === "win32" && !recordedServices(evidence.services),
+  ],
 ];
 
-const PRECONDITION_NAMES = new Set(PRECONDITIONS.map(([name]) => name));
+// The names a run may record in `unmetPreconditions`: the ones recomputed above and the container
+// probe failure (windowsAcceptancePreconditions.ts). A failed container probe leaves its signs
+// unrecorded, which the recomputed rule above refuses as present; the recorded code then says that
+// the probe could not run. A failed service probe leaves the services block unrecorded, which the
+// recomputed `service-probe-failed` rule reports once.
+const PRECONDITION_NAMES = new Set([
+  ...PRECONDITIONS.map(([name]) => name),
+  "container-runtime-probe-failed",
+]);
 
 // What the run itself said was unmet; a run that recorded nothing certifies nothing. Only a known
 // name is reported as itself: any other value may carry a body, so it becomes one fixed code (the
@@ -157,19 +219,32 @@ const CASE_RULES = [
   ],
 ];
 
+// The case rules (skipped for a machine on which no case was run) and the body-free scan.
+function resultFailures(evidence, preconditionsOnly) {
+  // A machine-only check never passes over a file that carries cases: that is a full-suite file.
+  const noCases =
+    evidence.cases === undefined || (Array.isArray(evidence.cases) && evidence.cases.length === 0);
+  const withCases = preconditionsOnly && !noCases;
+  const caseRules = preconditionsOnly ? [] : CASE_RULES;
+  const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
+  return [
+    ...(withCases ? ["preconditions-only-with-cases"] : []),
+    ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
+    ...bodyFree.map((pointer) => `body-free:${pointer}`),
+  ];
+}
+
 /** The reasons the evidence does not certify the promise; empty when it does. */
-export function acceptanceEvidenceFailures(evidence) {
+export function acceptanceEvidenceFailures(evidence, { preconditionsOnly = false } = {}) {
   if (typeof evidence !== "object" || evidence === null) return ["evidence-unreadable"];
   const failures = PRECONDITIONS.filter(([, unmet]) => unmet(evidence)).map(([name]) => name);
   for (const precondition of recordedPreconditions(evidence)) {
     if (!failures.includes(precondition)) failures.push(precondition);
   }
-  const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
-  failures.push(
-    ...CASE_RULES.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
-    ...bodyFree.map((pointer) => `body-free:${pointer}`),
-  );
-  if (evidence.certifiesPromise !== true && failures.length === 0) failures.push("not-certified");
+  failures.push(...resultFailures(evidence, preconditionsOnly));
+  if (!preconditionsOnly && evidence.certifiesPromise !== true && failures.length === 0) {
+    failures.push("not-certified");
+  }
   return failures;
 }
 
@@ -185,16 +260,30 @@ function fact(evidence, name) {
 
 /** One body-free line per fact: closed values and counts only. */
 export function acceptanceEvidenceSummary(evidence) {
-  const signs = presentSigns(evidence?.containerRuntime);
+  const signs = presentSigns(evidence?.containerRuntime, evidence?.platform);
+  const serviceSigns =
+    evidence?.platform === "win32" ? presentServiceSigns(evidence.services) : undefined;
   const cases = casesOf(evidence).length;
   return [
-    `platform ${fact(evidence, "platform")} ${fact(evidence, "darwinRelease")} ${fact(evidence, "arch")}`,
+    `platform ${fact(evidence, "platform")} ${fact(evidence, "osRelease")} ${fact(evidence, "arch")}`,
     `node ${fact(evidence, "node")}, opencode ${fact(evidence, "opencode")}`,
     `user class ${fact(evidence, "userClass")}`,
     `container runtime signs: ${signs.length === 0 ? "none" : signs.join(", ")}`,
+    ...(serviceSigns === undefined
+      ? []
+      : [`keiko service signs: ${serviceSigns.length === 0 ? "none" : serviceSigns.join(", ")}`]),
     `cases: ${String(metCount(evidence))} of ${String(cases)} met, set complete ${fact(evidence, "caseSetComplete")}`,
     `certifies the promise: ${fact(evidence, "certifiesPromise")}`,
   ];
+}
+
+const PRECONDITIONS_ONLY_FLAG = "--preconditions-only";
+
+function passLine(evidence, preconditionsOnly) {
+  const environment = `a standard user without a container runtime${evidence.platform === "win32" ? " or Keiko service" : ""}`;
+  return preconditionsOnly
+    ? `PASS preconditions met: ${environment}; no case was run, so no result is certified`
+    : `PASS ${environment}, every case as expected`;
 }
 
 /** Reads the evidence named by `argv[2]` and returns the process exit code. */
@@ -202,13 +291,14 @@ export function runCheck(argv, io = console) {
   const read = readJsonArgument(argv, io, { name: NAME, input: "evidence" });
   if ("exitCode" in read) return read.exitCode;
   const evidence = read.value;
+  const preconditionsOnly = argv.slice(3).includes(PRECONDITIONS_ONLY_FLAG);
   for (const line of acceptanceEvidenceSummary(evidence)) io.log(`${NAME}: ${line}`);
-  const failures = acceptanceEvidenceFailures(evidence);
+  const failures = acceptanceEvidenceFailures(evidence, { preconditionsOnly });
   if (failures.length > 0) {
     io.error(`${NAME}: FAIL does not certify the promise: ${failures.join(", ")}`);
     return 1;
   }
-  io.log(`${NAME}: PASS a standard user without a container runtime, every case as expected`);
+  io.log(`${NAME}: ${passLine(evidence, preconditionsOnly)}`);
   return 0;
 }
 

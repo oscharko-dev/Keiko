@@ -185,6 +185,49 @@ facts instead of trusting `certifiesPromise`, and it names every precondition th
 fails on any string that is not a closed token (a path, a task text or a model answer), and on any
 key that names content, naming the JSON pointer and never the value (#4492 AC6).
 
+**Windows preconditions (#4492 AC3).** Schema version 5 of the evidence also describes a Windows
+run, and the harness refuses to certify one unless all three preconditions hold. The probe is
+[`windowsAcceptancePreconditions.ts`](../../packages/keiko-server/src/test-support/windowsAcceptancePreconditions.ts),
+which takes its machine reads as injectable seams so every branch is unit-tested on macOS and
+Linux. Each unmet precondition is its own closed code, the evidence and the checker name every
+failed one (not just the first), and a probe that cannot run is its own code, never a pass:
+
+| Code                             | Refused when                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `administrator`                  | `whoami /groups /fo csv` lists `S-1-5-32-544` (BUILTIN\Administrators) in any state, or a mandatory integrity level of High or above. A split-token administrator's filtered token lists the group as deny-only, so it fails too: the promise is for a standard user.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `container-runtime-present`      | `docker`, `podman`, `nerdctl`, `colima` or `limactl` on `PATH`; `DOCKER_HOST` or `CONTAINER_HOST` set; `docker_engine` or `podman-machine-default` in the directory listing of `\\.\pipe\` (read as a directory, so no pipe is opened; a listing that cannot be read is `container-runtime-probe-failed`); a service named `docker`, `containerd` or `com.docker.service` (exact, case-insensitive) in the registry listing of the Services key (Docker Engine without Desktop runs as `docker` plus `containerd`; Podman's machine runs under WSL and shows as the pipe, the client or the folder); or an install folder of Docker, Podman, Podman Desktop (`Podman Desktop` or the per-user `podman-desktop`) or Rancher Desktop. |
+| `service-installed`              | the `KeikoRuntimeGateway` service (ADR-0043 D19) answers `sc query`, or a key whose name starts with `Keiko` (any case) is listed by `reg query HKLM\SYSTEM\CurrentControlSet\Services`. The registry listing replaces `sc query type= service state= all`, which the SCM refuses to a standard user under a batch or network logon (OpenSCManager access denied).                                                                                                                                                                                                                                                                                                                                                                  |
+| `administrator-probe-failed`     | `whoami` cannot run, or its output is not a group list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `container-runtime-probe-failed` | `where.exe` or the `reg.exe` listing cannot answer; the signs are then unrecorded, which the checker also counts as present.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `service-probe-failed`           | `sc.exe` or `reg.exe` cannot run or answers with a status other than installed or not found. A listing that cannot be read fails this code and `container-runtime-probe-failed` together. The checker reports it once, not also as `service-installed`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+On Windows on ARM the recorded `arch` is that of the x64 Node.js process under emulation, and `os.machine()` reports `x86_64` there too, so the evidence cannot name the hardware architecture.
+
+The Windows evidence records booleans and counts only (`userClass`, the container-runtime signs, and
+`services.keikoGatewayServiceInstalled` and `services.keikoServiceCount`): never a path, a user
+name, a SID or a service name. The container probe counts installed or configured signs, not
+reachability: a runtime that is installed but stopped still refuses the machine. The full suite
+itself still runs on macOS only; the Windows cases follow in the later children of #4491, and this
+probe is what their evidence is certified against.
+
+**Running the preconditions in the Windows VM.** The producer is
+[`windowsAcceptancePreconditions.windows.test.ts`](../../packages/keiko-server/src/test-support/windowsAcceptancePreconditions.windows.test.ts),
+which runs only on Windows, runs no case and writes the same evidence file (schema 5, `cases: []`)
+with the same owner-private writer. Log in as the standard user to be certified (never an
+administrator, never an elevated shell), in a built checkout, and run in PowerShell:
+
+```powershell
+$env:KEIKO_ACCEPTANCE_EVIDENCE_FILE = "$env:USERPROFILE\keiko-acceptance\windows-preconditions.json"
+npx vitest run packages/keiko-server/src/test-support/windowsAcceptancePreconditions.windows.test.ts
+node scripts/check-acceptance-evidence.mjs $env:KEIKO_ACCEPTANCE_EVIDENCE_FILE --preconditions-only
+```
+
+The evidence file must lie outside the checkout. The test passes whenever the file is written; the
+checker's exit code is the verdict. It prints every unmet precondition by code, and on success says
+`PASS preconditions met ... no case was run, so no result is certified`: that certifies the machine,
+never a Windows result. Without `--preconditions-only` the same file fails with
+`case-set-incomplete, case-not-met`, and with `--preconditions-only` a file that carries cases is refused as `preconditions-only-with-cases`, so the machine-only PASS line never sits over a full-suite file.
+
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)
 runs the whole set on a hosted macOS 15 runner (#4519). The runner's account is an administrator,
@@ -314,7 +357,9 @@ gate:
 | W6          | the small task set (read-only analysis, focused fix, edit/test/repair) in all three modes                               | the right fix in all three modes; read-only analysis is not part of this task     |
 | W8          | a real failing-test, repair, green loop in all three modes; denied, skipped, stale or failed checks never become a pass | the right fix in all three modes, and the failed, skipped, stale and denied cases |
 
-W8's Windows shell paths (cmd, PowerShell, `npm.cmd`) belong to the Windows half of #4492.
+W8's Windows shell paths (cmd, PowerShell, `npm.cmd`) belong to the Windows half of #4492. Its
+certification preconditions (standard user, no container runtime, no installed Keiko service) are
+described under "Windows preconditions" above.
 
 ## Baseline on macOS, 2026-11-22
 
