@@ -70,7 +70,7 @@ const CHILD_FILES = ["heartbeat.pid", "heartbeat.txt", "watcher.pid", "watcher.t
 const STEP_SOURCE = String.raw`const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 function settle(open) {
   return new Promise((resolve) => {
     const socket = open();
@@ -120,6 +120,10 @@ async function startChildren() {
   const env = process.env;
   const answer = {
     write: write("written.txt"),
+    child: (() => {
+      const result = spawnSync(process.execPath, ["-e", "process.exitCode = 7"], { stdio: "ignore", windowsHide: true });
+      return result.error === undefined ? "exit:" + String(result.status) : "error:" + result.error.code;
+    })(),
     outside: read(env.KEIKO_STEP_OUTSIDE),
     outsideWrite: write(env.KEIKO_STEP_OUTSIDE_WRITE),
     privateRead: read(env.KEIKO_STEP_PRIVATE_READ),
@@ -420,6 +424,8 @@ function checkNetwork(answer, host, pipe) {
 
 function checkOutside(answer, staged) {
   check("write-into-root-allowed", "(c)", answer.write === "ok", answer.write);
+  // A test command starts children (Maven starts Java): a plain child of the step runs.
+  check("plain-child-runs", "(b)", answer.child === "exit:7", answer.child);
   check("write-landed-in-root", "(c)", existsSync(join(staged.execution, "written.txt")));
   check("outside-read-refused", "(c)", refused(answer.outside), answer.outside);
   check("outside-write-refused", "(c)", refused(answer.outsideWrite), answer.outsideWrite);
