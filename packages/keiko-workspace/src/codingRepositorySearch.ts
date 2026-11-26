@@ -275,7 +275,8 @@ async function projectSearchHits(
   };
   // A file's hits are projected together, from one read, one redaction and one line index, so
   // ranked hits of several files never read a file twice and only one file is held at a time.
-  // Files go in the order of their best-ranked hit; the hits keep the scan's ranked order.
+  // Files go in the order of their best-ranked hit; the hits keep the scan's ranked order. A
+  // timeout keeps the hits of the files projected so far, so the best-ranked hit is always kept.
   for (const file of atomsByFile(atoms)) {
     assertStructuralExecutionActive(context.control);
     try {
