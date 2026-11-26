@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -426,8 +426,8 @@ describe("obtaining the package tarball", () => {
     return (command, args, options) => {
       const output = args.indexOf("--output");
       if (output === -1) return spawnSync(command, args, options);
-      calls.push({ url: args.at(-1), destination: args[output + 1] });
-      copyFileSync(source, args[output + 1]);
+      calls.push({ url: args.at(-1), destination: args[output + 1], args, cwd: options?.cwd });
+      copyFileSync(source, resolve(options?.cwd ?? ".", args[output + 1]));
       return { status: 0 };
     };
   }
@@ -467,6 +467,20 @@ describe("obtaining the package tarball", () => {
     );
     expect(second).toBe(first);
     expect(existsSync(first)).toBe(true);
+  });
+
+  // The download command line carries no path from the environment (temporary or cache folder):
+  // curl writes a plain file name, and the folder it lands in is the child's working directory.
+  it("names the download by its file name alone and runs curl in the cache folder", () => {
+    const source = goodPackage();
+    const selected = selectedFor(source, { version: "1.1.9", tarball: "fixture-1.1.9.tgz" });
+    const cacheDir = temporaryRoot();
+    const calls = [];
+    const cached = obtainPackageTarball(selected, { cacheDir, run: curlStub(source, calls) });
+
+    expect(calls[0].destination).toBe(`./fixture-1.1.9.tgz.${String(process.pid)}.tmp`);
+    expect(calls[0].args.some((arg) => isAbsolute(arg) && arg.includes(cacheDir))).toBe(false);
+    expect(calls[0].cwd).toBe(dirname(cached));
   });
 
   it("refuses and discards a download whose bytes differ from the pin", () => {

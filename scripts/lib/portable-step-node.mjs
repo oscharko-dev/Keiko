@@ -182,19 +182,22 @@ function verifyPackageTarball(path, selected) {
   }
 }
 
+// curl writes the file by its plain name in the folder that is its working directory, so the
+// size-bounded command line carries no path from the environment (temporary or cache folder).
 function downloadPackageTarball(selected, destination, run) {
   const bounds = { expectedSize: selected.sizeBytes, assetName: selected.tarball };
   const maxTimeSeconds = portableDownloadMaxTimeSeconds();
   const command = boundedCurlCommand(
     portableDownloadCurlArgs({
       expectedSize: selected.sizeBytes,
-      destination,
+      destination: `./${basename(destination)}`,
       url: stepNodePackageUrl(selected),
       maxTimeSeconds,
     }),
     selected.sizeBytes,
   );
   const result = run(command.cmd, command.args, {
+    cwd: dirname(destination),
     encoding: "utf8",
     timeout: portableDownloadTimeoutMs(maxTimeSeconds),
   });
