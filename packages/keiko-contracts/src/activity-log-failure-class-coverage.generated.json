@@ -9798,15 +9798,19 @@
       "failureClass": "coding-app-session-channel",
       "requirementContract": "coding-app-session-channel",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end", "start"],
+      "lifecycleTransitions": ["end", "start", "state"],
       "lifecycleOperations": {
         "start": ["coding-app-session.channel.opened"],
-        "state": [],
+        "state": ["coding-app-session.answer-page.read"],
         "end": ["coding-app-session.channel.closed"],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "coding-app-session.answer-page.read",
+          "mode": "correlation"
+        },
         {
           "op": "coding-app-session.channel.closed",
           "mode": "correlation"
@@ -9817,9 +9821,85 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["coding-app-session.channel.closed", "coding-app-session.channel.opened"],
+      "resourceSignals": [
+        "coding-app-session.answer-page.read",
+        "coding-app-session.channel.closed",
+        "coding-app-session.channel.opened"
+      ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "coding-app-session.answer-page.read",
+          "owner": "keiko-server",
+          "category": "http",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "answerChars",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "answerTruncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "complete",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "messageIdSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "occurrenceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "offset",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "pageChars",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "textPart",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-app-session.answer-page.read.outcome"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "coding-app-session.channel.closed",
           "owner": "keiko-server",
@@ -19701,7 +19781,11 @@
       "lifecycleTransitions": ["loss", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["coding-runtime.history-projection", "coding-runtime.native-question.observed"],
+        "state": [
+          "coding-runtime.history-projection",
+          "coding-runtime.native-question.observed",
+          "coding-runtime.tool.failed"
+        ],
         "end": [],
         "failure": [],
         "loss": ["coding-runtime.safe-activity"]
@@ -19718,12 +19802,17 @@
         {
           "op": "coding-runtime.safe-activity",
           "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.tool.failed",
+          "mode": "correlation"
         }
       ],
       "lossSignals": ["coding-runtime.safe-activity"],
       "resourceSignals": [
         "coding-runtime.history-projection",
-        "coding-runtime.native-question.observed"
+        "coding-runtime.native-question.observed",
+        "coding-runtime.tool.failed"
       ],
       "replayReferences": [],
       "operations": [
@@ -19928,6 +20017,60 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.safe-activity.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.tool.failed",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "commandFailureCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "exitCodeClass",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "failedCallCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failureOrigin",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "repeatedFailureCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "tool",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.tool.failed.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+  codingSafeActivityStateFailureOrigin,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_GIT_OUTCOMES,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -16,7 +20,10 @@ import {
   CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
   isCodingSafeActivityToolPresentation,
   unavailableCodingSafeActivityFeed,
+  validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   type CodingSafeActivityFeed,
   type CodingSafeActivityPlan,
 } from "./coding-safe-activity.js";
@@ -569,6 +576,187 @@ describe("coding safe-activity contract — model reasoning", () => {
   });
 });
 
+// A long answer is never cut to fit the feed: the feed names it and its pages carry it whole.
+describe("coding safe-activity contract — full answer", () => {
+  function withFullAnswer(fullAnswer: unknown, role = "assistant", truncated = false): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const [user, assistant] = turn.messages;
+    return {
+      ...feed,
+      turns: [
+        {
+          ...turn,
+          truncated: truncated || turn.truncated,
+          messages: [user, { ...assistant, role, fullAnswer, truncated }],
+        },
+      ],
+    };
+  }
+
+  it("accepts a whole or retention-cut full answer on an assistant message", () => {
+    expect(
+      validateCodingSafeActivityFeed(withFullAnswer({ length: 120_000, truncated: false })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(
+        withFullAnswer(
+          { length: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS, truncated: true },
+          "assistant",
+          true,
+        ),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["on a user message", { length: 10, truncated: false }, "user", false],
+    ["of zero length", { length: 0, truncated: false }, "assistant", false],
+    [
+      "beyond the retention bound",
+      { length: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS + 1, truncated: false },
+      "assistant",
+      false,
+    ],
+    ["of fractional length", { length: 1.5, truncated: false }, "assistant", false],
+    ["with an extra key", { length: 10, truncated: false, text: "raw" }, "assistant", false],
+    ["without its truncation flag", { length: 10 }, "assistant", false],
+    ["cut while the message claims it whole", { length: 10, truncated: true }, "assistant", false],
+    ["as a bare number", 10, "assistant", false],
+  ] as const)("rejects a full answer %s", (_label, fullAnswer, role, truncated) => {
+    expect(validateCodingSafeActivityFeed(withFullAnswer(fullAnswer, role, truncated)).ok).toBe(
+      false,
+    );
+  });
+
+  function page(overrides: Record<string, unknown>): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      runId: "run-safe-activity-1",
+      messageId: "msg_assistant_1",
+      part: "answer",
+      offset: 0,
+      text: "## Review\n",
+      length: 100,
+      truncated: false,
+      ...overrides,
+    };
+  }
+
+  it("accepts a bounded page inside the answer and the empty page at its end", () => {
+    expect(validateCodingSafeActivityAnswerPage(page({})).ok).toBe(true);
+    const full = "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
+    const length = 2 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS;
+    expect(validateCodingSafeActivityAnswerPage(page({ text: full, length })).ok).toBe(true);
+    expect(validateCodingSafeActivityAnswerPage(page({ offset: 100, text: "" })).ok).toBe(true);
+  });
+
+  it.each([
+    [
+      "longer than a page",
+      {
+        text: "x".repeat(CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS + 1),
+        length: 2 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
+      },
+    ],
+    ["beyond the answer's end", { offset: 95, text: "0123456789" }],
+    ["empty before the end", { offset: 10, text: "" }],
+    ["at a negative offset", { offset: -1 }],
+    ["with unsafe format characters", { text: "a\u202Eb" }],
+    ["with an unsafe run id", { runId: "../run" }],
+    ["with an extra key", { raw: "private" }],
+    ["without its truncation flag", { truncated: undefined }],
+    ["of another schema version", { schemaVersion: "2" }],
+    ["of an unknown part", { part: "prompt" }],
+    ["without its part", { part: undefined }],
+  ] as const)("rejects a page %s", (_label, overrides) => {
+    expect(validateCodingSafeActivityAnswerPage(page(overrides)).ok).toBe(false);
+  });
+
+  it("accepts a reasoning page", () => {
+    expect(validateCodingSafeActivityAnswerPage(page({ part: "reasoning" })).ok).toBe(true);
+  });
+
+  function withFullReasoning(fullReasoning: unknown, role = "assistant"): unknown {
+    const feed = withFullAnswer(undefined) as { turns: { messages: Record<string, unknown>[] }[] };
+    const [turn] = feed.turns;
+    const assistant = turn?.messages[1];
+    if (turn === undefined || assistant === undefined) throw new TypeError("expected a message");
+    const { fullAnswer: _omitted, ...rest } = assistant;
+    turn.messages[1] = { ...rest, role, fullReasoning };
+    return feed;
+  }
+
+  it("names whole or memory-cut reasoning on an assistant message", () => {
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 20_000, truncated: false })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 20_000, truncated: true })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 10, truncated: false }, "user"))
+        .ok,
+    ).toBe(false);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 0, truncated: false })).ok,
+    ).toBe(false);
+    // A reasoning the memory bound left no room for is named empty and cut.
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 0, truncated: true })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: -1, truncated: true })).ok,
+    ).toBe(false);
+    expect(
+      validateCodingSafeActivityFeed(
+        withFullReasoning({ length: 10, text: "raw", truncated: false }),
+      ).ok,
+    ).toBe(false);
+  });
+});
+
+// A live update carries what each model text gained as append-only deltas.
+describe("coding safe-activity contract — text deltas", () => {
+  const delta = { messageId: "msg_assistant_1", part: "answer", offset: 0, text: "Hello" };
+  function valid(value: unknown): boolean {
+    const errors: string[] = [];
+    validateCodingSafeActivityTextDeltas(value, "textDeltas", errors);
+    return errors.length === 0;
+  }
+
+  it("accepts bounded deltas of either part", () => {
+    expect(valid([])).toBe(true);
+    expect(valid([delta, { ...delta, part: "reasoning", offset: 7 }])).toBe(true);
+    expect(valid(Array.from({ length: CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS }, () => delta))).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["too many", Array.from({ length: CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS + 1 }, () => delta)],
+    ["of an unknown part", [{ ...delta, part: "prompt" }]],
+    ["with empty text", [{ ...delta, text: "" }]],
+    [
+      "longer than a delta's bound",
+      [{ ...delta, text: "x".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS + 1) }],
+    ],
+    ["at a negative offset", [{ ...delta, offset: -1 }]],
+    [
+      "past the retention bound",
+      [{ ...delta, offset: CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS }],
+    ],
+    ["with unsafe format characters", [{ ...delta, text: "a\u202Eb" }]],
+    ["with an unsafe message id", [{ ...delta, messageId: "../m" }]],
+    ["with an extra key", [{ ...delta, raw: 1 }]],
+    ["as an object", delta],
+  ] as const)("rejects deltas %s", (_label, value) => {
+    expect(valid(value)).toBe(false);
+  });
+});
+
 // #4491: a turn Keiko dispatched itself says so by a closed origin on its user message.
 describe("coding safe-activity contract — message origin", () => {
   function withUserOrigin(origin: unknown, role = "user"): unknown {
@@ -617,3 +805,14 @@ function planStep(
     ...overrides,
   } as CodingSafeActivityPlan["steps"][number];
 }
+
+describe("a failed call's origin from its closed state", () => {
+  it("falls back to the closed state for a producer that named none", () => {
+    expect(codingSafeActivityStateFailureOrigin("failed", 1)).toBe("command-failed");
+    expect(codingSafeActivityStateFailureOrigin("failed", 0)).toBe("tool-error");
+    expect(codingSafeActivityStateFailureOrigin("failed", undefined)).toBe("tool-error");
+    expect(codingSafeActivityStateFailureOrigin("denied", undefined)).toBe("keiko-refused");
+    expect(codingSafeActivityStateFailureOrigin("cancelled", undefined)).toBe("cancelled");
+    expect(codingSafeActivityStateFailureOrigin("succeeded", undefined)).toBeUndefined();
+  });
+});

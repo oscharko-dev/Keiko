@@ -11,19 +11,32 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createHash } from "node:crypto";
 import {
   codingAppSessionAcknowledgement,
+  contentFreeCodingAppSessionAnswerResponse,
   contentFreeCodingAppSessionChannelSnapshot,
+  type CodingAppSessionAnswerResponse,
   type CodingAppSessionChannelSnapshot,
 } from "./channelContract.js";
 import type { UiHandlerDeps } from "../deps.js";
+import type { CodingAppSessionAnswerRequest } from "./sessionChannel.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID, resolveCorrelationId } from "../correlation.js";
+import {
+  correlationIdOrUnknown,
+  UNKNOWN_CORRELATION_ID,
+  resolveCorrelationId,
+} from "../correlation.js";
+import {
+  CODING_SAFE_ACTIVITY_TEXT_PARTS,
+  isCodingSafeActivityIdentifier,
+  type CodingSafeActivityTextPart,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { STREAMING } from "../route-outcome.js";
@@ -70,6 +83,49 @@ const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["coding-app-session-channel"],
   proofIds: ["coding-app-session.channel.opened.live"],
+  releaseImpact: "patch",
+});
+
+// The end of one read of a retained answer (the feed's `fullAnswer`), body-free: the page that
+// completed it, where it starts and how long it and the answer are, in UTF-16 code units, never its
+// text. The pages before it write no line of their own. A refused or unknown read is recorded at
+// its 1st, 2nd, 4th, 8th … occurrence with the count, so a client retrying a gone answer cannot flood
+// the log; a served read writes one line per completed read of an answer.
+const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.answer-page.read",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionAnswerPage",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["served", "unavailable"],
+    },
+    // Which model text the page is of: the answer or the model's reasoning.
+    textPart: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["answer", "reasoning"],
+    },
+    offset: { type: "integer", dataClass: "count", required: true },
+    pageChars: { type: "integer", dataClass: "count", required: true },
+    answerChars: { type: "integer", dataClass: "count", required: false },
+    complete: { type: "boolean", dataClass: "closed-enum", required: false },
+    answerTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    messageIdSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Refused or unknown reads so far in this server process.
+    occurrenceCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-channel"],
+  proofIds: ["coding-app-session.answer-page.read.outcome"],
   releaseImpact: "patch",
 });
 
@@ -557,6 +613,106 @@ export function handleCodingAppSessionChannelSnapshot(
   return { status: 200, body: currentSnapshot(deps, ctx.req) };
 }
 
+const ANSWER_QUERY_KEYS: ReadonlySet<string> = new Set(["runId", "messageId", "part", "offset"]);
+const ANSWER_OFFSET = /^(?:0|[1-9]\d{0,8})$/u;
+
+/** The answer a request names, or undefined for any other query shape. */
+function answerRequest(url: URL): CodingAppSessionAnswerRequest | undefined {
+  const params = url.searchParams;
+  if ([...params.keys()].some((key) => !ANSWER_QUERY_KEYS.has(key))) return undefined;
+  const runId = params.get("runId");
+  const messageId = params.get("messageId");
+  const offset = params.get("offset");
+  const part = params.get("part") ?? "answer";
+  if (runId === null || messageId === null || offset === null) return undefined;
+  if (!isCodingSafeActivityIdentifier(runId) || !isCodingSafeActivityIdentifier(messageId)) {
+    return undefined;
+  }
+  if (!ANSWER_OFFSET.test(offset) || !isTextPart(part)) return undefined;
+  return { runId, messageId, part, offset: Number(offset) };
+}
+
+function isTextPart(value: string): value is CodingSafeActivityTextPart {
+  return (CODING_SAFE_ACTIVITY_TEXT_PARTS as readonly string[]).includes(value);
+}
+
+function answerResponse(
+  deps: UiHandlerDeps,
+  req: IncomingMessage,
+  request: CodingAppSessionAnswerRequest | undefined,
+): CodingAppSessionAnswerResponse {
+  const channel = deps.codingAppSessionChannel;
+  if (channel === undefined || request === undefined) {
+    return contentFreeCodingAppSessionAnswerResponse();
+  }
+  return channel.answerPage(readSessionCookie(req), request, {
+    correlationId: resolveCorrelationId(req),
+  });
+}
+
+/**
+ * GET /channel/answer — one page of a retained assistant answer for a paired session. Fail closed:
+ * an unpaired caller, a malformed query and an answer there is none of read the same page-free
+ * response, so the reply never reveals whether a session or an answer exists.
+ */
+export function handleCodingAppSessionAnswerPage(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const request = answerRequest(ctx.url);
+  const response = answerResponse(deps, ctx.req, request);
+  writeAnswerPageLine(deps, response.page, request, ctx.correlationId);
+  return { status: 200, body: response };
+}
+
+// Refused or unknown reads per server, so a flood writes a line only at each doubling.
+const unavailableAnswerReads = new WeakMap<UiHandlerDeps, { count: number }>();
+
+function writeAnswerPageLine(
+  deps: UiHandlerDeps,
+  page: CodingAppSessionAnswerResponse["page"],
+  request: CodingAppSessionAnswerRequest | undefined,
+  correlationId: string | undefined,
+): void {
+  if (page === null) {
+    const counter = unavailableAnswerReads.get(deps) ?? { count: 0 };
+    unavailableAnswerReads.set(deps, counter);
+    counter.count += 1;
+    if ((counter.count & (counter.count - 1)) !== 0) return;
+    appSessionActivity(deps).write(
+      activityLogEvent(
+        CODING_APP_SESSION_ANSWER_PAGE_OPERATION,
+        { correlationId: correlationIdOrUnknown(correlationId) },
+        {
+          outcome: "unavailable",
+          offset: request?.offset ?? 0,
+          pageChars: 0,
+          occurrenceCount: counter.count,
+        },
+      ),
+    );
+    return;
+  }
+  const complete = page.offset + page.text.length >= page.length;
+  if (!complete) return;
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      CODING_APP_SESSION_ANSWER_PAGE_OPERATION,
+      { correlationId: correlationIdOrUnknown(page.runId) },
+      {
+        outcome: "served",
+        textPart: page.part,
+        offset: page.offset,
+        pageChars: page.text.length,
+        answerChars: page.length,
+        complete,
+        answerTruncated: page.truncated,
+        messageIdSha256: createHash("sha256").update(page.messageId).digest("hex"),
+      },
+    ),
+  );
+}
+
 /** GET /channel/stream — authenticated fetch-streamed read. Never the content-free EventSource union. */
 export function handleCodingAppSessionChannelStream(
   ctx: RouteContext,
@@ -761,6 +917,11 @@ export const CODING_APP_SESSION_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/app-session/channel/stream",
     handler: handleCodingAppSessionChannelStream,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/app-session/channel/answer",
+    handler: handleCodingAppSessionAnswerPage,
   },
   {
     method: "POST",

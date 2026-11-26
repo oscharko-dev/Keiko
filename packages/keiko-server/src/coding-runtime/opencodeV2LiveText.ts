@@ -73,6 +73,8 @@ interface LivePart {
   bytes: number;
   // The part reached its bound: the rest of what the model wrote is not kept.
   full: boolean;
+  // The bound left out text the model wrote: the timeline must show the part as cut.
+  cut: boolean;
   // The event stream that fed the part was interrupted: it is not extended again.
   frozen: boolean;
   lastEventId: string | undefined;
@@ -85,6 +87,8 @@ export interface OpenCodeV2LiveText {
   observe(sessionId: string, event: Readonly<Record<string, unknown>>): void;
   /** What the part has shown so far, never ending in half a surrogate pair; `undefined` when untracked. */
   textOf(messageId: string, kind: LiveTextKind, ordinal: number): string | undefined;
+  /** Whether the part's bound left out text the model wrote, so the part is shown as cut. */
+  cutOf(messageId: string, kind: LiveTextKind, ordinal: number): boolean;
   /**
    * Whether any text or reasoning part of the message is being fed by the event stream right now.
    * A message that is not has its projected text decided by the history alone.
@@ -149,11 +153,15 @@ export function fittingUtf8Prefix(delta: string, room: number): string {
 
 // Appends what fits; true when anything did. A part that reaches its bound keeps what it has.
 function append(part: LivePart, delta: string, bound: number): boolean {
-  if (part.full) return false;
+  if (part.full) {
+    part.cut ||= delta.length > 0;
+    return false;
+  }
   const room = bound - part.bytes;
   const taken =
     Buffer.byteLength(delta, "utf8") <= room ? delta : fittingUtf8Prefix(delta, Math.max(0, room));
-  part.full = taken.length < delta.length || part.bytes + Buffer.byteLength(taken, "utf8") >= bound;
+  part.cut ||= taken.length < delta.length;
+  part.full = part.cut || part.bytes + Buffer.byteLength(taken, "utf8") >= bound;
   if (taken.length === 0) return false;
   part.text += taken;
   part.bytes += Buffer.byteLength(taken, "utf8");
@@ -191,6 +199,10 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
   textOf(messageId: string, kind: LiveTextKind, ordinal: number): string | undefined {
     const part = this.parts.get(partKey(messageId, kind, ordinal));
     return part === undefined ? undefined : withoutDanglingSurrogate(part.text);
+  }
+
+  cutOf(messageId: string, kind: LiveTextKind, ordinal: number): boolean {
+    return this.parts.get(partKey(messageId, kind, ordinal))?.cut === true;
   }
 
   tracks(messageId: string): boolean {
@@ -260,6 +272,7 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
       text: "",
       bytes: 0,
       full: false,
+      cut: false,
       frozen: false,
       lastEventId: undefined,
       diverged: false,

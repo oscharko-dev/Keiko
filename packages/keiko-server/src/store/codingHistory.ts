@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { withImmediateTransaction } from "./transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -200,6 +200,35 @@ export const CODING_HISTORY_MESSAGE_MAX_CHARS = 65_536;
 export function codingHistoryChunkEnd(content: string, offset: number): number {
   const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
   return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
+}
+
+/**
+ * The source id of the stored chunk at `offset` of one long message: the first keeps the message's
+ * own id, every later one a digest of it and its offset, so offsets stay stable while it streams.
+ */
+export function codingHistoryChunkSourceId(messageId: string, offset: number): string {
+  return offset === 0
+    ? messageId
+    : `${createHash("sha256").update(messageId).digest("hex")}:${String(offset)}`;
+}
+
+const CHUNK_CONTINUATION_SOURCE_ID = /^([0-9a-f]{64}):([1-9]\d*)$/u;
+
+/** Which message a continuation chunk continues, and where; undefined for any other source id. */
+interface ChunkContinuation {
+  /** SHA-256 of the source id of the message's first chunk. */
+  readonly sourceDigest: string;
+  readonly offset: number;
+}
+
+function chunkContinuation(sourceId: unknown): ChunkContinuation | undefined {
+  if (typeof sourceId !== "string") return undefined;
+  const match = CHUNK_CONTINUATION_SOURCE_ID.exec(sourceId);
+  const sourceDigest = match?.[1];
+  const offset = match?.[2];
+  return sourceDigest === undefined || offset === undefined
+    ? undefined
+    : { sourceDigest, offset: Number(offset) };
 }
 
 function assertId(value: string): void {
@@ -647,6 +676,21 @@ function scheduledIntentMessageIds(db: DatabaseSync, chatId: string): ReadonlySe
   return new Set(rows.map((row) => String(row.message_id)));
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+// A Keiko note's type wins over a scheduled continuation's, as the stored bindings name it.
+function messageTaskType(
+  messageId: string,
+  scheduled: ReadonlySet<string>,
+  keikoNotes: ReadonlySet<string>,
+): { readonly taskType?: string } {
+  if (keikoNotes.has(messageId)) return { taskType: CODING_HISTORY_KEIKO_TASK_TYPE };
+  if (scheduled.has(messageId)) return { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE };
+  return {};
+}
+
 function readDetail(
   db: DatabaseSync,
   store: UiStore,
@@ -656,24 +700,62 @@ function readDetail(
   const task = readTask(db, store, id, operator);
   if (task === undefined) return undefined;
   const binding = db.prepare(
-    "SELECT run_id FROM coding_history_message_bindings WHERE message_id = ?",
+    "SELECT run_id, source_id FROM coding_history_message_bindings WHERE message_id = ?",
   );
   const listed = store.listMessages(id, 200);
   const repeated = repeatedIntentMessageIds(db, id);
   const scheduled = scheduledIntentMessageIds(db, id);
   const keikoNotes = keikoNoteMessageIds(db, id);
-  const messages = listed
-    .filter((message) => !repeated.has(message.id))
-    .map((message) => {
-      const row = binding.get(message.id);
-      return {
-        ...message,
-        ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}),
-        ...(scheduled.has(message.id) ? { taskType: CODING_HISTORY_SCHEDULED_TASK_TYPE } : {}),
-        ...(keikoNotes.has(message.id) ? { taskType: CODING_HISTORY_KEIKO_TASK_TYPE } : {}),
-      };
+  const messages: CodingHistoryDetail["messages"][number][] = [];
+  // The source id of the message last shown, which a continuation chunk must name as its start.
+  let lastSourceId: string | undefined;
+  for (const message of listed) {
+    if (repeated.has(message.id)) continue;
+    const row = binding.get(message.id);
+    const runId = optionalString(row?.run_id);
+    const continuation = chunkContinuation(row?.source_id);
+    if (joinContinuation(messages, message, { runId, continuation, lastSourceId })) continue;
+    lastSourceId = optionalString(row?.source_id);
+    messages.push({
+      ...message,
+      ...(runId === undefined ? {} : { runId }),
+      ...messageTaskType(message.id, scheduled, keikoNotes),
     });
+  }
   return { task, messages, truncated: store.countMessages(id) > listed.length };
+}
+
+/**
+ * A long message is stored as consecutive chunks (`codingHistoryChunkEnd`); the conversation shows
+ * it as the one message the model wrote. A chunk joins the message before it only when that message
+ * is the start the chunk's own source id names (by digest), of the same run and role, and ends
+ * exactly where the chunk's offset says it starts, so a chunk whose start the listed window no
+ * longer holds stays a message of its own and no chunk ever joins another message.
+ */
+function joinContinuation(
+  messages: CodingHistoryDetail["messages"][number][],
+  chunk: CodingHistoryDetail["messages"][number],
+  binding: {
+    readonly runId: string | undefined;
+    readonly continuation: ChunkContinuation | undefined;
+    readonly lastSourceId: string | undefined;
+  },
+): boolean {
+  const previous = messages.at(-1);
+  const { continuation, lastSourceId } = binding;
+  if (
+    continuation === undefined ||
+    lastSourceId === undefined ||
+    previous === undefined ||
+    previous.runId !== binding.runId ||
+    previous.role !== chunk.role ||
+    previous.content.length !== continuation.offset ||
+    createHash("sha256").update(lastSourceId).digest("hex") !== continuation.sourceDigest
+  ) {
+    return false;
+  }
+  messages[messages.length - 1] = { ...previous, content: previous.content + chunk.content };
+  return true;
 }
 
 function updateTask(

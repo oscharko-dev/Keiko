@@ -19,11 +19,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  CodingAppSessionAnswerResponse,
   CodingAppSessionChannelSnapshot,
   CodingWorkbenchRuntimeQuestionRequest,
   CodingWorkbenchRuntimeSseEvent,
   EditorVerificationEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -614,7 +616,9 @@ async function runProductiveScenario(
   expect(activity).not.toContain(OLD);
   expect(activity).not.toContain(NEW);
   expect(activity).toContain('"state":"succeeded"');
-  expect(activity).toContain('"truncated":true');
+  // The feed carries a bounded part of the oversized answer, never its tail, yet the answer is not
+  // cut: the feed names the whole answer and its pages return it to the last character.
+  await expectWholeAnswerReadable(pipeline.baseUrl, sessionCookie, run.runId, activity);
   // V2 exposes progress as assistant text, without V1's native todowrite tool. The paired-only
   // visibility and redaction invariant remains here; structured-plan bounds stay in
   // opencodeSafeActivity.test.ts, at the projection layer that owns them.
@@ -654,6 +658,87 @@ async function codingAppSessionSnapshot(
   assertResponseMetadata(response);
   expect(response.status).toBe(200);
   return (await response.json()) as CodingAppSessionChannelSnapshot;
+}
+
+interface NamedFullAnswer {
+  readonly messageId: string;
+  readonly length: number;
+  readonly truncated: boolean;
+}
+
+function namedFullAnswers(value: unknown): readonly NamedFullAnswer[] {
+  if (Array.isArray(value)) return value.flatMap(namedFullAnswers);
+  if (typeof value !== "object" || value === null) return [];
+  const record = value as Record<string, unknown>;
+  const nested = Object.values(record).flatMap(namedFullAnswers);
+  const full = record.fullAnswer as { length?: unknown; truncated?: unknown } | undefined;
+  if (typeof record.messageId !== "string" || full === undefined) return nested;
+  const named = {
+    messageId: record.messageId,
+    length: Number(full.length),
+    truncated: full.truncated === true,
+  };
+  return [named, ...nested];
+}
+
+async function readAnswerPage(
+  baseUrl: string,
+  cookie: string,
+  query: string,
+): Promise<CodingAppSessionAnswerResponse> {
+  const response = await fetch(
+    `${baseUrl}/api/coding-workbench/app-session/channel/answer?${query}`,
+    {
+      headers: { Cookie: cookie },
+    },
+  );
+  assertResponseMetadata(response);
+  expect(response.status).toBe(200);
+  return (await response.json()) as CodingAppSessionAnswerResponse;
+}
+
+// Reads an answer page by page, each page from the offset the text held so far ends at.
+async function readWholeAnswer(
+  source: {
+    readonly baseUrl: string;
+    readonly cookie: string;
+    readonly runId: string;
+    readonly messageId: string;
+    readonly length: number;
+  },
+  whole: string,
+): Promise<string> {
+  if (whole.length >= source.length) return whole;
+  const query = new URLSearchParams({
+    runId: source.runId,
+    messageId: source.messageId,
+    offset: String(whole.length),
+  });
+  const { page } = await readAnswerPage(source.baseUrl, source.cookie, query.toString());
+  if (page === null || page.text.length === 0) throw new Error("an answer page was not served");
+  expect(page.truncated).toBe(false);
+  return readWholeAnswer(source, whole + page.text);
+}
+
+async function expectWholeAnswerReadable(
+  baseUrl: string,
+  cookie: string,
+  runId: string,
+  activity: string,
+): Promise<void> {
+  const answers = namedFullAnswers(JSON.parse(activity));
+  expect(answers).toHaveLength(1);
+  const [answer] = answers;
+  if (answer === undefined) throw new Error("the feed names no full answer");
+  expect(answer.truncated).toBe(false);
+  const whole = await readWholeAnswer(
+    { baseUrl, cookie, runId, messageId: answer.messageId, length: answer.length },
+    "",
+  );
+  expect(whole).toHaveLength(answer.length);
+  expect(whole.startsWith(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX)).toBe(true);
+  expect(whole.endsWith(FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL)).toBe(true);
+  expect(whole.length).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES);
 }
 
 async function waitForSafeActivity(baseUrl: string, cookie: string): Promise<string> {

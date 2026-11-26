@@ -666,7 +666,22 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Ungeprüfte Evaluations-Runtime — ohne Plattformsignatur",
   "codingWorkbench.readiness.runtime.unavailable": "Coding-Runtime nicht verfügbar",
   "codingWorkbench.timeline.details": "Laufdetails",
-  "codingWorkbench.activity.groupCount": "{count} Aktionen abgeschlossen",
+  "codingWorkbench.activity.group.read": "{count} Dateien gelesen",
+  "codingWorkbench.activity.group.read.one": "1 Datei gelesen",
+  "codingWorkbench.activity.group.search": "{count} Suchen ausgeführt",
+  "codingWorkbench.activity.group.search.one": "1 Suche ausgeführt",
+  "codingWorkbench.activity.group.edit": "{count} Dateien bearbeitet",
+  "codingWorkbench.activity.group.edit.one": "1 Datei bearbeitet",
+  "codingWorkbench.activity.group.command": "{count} Befehle ausgeführt",
+  "codingWorkbench.activity.group.command.one": "1 Befehl ausgeführt",
+  "codingWorkbench.activity.group.git": "{count} Git-Schritte ausgeführt",
+  "codingWorkbench.activity.group.git.one": "1 Git-Schritt ausgeführt",
+  "codingWorkbench.activity.group.web": "{count} Seiten abgerufen",
+  "codingWorkbench.activity.group.web.one": "1 Seite abgerufen",
+  "codingWorkbench.activity.group.plan": "Aufgabenliste {count}-mal aktualisiert",
+  "codingWorkbench.activity.group.plan.one": "Aufgabenliste aktualisiert",
+  "codingWorkbench.activity.group.other": "{count} weitere Schritte",
+  "codingWorkbench.activity.group.other.one": "1 weiterer Schritt",
   "codingWorkbench.timeline.title": "Aktivität",
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
@@ -682,6 +697,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.edit": "Datei bearbeiten",
   "codingWorkbench.timeline.tool.write": "Datei schreiben",
   "codingWorkbench.timeline.tool.patch": "Patch anwenden",
+  "codingWorkbench.timeline.tool.execute": "Programm",
+  "codingWorkbench.timeline.tool.unknown": "Werkzeug",
   "codingWorkbench.timeline.tool.shell": "Shell-Befehl",
   "codingWorkbench.timeline.tool.webfetch": "Webabruf",
   "codingWorkbench.timeline.tool.websearch": "Websuche",
@@ -773,6 +790,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, seine Überlegungen; sie sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
   "codingWorkbench.activity.reasoning.title": "Überlegungen",
+  "codingWorkbench.activity.reasoning.thinking": "Denkt nach…",
   "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
   "codingWorkbench.activity.status.loading": "Aktivität wird verbunden…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -787,6 +805,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Aktivität gekürzt.",
   "codingWorkbench.activity.dropped": "{count} Aktualisierung(en) ausgelassen.",
   "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
+  "codingWorkbench.activity.answerLoading": "Der Rest wird geladen …",
+  "codingWorkbench.activity.textReadFailed": "Der Rest konnte nicht geladen werden.",
+  "codingWorkbench.activity.textRetry": "Erneut versuchen",
+  "codingWorkbench.activity.copy.answer": "Antwort als Markdown kopieren",
+  "codingWorkbench.activity.copy.copied": "Kopiert",
+  "codingWorkbench.activity.copy.copiedStatus": "Antwort als Markdown kopiert",
+  "codingWorkbench.activity.copy.failedStatus":
+    "Zugriff auf die Zwischenablage fehlgeschlagen. Markiere die Antwort und kopiere sie selbst.",
   "codingWorkbench.activity.role.user": "Du",
   "codingWorkbench.activity.role.assistant": "Coding-Agent",
   "codingWorkbench.activity.role.keiko": "Hinweis von Keiko",
@@ -796,7 +822,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.running": "Wird ausgeführt",
   "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
   "codingWorkbench.activity.toolState.failed": "Fehlgeschlagen",
-  "codingWorkbench.activity.toolState.exited": "Exit-Code {code}",
+  "codingWorkbench.activity.toolState.exited": "Beendet mit Code {code}",
   "codingWorkbench.activity.toolState.waiting-for-trust": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nichts auszuführen",
   "codingWorkbench.activity.toolState.not-run": "Nicht ausgeführt",
@@ -1424,11 +1450,96 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
   "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
   "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
-  "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
+  "codingWorkbench.activity.editRefusal.DIRTY":
+    "Die Datei hat ungespeicherte Änderungen im Editor, daher wurde die Änderung nicht übernommen.",
+  "codingWorkbench.activity.editRefusal.VERSION_MISMATCH":
+    "Die Datei hat sich geändert, seit der Agent sie gelesen hat, daher wurde die Änderung nicht übernommen.",
+  "codingWorkbench.activity.editRefusal.CONTENT_HASH_MISMATCH":
+    "Die Datei hat sich geändert, seit der Agent sie gelesen hat, daher wurde die Änderung nicht übernommen.",
+  "codingWorkbench.activity.editRefusal.NO_ACTIVE_SESSION":
+    "Für diese Datei war keine Editor-Sitzung offen.",
+  "codingWorkbench.activity.editRefusal.NO_ACTIVE_BRIDGE":
+    "Der Editor war nicht verbunden, daher wurde die Änderung nicht übernommen.",
+  "codingWorkbench.activity.editRefusal.INVALID_EDITS":
+    "Die angeforderte Änderung passte nicht zur Datei.",
+  "codingWorkbench.activity.editRefusal.OUT_OF_SCOPE":
+    "Die Datei liegt außerhalb des Ordners, den diese Aufgabe ändern darf.",
+  "codingWorkbench.activity.editRefusal.DECOMPOSE_PER_ROOT":
+    "Die Änderung betraf mehr als einen Ordner und muss aufgeteilt werden.",
+  "codingWorkbench.activity.editRefusal.PRECONDITION_REQUIRED":
+    "Die Änderung nannte keine Fassung der Datei.",
+  "codingWorkbench.activity.editRefusal.POLICY_DENIED":
+    "Keikos Regeln erlauben diese Änderung nicht.",
+  "codingWorkbench.activity.editRefusal.APPROVAL_REQUIRED":
+    "Diese Änderung braucht zuerst deine Freigabe.",
+  "codingWorkbench.activity.editRefusal.TIMED_OUT":
+    "Die Änderung dauerte zu lange und wurde beendet.",
+  "codingWorkbench.activity.editRefusal.QUEUE_FULL":
+    "Zu viele Änderungen warteten, daher wurde diese nicht angenommen.",
+  "codingWorkbench.activity.editRefusal.CANCELLED": "Die Änderung wurde abgebrochen.",
+  "codingWorkbench.activity.editRefusal.PROVIDER_UNAVAILABLE":
+    "Der Editor-Dienst war nicht verfügbar.",
+  "codingWorkbench.activity.editRefusal.UNSUPPORTED_OPERATION":
+    "Diese Art von Änderung kann der Editor nicht ausführen.",
+  "codingWorkbench.activity.editRefusal.LIMIT_EXCEEDED": "Die Änderung war größer als erlaubt.",
+  "codingWorkbench.activity.editRefusal.DUPLICATE_ACTION":
+    "Dieselbe Änderung war bereits angefordert.",
+  "codingWorkbench.activity.editRefusal.MUTATION_IN_FLIGHT":
+    "Eine andere Änderung an dieser Datei lief noch.",
+  "codingWorkbench.activity.editRefusal.RESPONSE_TOO_LARGE": "Die Antwort des Editors war zu groß.",
+  "codingWorkbench.activity.editRefusal.TRANSPORT_FAILURE":
+    "Die Verbindung zum Editor ist fehlgeschlagen.",
+  "codingWorkbench.activity.editRefusal.REDIRECT_BLOCKED":
+    "Die Änderung wurde umgeleitet; Keiko folgt keiner Umleitung.",
+  "codingWorkbench.activity.editRefusal.EDIT_TRANSPORT_ERROR":
+    "Die Änderung hat den Editor nicht erreicht.",
+  "codingWorkbench.activity.editRefusal.EDIT_PREPARE_FAILED":
+    "Die Änderung konnte nicht vorbereitet werden.",
+  "codingWorkbench.activity.editRefusal.WORKSPACE_ACCESS_LOST":
+    "Keiko hat den Zugriff auf den Arbeitsordner verloren.",
+  "codingWorkbench.activity.editRefusal.EDIT_MUTATION_FAILED":
+    "Das Schreiben der Änderung in die Datei ist fehlgeschlagen.",
+  "codingWorkbench.activity.editRefusal.ci-observation-required":
+    "Die Änderung wartet zuerst auf das CI-Ergebnis.",
   "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
-  "codingWorkbench.activity.serviceDuration": "Dauer: {duration}",
-  "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",
-  "codingWorkbench.activity.toolError": "Das Tool hat dem Modell einen Fehler gemeldet.",
+  "codingWorkbench.activity.failureOrigin.keiko-refused": "Keiko hat blockiert",
+  "codingWorkbench.activity.failureOrigin.command-failed": "Befehl fehlgeschlagen",
+  "codingWorkbench.activity.failureOrigin.tool-error": "Werkzeug-Fehler",
+  "codingWorkbench.activity.failureOrigin.timed-out": "Zeitüberschreitung",
+  "codingWorkbench.activity.failureOrigin.invalid-arguments": "Ungültige Argumente",
+  "codingWorkbench.activity.failureOrigin.cancelled": "Abgebrochen",
+  "codingWorkbench.activity.failure.command-failed":
+    "Der Befehl wurde nicht erfolgreich abgeschlossen (beendet mit Code {code}).",
+  "codingWorkbench.activity.failure.command-failed-unknown":
+    "Der Befehl wurde nicht erfolgreich abgeschlossen.",
+  "codingWorkbench.activity.failure.tool-error":
+    "Das Werkzeug konnte diesen Schritt nicht ausführen.",
+  "codingWorkbench.activity.failure.keiko-refused": "Keiko hat diesen Schritt nicht zugelassen.",
+  "codingWorkbench.activity.failure.timed-out": "Der Befehl hat sein Zeitlimit überschritten.",
+  "codingWorkbench.activity.failure.invalid-arguments":
+    "Die Argumente des Aufrufs waren nicht lesbar, das Werkzeug lief nicht.",
+  "codingWorkbench.activity.failure.cancelled": "Dieser Schritt wurde abgebrochen.",
+  "codingWorkbench.activity.failure.agentRetries":
+    "Der Agent sieht dieses Ergebnis und kann darauf aufbauen.",
+  "codingWorkbench.activity.refusalCause.approval-declined": "Du hast ihn abgelehnt.",
+  "codingWorkbench.activity.refusalCause.approval-expired": "Niemand hat rechtzeitig entschieden.",
+  "codingWorkbench.runStatus.failedCommands": "{count} Befehle fehlgeschlagen",
+  "codingWorkbench.runStatus.failedCommands.one": "1 Befehl fehlgeschlagen",
+  "codingWorkbench.stream.jumpToLatest": "Zum Neuesten",
+  "codingWorkbench.stream.jumpToLatestNew": "{count} neue Schritte · Zum Neuesten",
+  "codingWorkbench.stream.jumpToLatestNew.one": "1 neuer Schritt · Zum Neuesten",
+  "codingWorkbench.activity.firstStep.waiting": "Warte auf den ersten Schritt des Modells…",
+  "codingWorkbench.activity.firstStep.slow": "Läuft noch — das Modell antwortet langsam.",
+  "codingWorkbench.activity.failedTimes": "In diesem Lauf {count}-mal fehlgeschlagen",
+  "codingWorkbench.activity.took": "Dauer {duration}",
+  "codingWorkbench.activity.command": "Befehl",
+  "codingWorkbench.activity.agentMessage": "Meldung an den Agenten",
+  "codingWorkbench.activity.output": "Ausgabe",
+  "codingWorkbench.activity.hiddenLines": "{count} Zeilen ausgeblendet",
+  "codingWorkbench.activity.hiddenLines.one": "1 Zeile ausgeblendet",
+  "codingWorkbench.activity.linesShortened": "Lange Zeilen wurden gekürzt.",
+  "codingWorkbench.activity.textShortened": "Der Text wurde gekürzt.",
+  "codingWorkbench.activity.detailOmitted": "Befehl und Ausgabe werden live nicht mehr angezeigt.",
   "codingWorkbench.activity.verification.passed":
     "Alle angeforderten Verifizierungsprüfungen sind bestanden.",
   "codingWorkbench.activity.verification.failed-check":

@@ -16,6 +16,7 @@ import {
   fakePairingRequestBody,
 } from "./_support.js";
 import {
+  handleCodingAppSessionAnswerPage,
   handleCodingAppSessionChannelSnapshot,
   handleCodingAppSessionChannelStream,
   handleCodingAppSessionLocalSession,
@@ -34,6 +35,7 @@ import {
 import { CodingAppSessionDenialWindows, DENIAL_ALERT_THRESHOLD } from "./denialWindows.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { validateCodingSafeActivityAnswerPage } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -826,4 +828,201 @@ it("records an absent channel only in the denial aggregate", () => {
     handleCodingAppSessionLocalSession(ctx(), { ...deps(undefined), activityLog }).status,
   ).toBe(200);
   expect(activityLog.events).toEqual([]);
+});
+
+// A long answer is read page by page over the authenticated channel, never cut to fit the feed.
+describe("app-session answer pages", () => {
+  const PAGE = {
+    schemaVersion: "1",
+    runId: "run-answer",
+    messageId: "msg-answer",
+    part: "answer",
+    offset: 0,
+    text: "## Review\n",
+    length: 10,
+    truncated: false,
+  } as const;
+
+  function answerChannel(
+    answerPageFor: (request: {
+      runId: string;
+      messageId: string;
+      part: string;
+      offset: number;
+    }) => unknown,
+  ): { channel: CodingAppSessionChannel; cookie: string } {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      contentSource: {
+        contentFor: () => CANARY,
+        answerPageFor: answerPageFor as never,
+      },
+    });
+    const result = channel.pair(fakePairingRequestBody());
+    if (!result.paired) throw new Error("pair failed");
+    return { channel, cookie: `${APP_SESSION_COOKIE_NAME}=${result.cookieToken}` };
+  }
+
+  function answerCtx(query: string, cookie?: string): RouteContext {
+    return {
+      ...ctx(cookie),
+      correlationId: "answer-correlation",
+      url: new URL(`http://127.0.0.1/api/coding-workbench/app-session/channel/answer?${query}`),
+    };
+  }
+
+  function loggedDeps(channel?: CodingAppSessionChannel): {
+    readonly deps: UiHandlerDeps;
+    readonly events: readonly ServerLogEvent[];
+  } {
+    const activityLog = createBufferedServerLogSink();
+    return {
+      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      events: activityLog.events,
+    };
+  }
+
+  it("serves a paired session the page it names and records it body-free", () => {
+    const requests: unknown[] = [];
+    const { channel, cookie } = answerChannel((request) => {
+      requests.push(request);
+      return PAGE;
+    });
+    const { deps: logDeps, events } = loggedDeps(channel);
+
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      logDeps,
+    );
+
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: PAGE } });
+    // An unnamed part is the answer.
+    expect(requests).toEqual([
+      { runId: "run-answer", messageId: "msg-answer", part: "answer", offset: 0 },
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "coding-app-session.answer-page.read",
+      correlationId: "run-answer",
+      extra: {
+        outcome: "served",
+        offset: 0,
+        pageChars: 10,
+        answerChars: 10,
+        complete: true,
+        answerTruncated: false,
+        textPart: "answer",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("Review");
+    expect(
+      expectActivityLogProof(
+        "coding-app-session.answer-page.read.outcome",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ outcome: "served" });
+  });
+
+  it.each([
+    ["no channel", undefined, "runId=run-answer&messageId=msg-answer&offset=0"],
+    ["no session", "unpaired", "runId=run-answer&messageId=msg-answer&offset=0"],
+    ["a malformed offset", "paired", "runId=run-answer&messageId=msg-answer&offset=01"],
+    ["a negative offset", "paired", "runId=run-answer&messageId=msg-answer&offset=-1"],
+    ["a missing message", "paired", "runId=run-answer&offset=0"],
+    ["an extra key", "paired", "runId=run-answer&messageId=msg-answer&offset=0&raw=1"],
+    ["an unknown part", "paired", "runId=run-answer&messageId=msg-answer&part=prompt&offset=0"],
+    ["an unsafe run id", "paired", "runId=..%2Frun&messageId=msg-answer&offset=0"],
+    ["an overlong message id", "paired", `runId=run-answer&messageId=${"m".repeat(129)}&offset=0`],
+  ] as const)("serves the page-free response for %s", (_label, session, query) => {
+    let asked = 0;
+    const { channel, cookie } = answerChannel(() => {
+      asked += 1;
+      return PAGE;
+    });
+    const { deps: logDeps, events } = loggedDeps(session === undefined ? undefined : channel);
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx(query, session === "paired" ? cookie : undefined),
+      logDeps,
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
+    expect(asked).toBe(0);
+    expect(events[0]).toMatchObject({
+      correlationId: "answer-correlation",
+      extra: { outcome: "unavailable", pageChars: 0 },
+    });
+  });
+
+  it("records refused reads at their 1st, 2nd and 4th occurrence, never one line per request", () => {
+    const { deps: logDeps, events } = loggedDeps(undefined);
+    for (let index = 0; index < 7; index += 1) {
+      handleCodingAppSessionAnswerPage(
+        answerCtx("runId=run-answer&messageId=msg-answer&offset=0"),
+        logDeps,
+      );
+    }
+    expect(events.map((event) => event.extra?.occurrenceCount)).toEqual([1, 2, 4]);
+  });
+
+  it("writes one line when a read completes, none for the pages before it", () => {
+    const first = { ...PAGE, text: "Review", length: 10 } as const;
+    const { channel, cookie } = answerChannel(({ offset }) =>
+      offset === 0 ? first : { ...PAGE, offset: 6, text: " ok.", length: 10 },
+    );
+    const { deps: logDeps, events } = loggedDeps(channel);
+    handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      logDeps,
+    );
+    expect(events).toEqual([]);
+    handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=6", cookie),
+      logDeps,
+    );
+    expect(events.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ outcome: "served", offset: 6, complete: true, answerChars: 10 }),
+    ]);
+  });
+
+  it("serves a reasoning page under the run's correlation", () => {
+    const reasoningPage = { ...PAGE, part: "reasoning", text: "Think.", length: 6 } as const;
+    const { channel, cookie } = answerChannel(() => reasoningPage);
+    const { deps: logDeps, events } = loggedDeps(channel);
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&part=reasoning&offset=0", cookie),
+      logDeps,
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: reasoningPage } });
+    expect(events[0]).toMatchObject({
+      correlationId: "run-answer",
+      extra: { outcome: "served", textPart: "reasoning" },
+    });
+    expect(JSON.stringify(events)).not.toContain("Think");
+  });
+
+  it.each([
+    ["another run", { runId: "run-other" }],
+    ["another message", { messageId: "msg-other" }],
+    ["another part", { part: "reasoning" }],
+    // A valid page in itself (it lies inside the answer), so only the identity check rejects it.
+    ["another offset", { offset: 3, text: "Review\n" }],
+  ] as const)("fails closed when the source returns a page of %s", (_label, override) => {
+    const page = { ...PAGE, ...override };
+    expect(validateCodingSafeActivityAnswerPage(page).ok).toBe(true);
+    const { channel, cookie } = answerChannel(() => page);
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      deps(channel),
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
+  });
+
+  it("fails closed when the source returns a page that breaks the contract", () => {
+    const { channel, cookie } = answerChannel(() => ({ ...PAGE, text: "x".repeat(11) }));
+    const result = handleCodingAppSessionAnswerPage(
+      answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
+      deps(channel),
+    );
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", page: null } });
+  });
 });

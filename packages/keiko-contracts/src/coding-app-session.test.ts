@@ -4,7 +4,9 @@ import {
   CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
   CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
   codingAppSessionAcknowledgement,
+  contentFreeCodingAppSessionAnswerResponse,
   contentFreeCodingAppSessionChannelSnapshot,
+  validateCodingAppSessionAnswerResponse,
   validateCodingAppSessionChannelContent,
   validateCodingAppSessionChannelSnapshot,
 } from "./coding-app-session.js";
@@ -86,6 +88,28 @@ describe("coding app-session channel contract", () => {
     ).toBe(false);
   });
 
+  it("accepts a live update's text deltas beside the feed and rejects malformed ones", () => {
+    const feed = {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-activity",
+      updatedAt: "2026-07-18T17:00:00.000Z",
+      turns: [],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+    const delta = { messageId: "msg_a", part: "reasoning", offset: 40, text: "more" };
+    const content = (textDeltas: unknown): unknown => ({ kind: "safe-activity", feed, textDeltas });
+    expect(validateCodingAppSessionChannelContent(content([delta])).ok).toBe(true);
+    expect(validateCodingAppSessionChannelContent(content([{ ...delta, part: "prompt" }])).ok).toBe(
+      false,
+    );
+    expect(validateCodingAppSessionChannelContent(content([{ ...delta, text: "" }])).ok).toBe(
+      false,
+    );
+    expect(validateCodingAppSessionChannelContent(content("more")).ok).toBe(false);
+  });
+
   it("rejects snapshots with a wrong version, extra keys, or a breached aggregate budget", () => {
     expect(validateCodingAppSessionChannelSnapshot({ schemaVersion: "2", content: null }).ok).toBe(
       false,
@@ -109,6 +133,37 @@ describe("coding app-session channel contract", () => {
       CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
     );
     expect(validateCodingAppSessionChannelSnapshot(oversized).ok).toBe(true);
+  });
+});
+
+describe("coding app-session answer response contract", () => {
+  const page = {
+    schemaVersion: "1",
+    runId: "run-1",
+    messageId: "msg-1",
+    part: "answer",
+    offset: 0,
+    text: "Answer",
+    length: 6,
+    truncated: false,
+  };
+
+  it("serves one fail-closed page-free shape and accepts a valid page", () => {
+    expect(contentFreeCodingAppSessionAnswerResponse()).toEqual({ schemaVersion: "1", page: null });
+    expect(
+      validateCodingAppSessionAnswerResponse(contentFreeCodingAppSessionAnswerResponse()).ok,
+    ).toBe(true);
+    expect(validateCodingAppSessionAnswerResponse({ schemaVersion: "1", page }).ok).toBe(true);
+  });
+
+  it.each([
+    ["a missing page", { schemaVersion: "1" }],
+    ["a wrong version", { schemaVersion: "2", page: null }],
+    ["an extra key", { schemaVersion: "1", page: null, content: null }],
+    ["an invalid page", { schemaVersion: "1", page: { ...page, offset: -1 } }],
+    ["a non-object", "page"],
+  ] as const)("rejects %s", (_label, value) => {
+    expect(validateCodingAppSessionAnswerResponse(value).ok).toBe(false);
   });
 });
 

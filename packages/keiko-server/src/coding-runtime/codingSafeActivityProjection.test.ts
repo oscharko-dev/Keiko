@@ -5,8 +5,16 @@ import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
+  validateCodingSafeActivityAnswerPage,
   validateCodingSafeActivityFeed,
+  validateCodingSafeActivityTextDeltas,
+  type CodingSafeActivityTextPart,
+  type CodingSafeActivityTool,
+  type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityTurn,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -1027,7 +1035,13 @@ describe("bounded coding safe-activity projection", () => {
           {
             messages: [
               {},
-              { messageId: "msg_extra", segments: [{ text: FULL_SEGMENT }], truncated: true },
+              // The segment bound holds; the answer beyond it is retained and named, never cut.
+              {
+                messageId: "msg_extra",
+                segments: [{ text: FULL_SEGMENT, truncated: false }],
+                truncated: false,
+                fullAnswer: { length: FULL_SEGMENT.length + "second".length, truncated: false },
+              },
             ],
             tools: [{ callId: "call_1" }],
             truncated: true,
@@ -1758,16 +1772,29 @@ describe("streamed answers in the live feed", () => {
     expect(answer.truncated).toBe(false);
   });
 
-  it("still marks the message truncated once the message byte budget is spent", () => {
+  it("still marks a prompt truncated once the message byte budget is spent", () => {
+    const projection = assistantTurn({ limits: { maxMessageBytes: 600 } });
+    for (let index = 0; index < 1_000; index += 1) {
+      projection.ingest(RUN_ID, text("msg_user", "x"));
+    }
+
+    const prompt = projected(projection, "msg_user");
+    expect(prompt.truncated).toBe(true);
+    expect(prompt.segments.at(-1)?.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(prompt), "utf8")).toBeLessThanOrEqual(600);
+  });
+
+  it("keeps a streamed answer inside the message byte budget and complete in its pages", () => {
     const projection = assistantTurn({ limits: { maxMessageBytes: 600 } });
     for (let index = 0; index < 1_000; index += 1) {
       projection.ingest(RUN_ID, text("msg_answer", "x"));
     }
 
     const answer = projected(projection);
-    expect(answer.truncated).toBe(true);
-    expect(answer.segments.at(-1)?.truncated).toBe(true);
+    expect(answer.truncated).toBe(false);
+    expect(answer.fullAnswer).toEqual({ length: 1_000, truncated: false });
     expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(600);
+    expect(readWholeAnswer(projection)).toBe("x".repeat(1_000));
   });
 });
 
@@ -1811,7 +1838,7 @@ describe("Windows-shaped text in the live feed", () => {
     expect(joinedText(projected(projection))).toBe("[32mok[0m\t|/-\r\n");
   });
 
-  it("bounds a single line far above the message budget and discloses the cut", () => {
+  it("bounds a single line far above the message budget and keeps it whole in its pages", () => {
     const projection = assistantTurn();
     const line = "x".repeat(200_000);
     for (let index = 0; index < 20; index += 1) {
@@ -1822,13 +1849,14 @@ describe("Windows-shaped text in the live feed", () => {
     }
 
     const answer = projected(projection);
-    expect(answer.truncated).toBe(true);
-    expect(answer.segments.at(-1)?.truncated).toBe(true);
+    expect(answer.truncated).toBe(false);
+    expect(answer.fullAnswer).toEqual({ length: line.length, truncated: false });
     expect(line.startsWith(joinedText(answer))).toBe(true);
     expect(joinedText(answer).length).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
     expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(
       CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
     );
+    expect(readWholeAnswer(projection)).toBe(line);
   });
 
   it("bounds replacement characters and a lone surrogate on their UTF-8 cost", () => {
@@ -1839,10 +1867,12 @@ describe("Windows-shaped text in the live feed", () => {
     projection.ingest(RUN_ID, text("msg_answer", mixed));
 
     const answer = projected(projection);
-    expect(answer.truncated).toBe(true);
+    expect(answer.truncated).toBe(false);
+    expect(answer.fullAnswer).toEqual({ length: mixed.length, truncated: false });
     expect(mixed.startsWith(joinedText(answer))).toBe(true);
     expect(joinedText(answer)).toContain("\uFFFD\uFFFD \ud800");
     expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(600);
+    expect(readWholeAnswer(projection)).toBe(mixed);
   });
 
   it("settles a shell call cut by Stop as cancelled and keeps the streamed text it had", () => {
@@ -1884,7 +1914,10 @@ describe("model reasoning in the live feed", () => {
     expect(answer.truncated).toBe(false);
   });
 
-  it("clips reasoning at its own bound and keeps it a true prefix of what the model wrote", () => {
+  // The feed carries reasoning only up to its own bound, as a true prefix; the reasoning itself is
+  // never cut: the feed names its whole length and its pages carry every character, the part the
+  // model wrote after the bound included.
+  it("bounds reasoning in the feed as a true prefix and keeps it whole in its pages", () => {
     const projection = assistantTurn();
     const long = "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 100);
     projection.ingest(RUN_ID, reasoning("msg_answer", long));
@@ -1894,27 +1927,32 @@ describe("model reasoning in the live feed", () => {
     const answer = projected(projection);
     expect(answer.reasoning).toEqual({
       text: "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES),
-      truncated: true,
+      truncated: false,
     });
+    expect(answer.fullReasoning).toEqual({ length: long.length + 5, truncated: false });
+    expect(readWholeAnswer(projection, "msg_answer", "reasoning")).toBe(`${long}LATER`);
     // The reasoning bound leaves the answer room of its own.
     expect(answer.truncated).toBe(false);
     expect(joinedText(answer)).toBe("y".repeat(7_000));
   });
 
-  it("cuts the reasoning back, keeping its beginning, when the answer needs the room", () => {
+  // #3878's priority of the answer over the reasoning holds without cutting either: the answer the
+  // message has no room for is retained whole and named, and the reasoning keeps its room.
+  it("keeps the answer whole and the reasoning uncut when the answer outgrows the message", () => {
     const projection = assistantTurn({ limits: { maxMessageBytes: 1_200 } });
     projection.ingest(RUN_ID, reasoning("msg_answer", "q".repeat(500)));
     projection.ingest(RUN_ID, text("msg_answer", "z".repeat(700)));
 
     const answer = projected(projection);
     expect(answer.truncated).toBe(false);
-    expect(joinedText(answer)).toBe("z".repeat(700));
-    expect(answer.reasoning?.truncated).toBe(true);
-    expect(answer.reasoning?.text).toMatch(/^q+$/u);
-    expect(answer.reasoning?.text.length ?? 0).toBeLessThan(500);
+    expect(answer.reasoning).toEqual({ text: "q".repeat(500), truncated: false });
+    expect(answer.fullAnswer).toEqual({ length: 700, truncated: false });
+    expect("z".repeat(700).startsWith(joinedText(answer))).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(1_200);
+    expect(readWholeAnswer(projection)).toBe("z".repeat(700));
   });
 
-  it("sheds older messages' reasoning before any answer text under turn pressure", () => {
+  it("sheds older answers' and older reasoning's feed text losslessly under turn pressure", () => {
     const projection = assistantTurn({ limits: { maxTurnBytes: 2_000 } });
     projection.ingest(RUN_ID, reasoning("msg_answer", "o".repeat(900)));
     projection.ingest(RUN_ID, text("msg_answer", "first answer"));
@@ -1925,10 +1963,15 @@ describe("model reasoning in the live feed", () => {
     const older = projected(projection);
     const newest = projected(projection, "msg_next");
     expect(older).not.toHaveProperty("reasoning");
-    expect(joinedText(older)).toBe("first answer");
+    expect(older.segments).toEqual([]);
+    expect(older.fullAnswer).toEqual({ length: "first answer".length, truncated: false });
+    expect(older.fullReasoning).toEqual({ length: 900, truncated: false });
+    expect(readWholeAnswer(projection)).toBe("first answer");
+    expect(readWholeAnswer(projection, "msg_answer", "reasoning")).toBe("o".repeat(900));
     expect(newest.reasoning?.text).toBe("n".repeat(900));
+    // Nothing was lost, so the turn is not marked as cut.
     const feed = projection.currentContent()?.feed;
-    expect(feed?.availability === "available" && feed.turns[0]?.truncated).toBe(true);
+    expect(feed?.availability === "available" && feed.turns[0]?.truncated).toBe(false);
   });
 
   it("drops reasoning that a format-character redactor empties", () => {
@@ -2176,5 +2219,571 @@ describe("OpenCode permission rejection evidence (#4271)", () => {
     projection.ingest(RUN_ID, denial("call_f", "running"));
     projection.ingest(RUN_ID, denial("call_f", "failed"));
     expect(deniedLines(log)).toEqual([]);
+  });
+});
+
+// A model's answer is never cut to fit the bounded feed (owner decision "Work-ending limits"): the
+// projection keeps its complete text, the feed names it, and pages carry it whole.
+function readWholeAnswer(
+  projection: Projection,
+  messageId = "msg_answer",
+  part: CodingSafeActivityTextPart = "answer",
+): string {
+  let whole = "";
+  for (;;) {
+    const page = projection.answerPage(RUN_ID, { messageId, part, offset: whole.length });
+    if (page === null) throw new TypeError(`no page for ${messageId} at ${String(whole.length)}`);
+    expect(validateCodingSafeActivityAnswerPage(page).ok).toBe(true);
+    expect(page).toMatchObject({ offset: whole.length, part });
+    whole += page.text;
+    if (whole.length >= page.length) return whole;
+    expect(page.text.length).toBeGreaterThan(0);
+  }
+}
+
+function longMarkdownAnswer(chars: number): string {
+  const paragraphs: string[] = [];
+  let length = 0;
+  for (let index = 0; length < chars; index += 1) {
+    const paragraph = `## Finding ${String(index)}\n\nThe review found **issue ${String(index)}** in \`src/file-${String(index)}.ts\` — äöü 😀.\n\n`;
+    paragraphs.push(paragraph);
+    length += paragraph.length;
+  }
+  return paragraphs.join("").slice(0, chars);
+}
+
+describe("complete answers beyond the feed budget", () => {
+  it("keeps a 120 KiB streamed answer complete, bounded in the feed and whole in its pages", () => {
+    const projection = assistantTurn();
+    const answer = longMarkdownAnswer(120 * 1_024);
+    for (let offset = 0; offset < answer.length; offset += 997) {
+      expect(
+        projection.ingest(RUN_ID, text("msg_answer", answer.slice(offset, offset + 997))),
+      ).toBe(true);
+    }
+
+    const shown = projected(projection);
+    expect(shown.truncated).toBe(false);
+    expect(shown.segments.every((segment) => !segment.truncated)).toBe(true);
+    expect(shown.fullAnswer).toEqual({ length: answer.length, truncated: false });
+    expect(answer.startsWith(joinedText(shown))).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(shown), "utf8")).toBeLessThanOrEqual(
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+    );
+    expect(readWholeAnswer(projection)).toBe(answer);
+  });
+
+  it("names no full answer while the segments carry the whole answer", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, text("msg_answer", "A short answer."));
+    expect(projected(projection).fullAnswer).toBeUndefined();
+    expect(readWholeAnswer(projection)).toBe("A short answer.");
+  });
+
+  it("sheds an earlier answer's segments without loss when the turn budget needs room", () => {
+    const projection = assistantTurn();
+    const first = longMarkdownAnswer(14_000);
+    const second = longMarkdownAnswer(15_000).replaceAll("Finding", "Second");
+    projection.ingest(RUN_ID, text("msg_answer", first));
+    projection.ingest(RUN_ID, message("msg_answer_2", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_answer_2", second));
+    projection.ingest(RUN_ID, message("msg_answer_3", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_answer_3", second));
+
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new TypeError("expected an available feed");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    expect(feed.turns[0]?.truncated).toBe(false);
+    expect(projected(projection).fullAnswer).toEqual({ length: first.length, truncated: false });
+    expect(readWholeAnswer(projection)).toBe(first);
+    expect(readWholeAnswer(projection, "msg_answer_2")).toBe(second);
+    expect(readWholeAnswer(projection, "msg_answer_3")).toBe(second);
+  });
+
+  it("cuts only at the memory bound, shows the cut and records it body-free", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({
+      activityLog: log,
+      limits: { maxRetainedAnswerChars: 1_000 },
+    });
+    for (let index = 0; index < 30; index += 1) {
+      projection.ingest(RUN_ID, text("msg_answer", "y".repeat(100)));
+    }
+
+    const shown = projected(projection);
+    expect(shown.truncated).toBe(true);
+    expect(shown.fullAnswer).toEqual({ length: 1_000, truncated: true });
+    expect(readWholeAnswer(projection)).toBe("y".repeat(1_000));
+    const clipped = log.events.filter(
+      (event) =>
+        event.op === "coding-runtime.safe-activity" && event.extra?.event === "answer-clipped",
+    );
+    expect(clipped).toHaveLength(1);
+    expect(clipped[0]).toMatchObject({
+      correlationId: RUN_ID,
+      extra: { event: "answer-clipped", reason: "retention-bound", occurrenceCount: 1 },
+    });
+    expect(JSON.stringify(log.events)).not.toContain("y".repeat(50));
+  });
+
+  it("serves no page for an unknown run, an unknown or user message, or past the end", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, text("msg_user", "Review the module."));
+    projection.ingest(RUN_ID, text("msg_answer", "Answer."));
+    expect(
+      projection.answerPage("run-other", { messageId: "msg_answer", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_missing", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_user", part: "answer", offset: 0 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 8 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: -1 }),
+    ).toBeNull();
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 7 }),
+    ).toMatchObject({ text: "", length: 7 });
+  });
+
+  it("releases a retained answer with its turn and with a purge", () => {
+    const projection = assistantTurn({ limits: { maxTurns: 1 } });
+    projection.ingest(RUN_ID, text("msg_answer", "First answer."));
+    projection.ingest(RUN_ID, message("msg_user_2", "user"));
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer", part: "answer", offset: 0 }),
+    ).toBeNull();
+    projection.ingest(RUN_ID, message("msg_answer_2", "assistant", "msg_user_2"));
+    projection.ingest(RUN_ID, text("msg_answer_2", "Second answer."));
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer_2", part: "answer", offset: 0 })?.text,
+    ).toBe("Second answer.");
+    projection.purge(RUN_ID, "stop");
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_answer_2", part: "answer", offset: 0 }),
+    ).toBeNull();
+  });
+
+  it("keeps the answer's complete text in the page while a Keiko note stays bounded text", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, message("msg_note", "user", undefined, "keiko"));
+    projection.ingest(RUN_ID, text("msg_note", "Continue."));
+    expect(
+      projection.answerPage(RUN_ID, { messageId: "msg_note", part: "answer", offset: 0 }),
+    ).toBeNull();
+  });
+});
+
+// A live update carries what each model text gained as an append-only delta beside the bounded
+// feed, so a reader keeps up without a page read per update; a gain past the feed's own bound still
+// reaches it whole.
+describe("live model-text deltas", () => {
+  it("streams a long answer and its reasoning as contiguous deltas inside the snapshot budget", () => {
+    const projection = assistantTurn();
+    const updates: NonNullable<ReturnType<Projection["currentContent"]>>[] = [];
+    projection.subscribeContent((content) => {
+      if (content !== null) updates.push(content);
+    });
+    const thought = "t".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 3_000);
+    projection.ingest(RUN_ID, reasoning("msg_answer", thought));
+    const answer = longMarkdownAnswer(110 * 1024);
+    for (let at = 0; at < answer.length; at += 3_000) {
+      projection.ingest(RUN_ID, text("msg_answer", answer.slice(at, at + 3_000)));
+    }
+
+    const rebuilt: Record<CodingSafeActivityTextPart, string> = { answer: "", reasoning: "" };
+    for (const update of updates) {
+      expect(Buffer.byteLength(JSON.stringify(update), "utf8")).toBeLessThanOrEqual(
+        CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
+      );
+      const errors: string[] = [];
+      validateCodingSafeActivityTextDeltas(update.textDeltas ?? [], "textDeltas", errors);
+      expect(errors).toEqual([]);
+      for (const delta of update.textDeltas ?? []) {
+        expect(delta.offset).toBe(rebuilt[delta.part].length);
+        rebuilt[delta.part] += delta.text;
+      }
+    }
+    expect(rebuilt).toEqual({ answer, reasoning: thought });
+    expect(JSON.stringify(projection.currentContent())).not.toContain("textDeltas");
+  });
+
+  it("records reasoning the feed names and reasoning the memory bound cuts, body-free", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({
+      activityLog: log,
+      limits: { maxRetainedAnswerChars: 9_000 },
+    });
+    projection.ingest(
+      RUN_ID,
+      reasoning("msg_answer", "s".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 10)),
+    );
+    projection.ingest(RUN_ID, reasoning("msg_answer", "s".repeat(2_000)));
+
+    const events = log.events
+      .filter((event) => event.op === "coding-runtime.safe-activity")
+      .map((event) => [event.extra?.event, event.extra?.reason, event.level]);
+    expect(events).toEqual([
+      ["reasoning-retained", "feed-bound", undefined],
+      ["reasoning-clipped", "retention-bound", "warn"],
+    ]);
+    // Reasoning may fill at most half the run's bound; the other half stays for answers.
+    expect(projected(projection).fullReasoning).toEqual({ length: 4_500, truncated: true });
+    // The cut is shown on the reasoning; the answer itself is whole.
+    expect(projected(projection).reasoning?.truncated).toBe(true);
+    expect(projected(projection).truncated).toBe(false);
+    for (const event of log.events) {
+      expect(validateRegisteredActivityLogEvent(event as never)).toMatchObject({
+        op: "coding-runtime.safe-activity",
+      });
+    }
+    expect(JSON.stringify(log.events)).not.toContain("s".repeat(50));
+  });
+});
+
+describe("a text the memory bound left no room for", () => {
+  const cut = (
+    part: CodingSafeActivityTextPart,
+    messageId = "msg_answer",
+  ): CodingSafeActivitySignal => ({
+    kind: "text-cut",
+    messageId,
+    part,
+    occurredAt: "2026-07-18T17:00:00.003Z",
+  });
+
+  it("marks an answer its source showed only a prefix of, once, and logs it body-free", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    projection.ingest(RUN_ID, text("msg_answer", "PRIVATE_PREFIX"));
+    expect(projection.ingest(RUN_ID, cut("answer"))).toBe(true);
+    expect(projection.ingest(RUN_ID, cut("answer"))).toBe(true);
+    const message = projected(projection);
+    expect(message.truncated).toBe(true);
+    expect(message.fullAnswer).toEqual({ length: 14, truncated: true });
+    const clipped = log.events
+      .filter((event) => event.extra?.event === "answer-clipped")
+      .map((event) => [event.extra?.reason, event.extra?.occurrenceCount, event.level]);
+    expect(clipped).toEqual([["source-bound", 1, "warn"]]);
+    for (const event of log.events) {
+      expect(validateRegisteredActivityLogEvent(event as never)).toBeDefined();
+    }
+    expect(JSON.stringify(log.events)).not.toContain("PRIVATE_PREFIX");
+  });
+
+  it("marks reasoning its source cut, and refuses a cut for a message it does not know", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, reasoning("msg_answer", "thinking"));
+    projection.ingest(RUN_ID, cut("reasoning"));
+    expect(projected(projection).reasoning).toEqual({ text: "thinking", truncated: true });
+    expect(projected(projection).fullReasoning).toEqual({ length: 8, truncated: true });
+    expect(projection.ingest(RUN_ID, cut("answer", "msg_unknown"))).toBe(false);
+    expect(projection.ingest(RUN_ID, cut("answer", "msg_user"))).toBe(false);
+  });
+
+  it("names a reasoning the bound cut to nothing, so the cut stays visible", () => {
+    const projection = assistantTurn({ limits: { maxRetainedAnswerChars: 1_000 } });
+    projection.ingest(RUN_ID, reasoning("msg_answer", "s".repeat(600)));
+    projection.ingest(RUN_ID, text("msg_answer", "first answer"));
+    projection.ingest(RUN_ID, message("msg_user_2", "user"));
+    projection.ingest(RUN_ID, message("msg_answer_2", "assistant", "msg_user_2"));
+    projection.ingest(RUN_ID, reasoning("msg_answer_2", "t".repeat(40)));
+    const cut = projected(projection, "msg_answer_2");
+    expect(cut.reasoning).toBeUndefined();
+    expect(cut.fullReasoning).toEqual({ length: 0, truncated: true });
+    // A message whose reasoning was never cut names nothing.
+    projection.ingest(RUN_ID, text("msg_answer_2", "second answer"));
+    expect(projected(projection, "msg_answer_2").fullAnswer).toBeUndefined();
+  });
+});
+
+// A failed row says what failed and who caused it; the Activity Log keeps the closed facts alone.
+describe("failed tool rows", () => {
+  const PRIVATE_COMMAND = "npm test -- --grep private-case";
+
+  function shellCall(
+    callId: string,
+    state: "running" | "failed" | "succeeded" | "denied" | "cancelled",
+    presentation?: CodingSafeActivityToolPresentation,
+    messageId = "msg_answer",
+  ): CodingSafeActivitySignal {
+    return {
+      kind: "tool",
+      messageId,
+      callId,
+      tool: "shell",
+      state,
+      occurredAt: "2026-07-18T17:00:00.002Z",
+      ...(presentation === undefined ? {} : { presentation }),
+    };
+  }
+
+  const failedShell = (callId: string): CodingSafeActivitySignal =>
+    shellCall(callId, "failed", {
+      exitCode: 1,
+      failureOrigin: "command-failed",
+      durationMs: 2_400,
+      command: { text: PRIVATE_COMMAND, truncated: false },
+      output: {
+        head: "FAIL private-case",
+        tail: "",
+        lineCount: 1,
+        hiddenLineCount: 0,
+        truncated: false,
+      },
+    });
+
+  function toolOf(projection: Projection, callId: string): CodingSafeActivityTool {
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new TypeError("expected an available feed");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    const found = feed.turns.flatMap((turn) => turn.tools).find((tool) => tool.callId === callId);
+    if (found === undefined) throw new TypeError(`missing ${callId}`);
+    return found;
+  }
+
+  const failedLines = (
+    log: ReturnType<typeof createBufferedServerLogSink>,
+  ): ReturnType<typeof createBufferedServerLogSink>["events"] =>
+    log.events.filter((event) => event.op === "coding-runtime.tool.failed");
+
+  it("keeps a running call's command when its failure settles it, and counts a repeat", () => {
+    const projection = assistantTurn();
+    projection.ingest(
+      RUN_ID,
+      shellCall("call_a", "running", { command: { text: PRIVATE_COMMAND, truncated: false } }),
+    );
+    projection.ingest(RUN_ID, shellCall("call_a", "failed", { exitCode: 1 }));
+    expect(toolOf(projection, "call_a").presentation).toMatchObject({
+      exitCode: 1,
+      failureOrigin: "command-failed",
+      failureCount: 1,
+      command: { text: PRIVATE_COMMAND },
+    });
+
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    expect(toolOf(projection, "call_b").presentation?.failureCount).toBe(2);
+  });
+
+  it("names no origin on a call that succeeded after all", () => {
+    const projection = assistantTurn();
+    projection.ingest(RUN_ID, shellCall("call_a", "running", { failureOrigin: "tool-error" }));
+    projection.ingest(RUN_ID, shellCall("call_a", "succeeded", { exitCode: 0 }));
+    expect(toolOf(projection, "call_a").presentation).toEqual({ exitCode: 0 });
+  });
+
+  it("names a stopped call's origin when Stop settles it, and counts no failure for it", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    projection.ingest(RUN_ID, shellCall("call_a", "running"));
+    projection.interrupt(RUN_ID, "stop");
+    expect(toolOf(projection, "call_a")).toMatchObject({
+      state: "cancelled",
+      presentation: { failureOrigin: "cancelled" },
+    });
+    expect(toolOf(projection, "call_a").presentation).not.toHaveProperty("failureCount");
+    projection.ingest(RUN_ID, shellCall("call_b", "cancelled", { failureOrigin: "cancelled" }));
+    expect(toolOf(projection, "call_b").presentation).not.toHaveProperty("failureCount");
+    // A stop is recorded once per run as the interruption, never as a failed call.
+    expect(failedLines(log)).toEqual([]);
+  });
+
+  it("writes the line of a failed call the full turn had no room for", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log, limits: { maxToolsPerTurn: 1 } });
+    projection.ingest(RUN_ID, shellCall("call_open", "running"));
+    projection.ingest(RUN_ID, failedShell("call_dropped"));
+    const feed = projection.currentContent()?.feed;
+    const listed =
+      feed?.availability === "available" ? feed.turns.flatMap((turn) => turn.tools) : [];
+    expect(listed.map((tool) => tool.callId)).toEqual(["call_open"]);
+    expect(failedLines(log).map((line) => line.extra)).toEqual([
+      expect.objectContaining({ failureOrigin: "command-failed", failedCallCount: 1 }),
+    ]);
+  });
+
+  it("writes one body-free line per failed call with the run's failure counts", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    projection.ingest(RUN_ID, failedShell("call_a"));
+    projection.ingest(RUN_ID, failedShell("call_a"));
+    projection.ingest(RUN_ID, failedShell("call_b"));
+    projection.ingest(RUN_ID, shellCall("call_c", "succeeded", { exitCode: 0 }));
+    const lines = failedLines(log);
+    expect(lines.map((line) => line.extra)).toEqual([
+      {
+        tool: "shell",
+        failureOrigin: "command-failed",
+        exitCodeClass: "1",
+        commandFailureCount: 1,
+        failedCallCount: 1,
+        repeatedFailureCount: 0,
+        completeness: "complete",
+        loss: "none",
+      },
+      {
+        tool: "shell",
+        failureOrigin: "command-failed",
+        exitCodeClass: "1",
+        commandFailureCount: 2,
+        failedCallCount: 2,
+        repeatedFailureCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    ]);
+    const second = lines[1];
+    if (second === undefined) throw new Error("expected a tool.failed line");
+    const line = formatActivityLogProofLine(second);
+    expect(expectActivityLogProof("coding-runtime.tool.failed.emitted-line", line)).toMatchObject({
+      correlationId: RUN_ID,
+      failureOrigin: "command-failed",
+    });
+    // Neither the command, its output, an error text nor the call's id reach the log.
+    projection.ingest(
+      RUN_ID,
+      shellCall("call_err", "failed", {
+        failureOrigin: "tool-error",
+        errorText: { text: "private-error-text", truncated: false },
+      }),
+    );
+    expect(failedLines(log)).toHaveLength(3);
+    const logged = JSON.stringify(log.events);
+    for (const body of [
+      "private-case",
+      "FAIL private",
+      "private-error-text",
+      "call_a",
+      "call_err",
+    ]) {
+      expect(logged).not.toContain(body);
+    }
+  });
+
+  it("lets a later update bring back a row's shed detail once the feed has room", () => {
+    const projection = assistantTurn({
+      limits: { maxTurns: 2, maxTurnBytes: 3_000, maxTotalBytes: 3_400 },
+    });
+    const bulky = (
+      messageId: string,
+      callId: string,
+      state: "succeeded" | "failed",
+    ): CodingSafeActivitySignal =>
+      shellCall(
+        callId,
+        state,
+        {
+          exitCode: state === "failed" ? 1 : 0,
+          command: { text: `${callId} ${"c".repeat(700)}`, truncated: false },
+          output: {
+            head: "o".repeat(700),
+            tail: "",
+            lineCount: 1,
+            hiddenLineCount: 0,
+            truncated: false,
+          },
+        },
+        messageId,
+      );
+    projection.ingest(RUN_ID, bulky("msg_answer", "call_bad", "failed"));
+    projection.ingest(RUN_ID, message("msg_user_2", "user"));
+    projection.ingest(RUN_ID, message("msg_answer_2", "assistant", "msg_user_2"));
+    projection.ingest(RUN_ID, bulky("msg_answer_2", "call_ok", "succeeded"));
+    expect(toolOf(projection, "call_ok").presentation).toMatchObject({ detailOmitted: true });
+    // An update without detail leaves the omission in place.
+    projection.ingest(
+      RUN_ID,
+      shellCall("call_ok", "succeeded", { exitCode: 0, durationMs: 1_200 }, "msg_answer_2"),
+    );
+    expect(toolOf(projection, "call_ok").presentation).toMatchObject({ detailOmitted: true });
+    // A new turn displaces the oldest one, so the feed has room again.
+    projection.ingest(RUN_ID, message("msg_user_3", "user"));
+    projection.ingest(RUN_ID, bulky("msg_answer_2", "call_ok", "succeeded"));
+    const presentation = toolOf(projection, "call_ok").presentation;
+    expect(presentation).not.toHaveProperty("detailOmitted");
+    expect(presentation?.command?.text).toContain("call_ok");
+    // An update that carries no detail keeps the detail the row has.
+    projection.ingest(RUN_ID, shellCall("call_ok", "succeeded", { exitCode: 0 }, "msg_answer_2"));
+    expect(toolOf(projection, "call_ok").presentation?.command?.text).toContain("call_ok");
+  });
+
+  it("keeps a full message inside its bound while its named texts keep growing", () => {
+    const projection = assistantTurn();
+    const answer = (chars: number): CodingSafeActivitySignal =>
+      text("msg_answer", "a".repeat(chars));
+    const thought = (chars: number): CodingSafeActivitySignal =>
+      reasoning("msg_answer", "r".repeat(chars));
+    // The reasoning closes and is named at four digits, the answer then fills the message.
+    projection.ingest(RUN_ID, thought(8_200));
+    projection.ingest(RUN_ID, answer(20_000));
+    // Both named texts grow by several digits after the message was filled.
+    projection.ingest(RUN_ID, answer(10_000_000));
+    projection.ingest(RUN_ID, thought(1_000_000));
+    const named = projected(projection);
+    expect(named.fullAnswer).toEqual({ length: 10_020_000, truncated: false });
+    expect(named.fullReasoning).toEqual({ length: 1_008_200, truncated: false });
+    expect(Buffer.byteLength(JSON.stringify(named), "utf8")).toBeLessThanOrEqual(
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+    );
+  });
+
+  it("keeps a feed at its byte bound valid when Stop settles its open calls", () => {
+    const projection = assistantTurn();
+    const lastTurn = (): CodingSafeActivityTurn | undefined => {
+      const feed = projection.currentContent()?.feed;
+      if (feed?.availability !== "available") throw new TypeError("expected an available feed");
+      return feed.turns.at(-1);
+    };
+    const turnBytes = (): number => Buffer.byteLength(JSON.stringify(lastTurn()), "utf8");
+    const running = (index: number, commandChars: number): CodingSafeActivitySignal =>
+      shellCall(`call_${String(index)}`, "running", {
+        command: { text: "c".repeat(commandChars), truncated: false },
+      });
+    let index = 0;
+    while (turnBytes() + 1_200 < CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES) {
+      projection.ingest(RUN_ID, running(index, 900));
+      index += 1;
+    }
+    while (turnBytes() + 220 < CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES) {
+      projection.ingest(RUN_ID, running(index, 40));
+      index += 1;
+    }
+    // Each settled call gains its origin, together more than the slack the turn had left.
+    expect(index * 30).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES - turnBytes());
+    const updates: (CodingSafeActivityContent | null)[] = [];
+    projection.subscribeContent((content) => updates.push(content));
+    projection.interrupt(RUN_ID, "stop");
+    const feed = projection.currentContent()?.feed;
+    expect(feed).toBeDefined();
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    expect(updates.at(-1)).not.toBeNull();
+    expect(lastTurn()?.tools.every(({ state }) => state === "cancelled")).toBe(true);
+  });
+
+  it("sheds a success's text before a failure's under byte pressure and says so", () => {
+    const projection = assistantTurn({ limits: { maxTurnBytes: 2_200, maxTotalBytes: 4_096 } });
+    const bulky = (callId: string, state: "succeeded" | "failed"): CodingSafeActivitySignal =>
+      shellCall(callId, state, {
+        exitCode: state === "failed" ? 1 : 0,
+        command: { text: `${callId} ${"c".repeat(400)}`, truncated: false },
+        output: {
+          head: "o".repeat(500),
+          tail: "",
+          lineCount: 1,
+          hiddenLineCount: 0,
+          truncated: false,
+        },
+      });
+    projection.ingest(RUN_ID, bulky("call_ok", "succeeded"));
+    projection.ingest(RUN_ID, bulky("call_bad", "failed"));
+    projection.ingest(RUN_ID, bulky("call_ok2", "succeeded"));
+    expect(toolOf(projection, "call_ok").presentation).toMatchObject({ detailOmitted: true });
+    expect(toolOf(projection, "call_ok").presentation).not.toHaveProperty("command");
+    expect(toolOf(projection, "call_bad").presentation?.command?.text).toContain("call_bad");
   });
 });

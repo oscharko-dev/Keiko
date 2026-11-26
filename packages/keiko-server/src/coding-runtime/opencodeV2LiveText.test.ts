@@ -222,6 +222,21 @@ describe("OpenCode V2 live text overlay", () => {
       expect(live.takeCounts()).toEqual({ applied: 1, dropped: 2, diverged: 0 });
     });
 
+    it("names a part cut only once its bound left out text the model wrote", () => {
+      const live = createOpenCodeV2LiveText();
+      live.observe(SESSION, started("text", 0));
+      live.observe(SESSION, delta("text", 0, "a".repeat(MAX_LIVE_TEXT_UTF8_BYTES)));
+      // Exactly at the bound nothing was left out yet.
+      expect(live.cutOf(MESSAGE, "text", 0)).toBe(false);
+      live.observe(SESSION, delta("text", 0, "b"));
+      expect(live.cutOf(MESSAGE, "text", 0)).toBe(true);
+
+      live.observe(SESSION, started("text", 1));
+      live.observe(SESSION, delta("text", 1, "c".repeat(MAX_LIVE_TEXT_UTF8_BYTES + 1)));
+      expect(live.cutOf(MESSAGE, "text", 1)).toBe(true);
+      expect(live.cutOf(MESSAGE, "text", 2)).toBe(false);
+    });
+
     it("tracks a bounded number of unfinished parts", () => {
       const live = createOpenCodeV2LiveText();
       for (let ordinal = 0; ordinal < 40; ordinal += 1) {
