@@ -263,7 +263,7 @@ const WINDOWS_NO_RUNTIME = {
   podmanOnPath: false,
   otherClientOnPath: false,
   dockerHostConfigured: false,
-  dockerServiceInstalled: false,
+  containerServiceInstalled: false,
   runtimePipePresent: false,
   applicationPresent: false,
 };
@@ -418,6 +418,23 @@ describe("--preconditions-only (#4492 AC3)", () => {
     const result = check(MACHINE_ONLY, false);
     expect(result.code).toBe(1);
     expect(result.error[0]).toContain("case-set-incomplete, case-not-met");
+  });
+
+  it("refuses a file that carries cases, so the PASS line never sits over a full-suite file", () => {
+    const withCases = {
+      ...WINDOWS_CERTIFYING,
+      cases: [{ caseId: "wrong-fix", metExpectation: true }],
+    };
+    const result = check(withCases, true);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("preconditions-only-with-cases");
+    expect(acceptanceEvidenceFailures(withCases, { preconditionsOnly: true })).toEqual([
+      "preconditions-only-with-cases",
+    ]);
+    const malformed = { ...WINDOWS_CERTIFYING, cases: "x" };
+    expect(acceptanceEvidenceFailures(malformed, { preconditionsOnly: true })).toEqual([
+      "preconditions-only-with-cases",
+    ]);
   });
 
   it("still refuses an unmet precondition and a body-free violation", () => {

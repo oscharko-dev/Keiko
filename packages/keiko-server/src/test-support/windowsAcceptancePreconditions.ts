@@ -7,7 +7,7 @@
 // booleans and counts only: never a path, a user name, a SID or a service name of the person.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { win32 } from "node:path";
 
 import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
@@ -51,6 +51,8 @@ export interface ScResult {
 export interface WindowsProbeSeams {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly exists: (path: string) => boolean;
+  /** The names in `\\.\pipe\`, listed rather than opened, so no pipe server sees a client. */
+  readonly pipes: () => readonly string[];
   /** Whether the program is on `PATH`; `undefined` when `where.exe` itself could not run. */
   readonly onPath: (program: string) => boolean | undefined;
   /** Output of `whoami /groups /fo csv`; `undefined` when it could not run. */
@@ -77,18 +79,24 @@ const HIGH_INTEGRITY_RID = 12288;
  * is kept here.
  */
 const KEIKO_GATEWAY_SERVICE = "KeikoRuntimeGateway";
-/** The Windows service of Docker Desktop. */
-const DOCKER_DESKTOP_SERVICE = "com.docker.service";
+/**
+ * The services of a Windows container engine, matched exactly and case-insensitively against the
+ * registry listing: Docker Engine without Desktop (`docker` and `containerd`) and Docker Desktop.
+ * Podman's machine runs under WSL and shows as the pipe, the client or the install folder.
+ */
+const CONTAINER_SERVICES = ["docker", "containerd", "com.docker.service"];
 /** Upper bound for one system tool, so a hung `sc.exe` cannot hang the probe. */
 const TOOL_TIMEOUT_MS = 10_000;
 const KEIKO_SERVICE_PREFIX = "Keiko";
 /** `sc.exe` status for a service that does not exist (ERROR_SERVICE_DOES_NOT_EXIST). */
 const SC_SERVICE_DOES_NOT_EXIST = 1060;
-const CONTAINER_PIPES = ["\\\\.\\pipe\\docker_engine", "\\\\.\\pipe\\podman-machine-default"];
+/** `\\.\pipe\`; a template literal cannot end in a backslash. */
+const PIPE_DIRECTORY = String.raw`\\.\pipe` + win32.sep;
+const CONTAINER_PIPES = ["docker_engine", "podman-machine-default"];
 const CONTAINER_APPLICATION_FOLDERS = [
   "Docker",
   "Podman",
-  "RedHat\\Podman",
+  String.raw`RedHat\Podman`,
   "Podman Desktop",
   "podman-desktop",
   "Rancher Desktop",
@@ -142,18 +150,19 @@ function applicationFolders(env: WindowsProbeSeams["env"]): readonly string[] {
 
 /**
  * Signs that a container runtime is installed or configured, conservatively: a client on `PATH`, a
- * configured `DOCKER_HOST` or `CONTAINER_HOST`, an engine named pipe, the Docker Desktop service,
- * or the install folder of Docker Desktop, Podman (Desktop) or Rancher Desktop. These are signs of
+ * configured `DOCKER_HOST` or `CONTAINER_HOST`, an engine named pipe, a `docker`, `containerd` or
+ * Docker Desktop service, or the install folder of Docker Desktop, Podman (Desktop) or Rancher Desktop. These are signs of
  * presence, not proof that an engine is reachable, and they count whether or not it is running.
  */
 export function windowsContainerRuntimeFacts(
   seams: WindowsProbeSeams,
+  serviceNames: ReadonlySet<string> | undefined,
 ): Readonly<Record<string, boolean>> | undefined {
   const clients = ["docker", "podman", "nerdctl", "colima", "limactl"].map((program) =>
     seams.onPath(program),
   );
-  const dockerService = serviceInstalled(seams, DOCKER_DESKTOP_SERVICE);
-  if (clients.includes(undefined) || dockerService === undefined) return undefined;
+  if (clients.includes(undefined) || serviceNames === undefined) return undefined;
+  const pipes = new Set(seams.pipes().map((name) => name.toLowerCase()));
   const [docker, podman, ...others] = clients;
   return {
     dockerOnPath: docker === true,
@@ -161,27 +170,35 @@ export function windowsContainerRuntimeFacts(
     otherClientOnPath: others.includes(true),
     dockerHostConfigured:
       (seams.env.DOCKER_HOST ?? "") !== "" || (seams.env.CONTAINER_HOST ?? "") !== "",
-    dockerServiceInstalled: dockerService,
-    runtimePipePresent: CONTAINER_PIPES.some((pipe) => seams.exists(pipe)),
+    containerServiceInstalled: CONTAINER_SERVICES.some((name) => serviceNames.has(name)),
+    runtimePipePresent: CONTAINER_PIPES.some((name) => pipes.has(name)),
     applicationPresent: applicationFolders(seams.env).some((folder) => seams.exists(folder)),
   };
 }
 
-const SERVICES_REGISTRY_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
-const SERVICE_KEY_LINE =
-  /^HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\([^\\\r\n]+)\s*$/u;
+const SERVICES_REGISTRY_KEY = String.raw`HKLM\SYSTEM\CurrentControlSet\Services`;
+const SERVICE_KEY_LINE = /^HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\([^\\\r\n]+)$/u;
 
-/**
- * The distinct names, lower-cased, of the service keys that start with the Keiko prefix in a
- * `reg query` listing of the Services key. Only direct children count, in any locale.
- */
-export function keikoRegistryServiceNames(listing: string): readonly string[] {
+/** The distinct, lower-cased names of the direct child keys in a `reg query` listing, in any locale. */
+export function serviceKeyNames(listing: string): ReadonlySet<string> {
   const names = new Set<string>();
-  for (const line of listing.split(/\r?\n/u)) {
-    const name = SERVICE_KEY_LINE.exec(line)?.[1]?.toLowerCase();
-    if (name?.startsWith(KEIKO_SERVICE_PREFIX.toLowerCase()) === true) names.add(name);
+  for (const line of listing.split("\n")) {
+    const name = SERVICE_KEY_LINE.exec(line.trimEnd())?.[1]?.toLowerCase();
+    if (name !== undefined) names.add(name);
   }
-  return [...names];
+  return names;
+}
+
+/** The names that start with the Keiko prefix; each is counted once. */
+export function keikoRegistryServiceNames(listing: string): readonly string[] {
+  const prefix = KEIKO_SERVICE_PREFIX.toLowerCase();
+  return [...serviceKeyNames(listing)].filter((name) => name.startsWith(prefix));
+}
+
+/** The service keys of the registry; `undefined` when `reg.exe` could not answer. */
+function registryServiceNames(seams: WindowsProbeSeams): ReadonlySet<string> | undefined {
+  const listing = seams.reg(["query", SERVICES_REGISTRY_KEY]);
+  return listing.status === 0 ? serviceKeyNames(listing.stdout) : undefined;
 }
 
 function serviceInstalled(seams: WindowsProbeSeams, name: string): boolean | undefined {
@@ -194,11 +211,14 @@ function serviceInstalled(seams: WindowsProbeSeams, name: string): boolean | und
  * Whether the gateway service, or any service named with the Keiko prefix, is installed;
  * `undefined` when `sc.exe` or `reg.exe` could not answer.
  */
-export function windowsServiceFacts(seams: WindowsProbeSeams): WindowsServiceFacts | undefined {
+export function windowsServiceFacts(
+  seams: WindowsProbeSeams,
+  serviceNames: ReadonlySet<string> | undefined,
+): WindowsServiceFacts | undefined {
   const installed = serviceInstalled(seams, KEIKO_GATEWAY_SERVICE);
-  const listing = seams.reg(["query", SERVICES_REGISTRY_KEY]);
-  if (installed === undefined || listing.status !== 0) return undefined;
-  const names = new Set(keikoRegistryServiceNames(listing.stdout));
+  if (installed === undefined || serviceNames === undefined) return undefined;
+  const prefix = KEIKO_SERVICE_PREFIX.toLowerCase();
+  const names = new Set([...serviceNames].filter((name) => name.startsWith(prefix)));
   if (installed) names.add(KEIKO_GATEWAY_SERVICE.toLowerCase());
   return { keikoGatewayServiceInstalled: installed, keikoServiceCount: names.size };
 }
@@ -227,8 +247,9 @@ export function probeWindowsPreconditions(
   seams: WindowsProbeSeams = realWindowsProbeSeams(),
 ): WindowsPreconditionFacts {
   const userClass = probeUserClass(seams);
-  const containerRuntime = windowsContainerRuntimeFacts(seams);
-  const services = windowsServiceFacts(seams);
+  const serviceNames = registryServiceNames(seams);
+  const containerRuntime = windowsContainerRuntimeFacts(seams, serviceNames);
+  const services = windowsServiceFacts(seams, serviceNames);
   return {
     userClass,
     containerRuntime: containerRuntime ?? {},
@@ -247,7 +268,10 @@ function runSystemTool(
   tool: string,
   args: readonly string[],
 ): ScResult {
-  const result = spawnSync(resolveWindowsSystemBinary(tool, env), [...args], {
+  const binary = resolveWindowsSystemBinary(tool, env);
+  const result = spawnSync(binary, [...args], {
+    // The System32 folder, so a tool never resolves anything against the caller's directory.
+    cwd: win32.dirname(binary),
     encoding: "utf8",
     shell: false,
     windowsHide: true,
@@ -261,6 +285,7 @@ export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): Win
   return {
     env,
     exists: (path) => existsSync(path),
+    pipes: () => readdirSync(PIPE_DIRECTORY),
     onPath: (program): boolean | undefined => {
       const { status } = runSystemTool(env, "where.exe", [program]);
       // `where.exe` answers 1 for a program that is not found; no status at all means it never ran.

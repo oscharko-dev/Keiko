@@ -44,7 +44,7 @@ const CONTAINER_RUNTIME_SIGNS = {
     "podmanOnPath",
     "otherClientOnPath",
     "dockerHostConfigured",
-    "dockerServiceInstalled",
+    "containerServiceInstalled",
     "runtimePipePresent",
     "applicationPresent",
   ],
@@ -221,9 +221,14 @@ const CASE_RULES = [
 
 // The case rules (skipped for a machine on which no case was run) and the body-free scan.
 function resultFailures(evidence, preconditionsOnly) {
+  // A machine-only check never passes over a file that carries cases: that is a full-suite file.
+  const noCases =
+    evidence.cases === undefined || (Array.isArray(evidence.cases) && evidence.cases.length === 0);
+  const withCases = preconditionsOnly && !noCases;
   const caseRules = preconditionsOnly ? [] : CASE_RULES;
   const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
   return [
+    ...(withCases ? ["preconditions-only-with-cases"] : []),
     ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
     ...bodyFree.map((pointer) => `body-free:${pointer}`),
   ];

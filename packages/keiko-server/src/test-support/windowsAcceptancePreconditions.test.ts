@@ -41,18 +41,17 @@ const registryListing = (...names: readonly string[]): ScResult => ({
   stdout: ["", REGISTRY_ROOT, ...names.map((name) => `${REGISTRY_ROOT}\\${name}`), ""].join("\r\n"),
 });
 const EMPTY_LISTING: ScResult = registryListing("Spooler", "BFE", "Dhcp");
-/** What the SCM answers to a standard user under a batch or network logon: it cannot enumerate. */
-const ENUMERATION_DENIED: ScResult = { status: 5, stdout: "[SC] OpenSCManager FAILED 5:" };
+const SERVICES_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
 
 interface SeamOverrides {
   readonly env?: Record<string, string | undefined>;
   readonly present?: readonly string[];
+  /** Names in `\\.\pipe\`. */
+  readonly pipes?: readonly string[];
   readonly programs?: readonly string[];
   /** `null`: `whoami` could not run. */
   readonly groups?: string | null;
   readonly gateway?: ScResult;
-  /** The answer for `com.docker.service`. */
-  readonly dockerService?: ScResult;
   /** The registry listing of the service keys. */
   readonly listing?: ScResult;
   /** `where.exe` could not run. */
@@ -66,16 +65,19 @@ function seams(overrides: SeamOverrides = {}): WindowsProbeSeams {
       LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
     },
     exists: (path) => (overrides.present ?? []).includes(path),
+    pipes: () => overrides.pipes ?? [],
     onPath: (program) =>
       overrides.whereUnrunnable === true ? undefined : (overrides.programs ?? []).includes(program),
     whoamiGroups: () =>
       overrides.groups === null ? undefined : (overrides.groups ?? STANDARD_GROUPS),
-    reg: () => overrides.listing ?? EMPTY_LISTING,
+    // The seams assert their exact arguments: the one registry key, and the one gateway service.
+    reg: (args): ScResult => {
+      expect(args).toEqual(["query", SERVICES_KEY]);
+      return overrides.listing ?? EMPTY_LISTING;
+    },
     sc: (args): ScResult => {
-      if (args.length !== 2) return ENUMERATION_DENIED;
-      return args[1] === "com.docker.service"
-        ? (overrides.dockerService ?? NO_SERVICES)
-        : (overrides.gateway ?? NO_SERVICES);
+      expect(args).toEqual(["query", "KeikoRuntimeGateway"]);
+      return overrides.gateway ?? NO_SERVICES;
     },
   };
 }
@@ -128,6 +130,10 @@ describe("keikoRegistryServiceNames", () => {
 });
 
 describe("probeWindowsPreconditions", () => {
+  // Also the red-before-fix case of the batch-logon defect: the SCM refuses enumeration to a
+  // standard user under a batch or network logon, so the seams accept no `sc` call other than the
+  // gateway query and no `reg` call other than the one registry key, and this passes only when the
+  // probe never enumerates through the SCM.
   it("certifies a clean standard user", () => {
     const facts = probeWindowsPreconditions(seams());
     expect(facts.userClass).toBe("standard");
@@ -136,7 +142,7 @@ describe("probeWindowsPreconditions", () => {
       podmanOnPath: false,
       otherClientOnPath: false,
       dockerHostConfigured: false,
-      dockerServiceInstalled: false,
+      containerServiceInstalled: false,
       runtimePipePresent: false,
       applicationPresent: false,
     });
@@ -155,8 +161,8 @@ describe("probeWindowsPreconditions", () => {
     ["podman on PATH", { programs: ["podman"] }],
     ["DOCKER_HOST", { env: { DOCKER_HOST: "npipe:////./pipe/x" } }],
     ["CONTAINER_HOST", { env: { CONTAINER_HOST: "ssh://x" } }],
-    ["the docker engine pipe", { present: ["\\\\.\\pipe\\docker_engine"] }],
-    ["the podman machine pipe", { present: ["\\\\.\\pipe\\podman-machine-default"] }],
+    ["the docker engine pipe", { pipes: ["docker_engine"] }],
+    ["the podman machine pipe", { pipes: ["Podman-Machine-Default"] }],
     ["Docker Desktop's folder", { present: ["C:\\Program Files\\Docker"] }],
     [
       "Podman Desktop under the user's programs",
@@ -166,7 +172,9 @@ describe("probeWindowsPreconditions", () => {
       "the per-user podman-desktop folder",
       { present: ["C:\\Users\\u\\AppData\\Local\\Programs\\podman-desktop"] },
     ],
-    ["the Docker Desktop service", { dockerService: { status: 0, stdout: "" } }],
+    ["the Docker Desktop service", { listing: registryListing("Com.Docker.Service") }],
+    ["the Docker Engine service", { listing: registryListing("Docker") }],
+    ["the containerd service", { listing: registryListing("containerd") }],
   ] satisfies readonly (readonly [string, SeamOverrides])[])(
     "names a container runtime alone: %s",
     (_sign, overrides) => {
@@ -188,10 +196,9 @@ describe("probeWindowsPreconditions", () => {
     expect(facts.services).toEqual({ keikoGatewayServiceInstalled: false, keikoServiceCount: 1 });
   });
 
-  it("certifies a clean machine whose SCM refuses enumeration to a batch logon (regression)", () => {
-    const facts = probeWindowsPreconditions(seams());
-    expect(facts.services).toEqual({ keikoGatewayServiceInstalled: false, keikoServiceCount: 0 });
-    expect(facts.unmetPreconditions).toEqual([]);
+  it("does not read a name that only contains or extends a container service name", () => {
+    const listing = registryListing("dockerd-helper", "MyDocker", "containerd-shim");
+    expect(probeWindowsPreconditions(seams({ listing })).unmetPreconditions).toEqual([]);
   });
 
   it("names every failed precondition, not only the first", () => {
@@ -223,17 +230,21 @@ describe("probeWindowsPreconditions", () => {
     expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
   });
 
-  it("fails closed as its own code when the Docker Desktop service query cannot answer", () => {
-    const facts = probeWindowsPreconditions(seams({ dockerService: { status: null, stdout: "" } }));
-    expect(facts.containerRuntime).toEqual({});
-    expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
+  it("fails closed in both probes when the registry listing cannot be read", () => {
+    for (const status of [1, null]) {
+      const facts = probeWindowsPreconditions(seams({ listing: { status, stdout: "" } }));
+      expect(facts.containerRuntime).toEqual({});
+      expect(facts.services).toBeUndefined();
+      expect(facts.unmetPreconditions).toEqual([
+        "container-runtime-probe-failed",
+        "service-probe-failed",
+      ]);
+    }
   });
 
   it.each([
     ["a gateway query that cannot run", { gateway: { status: null, stdout: "" } }],
     ["an unexpected gateway query status", { gateway: { status: 5, stdout: "" } }],
-    ["a listing that fails", { listing: { status: 1, stdout: "" } }],
-    ["a listing that cannot run", { listing: { status: null, stdout: "" } }],
   ] satisfies readonly (readonly [string, SeamOverrides])[])(
     "fails closed as its own code for %s",
     (_name, overrides) => {
@@ -284,7 +295,7 @@ const CODE_CASES = [
     ["container-runtime-present", "container-runtime-probe-failed"],
   ],
   ["service-installed", { gateway: { status: 0, stdout: "" } }, ["service-installed"]],
-  ["service-probe-failed", { listing: { status: null, stdout: "" } }, ["service-probe-failed"]],
+  ["service-probe-failed", { gateway: { status: null, stdout: "" } }, ["service-probe-failed"]],
 ] satisfies readonly (readonly [string, SeamOverrides, readonly string[]])[];
 
 describe("probe output through the production evidence builder and checker", () => {
