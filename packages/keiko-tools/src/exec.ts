@@ -1197,16 +1197,11 @@ function windowsStepInvocation(
   });
 }
 
-// The two questions the step Node.js plan asks of the file system (#4492). A path that cannot be
-// read is an ordinary condition for the plan, not a failure: it falls back to the install's `.cmd`.
+// The two questions the step Node.js plan asks of the file system (#4492). A script that is not
+// there is an ordinary condition for the plan: it falls back to the install's `.cmd`. Any other
+// failure to stat it surfaces as the step's own launch error instead of being read as "absent".
 const nodeWindowsStepNodeProbe: WindowsStepNodeProbe = {
-  isFile: (path) => {
-    try {
-      return statSync(path).isFile();
-    } catch {
-      return false;
-    }
-  },
+  isFile: (path) => statSync(path, { throwIfNoEntry: false })?.isFile() === true,
   realPath: realWindowsSearchPathEntry,
 };
 

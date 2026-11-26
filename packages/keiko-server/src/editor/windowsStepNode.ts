@@ -6,8 +6,7 @@
 // verified one a step runs exactly as it did before, and the log says so. Closed values only: never
 // a path.
 
-import { createHash } from "node:crypto";
-import { closeSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   activityLogEvent,
@@ -18,6 +17,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { NPM_LANE_RUNTIME_APPROVALS } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import type { NpmLaneStepNodeApproval } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { sha256FileSync } from "../file-sha256.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 
 const WINDOWS_STEP_NODE_OPERATION = defineActivityLogOperation({
@@ -81,25 +81,6 @@ export function windowsStepNodePin(): NpmLaneStepNodeApproval | undefined {
   return NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode;
 }
 
-const READ_CHUNK_BYTES = 4 * 1024 * 1024;
-
-// The digest of a large file without holding it in memory.
-function sha256OfFile(path: string): string {
-  const hash = createHash("sha256");
-  const buffer = Buffer.alloc(READ_CHUNK_BYTES);
-  const descriptor = openSync(path, "r");
-  try {
-    for (;;) {
-      const read = readSync(descriptor, buffer, 0, buffer.length, null);
-      if (read === 0) break;
-      hash.update(buffer.subarray(0, read));
-    }
-  } finally {
-    closeSync(descriptor);
-  }
-  return hash.digest("hex");
-}
-
 function isOrdinaryFile(path: string, sizeBytes: number): boolean {
   const entry = lstatSync(path, { throwIfNoEntry: false });
   return (
@@ -133,7 +114,7 @@ export function resolveStepNode(input: {
       input.isDirectory(directory) &&
       readdirSync(directory).length === 1 &&
       isOrdinaryFile(executable, pin.sizeBytes) &&
-      sha256OfFile(executable) === pin.sha256;
+      sha256FileSync(executable) === pin.sha256;
     return exact ? { outcome: "patched", directory, executable } : { outcome: "mismatch" };
   } catch (error) {
     emitServerDiagnostic(
