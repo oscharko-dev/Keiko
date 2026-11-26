@@ -94,10 +94,13 @@ const HELPER_WINDOWS_X64 = {
   helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
 } as const;
 
+// CI run 45790698055 of windows-gateway-confinement.yml (artifact relay-runtime-supervisor-windows-x64)
+// on 75d78002a: the step-mode supervisor whose step ends with its root (#4496). Run 45773380160 built
+// the same source into the same bytes.
 const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
-  sha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+  sha256: "88dfffdcf4c9b3a2123109e9fb60a18a9e0e051988d84572b3f50b772057802b",
   sizeBytes: 255_488,
-  sourceTreeSha256: "57054c1e9614341b41b66146c4f2ba08b13bff0979f1db920c6d17e29f57060b",
+  sourceTreeSha256: "02e4e49bcfc95adfaf751048e072c067530397c1326350c136f5de6a4dc66b2d",
 });
 
 // CI run 45777530612 of windows-step-node.yml (artifact keiko-step-node-windows-x64-26.13.1-libuv-5181).

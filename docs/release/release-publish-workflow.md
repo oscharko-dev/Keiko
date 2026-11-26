@@ -343,9 +343,10 @@ carries exactly the Windows helper and supervisor of the portable release. The s
 `8699612e…` (128,512 bytes) is the helper the 1.5.4 release build shipped at `d88ac1cb8…` (runner
 image `windows-2025-vs2026` 20261116, `/Brepro`). The supervisor was first built by the
 `relay-confinement` job of `windows-gateway-confinement.yml` (#4068); its step mode (#4496) changed
-its source, and so did its profile sweep and session check (#4495): the pin `d45a4d8d…` (255,488
-bytes, source tree `57054c1e…`) is the byte set the `portable-assets.yml` evaluation build compiled
-at `939da9f07`. A Windows runtime package that
+its source, and so did its profile sweep and session check (#4495) and the step that ends with its
+root (#4496): the pin `88dfffdc…` (255,488 bytes, source tree `02e4e49b…`) is the byte set the
+`relay-confinement` job compiled at `75d78002a` (run 45790698055) and again, byte for byte, at
+`a8a47112a` (run 45773380160). A Windows runtime package that
 carries it must be published before an npm installation can use it. `npmLaneRuntimeApprovals.ts`
 pins the npm lane and the desktop package to those bytes, and `npmLaneRuntimeApprovals.test.ts`
 fails when the npm and portable Windows pins diverge.
