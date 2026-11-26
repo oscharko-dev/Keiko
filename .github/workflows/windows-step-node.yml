@@ -76,9 +76,11 @@ jobs:
             throw "the patch did not reach deps/uv/src/win/pipe.c"
           }
       - name: Build node.exe (vcbuild release x64)
-        shell: cmd
+        shell: pwsh
         working-directory: C:\n
-        run: vcbuild.bat release x64 nonpm no-cctest openssl-no-asm
+        run: |
+          & .\vcbuild.bat release x64 nonpm no-cctest openssl-no-asm
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Collect the binary, its digest and the build receipt
         shell: pwsh
         run: |
