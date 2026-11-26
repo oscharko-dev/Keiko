@@ -8,10 +8,10 @@ name: Windows step Node.js build
 # libuv 1.53.0 fixes it and no Node.js release carries 1.53 yet (nodejs/node#66282).
 #
 # Only node.exe is used by a step, so the npm bundle is not built (`nonpm`: it is JavaScript beside
-# the binary, never part of it, and the C++ test binaries are skipped). OpenSSL is built without assembly so
-# the build needs no NASM; a second, link-only patch adds synchronization.lib for the runner's Rust
-# standard library; ICU stays Node's default full-ICU build. The artifact is not wired into
-# the product launch path by this workflow.
+# the binary, never part of it) and the C++ test binaries are skipped. OpenSSL is built without
+# assembly so the build needs no NASM; a second, link-only patch adds synchronization.lib for the
+# runner's Rust standard library; ICU stays Node's default full-ICU build. The artifact is not wired
+# into the product launch path by this workflow.
 
 on:
   push:
@@ -51,11 +51,6 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Record the official Node.js used as the stock control
-        run: |
-          $stock = (Get-Command node).Source
-          "STOCK_NODE=$stock" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $stock -p "process.versions.uv"
       - name: Fetch and verify the official source tarball
         run: |
           New-Item -ItemType Directory -Force -Path C:\n-dl | Out-Null
@@ -84,14 +79,6 @@ jobs:
         shell: cmd
         working-directory: C:\n
         run: vcbuild.bat release x64 nonpm no-cctest openssl-no-asm
-      - name: Canary on the runner
-        run: |
-          $exe = "C:\n\out\Release\node.exe"
-          $uv = & $exe -p "process.versions.uv"
-          if ($uv -ne "1.52.1-keiko.5181") { throw "unexpected libuv version: $uv" }
-          & $exe -p "process.version"
-          & $exe -e "const r=require('node:child_process').spawnSync(process.execPath,['-e','process.stdout.write(`ok`)'],{encoding:'utf8',timeout:60000}); if(r.stdout!=='ok') process.exit(1)"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Collect the binary, its digest and the build receipt
         shell: pwsh
         run: |
@@ -111,13 +98,6 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Get-Content step-node-out\build-receipt.json
           (Get-Item step-node-out\node.exe).Length
-      - name: Build the runtime supervisor as the release does
-        run: |
-          New-Item -ItemType Directory -Force -Path relay-out | Out-Null
-          node scripts/build-runtime-supervisor.mjs windows-x64 "$PWD\relay-out\keiko-runtime-supervisor.exe"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Prove the binary inside the supervisor's AppContainer
-        run: node scripts/testing/test-windows-step-node.mjs --helper relay-out/keiko-runtime-supervisor.exe --node step-node-out/node.exe --stock-node "$env:STOCK_NODE"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: keiko-step-node-windows-x64-26.13.1-libuv-5181
@@ -127,3 +107,49 @@ jobs:
             step-node-out/build-receipt.json
           if-no-files-found: error
           retention-days: 30
+
+  # A separate job so a failing proof reruns without rebuilding Node.js (about an hour).
+  verify:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Record the official Node.js used as the stock control
+        run: |
+          $stock = (Get-Command node).Source
+          "STOCK_NODE=$stock" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $stock -p "process.versions.uv"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: keiko-step-node-windows-x64-26.13.1-libuv-5181
+          path: step-node-out
+      - name: Verify the digest and run the canary on the runner
+        run: |
+          $expected = (Get-Content step-node-out\node.exe.sha256).Split(" ")[0]
+          $actual = (Get-FileHash -Algorithm SHA256 step-node-out\node.exe).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "node.exe digest mismatch: $actual" }
+          @'
+          const { spawnSync } = require("node:child_process");
+          const r = spawnSync(process.execPath, ["-e", "process.stdout.write('ok')"], { encoding: "utf8", timeout: 60000 });
+          if (r.stdout !== "ok") process.exit(1);
+          if (process.versions.uv !== "1.52.1-keiko.5181") process.exit(2);
+          console.log("canary ok", process.version, process.versions.uv);
+          '@ | Set-Content -Path step-node-out\canary.js
+          & step-node-out\node.exe step-node-out\canary.js
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build the runtime supervisor as the release does
+        run: |
+          New-Item -ItemType Directory -Force -Path relay-out | Out-Null
+          node scripts/build-runtime-supervisor.mjs windows-x64 "$PWD\relay-out\keiko-runtime-supervisor.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prove the binary inside the supervisor's AppContainer
+        run: node scripts/testing/test-windows-step-node.mjs --helper relay-out/keiko-runtime-supervisor.exe --node step-node-out/node.exe --stock-node "$env:STOCK_NODE"
