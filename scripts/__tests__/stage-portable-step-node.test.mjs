@@ -552,6 +552,9 @@ describe("the tool-set shape and the signing inventory", () => {
     ["an unknown second tool", [{ name: "ripgrep" }, { name: "other" }], false],
     ["three tools", [{ name: "ripgrep" }, { name: "step-node" }, { name: "step-node" }], false],
     ["a non-array", { name: "ripgrep" }, false],
+    ["an unknown tool alone", [{ name: "other" }], false],
+    ["an unknown first tool", [{ name: "other" }, { name: "step-node" }], false],
+    ["an unnamed first tool", [{}], false],
   ])("accepts %s: %s", (_label, tools, expected) => {
     expect(nativeToolSetIsValid(tools)).toBe(expected);
   });

@@ -35,6 +35,7 @@ export { CODING_RUNTIME_RELEASES_FILE } from "./coding-runtime-releases.mjs";
 /** The one portable target that carries a step Node.js; every other target is unchanged. */
 const STEP_NODE_PLATFORM_TARGET = "windows-x64";
 export const STEP_NODE_TOOL_NAME = "step-node";
+const RIPGREP_TOOL_NAME = "ripgrep";
 export const STEP_NODE_PORTABLE_EXECUTABLE_PATH = "runtime/step-node/node.exe";
 export const STEP_NODE_PORTABLE_LICENSE_PATH = "runtime/licenses/node-step/LICENSE";
 /** Official Node.js 26.13.1 plus libuv#5181 (libuv 1.52.1-keiko.5181). */
@@ -91,13 +92,22 @@ export function isStepNodeExecutablePath(relativePath) {
 }
 
 /**
- * The shape of a manifest's tool set: ripgrep alone, or ripgrep followed by the step Node.js. Every
- * consumer that used to demand exactly one tool asks this instead, so a stray entry stays refused.
+ * The positions of a manifest's tool set: one or two entries, the step Node.js never first and
+ * always second when there are two. The manifest validator asks only this, then reports what is
+ * wrong with each entry on its own.
  */
-export function nativeToolSetIsValid(tools) {
+export function nativeToolSetShapeIsValid(tools) {
   if (!Array.isArray(tools) || tools.length === 0 || tools.length > 2) return false;
   if (tools[0]?.name === STEP_NODE_TOOL_NAME) return false;
   return tools.length === 1 || tools[1]?.name === STEP_NODE_TOOL_NAME;
+}
+
+/**
+ * A manifest's tool set: ripgrep alone, or ripgrep followed by the step Node.js. Every consumer
+ * that used to demand exactly one tool asks this instead, so a stray or unknown entry stays refused.
+ */
+export function nativeToolSetIsValid(tools) {
+  return nativeToolSetShapeIsValid(tools) && tools[0]?.name === RIPGREP_TOOL_NAME;
 }
 
 /** The ripgrep entry of a valid tool set, which is always the first. */

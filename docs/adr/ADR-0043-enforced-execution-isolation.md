@@ -1390,7 +1390,9 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     (the provenance of the pin), pinned by digest, size, source digest and patch digests in
     `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build, by the package
     inspection (the folder may hold exactly that one file) and at every launch; the server hashes
-    it once per (path, size, modification time, inode) for its lifetime. The server offers it only when the folder is a real folder that holds exactly the
+    it on every resolution, because the folder's owner can restore every timestamp after a rewrite,
+    so no metadata match proves the bytes (an owner-controlled swap after that check stays possible,
+    as for every file the owner can write). The server offers it only when the folder is a real folder that holds exactly the
     pinned file (`editor.verification.windows-step-supervisor` field `stepNode`: `patched`, `absent`
     or `mismatch`); the step then reads and executes that folder, finds it first on its `PATH`
     through its drive letter (so every `node` resolved through the search path, including the bare

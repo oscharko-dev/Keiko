@@ -13,7 +13,7 @@ import {
 } from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { sha256 } from "./lib/digest.mjs";
 import {
-  nativeToolSetIsValid,
+  nativeToolSetShapeIsValid,
   STEP_NODE_LICENSE_SHA256,
   STEP_NODE_PORTABLE_EXECUTABLE_PATH,
   STEP_NODE_PORTABLE_LICENSE_PATH,
@@ -1025,7 +1025,7 @@ function validateNativeTools(manifest, failures, options) {
 
 function validateNativeToolSet(tools, target, failures, options) {
   const allowsStepNode = stepNodeAppliesTo(target);
-  if (!nativeToolSetIsValid(tools) || (tools.length === 2 && !allowsStepNode)) {
+  if (!nativeToolSetShapeIsValid(tools) || (tools.length === 2 && !allowsStepNode)) {
     push(failures, "nativeTools", "must contain exactly one tool when present");
     return;
   }
