@@ -1366,8 +1366,9 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     cannot hide an overlap; a folder whose real path cannot be resolved is no folder. The named
     homes are judged once per resolution and once per real folder (refusals are counted on the
     supervisor line by reason, `readRootRefusedDriveRootCount`, `readRootRefusedM2Count`,
-    `readRootRefusedCredentialCount`, `readRootRefusedUnlistableCount`), and the executable's own
-    folder again for each step, unless it lies in the execution root. A folder that is no drive path
+    `readRootRefusedCredentialCount`, `readRootRefusedUnlistableCount`); before each step the admitted
+    homes are admitted again, so a credential-named entry added to one later refuses the step, and so
+    is the executable's own folder, unless it lies in the execution root. A folder that is no drive path
     (UNC, `\\?\`) is left out when a named home names it and refused when it is a step's own
     toolchain folder, and every step is refused on a host whose profile folder is unknown
     (`profileKnown`). A folder inside the execution root or inside another grant adds no grant.

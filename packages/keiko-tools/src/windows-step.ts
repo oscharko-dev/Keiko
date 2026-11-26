@@ -167,6 +167,22 @@ function admittedToolchain(
   return admitted;
 }
 
+// The named toolchain homes were admitted when the supervisor was resolved; each is admitted again
+// before every step, so a credential-named entry added to one later refuses the step instead of
+// reaching it (#4496). The Maven repository is the launcher's explicit exception and is not a home.
+function readmittedHomes(supervisor: WindowsStepSupervisor, command: string): readonly string[] {
+  return supervisor.readRoots.map((home) => {
+    const admitted = supervisor.admitReadRoot(home);
+    if (admitted === undefined) {
+      throw new CommandDeniedError(
+        "a toolchain home granted to this run is no longer admitted: it is a whole drive, holds or sits in the Maven user folder or a credential store, holds a credential-named entry or cannot be read",
+        command,
+      );
+    }
+    return admitted;
+  });
+}
+
 export function windowsStepLaunch(
   invocation: {
     readonly command: string;
@@ -179,7 +195,10 @@ export function windowsStepLaunch(
   command: string,
   stepNodeDirectory?: string,
 ): WindowsStepLaunch {
-  const readRoots = windowsStepReadRoots(executable, executionRoot, supervisor);
+  const readRoots = windowsStepReadRoots(executable, executionRoot, {
+    ...supervisor,
+    readRoots: readmittedHomes(supervisor, command),
+  });
   return {
     image: invocation.command,
     args: invocation.windowsVerbatimArguments

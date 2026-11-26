@@ -261,10 +261,18 @@ describe("windowsStepReadRoots", () => {
     mkdirSync(maven);
     const file = join(jdk, "release");
     writeFileSync(file, "");
+    // A known profile that holds neither home; the homes are named by their real paths.
+    const profile = temporary("keiko-step-profile-");
+    const real = (path: string): string => realpathSync.native(path);
     // Absolute Windows paths only: on this host a POSIX path is not one, so nothing is named.
     expect(
-      windowsStepReadRoots({ JAVA_HOME: jdk, MAVEN_HOME: maven, M2_HOME: file }).roots,
-    ).toEqual(process.platform === "win32" ? [jdk, maven] : []);
+      windowsStepReadRoots({
+        JAVA_HOME: jdk,
+        MAVEN_HOME: maven,
+        M2_HOME: file,
+        USERPROFILE: profile,
+      }).roots,
+    ).toEqual(process.platform === "win32" ? [real(jdk), real(maven)] : []);
     expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" }).roots).toEqual([]);
   });
 

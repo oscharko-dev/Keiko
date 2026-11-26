@@ -440,8 +440,9 @@ export interface WindowsStepSupervisor {
    */
   readonly profile: string | undefined;
   /**
-   * The real path of the step executable's own toolchain folder, or `undefined` when that folder
-   * holds or sits in the profile's `.m2`, holds a credential-named entry, cannot be listed or is no
+   * The real path of a toolchain folder (the step executable's own, and each of `readRoots` again
+   * before every step), or `undefined` when that folder is a drive root, holds or sits in the
+   * profile's `.m2` or a credential store, holds a credential-named entry, cannot be listed or is no
    * drive path (#4496). The step is then refused.
    */
   readonly admitReadRoot: (directory: string) => string | undefined;

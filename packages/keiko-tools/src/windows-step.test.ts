@@ -558,6 +558,7 @@ interface HarnessOptions {
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"];
   readonly windowsStepNodeProbe?: RunCommandDeps["windowsStepNodeProbe"];
   readonly admitReadRoot?: WindowsStepSupervisor["admitReadRoot"];
+  readonly readRoots?: readonly string[];
   /** The supervisor's real profile folder; `null` for a host whose profile is unknown. */
   readonly profile?: string | null;
 }
@@ -586,7 +587,7 @@ function harness(options: HarnessOptions = {}): Harness {
         },
       };
     },
-    readRoots: [],
+    readRoots: options.readRoots ?? [],
     profile: options.profile === null ? undefined : (options.profile ?? String.raw`C:\Users\dev`),
     admitReadRoot: options.admitReadRoot ?? ((directory): string => directory),
     ...(options.stepNode === undefined ? {} : { stepNode: options.stepNode }),
@@ -833,6 +834,33 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     expect(
       windowsExecutionRoot({ ...fs, realPath: () => String.raw`C:\real\repo` }, "x", "node"),
     ).toBe(String.raw`C:\real\repo`);
+  });
+
+  it("admits each named home again before every step, and refuses the step when one changed", async () => {
+    const jdk = String.raw`C:\tools\jdk`;
+    const admitted: string[] = [];
+    let jdkChanged = false;
+    const h = harness({
+      readRoots: [jdk],
+      admitReadRoot: (directory) => {
+        admitted.push(directory);
+        return directory === jdk && jdkChanged ? undefined : directory;
+      },
+    });
+    const run = runCommand(input(new AbortController().signal), h.deps);
+    await settled();
+    expect(admitted).toContain(jdk);
+    expect(h.acquired.at(-1)).toContain(jdk);
+    answers(h.child).write(Buffer.concat([LAUNCHED, reaped(0)]));
+    await settled();
+    h.child.emit("close", 0, null);
+    expect((await run).exitCode).toBe(0);
+    jdkChanged = true;
+    const launches = h.acquired.length;
+    await expect(runCommand(input(new AbortController().signal), h.deps)).rejects.toThrow(
+      /toolchain home granted to this run is no longer admitted/u,
+    );
+    expect(h.acquired).toHaveLength(launches);
   });
 
   it("refuses every step on a host whose profile folder is unknown, before any launch", async () => {
