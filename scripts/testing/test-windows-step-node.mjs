@@ -204,7 +204,11 @@ function assertPatchedResult(outcome) {
   assert.equal(result.forkEcho, 1, "the IPC round trip answered");
   assert.equal(result.nodeTest.status, 0, "node --test over two files exits clean");
   assert.equal(result.nodeTest.passes, "2", "both test files ran");
-  assert.match(result.globalPipe, /^error:(EACCES|EPERM)$/u, "a global pipe is still refused");
+  assert.match(
+    result.globalPipe,
+    /^error:(EACCES|EPERM)$/u,
+    `a global pipe is still refused: ${JSON.stringify(result)}`,
+  );
   assert.equal(result.localPipe, "listening", "a LOCAL pipe is allowed (positive control)");
   return result;
 }
