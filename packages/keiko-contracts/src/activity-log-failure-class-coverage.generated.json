@@ -47765,6 +47765,12 @@
               "required": true
             },
             {
+              "name": "readRootRefusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "stepNode",
               "type": "string",
               "dataClass": "closed-enum",

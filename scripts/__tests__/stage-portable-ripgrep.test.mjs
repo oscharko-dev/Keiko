@@ -387,7 +387,7 @@ describe("portable ripgrep after platform signing", () => {
     const { manifest, stageRoot, tool } = signedFixture();
     manifest.nativeTools = [tool, tool];
     expect(() => rebindSignedPayload(stageRoot, manifest, "macos-arm64")).toThrow(
-      "ripgrep, optionally followed by the step Node.js",
+      "exactly one native tool",
     );
   });
 

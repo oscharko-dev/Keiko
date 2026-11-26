@@ -454,7 +454,7 @@ export function ripgrepActivationDigest(
   runtimeManifest: Readonly<RipgrepRuntimeManifest> = RIPGREP_RUNTIME_MANIFEST,
 ): string | undefined {
   const approval = ripgrepRuntimeApproval(target, runtimeManifest);
-  const tool = approval === undefined ? undefined : onlyActivationTool(activation);
+  const tool = approval === undefined ? undefined : onlyActivationTool(activation, target);
   if (approval === undefined || tool === undefined) return undefined;
   const bound =
     tool.name === "ripgrep" &&
@@ -471,11 +471,19 @@ export function ripgrepActivationDigest(
  */
 export const ACTIVATION_STEP_NODE_TOOL_NAME = "step-node";
 
-// Ripgrep, alone or followed by the step Node.js entry; any other set is refused.
-function onlyActivationTool(activation: unknown): Record<string, unknown> | undefined {
+// The only target whose payload carries the step Node.js companion (#4492, ADR-0043 D21).
+const STEP_NODE_TARGET = "win32-x64";
+
+// Ripgrep alone; on the Windows x64 target it may be followed by the step Node.js entry. Any other
+// set is refused, so every other target keeps its exactly-one-tool pin.
+function onlyActivationTool(
+  activation: unknown,
+  target: string,
+): Record<string, unknown> | undefined {
   if (!isRecord(activation)) return undefined;
   const tools: unknown = activation.nativeTools;
-  if (!Array.isArray(tools) || tools.length < 1 || tools.length > 2) return undefined;
+  const maxTools = target === STEP_NODE_TARGET ? 2 : 1;
+  if (!Array.isArray(tools) || tools.length < 1 || tools.length > maxTools) return undefined;
   const [tool, companion] = tools as readonly unknown[];
   const companionAllowed =
     companion === undefined ||

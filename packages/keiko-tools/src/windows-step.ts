@@ -57,6 +57,16 @@ function toolchainRoot(executable: string): string {
   return win32.basename(folder).toLowerCase() === "bin" ? win32.dirname(folder) : folder;
 }
 
+// `<profile>\.m2` holds the person's Maven settings and their credentials. A read root may hold
+// neither it nor anything inside it, except the repository folder the Maven launcher is given
+// explicitly (`windowsStepReadRoots`); `MAVEN_HOME\conf` is not under the profile and stays readable.
+function touchesMavenUserDirectory(root: string, profile: string | undefined): boolean {
+  if (profile === undefined || !win32.isAbsolute(profile)) return false;
+  const m2 = win32.join(profile, ".m2");
+  if (contains(root, m2)) return true;
+  return contains(m2, root) && !contains(win32.join(m2, "repository"), root);
+}
+
 /**
  * The tree's grants: the execution root for modification, and read access to the toolchain of
  * the step's executable and to the supervisor's read roots. A directory inside the execution root
@@ -83,6 +93,12 @@ export function windowsStepGrants(
       throw new CommandDeniedError("step read root is not absolute", command);
     if (holdsProfile(root)) {
       throw new CommandDeniedError("a step read root holds the whole user profile", command);
+    }
+    if (touchesMavenUserDirectory(root, profile)) {
+      throw new CommandDeniedError(
+        "a step read root holds or sits in the Maven user folder",
+        command,
+      );
     }
     if (grants.some((grant) => contains(grant.path, root))) continue;
     grants.push({ path: root, access: "read", principal: "tree" });
@@ -377,4 +393,28 @@ function decodeAnswer(kind: number, payload: Buffer): WindowsStepAnswer {
   }
   if (kind === 3 && payload.length === 2) return { kind: "refused", code: payload.readUInt16LE(0) };
   return { kind: "malformed" };
+}
+
+const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
+  [7, "a directory the step needs is missing or is a link"],
+  [
+    8,
+    "this account may not grant the step a directory it needs, such as a toolchain an " +
+      "administrator installed outside Program Files",
+  ],
+  [12, "the user environment could not be closed to the step"],
+  // The words a Coding run gives refusals 18 and 19 (supervisorRefusal.ts, #4495).
+  [
+    18,
+    "Keiko was not started in a signed-in desktop session, for example over a remote shell " +
+      "or as a service",
+  ],
+  [19, "the path of Keiko's folder is too long; move it to a shorter path"],
+]);
+
+/** The closed words for a supervisor refusal code, which never ran the step. */
+export function windowsStepRefusal(code: number): string {
+  const reason =
+    WINDOWS_STEP_REFUSALS.get(code) ?? `the supervisor refused the launch (${String(code)})`;
+  return `Windows execution isolation refused the step: ${reason}`;
 }

@@ -25,6 +25,7 @@ import {
   resolveWindowsStepSupervisor,
   windowsMavenRepository,
   windowsStepReadRoots,
+  type WindowsReadRootHost,
 } from "./windowsStepSupervisor.js";
 
 const roots: string[] = [];
@@ -116,6 +117,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       correlationId: "step-supervisor-proof",
       outcome: "available",
       readRootCount: 0,
+      readRootRefusedCount: 0,
       mavenRepository: false,
     });
     copy?.release();
@@ -253,10 +255,50 @@ describe("windowsStepReadRoots", () => {
     const file = join(jdk, "release");
     writeFileSync(file, "");
     // Absolute Windows paths only: on this host a POSIX path is not one, so nothing is named.
-    expect(windowsStepReadRoots({ JAVA_HOME: jdk, MAVEN_HOME: maven, M2_HOME: file })).toEqual(
-      process.platform === "win32" ? [jdk, maven] : [],
-    );
-    expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" })).toEqual([]);
+    expect(
+      windowsStepReadRoots({ JAVA_HOME: jdk, MAVEN_HOME: maven, M2_HOME: file }).roots,
+    ).toEqual(process.platform === "win32" ? [jdk, maven] : []);
+    expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" }).roots).toEqual([]);
+  });
+
+  describe("a home that reaches the profile's .m2 or a credential (#4496)", () => {
+    const profile = String.raw`C:\Users\dev`;
+    const host = (
+      entries: Readonly<Record<string, readonly string[]>> = {},
+    ): WindowsReadRootHost => ({
+      directoryOf: (value) => value,
+      entryNames: (directory) => entries[directory] ?? [],
+    });
+
+    it.each([
+      ["inside .m2", String.raw`C:\Users\dev\.m2\toolchain`],
+      ["inside .m2 in another case", String.raw`c:\USERS\Dev\.M2\jdk`],
+      [".m2 itself", String.raw`C:\Users\dev\.m2`],
+      ["the profile that holds .m2", profile],
+      ["a parent of the profile", String.raw`C:\Users`],
+    ])("drops a home that is %s and counts it", (_label, home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], refusedCount: 1 });
+    });
+
+    it("drops a home that holds a credential-named entry", () => {
+      const home = String.raw`C:\tools\jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: home, USERPROFILE: profile },
+        host({ [home]: ["bin", ".env"] }),
+      );
+      expect(result).toEqual({ roots: [], refusedCount: 1 });
+    });
+
+    it("keeps a home outside .m2, and Maven's own conf folder with it", () => {
+      const maven = String.raw`C:\tools\maven`;
+      const jdk = String.raw`C:\Users\dev\Programs\jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: jdk, MAVEN_HOME: maven, USERPROFILE: profile },
+        host({ [maven]: ["bin", "conf", "lib"] }),
+      );
+      expect(result).toEqual({ roots: [jdk, maven], refusedCount: 0 });
+    });
   });
 });
 

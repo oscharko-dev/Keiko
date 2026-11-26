@@ -852,6 +852,19 @@ describe("macOS portable signing inventory", () => {
     expect(component.hashes).toEqual([{ alg: "SHA-256", content: sha256(signed) }]);
   });
 
+  it("refuses a second native tool on a payload that is not the Windows x64 one (macOS)", () => {
+    const prepared = macFinalizeStage();
+    resetSidecarSbomForRebind(prepared);
+    const manifest = JSON.parse(readFileSync(prepared.manifestPath, "utf8"));
+    manifest.nativeTools = [
+      { name: "ripgrep", executablePath: "runtime/native/rg" },
+      { name: "step-node", executablePath: "runtime/step-node/node.exe" },
+    ];
+    expect(() => rebindSignedPayload(prepared.stage, manifest, "macos-arm64")).toThrow(
+      /exactly one native tool/u,
+    );
+  });
+
   it("rejects incomplete macOS inventory authority and unsupported dispatcher input", async () => {
     const fixture = macFinalizeStage();
     const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));

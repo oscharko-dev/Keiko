@@ -60,6 +60,7 @@ import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-
 import {
   windowsStepFrames,
   windowsStepLaunch,
+  windowsStepRefusal,
   windowsStepTerminateFrame,
   WindowsStepResponses,
   type WindowsStepLaunch,
@@ -1656,22 +1657,6 @@ function settledExitCode(ctx: ExecContext, code: number | null): number | null |
     );
   }
   return new Error("the Windows step supervisor ended without reporting the step's exit");
-}
-
-const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
-  [7, "a directory the step needs is missing or is a link"],
-  [
-    8,
-    "this account may not grant the step a directory it needs, such as a toolchain an " +
-      "administrator installed outside Program Files",
-  ],
-  [12, "the user environment could not be closed to the step"],
-]);
-
-function windowsStepRefusal(code: number): string {
-  const reason =
-    WINDOWS_STEP_REFUSALS.get(code) ?? `the supervisor refused the launch (${String(code)})`;
-  return `Windows execution isolation refused the step: ${reason}`;
 }
 
 function settleChildProcessError(

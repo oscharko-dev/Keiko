@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4cdbd6af33d5eb5c127f79a170e74b2eaf0f93f6e21f30a2cadbd1e5512e2963",
+    "catalogDigest": "93dc5531b80390696993ae5270f53dbb6577b78411e6bccb122b5c22ba0810e9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22499,8 +22499,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:82",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:257"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:85",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:307"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22531,6 +22531,11 @@
             "dataClass": "count",
             "required": true
           },
+          "readRootRefusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
           "mavenRepository": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -22549,8 +22554,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:45",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:297"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:46",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:347"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -114109,6 +114114,12 @@
                   "required": true
                 },
                 {
+                  "name": "readRootRefusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "stepNode",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -127813,19 +127824,19 @@
     {
       "op": "editor.verification.windows-step-refused",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:85",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:88",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:48",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:49",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor.copy-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:206",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:256",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

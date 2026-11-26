@@ -26,6 +26,7 @@ import {
   windowsStepFrames,
   windowsStepGrants,
   windowsStepReadRoots,
+  windowsStepRefusal,
   WindowsStepResponses,
   type WindowsStepLaunch,
 } from "./windows-step.js";
@@ -134,6 +135,22 @@ describe("windowsStepGrants", () => {
     expect(
       windowsStepGrants(root, String.raw`C:\Users\dev\Programs\node\node.exe`, [], "node", profile),
     ).toHaveLength(2);
+  });
+
+  it("refuses a read root that holds, is, or sits in the profile's .m2, bar its repository", () => {
+    const profile = String.raw`C:\Users\dev`;
+    const grant = (roots: readonly string[]): readonly unknown[] =>
+      windowsStepGrants(root, String.raw`C:\t\x.exe`, roots, "x", profile);
+    for (const refused of [
+      String.raw`C:\Users\dev\.m2`,
+      String.raw`c:\users\DEV\.M2\toolchains`,
+      String.raw`C:\Users\dev\.m2\conf`,
+    ]) {
+      expect(() => grant([refused])).toThrow(/Maven user folder/u);
+    }
+    expect(grant([String.raw`C:\Users\dev\.m2\repository`])).toHaveLength(3);
+    expect(grant([String.raw`C:\Users\dev\.m2\Repository\org`])).toHaveLength(3);
+    expect(grant([String.raw`C:\tools\maven`])).toHaveLength(3);
   });
 
   it("refuses a relative read root and more folders than one tree may be granted", () => {
@@ -864,5 +881,23 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
     );
     expect(h.spawned.every((call) => call.options.stdio === undefined)).toBe(true);
     expect(h.released()).toBe(0);
+  });
+});
+
+describe("windowsStepRefusal", () => {
+  it.each([
+    [7, /missing or is a link/u],
+    [12, /user environment could not be closed/u],
+    [18, /signed-in desktop session/u],
+    [19, /path of Keiko's folder is too long/u],
+  ])("words supervisor refusal %i in closed terms", (code, words) => {
+    expect(windowsStepRefusal(code)).toMatch(words);
+    expect(windowsStepRefusal(code)).not.toContain(`(${String(code)})`);
+  });
+
+  it("names only the code of a refusal it has no words for", () => {
+    expect(windowsStepRefusal(99)).toBe(
+      "Windows execution isolation refused the step: the supervisor refused the launch (99)",
+    );
   });
 });
