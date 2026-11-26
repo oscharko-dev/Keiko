@@ -2154,13 +2154,10 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         },
         { timeout: 120_000, interval: 200 },
       );
-      // The index journey edits code and runs no check, so a run that ends before the stop owes it;
-      // the probe journey edits nothing.
-      await stopRun(
-        pipeline.baseUrl,
-        runId,
-        mode === "index" ? SETTLED_UNVERIFIED_EDIT : SETTLED_CLEAN,
-      );
+      // Both journeys edit code and run no check: the index journey through its proposals, the
+      // probe journey by appending to src/example.ts before it reads the diff. A run that ends
+      // before the stop therefore owes the verification.
+      await stopRun(pipeline.baseUrl, runId, SETTLED_UNVERIFIED_EDIT);
       return { transcript: transcripts.join("\n"), workspace: fixture.workspace };
     }
 
