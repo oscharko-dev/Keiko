@@ -975,14 +975,32 @@ function pipelineSessionCookie(base: string): Promise<string> {
   return functionalSessionCookie(base, assertResponseMetadata);
 }
 
-async function stopRun(base: string, runId: string): Promise<void> {
+// How a run settles when its own end lands before the operator's stop. A run that changed code and
+// ran no check owes that check: it settles failed with `verification-not-evidenced` (#4491), never
+// succeeded, so a journey that edits code names that outcome exactly.
+interface SelfSettlement {
+  readonly state: "succeeded" | "failed";
+  readonly failureCode?: "verification-not-evidenced";
+}
+
+const SETTLED_CLEAN: SelfSettlement = { state: "succeeded" };
+const SETTLED_UNVERIFIED_EDIT: SelfSettlement = {
+  state: "failed",
+  failureCode: "verification-not-evidenced",
+};
+
+async function stopRun(
+  base: string,
+  runId: string,
+  selfSettled: SelfSettlement = SETTLED_CLEAN,
+): Promise<void> {
   const stopped = await post(base, `/api/coding-workbench/runtime/runs/${runId}/stop`, {
     requestId: runId,
   });
   expect(stopped.status).toBe(200);
-  // Under the causal-terminal contract the child's own stop completion may settle the run
-  // succeeded before the operator's stop lands. Both terminal outcomes are legitimate here;
-  // anything else (failed, still running, missing snapshot) stays a hard failure.
+  // Under the causal-terminal contract the child's own completion may settle the run before the
+  // operator's stop lands. Cancelled and the journey's own settlement are legitimate here; anything
+  // else (another failure, still running, missing snapshot) stays a hard failure.
   const body = (await stopped.json()) as { readonly runId?: string; readonly state?: string };
   if (body.state === "cancelled") {
     expect(body).toMatchObject({ runId, state: "cancelled" });
@@ -991,7 +1009,17 @@ async function stopRun(base: string, runId: string): Promise<void> {
   const settled = await fetch(`${base}/api/coding-workbench/runtime/runs/${runId}`);
   assertResponseMetadata(settled);
   expect(settled.status).toBe(200);
-  await expect(settled.json()).resolves.toMatchObject({ runId, state: "succeeded" });
+  const snapshot = (await settled.json()) as {
+    readonly runId?: string;
+    readonly state?: string;
+    readonly failureCode?: string;
+  };
+  // The failure code is part of the comparison, so a run that settled failed names why.
+  expect({
+    runId: snapshot.runId,
+    state: snapshot.state,
+    failureCode: snapshot.failureCode,
+  }).toEqual({ runId, state: selfSettled.state, failureCode: selfSettled.failureCode });
 }
 
 let questionPollSequence = 0;
@@ -2041,7 +2069,13 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         },
         { timeout: 120_000, interval: 200 },
       );
-      await stopRun(pipeline.baseUrl, runId);
+      // The index journey edits code and runs no check, so a run that ends before the stop owes it;
+      // the probe journey edits nothing.
+      await stopRun(
+        pipeline.baseUrl,
+        runId,
+        mode === "index" ? SETTLED_UNVERIFIED_EDIT : SETTLED_CLEAN,
+      );
       return { transcript: transcripts.join("\n"), workspace: fixture.workspace };
     }
 
@@ -2207,7 +2241,8 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           },
           { timeout: 180_000, interval: 200 },
         );
-        await stopRun(pipeline.baseUrl, runId);
+        // The journey edits code and runs no check, so a run that ends before the stop owes it.
+        await stopRun(pipeline.baseUrl, runId, SETTLED_UNVERIFIED_EDIT);
         const transcript = transcripts.join("\n");
         // The shell's `git checkout -b` was refused with the pointer to the governed tool.
         expect(transcript).toContain("Create and switch to a task branch with keiko_git_branch");
