@@ -103,10 +103,11 @@ const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.
   sourceTreeSha256: "02e4e49bcfc95adfaf751048e072c067530397c1326350c136f5de6a4dc66b2d",
 });
 
-// CI run 45777530612 of windows-step-node.yml (artifact keiko-step-node-windows-x64-26.13.1-libuv-5181).
+// CI run 45788444328 of windows-step-node.yml at 18449b133 (artifact
+// keiko-step-node-windows-x64-26.13.1-libuv-5181, libuv 1.52.1-keiko.5181).
 // A newer build replaces it by re-pinning these constants and nothing else.
 const STEP_NODE_WINDOWS_X64_SHA256 =
-  "61547f93cc5f92870d7e67e8847c6b3da05d6978fb9d9713a0551ed358dd8fd7";
+  "761112aee049a108f38549439a720551fcaf0b850c85da2cc9a1e79277e9fc46";
 const STEP_NODE_WINDOWS_X64_SIZE_BYTES = 100_574_720;
 
 const STEP_NODE_WINDOWS_X64: NpmLaneStepNodeApproval = Object.freeze({

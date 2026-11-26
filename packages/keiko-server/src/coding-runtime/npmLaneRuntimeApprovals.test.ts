@@ -144,7 +144,7 @@ describe("npm-lane runtime approvals", () => {
   it("pins the patched Windows step Node.js for Windows only, with its source and patches", () => {
     const stepNode = NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode;
     expect(stepNode).toStrictEqual({
-      sha256: "61547f93cc5f92870d7e67e8847c6b3da05d6978fb9d9713a0551ed358dd8fd7",
+      sha256: "761112aee049a108f38549439a720551fcaf0b850c85da2cc9a1e79277e9fc46",
       sizeBytes: 100_574_720,
       sourceSha256: "60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e",
       patchSha256s: [
