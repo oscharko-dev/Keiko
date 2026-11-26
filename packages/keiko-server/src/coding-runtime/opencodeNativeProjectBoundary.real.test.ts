@@ -824,6 +824,12 @@ const SEARCH_CODE_MODE_PATHS = [
   "  for (const item of (await search(query)).items) paths.add(item.path);",
   "return JSON.stringify([...paths].sort());",
 ].join("\n");
+const SEARCH_WITHHELD_CODE_MODE_PATHS = [
+  "const paths = new Set();",
+  'for (const query of ["model", "generate", "image", "video", "directory", "cd", "machine", "computer"])',
+  "  for (const item of (await search(query)).items) paths.add(item.path);",
+  "return JSON.stringify([...paths].sort());",
+].join("\n");
 const ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE = ["read", "edit", "shell", "write"] as const;
 
 const REQUIRE_PROBE_MODULES = [
@@ -1353,6 +1359,34 @@ describe("pinned native OpenCode Code Mode semantics", () => {
         for (const ordinary of ORDINARY_TOOLS_ABSENT_FROM_CODE_MODE) {
           expect(catalog).not.toContain(`tools.${ordinary}(`);
           expect(found).not.toContain(`tools.${ordinary}`);
+        }
+      });
+    },
+    120_000,
+  );
+
+  // #4546: 2.4.2 moves image and video generation into Code Mode, where a program could reach
+  // them as `tools.generate_image`. Their plugins are withheld and their switches stated off, and
+  // the working-directory and machine tools stay out too: the program's own search finds none.
+  it.skipIf(skip)(
+    "catalogs no image or video generation, working-directory or machine tool in Code Mode",
+    async () => {
+      await withRun({}, async (run) => {
+        await driveTurn(run.service, run.sessionId, run.gateway, "Read the fixture file.");
+        const catalog = firstSystemPrompt(run.gateway);
+        const found = JSON.parse(
+          await scriptedTurn(
+            run,
+            executeCall(SEARCH_WITHHELD_CODE_MODE_PATHS),
+            "Search the tools.",
+          ),
+        ) as readonly string[];
+        // Positive control: the same search does find a management tool, so an empty answer is not
+        // a search that found nothing at all.
+        expect(found).toEqual(expect.arrayContaining(["tools.opencode.models"]));
+        for (const withheld of ["generate_image", "generate_video", "cd", "machine"]) {
+          expect(catalog).not.toContain(`tools.${withheld}`);
+          expect(found.filter((path) => path.includes(withheld))).toEqual([]);
         }
       });
     },

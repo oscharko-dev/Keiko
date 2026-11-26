@@ -3133,6 +3133,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - *Shell result text.* The shell output now ends with `Exit code: <n>` (2.2.5:
     `Exited with code <n>`); Keiko reads the status from the part's metadata, never from this text.
 
+- **OpenCode 2.4.2 (2026-11-26, #4546).** The pin moves from 2.4.1 to 2.4.2 with no migration and
+  no change to a model-visible tool schema. The new surfaces stay closed: the push-device and
+  push-session operations (an external push service) and the skill-file read have refused
+  dispositions, `experimental.compaction_jobs` and `experimental.mcp_skills` are stated `false` in
+  every profile, and the plugins `opencode.mcp.skill` and `opencode.tool.cd` are withheld. The new
+  `cd` tool, which moves a session's working directory and can name another computer, is never
+  registered: its `machines` switch is off and its plugin withheld, each proved sufficient alone by
+  a real-binary test. As with 2.4.1, `protocolSurfaceSha256` is the projection of the document the
+  binary serves, not of upstream's committed `openapi.json`.
+
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation
 with signed commits and bounded refs (ADR-0135, ADR-0087), evidence redaction (D7) and the one

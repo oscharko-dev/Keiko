@@ -97,7 +97,7 @@ describe(`OpenCode ${OPENCODE_PINNED_VERSION} producer inventory fixture`, () =>
   // Producer facts of the pinned version: an upgrade changes them together with the fixture.
   it("is the inventory of the pinned version and has not been truncated", () => {
     expect(CURRENT.version).toBe(OPENCODE_PINNED_VERSION);
-    expect(CURRENT.operations).toHaveLength(178);
+    expect(CURRENT.operations).toHaveLength(188);
     expect(CLI_COMMANDS).toHaveLength(44);
   });
 
@@ -607,7 +607,7 @@ function configurationNames(kind: OpenCodeConfigurationDisposition["kind"]): rea
 
 describe(`OpenCode ${OPENCODE_PINNED_VERSION} configuration dispositions fail closed`, () => {
   it("hold the complete, ordered setting inventory of the pinned version", () => {
-    expect(CONFIGURATION_PATHS).toHaveLength(277);
+    expect(CONFIGURATION_PATHS).toHaveLength(279);
     expect(duplicates(CONFIGURATION_PATHS)).toEqual([]);
     expect(CONFIGURATION_PATHS).toEqual([...CONFIGURATION_PATHS].sort());
   });
@@ -843,7 +843,7 @@ function pluginNames(kind: OpenCodePluginDisposition["kind"]): readonly string[]
 
 describe(`OpenCode ${OPENCODE_PINNED_VERSION} plugin dispositions fail closed`, () => {
   it("hold every built-in plugin of the pinned version, ordered", () => {
-    expect(PLUGINS).toHaveLength(100);
+    expect(PLUGINS).toHaveLength(102);
     expect(duplicates(PLUGINS)).toEqual([]);
     expect(PLUGINS).toEqual([...PLUGINS].sort());
   });

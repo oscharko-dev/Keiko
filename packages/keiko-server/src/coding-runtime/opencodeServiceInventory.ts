@@ -628,6 +628,29 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
       "experimental.machine.remove",
     ],
   ),
+  // #4546: 2.4.2 registers devices with the producer's push service and lets it notify them about
+  // sessions. Every operation reaches an external service and carries session identity, so none is
+  // admitted; the `push` plugin state stays unreachable because no Keiko surface calls these.
+  refused(
+    "leaves-machine",
+    4546,
+    ["S18"],
+    [
+      "experimental.push.device.register",
+      "experimental.push.device.remove",
+      "experimental.push.device.session.remove",
+      "experimental.push.device.session.set",
+      "experimental.push.device.update",
+      "experimental.push.get",
+      "experimental.push.session.remove",
+      "experimental.push.session.set",
+      "experimental.push.settings.set",
+    ],
+  ),
+  // #4546: serves a file of a skill's bundle by relative path, which includes the bundles an MCP
+  // server lists. Keiko admits skills only as sanitized copies (`GET /api/skill`, S15) and withholds
+  // the MCP skill plugin, so a raw bundle read has no owner and stays closed.
+  refused("experimental-unadmitted", 4546, ["T17"], ["experimental.skill.file"]),
   refused(
     "experimental-unadmitted",
     3900,
@@ -860,6 +883,10 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
   ),
   // #4546: stated closed, so a changed producer default cannot open one; the plugins are withheld.
   keikoSet(["C05"], ["experimental.all_flags"]),
+  // #4546: a background compaction summary nothing uses (stated off in every profile), and the
+  // skills of an MCP server, which Keiko does not admit (the plugin is withheld).
+  keikoSet(["S08"], ["experimental.compaction_jobs"]),
+  keikoSet(["C04"], ["experimental.mcp_skills"]),
   keikoSet(
     ["T21"],
     [
@@ -1351,6 +1378,13 @@ export const OPENCODE_PLUGIN_DISPOSITIONS = flatten<OpenCodePluginDisposition>([
   refused("experimental-unadmitted", 4546, ["S14"], ["opencode.tool.video-generate"]),
   refused("experimental-unadmitted", 4546, ["C04", "C09"], ["opencode.tools.mcp-events"]),
   refused("leaves-machine", 4546, ["S18"], ["opencode.tool.machine"]),
+  // #4546: `cd` moves a session's working directory, also onto another computer. Keiko binds a run
+  // to its workspace, so the tool stays withheld (and its `machines` switch stated off); the
+  // real-binary workspace proof shows no run offers it in any mode.
+  refused("keiko-owns-workspace-binding", 4546, ["S18"], ["opencode.tool.cd"]),
+  // #4546: lists and loads the skills of a connected MCP server (`experimental.mcp_skills`, stated
+  // off). Keiko admits skills only as sanitized copies, so remote skill text stays out of a run.
+  refused("experimental-unadmitted", 4546, ["C04", "T17"], ["opencode.mcp.skill"]),
   refused("keiko-owns-configuration", 4271, ["S11"], ["opencode.provider.claude-agent"]),
   refused(
     "leaves-machine",
