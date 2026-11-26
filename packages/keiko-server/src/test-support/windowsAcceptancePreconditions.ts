@@ -7,7 +7,7 @@
 // booleans and counts only: never a path, a user name, a SID or a service name of the person.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { win32 } from "node:path";
 
 import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
@@ -51,8 +51,11 @@ export interface ScResult {
 export interface WindowsProbeSeams {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly exists: (path: string) => boolean;
-  /** The names in `\\.\pipe\`, listed rather than opened, so no pipe server sees a client. */
-  readonly pipes: () => readonly string[];
+  /**
+   * The names in `\\.\pipe\`, listed rather than opened, so no pipe server sees a client;
+   * `undefined` when the listing could not be read.
+   */
+  readonly pipes: () => readonly string[] | undefined;
   /** Whether the program is on `PATH`; `undefined` when `where.exe` itself could not run. */
   readonly onPath: (program: string) => boolean | undefined;
   /** Output of `whoami /groups /fo csv`; `undefined` when it could not run. */
@@ -90,8 +93,8 @@ const TOOL_TIMEOUT_MS = 10_000;
 const KEIKO_SERVICE_PREFIX = "Keiko";
 /** `sc.exe` status for a service that does not exist (ERROR_SERVICE_DOES_NOT_EXIST). */
 const SC_SERVICE_DOES_NOT_EXIST = 1060;
-/** `\\.\pipe\`; a template literal cannot end in a backslash. */
-const PIPE_DIRECTORY = String.raw`\\.\pipe` + win32.sep;
+/** The folder of named pipes, listed with `cmd.exe /c dir /b`: no `catch`, no pipe opened. */
+const PIPE_DIRECTORY = String.raw`\\.\pipe`;
 const CONTAINER_PIPES = ["docker_engine", "podman-machine-default"];
 const CONTAINER_APPLICATION_FOLDERS = [
   "Docker",
@@ -161,8 +164,11 @@ export function windowsContainerRuntimeFacts(
   const clients = ["docker", "podman", "nerdctl", "colima", "limactl"].map((program) =>
     seams.onPath(program),
   );
-  if (clients.includes(undefined) || serviceNames === undefined) return undefined;
-  const pipes = new Set(seams.pipes().map((name) => name.toLowerCase()));
+  const pipeNames = seams.pipes();
+  if (clients.includes(undefined) || serviceNames === undefined || pipeNames === undefined) {
+    return undefined;
+  }
+  const pipes = new Set(pipeNames.map((name) => name.toLowerCase()));
   const [docker, podman, ...others] = clients;
   return {
     dockerOnPath: docker === true,
@@ -285,7 +291,16 @@ export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): Win
   return {
     env,
     exists: (path) => existsSync(path),
-    pipes: () => readdirSync(PIPE_DIRECTORY),
+    pipes: (): readonly string[] | undefined => {
+      const { status, stdout } = runSystemTool(env, "cmd.exe", [
+        "/d",
+        "/c",
+        "dir",
+        "/b",
+        PIPE_DIRECTORY,
+      ]);
+      return status === 0 ? stdout.split(/\r?\n/u).filter((name) => name !== "") : undefined;
+    },
     onPath: (program): boolean | undefined => {
       const { status } = runSystemTool(env, "where.exe", [program]);
       // `where.exe` answers 1 for a program that is not found; no status at all means it never ran.

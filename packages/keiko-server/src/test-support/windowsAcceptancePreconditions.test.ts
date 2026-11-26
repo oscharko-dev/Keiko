@@ -46,8 +46,8 @@ const SERVICES_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Services";
 interface SeamOverrides {
   readonly env?: Record<string, string | undefined>;
   readonly present?: readonly string[];
-  /** Names in `\\.\pipe\`. */
-  readonly pipes?: readonly string[];
+  /** Names in `\\.\pipe\`; `null`: the listing could not be read. */
+  readonly pipes?: readonly string[] | null;
   readonly programs?: readonly string[];
   /** `null`: `whoami` could not run. */
   readonly groups?: string | null;
@@ -65,7 +65,7 @@ function seams(overrides: SeamOverrides = {}): WindowsProbeSeams {
       LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
     },
     exists: (path) => (overrides.present ?? []).includes(path),
-    pipes: () => overrides.pipes ?? [],
+    pipes: () => (overrides.pipes === null ? undefined : (overrides.pipes ?? [])),
     onPath: (program) =>
       overrides.whereUnrunnable === true ? undefined : (overrides.programs ?? []).includes(program),
     whoamiGroups: () =>
@@ -226,6 +226,12 @@ describe("probeWindowsPreconditions", () => {
 
   it("fails closed as its own code when the container probe cannot run", () => {
     const facts = probeWindowsPreconditions(seams({ whereUnrunnable: true }));
+    expect(facts.containerRuntime).toEqual({});
+    expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
+  });
+
+  it("fails closed as its own code when the pipe listing cannot be read", () => {
+    const facts = probeWindowsPreconditions(seams({ pipes: null }));
     expect(facts.containerRuntime).toEqual({});
     expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
   });
