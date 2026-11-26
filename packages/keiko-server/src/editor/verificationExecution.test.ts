@@ -564,6 +564,8 @@ describe("planIsolationProbe (#4496)", () => {
       refused: () => 0,
     }),
     readRoots: [],
+    profile: String.raw`C:\Users\dev`,
+    admitReadRoot: (directory) => directory,
   };
 
   it("keeps a served Docker on Windows even when the supervisor is available", () => {

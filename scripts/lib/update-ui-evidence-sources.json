@@ -13,6 +13,7 @@
   "packages/keiko-ui/read-stylesheet.mjs",
   "packages/keiko-ui/next.config.mjs",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
+  "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.module.css",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
   "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",

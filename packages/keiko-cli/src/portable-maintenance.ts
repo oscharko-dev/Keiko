@@ -164,6 +164,11 @@ const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES: readonly string[] = [
   // coding-runtime owner (ripgrepRuntime.ts) by scripts/__tests__/stage-portable-ripgrep.test.mjs.
   "runtime/native/rg.exe",
   "runtime/licenses/ripgrep/LICENSE-MIT",
+  // The patched step Node.js of the Windows Coding Workbench and its MIT text (#4492). The paths
+  // are pinned to the producer (scripts/lib/portable-step-node.mjs) by
+  // scripts/__tests__/stage-portable-step-node.test.mjs.
+  "runtime/step-node/node.exe",
+  "runtime/licenses/node-step/LICENSE",
 ];
 const WINDOWS_GENERATION_PAYLOAD_PREFIXES: readonly string[] = [
   "app/dist/",

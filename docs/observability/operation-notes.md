@@ -740,6 +740,23 @@ of the run's retention bound, so a long chain of thought never pushes an answer 
 update's append-only `textDeltas` (at most 32 Ki characters each; a larger growth is read as pages)
 are never logged: they carry model text.
 
+A tool update the projection refuses (`event=dropped reason=projection-rejected
+rejection=tool-transition-refused`) names the transition it refused: `refusedFromState` (the call's
+state in the feed, `absent` when the call is not listed), `refusedToState` (the state the update
+asked for), `refusedSignalSource` (`opencode` for OpenCode's part update, `keiko` for Keiko's own
+settlement) and the call as `callIdSha256`. That tells an update the feed lost from a genuine
+regression without the call id or any tool content.
+
+`coding-repository-handler.settled` counts the hits a repository search left out after the scan:
+`staleHitsSkipped` for a file that no longer held the match, `misplacedHitsSkipped` for one that
+held it only outside the reported lines (or a hit without lines), `unreadableHitsSkipped` for one
+that could no longer be read. A `misplacedHitsSkipped` above zero on a file nobody changed is a
+defect in the scan. Such a hit is never shown and no longer fails the search: its other hits are
+returned with the `io-error` truncation reason. A path the workspace boundary refuses after the
+scan still fails the search (`scope-denied`). The projection reads, redacts and indexes each file
+once, however many hits it holds and however the ranked hits of several files interleave, and holds
+one file at a time.
+
 `coding-runtime.tool.failed` records one line per tool call that failed, under the run's id, also
 for a call the bounded feed had no room for; a call an explicit Stop or takeover cancelled is not a
 failure and writes no line (the `interrupted` event above counts those). The line carries the closed `failureOrigin` (`keiko-refused`, `command-failed`, `tool-error`, `timed-out`,
@@ -880,7 +897,8 @@ removed or failed to remove something, and a failed count is a diagnostic.
 reaped tree; `0xE04B0001` (3763011585) and `0xE04B0002` (3763011586) are the relay root's own
 failures (its routes could not be set up, the runtime could not be created). A refused start names
 its step on the `coding-runtime.exit` diagnostic, for example `supervisor-no-desktop` (started from
-an SSH or service session).
+an SSH or service session); the refusal words are one per supervisor error code and
+`nativeRuntimeProcessTree.refusal-codes.test.ts` fails when a code lacks its own.
 
 ## Coding Workbench request deadlines, Editor and window binding
 
@@ -929,6 +947,38 @@ still ending, a session gone while starting or an invalid target (409), an unava
 shutting-down service (503), and any other closed adapter failure (502). The response carries the
 same code and the request's correlation id; an unclassified error still reaches the top-level
 catch with its frames. Closed values, one count and one duration only.
+
+## Confined Windows verification steps and the step Node.js
+
+`editor.verification.windows-step-supervisor` records, once per resolution of a verification run's
+Windows step backend (#4496, #4492; ADR-0043 D21), the supervisor's closed `outcome`, the count of
+read roots, whether a Maven step may read the person's repository (`mavenRepository`) and, new with
+#4492, the runtime's patched Node.js as the closed `stepNode`: `patched` (the folder is a real
+folder that holds exactly the pinned `node.exe`), `absent` (the runtime carries none, this server
+has no pin, or there is no supervisor to find the runtime from) or `mismatch` (the folder, its
+contents or the bytes are not the pinned build; it is never offered). With `absent` or `mismatch`
+the steps run exactly as they did before, so a project that needs no Node.js is unaffected and the
+log names why a Node.js step may hang. A file that could not be read to verify it also answers
+`mismatch` and carries the diagnostic `editor.verification.windows-step-supervisor.step-node-unreadable`
+with a correlation id. `stepNodeMismatch` names the check a `mismatch` missed (`not-real-folder`,
+`extra-entries`, `not-ordinary-file`, `size`, `hash` or `unreadable`; `none` otherwise), so a log
+tells a stale package from a rewritten file. #4496 adds, as counts per reason and never as paths,
+the named toolchain homes left out, once per real folder however many homes name it (a home that
+is unset or does not resolve to a drive folder is not counted): `readRootRefusedDriveRootCount` (the
+home is a drive root), `readRootRefusedM2Count` (the home holds or sits in the profile's `.m2`,
+named or relocated), `readRootRefusedCredentialCount` (it holds or sits in one of the profile's
+credential stores, named or relocated, or holds a credential-named entry) and
+`readRootRefusedUnlistableCount` (it cannot be listed), and `profileKnown`: without a known profile
+folder every step is refused with "the user profile folder is unknown".
+
+`editor.verification.windows-step-node` records, at the start of each step that holds a verified
+step Node.js, what the step does with it, on the run's correlation id: `image` (`step-node` when the
+step starts the step Node.js directly, for a command named `node` or an npm or npx started through
+it, `resolved` otherwise), `npmLaunch` (`step-node`, `install-cmd` or `not-npm`), `npmFallback`
+(`none`, `cli-missing` when the install has no `npm-cli.js` or `npx-cli.js`, `cli-outside-grant`
+when it resolves outside the install's folder), `pathPrefixed` and `placement` (`applied`, or
+`inside-execution-root` for a folder the step may modify, which is never used). Closed values only:
+never a path.
 
 ## Gateway readiness, model activation and the tool-calling check
 

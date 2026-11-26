@@ -68,7 +68,8 @@
             "name": "search",
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "allOf": [{}]
             },
             "required": false
           },
@@ -93,7 +94,8 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "enum": ["true", "false"]
+              "enum": ["true", "false"],
+              "allOf": [{}]
             },
             "required": false
           },
@@ -101,7 +103,12 @@
             "name": "directory",
             "in": "query",
             "schema": {
-              "$ref": "#/components/schemas/AbsolutePath"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/AbsolutePath"
+                },
+                {}
+              ]
             },
             "required": false
           },
@@ -117,7 +124,12 @@
             "name": "subpath",
             "in": "query",
             "schema": {
-              "$ref": "#/components/schemas/RelativePath"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/RelativePath"
+                },
+                {}
+              ]
             },
             "required": false
           },
@@ -125,7 +137,12 @@
             "name": "cursor",
             "in": "query",
             "schema": {
-              "$ref": "#/components/schemas/SessionsCursor"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SessionsCursor"
+                },
+                {}
+              ]
             },
             "required": false
           }
@@ -558,6 +575,15 @@
                 }
               }
             }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillLoadErrorEncoded"
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -646,7 +672,8 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "enum": ["true", "false"]
+              "enum": ["true", "false"],
+              "allOf": [{}]
             },
             "required": false
           }
@@ -1131,7 +1158,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -1302,7 +1330,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -1383,7 +1412,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -1556,7 +1586,8 @@
             "name": "message",
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "allOf": [{}]
             },
             "required": false
           }
@@ -1710,6 +1741,7 @@
                     "form.replied",
                     "form.cancelled",
                     "websearch.updated",
+                    "experimental.push.updated",
                     "artifact.updated",
                     "session.status",
                     "session.idle",
@@ -1822,6 +1854,7 @@
                           "form.replied",
                           "form.cancelled",
                           "websearch.updated",
+                          "experimental.push.updated",
                           "artifact.updated",
                           "session.status",
                           "session.idle",
@@ -1921,7 +1954,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2114,7 +2148,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2195,7 +2230,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2676,7 +2712,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2765,7 +2802,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2825,7 +2863,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -2914,7 +2953,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -3045,7 +3085,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -3147,7 +3188,8 @@
                   ]
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "allOf": [{}]
             },
             "required": false,
             "style": "deepObject",
@@ -3723,6 +3765,23 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "SkillLoadErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["SkillLoadError"]
+          },
+          "skill": {
+            "$ref": "#/components/schemas/Skill.ID"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "skill", "message"],
+        "additionalProperties": false
+      },
       "Session.Message.ID": {
         "type": "string",
         "pattern": "^msg_"
@@ -4118,6 +4177,26 @@
           },
           "system": {
             "type": "string"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string"
+                  },
+                  "unselected": {
+                    "type": "string"
+                  }
+                },
+                "required": ["selected", "unselected"],
+                "additionalProperties": false
+              }
+            ]
           },
           "description": {
             "type": "string"
@@ -4744,6 +4823,9 @@
         "required": ["text"],
         "additionalProperties": false
       },
+      "Skill.ID": {
+        "type": "string"
+      },
       "Prompt.FileSource": {
         "anyOf": [
           {
@@ -4788,9 +4870,6 @@
         },
         "required": ["start", "end", "text"],
         "additionalProperties": false
-      },
-      "Skill.ID": {
-        "type": "string"
       },
       "Snapshot.ID": {
         "type": "string"
@@ -5212,6 +5291,9 @@
           },
           {
             "$ref": "#/components/schemas/websearch.updated"
+          },
+          {
+            "$ref": "#/components/schemas/experimental.push.updated"
           },
           {
             "$ref": "#/components/schemas/artifact.updated"
@@ -10190,6 +10272,34 @@
           "type": {
             "type": "string",
             "enum": ["websearch.updated"]
+          },
+          "location": {
+            "$ref": "#/components/schemas/Location.Ref"
+          },
+          "data": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": ["id", "created", "type", "data"],
+        "additionalProperties": false
+      },
+      "experimental.push.updated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Event.ID"
+          },
+          "created": {
+            "type": "number"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["experimental.push.updated"]
           },
           "location": {
             "$ref": "#/components/schemas/Location.Ref"

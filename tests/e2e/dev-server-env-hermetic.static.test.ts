@@ -1,11 +1,18 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { resolveOutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { describe, expect, it } from "vitest";
 
-import { devServerEnv, HERMETIC_DEAD_PROXY } from "./support/dev-server-env.js";
+import {
+  devServerEnv,
+  HERMETIC_DEAD_PROXY,
+  HERMETIC_OUTBOUND_ENV,
+} from "./support/dev-server-env.js";
 
 // Smoke journeys failed on an unrelated click whenever a Keiko release newer than the checkout
 // existed: the server's startup update preflight read the public npm registry, and the update
@@ -66,5 +73,186 @@ describe("the smoke dev server's outbound traffic", () => {
         });
       });
     }
+  });
+});
+
+// The smoke config was hermetic first; the other suites started their Keiko servers with the
+// registry reachable and failed the same way once a newer release existed (jira-chat-4081 on the
+// epic #4130 branch). Every Playwright config that starts a web server must give each server's env
+// the hermetic outbound settings: a derived config inherits them from the base config's servers.
+const E2E_ROOT = dirname(fileURLToPath(import.meta.url));
+const HERMETIC_ENV_SPREADS = ["...HERMETIC_OUTBOUND_ENV", "...devServerEnv(", "...server.env"];
+
+// A live qualification (`npm run …:live`) reaches a real gateway and is never hermetic.
+function liveConfigs(): ReadonlySet<string> {
+  const manifest = JSON.parse(readFileSync(join(E2E_ROOT, "..", "..", "package.json"), "utf8")) as {
+    readonly scripts: Readonly<Record<string, string>>;
+  };
+  return new Set(
+    Object.entries(manifest.scripts)
+      .filter(([name]) => name.endsWith(":live"))
+      .flatMap(([, command]) => [...command.matchAll(/--config (tests\/e2e\/\S+)/gu)])
+      .map((match) => join(E2E_ROOT, "..", "..", match[1] ?? "")),
+  );
+}
+
+function playwrightConfigs(): readonly string[] {
+  const configDir = join(E2E_ROOT, "config");
+  const nested = readdirSync(configDir)
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => join(configDir, name));
+  const topLevel = readdirSync(E2E_ROOT)
+    .filter((name) => name.endsWith(".config.ts"))
+    .map((name) => join(E2E_ROOT, name));
+  return [...nested, ...topLevel].filter((path) =>
+    readFileSync(path, "utf8").includes("webServer"),
+  );
+}
+
+// A config names none of the hermetic proxy settings itself: a key written after the spread
+// replaces the hermetic value, so naming one at all would weaken the routing the spread sets.
+const HERMETIC_PROXY_SETTING = /\bKEIKO_(?:HTTPS?|NO)_PROXY\b/u;
+
+function nonHermeticEnvBlocks(source: string): number {
+  const blocks = source.split(/\benv:\s*\{/u).slice(1);
+  return blocks.filter(
+    (block) =>
+      !HERMETIC_ENV_SPREADS.some((spread) => block.trimStart().startsWith(spread)) ||
+      HERMETIC_PROXY_SETTING.test(block),
+  ).length;
+}
+
+function e2eSources(dir: string = E2E_ROOT): readonly string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : e2eSources(path);
+    return /\.(mjs|mts|ts)$/u.test(entry.name) && !/\.test\.m?ts$/u.test(entry.name) ? [path] : [];
+  });
+}
+
+// An env key the harness sets itself (`env: …`, or the `env,` / `env }` shorthand), not `process.env`.
+const OWN_ENV_KEY = /(?<![.\w])env\s*[:,}]/u;
+
+function isHermeticHarness(raw: string): boolean {
+  const source = withoutComments(raw);
+  if (!OWN_ENV_KEY.test(source)) return true;
+  return source.includes("...HERMETIC_OUTBOUND_ENV") || source.includes("...hermeticOutboundEnv");
+}
+
+function hermeticEnvBlocks(source: string): number {
+  return source.split(/\benv:\s*\{/u).length - 1 - nonHermeticEnvBlocks(source);
+}
+
+// Comments must not count: a commented-out env block would otherwise cover a server without one.
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/(^|[^:])\/\/.*$/gmu, "$1");
+}
+
+// Each server a config starts (a `command:`) needs its own hermetic env block, between its command
+// and the next server's: importing the settings, or a second env block on one server, leaves the
+// others on process.env. Every config writes the env after the command. A derived config starts
+// no command of its own and inherits the base config's servers' env.
+function isHermeticConfig(raw: string): boolean {
+  const source = withoutComments(raw);
+  if (nonHermeticEnvBlocks(source) > 0) return false;
+  const servers = source.split(/\bcommand:/u).slice(1);
+  if (servers.length === 0) {
+    return source.includes("baseConfig.webServer") && hermeticEnvBlocks(source) > 0;
+  }
+  return servers.every((server) => hermeticEnvBlocks(server) > 0);
+}
+
+describe("every Playwright web server's outbound traffic", () => {
+  it("exposes the hermetic settings the smoke server uses", () => {
+    expect(HERMETIC_OUTBOUND_ENV).toStrictEqual({
+      KEIKO_HTTP_PROXY: HERMETIC_DEAD_PROXY,
+      KEIKO_HTTPS_PROXY: HERMETIC_DEAD_PROXY,
+      KEIKO_NO_PROXY: "127.0.0.1,localhost,::1",
+    });
+    expect(env).toMatchObject(HERMETIC_OUTBOUND_ENV);
+  });
+
+  it("is hermetic in every config that starts a web server", () => {
+    const live = liveConfigs();
+    expect([...live].map((path) => relative(E2E_ROOT, path).split("\\").join("/"))).toStrictEqual([
+      "config/playwright.coding-issue-journey.config.ts",
+    ]);
+    const configs = playwrightConfigs().filter((path) => !live.has(path));
+    expect(configs.length).toBeGreaterThan(40);
+    const offenders = configs
+      .filter((path) => {
+        return !isHermeticConfig(readFileSync(path, "utf8"));
+      })
+      .map((path) => relative(E2E_ROOT, path).split("\\").join("/"));
+    expect(offenders).toStrictEqual([]);
+  });
+
+  it("reaches a Keiko server whose harness replaces process.env", () => {
+    // A harness that builds Keiko's handler deps and sets their env itself drops process.env, so
+    // it must carry the hermetic settings itself. A harness that sets no env keeps process.env,
+    // which the web server env above makes hermetic.
+    const harnesses = e2eSources().filter((path) =>
+      readFileSync(path, "utf8").includes("buildUiHandlerDeps("),
+    );
+    expect(harnesses.length).toBeGreaterThan(2);
+    const offenders = harnesses
+      .filter((path) => !isHermeticHarness(readFileSync(path, "utf8")))
+      .map((path) => relative(E2E_ROOT, path).split("\\").join("/"));
+    expect(offenders).toStrictEqual([]);
+  });
+
+  it("flags a web server env block without the hermetic settings", () => {
+    expect(nonHermeticEnvBlocks('webServer: { env: { KEIKO_OS_KEYCHAIN: "off" } }')).toBe(1);
+    expect(nonHermeticEnvBlocks("webServer: { env: { ...HERMETIC_OUTBOUND_ENV, A: 1 } }")).toBe(0);
+    for (const setting of ["KEIKO_HTTP_PROXY", "KEIKO_HTTPS_PROXY", "KEIKO_NO_PROXY"]) {
+      const overridden = `webServer: { command: "node server.mjs", env: { ...HERMETIC_OUTBOUND_ENV, ${setting}: "" } }`;
+      expect(isHermeticConfig(overridden)).toBe(false);
+    }
+    expect(
+      isHermeticConfig(
+        'webServer: { command: "node server.mjs", env: { ...HERMETIC_OUTBOUND_ENV } }',
+      ),
+    ).toBe(true);
+    expect(isHermeticConfig("webServer: { command: 'node server.mjs' }")).toBe(false);
+    const importOnly = [
+      'import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";',
+      "webServer: { command: 'node server.mjs', url: 'http://127.0.0.1:1' }",
+    ].join("\n");
+    expect(isHermeticConfig(importOnly)).toBe(false);
+    const oneOfTwo =
+      "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV } }, { command: 'b' }]";
+    expect(isHermeticConfig(oneOfTwo)).toBe(false);
+    expect(
+      isHermeticConfig(
+        "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV } }, " +
+          "{ command: 'b', env: { ...HERMETIC_OUTBOUND_ENV } }]",
+      ),
+    ).toBe(true);
+    expect(isHermeticConfig("webServer: { command: 'a', env: { ...devServerEnv(1) } }")).toBe(true);
+    const doubledOnOne =
+      "webServer: [{ command: 'a', env: { ...HERMETIC_OUTBOUND_ENV }, x: { env: { ...HERMETIC_OUTBOUND_ENV } } }, " +
+      "{ command: 'b' }]";
+    expect(isHermeticConfig(doubledOnOne)).toBe(false);
+    expect(
+      isHermeticConfig(
+        "webServer: { command: 'a' }\n// env: { ...HERMETIC_OUTBOUND_ENV }\n/* env: { ...HERMETIC_OUTBOUND_ENV } */",
+      ),
+    ).toBe(false);
+    expect(isHermeticHarness("buildUiHandlerDeps({ ...options })")).toBe(true);
+    expect(isHermeticHarness("const env = scripted(); buildUiHandlerDeps({ env, store })")).toBe(
+      false,
+    );
+    expect(isHermeticHarness("buildUiHandlerDeps({ env: { KEIKO_STATE_DIR: dir } })")).toBe(false);
+    expect(
+      isHermeticHarness("const env = { KEIKO_STATE_DIR: dir }; buildUiHandlerDeps({ store, env })"),
+    ).toBe(false);
+    expect(
+      isHermeticHarness(
+        "buildUiHandlerDeps({ env: { KEIKO_STATE_DIR: dir } }); // ...HERMETIC_OUTBOUND_ENV",
+      ),
+    ).toBe(false);
+    expect(
+      isHermeticHarness("const env = { ...HERMETIC_OUTBOUND_ENV }; buildUiHandlerDeps({ env })"),
+    ).toBe(true);
   });
 });

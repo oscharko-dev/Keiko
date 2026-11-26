@@ -28,6 +28,7 @@ import {
 } from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { portableTargetByName, ripgrepApprovalForPortableTarget } from "./portable-runtime.mjs";
 import { portableResourceRoot } from "./portable-signed-archive.mjs";
+import { ripgrepToolOf } from "./lib/portable-step-node.mjs";
 
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_NATIVE_BINARY_BYTES = 128 * 1024 * 1024;
@@ -82,10 +83,8 @@ function readContainedText(stageRoot, candidate, label) {
 }
 
 function toolFrom(manifest, targetName, approval) {
-  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
-    fail("manifest must bind exactly one native tool");
-  }
-  const tool = manifest.nativeTools[0];
+  const tool = ripgrepToolOf(manifest.nativeTools);
+  if (tool === undefined) fail("manifest must bind exactly one native tool");
   if (
     tool.name !== "ripgrep" ||
     tool.kind !== "native-tool" ||

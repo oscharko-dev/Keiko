@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2c4c7539d74131855e977ac4dbd416635d8f18b3aa169684bb4d5d2a8731baff",
+    "catalogDigest": "3593da5a020a6e002a08a3db8b130a8b4341a5a51fca34d094fa5d32c7c1a79c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10250,6 +10250,21 @@
             "dataClass": "count",
             "required": false
           },
+          "staleHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "misplacedHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unreadableHitsSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "resultPathSha256": {
             "type": "string-array",
             "dataClass": "digest",
@@ -10286,7 +10301,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:216"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:219"
         ]
       },
       {
@@ -10316,7 +10331,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:24",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:291"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:294"
         ]
       },
       {
@@ -14303,9 +14318,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-tool.denied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:239",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:261",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1100"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1143"
         ]
       },
       {
@@ -18019,6 +18034,24 @@
             "required": false,
             "values": ["pending", "running", "failed", "succeeded", "denied"]
           },
+          "refusedFromState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["absent", "pending", "running", "succeeded", "failed", "denied", "cancelled"]
+          },
+          "refusedToState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["pending", "running", "succeeded", "failed", "denied", "cancelled"]
+          },
+          "refusedSignalSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["opencode", "keiko"]
+          },
           "rejection": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -18045,13 +18078,13 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.safe-activity.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:110",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:111",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:759",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:913",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:994",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1066",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1120"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:785",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:949",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1031",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1109",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1164"
         ]
       },
       {
@@ -19197,9 +19230,9 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.tool.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:270",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:292",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:719"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:745"
         ]
       },
       {
@@ -22409,6 +22442,63 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "editor.verification.windows-step-node",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "editor.windowsStepNode.record",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "image": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["step-node", "resolved"]
+          },
+          "npmLaunch": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["step-node", "install-cmd", "not-npm"]
+          },
+          "npmFallback": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "cli-missing", "cli-outside-grant"]
+          },
+          "pathPrefixed": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "placement": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["applied", "inside-execution-root"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["runtime-confinement-unavailable"],
+        "proofIds": ["editor.verification.windows-step-node.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepNode.ts:23",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepNode.ts:189"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "editor.verification.windows-step-refused",
         "category": "process",
         "owner": "keiko-server",
@@ -22442,8 +22532,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:70",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:243"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:108",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:475"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22474,10 +22564,55 @@
             "dataClass": "count",
             "required": true
           },
+          "readRootRefusedDriveRootCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "readRootRefusedM2Count": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "readRootRefusedCredentialCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "readRootRefusedUnlistableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "profileKnown": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
           "mavenRepository": {
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
+          },
+          "stepNode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["patched", "absent", "mismatch"]
+          },
+          "stepNodeMismatch": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "none",
+              "not-real-folder",
+              "extra-entries",
+              "not-ordinary-file",
+              "size",
+              "hash",
+              "unreadable"
+            ]
           }
         },
         "causal": "correlation",
@@ -22486,8 +22621,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:41",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:269"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:47",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:513"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -51657,8 +51792,8 @@
         "failureClasses": ["tool-catalog-dispatch-unbound"],
         "proofIds": ["tool-catalog.dispatch-unbound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:86",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:974"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:87",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:980"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -63808,6 +63943,7 @@
           "start": [],
           "state": [
             "editor.verification.windows-step-drives",
+            "editor.verification.windows-step-node",
             "editor.verification.windows-step-refused",
             "editor.verification.windows-step-supervisor",
             "runtime.confinement.unavailable"
@@ -63818,6 +63954,7 @@
         },
         "requiredCausalOperations": [
           "editor.verification.windows-step-drives",
+          "editor.verification.windows-step-node",
           "editor.verification.windows-step-refused",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
@@ -63825,6 +63962,7 @@
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "editor.verification.windows-step-drives",
+          "editor.verification.windows-step-node",
           "editor.verification.windows-step-refused",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
@@ -63832,6 +63970,7 @@
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "editor.verification.windows-step-drives",
+          "editor.verification.windows-step-node",
           "editor.verification.windows-step-refused",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
@@ -77580,6 +77719,12 @@
                   "required": false
                 },
                 {
+                  "name": "misplacedHitsSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outputBytes",
                   "type": "integer",
                   "dataClass": "count",
@@ -77634,6 +77779,12 @@
                   "required": false
                 },
                 {
+                  "name": "staleHitsSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "state",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -77653,6 +77804,12 @@
                 },
                 {
                   "name": "unreadableFilesSkipped",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "unreadableHitsSkipped",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -86042,6 +86199,24 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "refusedFromState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "refusedSignalSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "refusedToState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "rejection",
@@ -113860,6 +114035,7 @@
             "start": [],
             "state": [
               "editor.verification.windows-step-drives",
+              "editor.verification.windows-step-node",
               "editor.verification.windows-step-refused",
               "editor.verification.windows-step-supervisor",
               "runtime.confinement.unavailable"
@@ -113871,6 +114047,10 @@
           "causalEdges": [
             {
               "op": "editor.verification.windows-step-drives",
+              "mode": "correlation"
+            },
+            {
+              "op": "editor.verification.windows-step-node",
               "mode": "correlation"
             },
             {
@@ -113889,6 +114069,7 @@
           "lossSignals": [],
           "resourceSignals": [
             "editor.verification.windows-step-drives",
+            "editor.verification.windows-step-node",
             "editor.verification.windows-step-refused",
             "editor.verification.windows-step-supervisor",
             "runtime.confinement.unavailable"
@@ -113928,6 +114109,54 @@
                 "causeChain": false
               },
               "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "editor.verification.windows-step-node",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "image",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "npmFallback",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "npmLaunch",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "pathPrefixed",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "placement",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.verification.windows-step-node.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -113982,9 +114211,51 @@
                   "required": true
                 },
                 {
+                  "name": "profileKnown",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
                   "name": "readRootCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "readRootRefusedCredentialCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "readRootRefusedDriveRootCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "readRootRefusedM2Count",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "readRootRefusedUnlistableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stepNode",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stepNodeMismatch",
+                  "type": "string",
+                  "dataClass": "closed-enum",
                   "required": true
                 }
               ],
@@ -124963,21 +125234,21 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2097",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2098",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2143",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2144",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2324",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2325",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126302,7 +126573,7 @@
     {
       "op": "coding-runtime.approval-revocation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2042",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2043",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126451,7 +126722,7 @@
     {
       "op": "coding-runtime.exit",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1981",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:1982",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126477,7 +126748,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2574",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2575",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126688,7 +126959,7 @@
     {
       "op": "coding-runtime.native-tool.denied",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:242",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:264",
       "package": "keiko-server"
     },
     {
@@ -126822,14 +127093,14 @@
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3150",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3151",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3167",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3168",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127000,20 +127271,20 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:113",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:114",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2323",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2391",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2341",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2409",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127070,14 +127341,14 @@
     {
       "op": "coding-runtime.stderr",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2001",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2002",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.stream-drain",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2020",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2021",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127226,7 +127497,7 @@
     {
       "op": "coding-runtime.tool.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:273",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:295",
       "package": "keiko-server"
     },
     {
@@ -127678,21 +127949,34 @@
       "package": "keiko-server"
     },
     {
+      "op": "editor.verification.windows-step-node",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/windowsStepNode.ts:26",
+      "package": "keiko-server"
+    },
+    {
       "op": "editor.verification.windows-step-refused",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:73",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:111",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:44",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:50",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor.copy-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:192",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:424",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.windows-step-supervisor.step-node-unreadable",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/windowsStepNode.ts:169",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129842,7 +130126,7 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:727",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:733",
       "package": "keiko-server"
     },
     {
@@ -129906,7 +130190,7 @@
     {
       "op": "tool-catalog.dispatch-unbound",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:89",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:90",
       "package": "keiko-server"
     },
     {
@@ -130634,9 +130918,11 @@
     "editor.verification.windows-step-copy.cleanup-failed",
     "editor.verification.windows-step-drives",
     "editor.verification.windows-step-drives.release-failed",
+    "editor.verification.windows-step-node",
     "editor.verification.windows-step-refused",
     "editor.verification.windows-step-supervisor",
     "editor.verification.windows-step-supervisor.copy-refused",
+    "editor.verification.windows-step-supervisor.step-node-unreadable",
     "editor.verification.workspace",
     "editor.workspace-watch.authority-revoked",
     "editor.workspace-watch.health-changed",

@@ -41,6 +41,7 @@ export const D12_MEASUREMENT_TOOLCHAIN_PATHS = Object.freeze([
   // numbers without moving measurementHarnessSha256, which is the one thing this digest prevents.
   // `scripts/__tests__/d12-toolchain-closure.test.mjs` now derives the requirement instead of
   // trusting this list to be maintained by hand.
+  "tests/e2e/support/dev-server-env.ts",
   "tests/e2e/support/debugSessionStartCapture.ts",
   "tests/e2e/support/editor-chord.ts",
   "tests/e2e/support/editorWorkspace.ts",

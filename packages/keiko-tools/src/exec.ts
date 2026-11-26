@@ -9,7 +9,7 @@
 
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -60,10 +60,12 @@ import { buildWindowsShellInvocation, resolveSystemBinaryPath } from "./windows-
 import {
   windowsStepFrames,
   windowsStepLaunch,
+  windowsStepRefusal,
   windowsStepTerminateFrame,
   WindowsStepResponses,
   type WindowsStepLaunch,
 } from "./windows-step.js";
+import { planWindowsStepNode, type WindowsStepNodeProbe } from "./windows-step-node.js";
 
 export interface SpawnOptions {
   readonly cwd: string;
@@ -170,6 +172,8 @@ export interface RunCommandDeps {
   // `windows-appcontainer` backend's availability; an execution-root step then runs in a per-run
   // AppContainer without network instead of being refused for a missing container runtime.
   readonly windowsStepSupervisor?: WindowsStepSupervisor | undefined;
+  // Hermetic test seam: how the step Node.js plan reads an install's npm CLI script (#4492).
+  readonly windowsStepNodeProbe?: WindowsStepNodeProbe | undefined;
 }
 
 // Body-free evidence of a termination decision, handed to the optional `onTerminated` seam below.
@@ -830,6 +834,16 @@ function realRoot(fs: WorkspaceFs, root: string): string {
   }
 }
 
+// The real execution root a Windows step is granted. A root whose real path cannot be resolved is
+// refused: its lexical spelling could hide a short name or a junction from the profile check.
+export function windowsExecutionRoot(fs: WorkspaceFs, root: string, command: string): string {
+  try {
+    return fs.realPath(root);
+  } catch {
+    throw new CommandDeniedError("the execution root cannot be resolved", command);
+  }
+}
+
 function assertBareExecutable(command: string): void {
   if (command.length === 0 || hasNul(command) || hasPathSeparator(command)) {
     throw new CommandDeniedError("executable must be a bare PATH-resolved name", command);
@@ -1143,20 +1157,30 @@ function windowsStepTarget(
     throw new CommandDeniedError("the Windows step supervisor is unavailable", input.command);
   }
   const resolved = executable();
-  const invocation = buildWindowsShellInvocation(resolved, input.args, {
-    platform: "win32",
-    env: deps.processEnv,
+  const executionRoot = windowsExecutionRoot(
+    workspaceFsOf(deps),
+    deps.workspace.root,
+    input.command,
+  );
+  const plan = planWindowsStepNode({
+    command: input.command,
+    executable: resolved,
+    args: input.args,
+    executionRoot,
+    stepNode: supervisor.stepNode,
+    probe: deps.windowsStepNodeProbe ?? nodeWindowsStepNodeProbe,
   });
-  const executionRoot = realRoot(workspaceFsOf(deps), deps.workspace.root);
   const launch = windowsStepLaunch(
-    invocation,
-    resolved,
+    windowsStepInvocation(input, deps, resolved, plan),
+    plan.kind === "applied" ? plan.grantExecutable : resolved,
     executionRoot,
     supervisor,
     input.command,
-    environmentVariableValue(deps.processEnv, "USERPROFILE", "win32"),
+    plan.kind === "applied" ? plan.stepNode.directory : undefined,
   );
   const copy = supervisor.acquire(launch.grants.map((grant) => grant.path));
+  // Recorded once the step holds its supervisor copy, so a refused step logs no launch decision.
+  if (plan.kind !== "none") supervisor.stepNode?.record(plan.decision);
   return {
     command: copy.path,
     args: decision.args,
@@ -1169,6 +1193,31 @@ function windowsStepTarget(
     },
   };
 }
+
+// The step's own launch: the step Node.js for `node`, `npm` and `npx` when the plan says so (#4492),
+// otherwise the resolved executable, through cmd.exe for a command script.
+function windowsStepInvocation(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  resolved: string,
+  plan: ReturnType<typeof planWindowsStepNode>,
+): ReturnType<typeof buildWindowsShellInvocation> {
+  if (plan.kind === "applied" && plan.invocation !== undefined) {
+    return { ...plan.invocation, windowsVerbatimArguments: false };
+  }
+  return buildWindowsShellInvocation(resolved, input.args, {
+    platform: "win32",
+    env: deps.processEnv,
+  });
+}
+
+// The two questions the step Node.js plan asks of the file system (#4492). A script that is not
+// there is an ordinary condition for the plan: it falls back to the install's `.cmd`. Any other
+// failure to stat it surfaces as the step's own launch error instead of being read as "absent".
+const nodeWindowsStepNodeProbe: WindowsStepNodeProbe = {
+  isFile: (path) => statSync(path, { throwIfNoEntry: false })?.isFile() === true,
+  realPath: realWindowsSearchPathEntry,
+};
 
 function onceOnly(action: () => void): () => void {
   let done = false;
@@ -1621,22 +1670,6 @@ function settledExitCode(ctx: ExecContext, code: number | null): number | null |
     );
   }
   return new Error("the Windows step supervisor ended without reporting the step's exit");
-}
-
-const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
-  [7, "a directory the step needs is missing or is a link"],
-  [
-    8,
-    "this account may not grant the step a directory it needs, such as a toolchain an " +
-      "administrator installed outside Program Files",
-  ],
-  [12, "the user environment could not be closed to the step"],
-]);
-
-function windowsStepRefusal(code: number): string {
-  const reason =
-    WINDOWS_STEP_REFUSALS.get(code) ?? `the supervisor refused the launch (${String(code)})`;
-  return `Windows execution isolation refused the step: ${reason}`;
 }
 
 function settleChildProcessError(

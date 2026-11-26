@@ -22,9 +22,14 @@ import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
 import {
   isRealDirectory,
+  realDirectory,
+  realLocation,
   resolveWindowsStepSupervisor,
   windowsMavenRepository,
+  windowsReadRootAdmission,
   windowsStepReadRoots,
+  type RealDirectoryFs,
+  type WindowsReadRootHost,
 } from "./windowsStepSupervisor.js";
 
 const roots: string[] = [];
@@ -116,7 +121,12 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       correlationId: "step-supervisor-proof",
       outcome: "available",
       readRootCount: 0,
+      readRootRefusedDriveRootCount: 0,
+      readRootRefusedM2Count: 0,
+      readRootRefusedCredentialCount: 0,
+      readRootRefusedUnlistableCount: 0,
       mavenRepository: false,
+      stepNodeMismatch: "none",
     });
     copy?.release();
     expect(defined.size).toBe(0);
@@ -252,11 +262,280 @@ describe("windowsStepReadRoots", () => {
     mkdirSync(maven);
     const file = join(jdk, "release");
     writeFileSync(file, "");
+    // A known profile that holds neither home; the homes are named by their real paths.
+    const profile = temporary("keiko-step-profile-");
+    const real = (path: string): string => realpathSync.native(path);
     // Absolute Windows paths only: on this host a POSIX path is not one, so nothing is named.
-    expect(windowsStepReadRoots({ JAVA_HOME: jdk, MAVEN_HOME: maven, M2_HOME: file })).toEqual(
-      process.platform === "win32" ? [jdk, maven] : [],
-    );
-    expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" })).toEqual([]);
+    expect(
+      windowsStepReadRoots({
+        JAVA_HOME: jdk,
+        MAVEN_HOME: maven,
+        M2_HOME: file,
+        USERPROFILE: profile,
+      }).roots,
+    ).toEqual(process.platform === "win32" ? [real(jdk), real(maven)] : []);
+    expect(windowsStepReadRoots({ JAVA_HOME: "relative\\jdk" }).roots).toEqual([]);
+  });
+
+  describe("a home that reaches the profile's .m2 or a credential (#4496)", () => {
+    const profile = String.raw`C:\Users\dev`;
+    const none = { "drive-root": 0, m2: 0, credential: 0, unlistable: 0 };
+    // `real` maps a short name or a junction to the folder it reaches, as the real host's
+    // realpath does; every other path is its own real path. `files` maps a linked file, which only
+    // `realLocation` resolves, as `realDirectory` resolves no file.
+    const host = (
+      entries: Readonly<Record<string, readonly string[] | null>> = {},
+      real: Readonly<Record<string, string>> = {},
+      files: Readonly<Record<string, string>> = {},
+    ): WindowsReadRootHost => ({
+      realDirectory: (value): string | undefined =>
+        value === undefined ? undefined : (real[value] ?? value),
+      realLocation: (value): string | undefined => files[value] ?? real[value] ?? value,
+      entryNames: (directory): readonly string[] | undefined => {
+        const names = entries[directory];
+        return names === null ? undefined : (names ?? []);
+      },
+    });
+
+    it.each([
+      ["inside .m2", String.raw`C:\Users\dev\.m2\toolchain`],
+      ["inside .m2 in another case", String.raw`c:\USERS\Dev\.M2\jdk`],
+      [".m2 itself", String.raw`C:\Users\dev\.m2`],
+      ["the profile that holds .m2", profile],
+      ["a parent of the profile", String.raw`C:\Users`],
+    ])("drops a home that is %s and counts it", (_label, home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it.each([
+      ["a short name", String.raw`C:\Users\DEV~1\.m2\jdk`],
+      ["a junction", String.raw`C:\link\jdk`],
+    ])("drops a home inside .m2 that is reached through %s", (_label, home) => {
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: home, USERPROFILE: profile },
+        host({}, { [home]: String.raw`C:\Users\dev\.m2\jdk` }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it("drops a home inside a relocated .m2 that the profile reaches through a junction", () => {
+      const home = String.raw`D:\m2\maven`;
+      const result = windowsStepReadRoots(
+        { MAVEN_HOME: home, USERPROFILE: profile },
+        host({}, { [String.raw`C:\Users\dev\.m2`]: String.raw`D:\m2` }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+      const admit = windowsReadRootAdmission(
+        profile,
+        host({}, { [String.raw`C:\Users\dev\.m2`]: String.raw`D:\m2` }),
+      );
+      expect(admit(String.raw`D:\m2\jdk`)).toEqual({ refusal: "m2" });
+      expect(admit(String.raw`D:\other\jdk`)).toEqual({ root: String.raw`D:\other\jdk` });
+    });
+
+    it("sees a .m2 relocated after the supervisor was resolved", () => {
+      const real: Record<string, string> = {};
+      const admit = windowsReadRootAdmission(profile, host({}, real));
+      expect(admit(String.raw`D:\m2\jdk`)).toEqual({ root: String.raw`D:\m2\jdk` });
+      real[String.raw`C:\Users\dev\.m2`] = String.raw`D:\m2`;
+      expect(admit(String.raw`D:\m2\jdk`)).toEqual({ refusal: "m2" });
+    });
+
+    it("judges and counts a folder once when several homes name it", () => {
+      const home = String.raw`C:\Users\dev\.m2\maven`;
+      const result = windowsStepReadRoots(
+        { MAVEN_HOME: home, M2_HOME: home, USERPROFILE: profile },
+        host(),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it("compares against the profile's real path when it is named by a short name", () => {
+      const short = String.raw`C:\Users\DEV~1`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`C:\Users\dev\.m2\jdk`, USERPROFILE: short },
+        host({}, { [short]: profile }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it("drops a home inside .m2 when the profile is written with forward slashes", () => {
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`C:\Users\dev\.m2\jdk`, USERPROFILE: "C:/Users/dev" },
+        host({}, { "C:/Users/dev": profile }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it.each(["D:\\", "e:\\"])("drops the drive root %s and counts it", (home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, "drive-root": 1 } });
+      expect(windowsReadRootAdmission(profile, host())(home)).toEqual({ refusal: "drive-root" });
+    });
+
+    it.each([
+      ["inside .ssh", String.raw`C:\Users\dev\.ssh\tools`],
+      ["inside .aws in another case", String.raw`c:\users\DEV\.AWS\cli`],
+      ["the folder that holds .cargo's credentials", String.raw`C:\Users\dev\.cargo`],
+      ["the folder that holds the gh store", String.raw`C:\Users\dev\.config`],
+      [
+        "the folder that holds the Windows credential store",
+        String.raw`C:\Users\dev\AppData\Roaming`,
+      ],
+      ["inside the DPAPI keys", String.raw`C:\Users\dev\AppData\Roaming\Microsoft\Protect\x`],
+      ["inside OpenCode's own state", String.raw`C:\Users\dev\.local\share\opencode\bin`],
+    ])("drops a home that is %s, as the macOS profile denies it", (_label, home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+    });
+
+    it("drops a home inside a credential store the profile reaches through a junction", () => {
+      const relocated = host({}, { [String.raw`C:\Users\dev\.aws`]: String.raw`D:\aws` });
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`D:\aws\cli`, USERPROFILE: profile },
+        relocated,
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+      expect(windowsReadRootAdmission(profile, relocated)(String.raw`D:\tools\cli`)).toEqual({
+        root: String.raw`D:\tools\cli`,
+      });
+    });
+
+    it.each([
+      [".netrc", String.raw`C:\Users\dev\.netrc`],
+      [".git-credentials", String.raw`C:\Users\dev\.git-credentials`],
+      ["Cargo credentials file", String.raw`C:\Users\dev\.cargo\credentials.toml`],
+    ])("drops a home that holds the profile's %s through a file link", (_label, named) => {
+      const linked = host({}, {}, { [named]: String.raw`D:\tools\jdk\conf\store` });
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`D:\tools\jdk`, USERPROFILE: profile },
+        linked,
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+      expect(windowsReadRootAdmission(profile, linked)(String.raw`D:\tools\node`)).toEqual({
+        root: String.raw`D:\tools\node`,
+      });
+    });
+
+    it("keeps a bin folder beside a credential store, as macOS keeps ~/.cargo/bin", () => {
+      const bin = String.raw`C:\Users\dev\.cargo\bin`;
+      expect(windowsReadRootAdmission(profile, host())(bin)).toEqual({ root: bin });
+    });
+
+    it("drops a home that holds a credential-named entry", () => {
+      const home = String.raw`C:\tools\jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: home, USERPROFILE: profile },
+        host({ [home]: ["bin", ".env"] }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+    });
+
+    it("drops a home whose entries cannot be listed", () => {
+      const home = String.raw`C:\tools\locked-jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: home, USERPROFILE: profile },
+        host({ [home]: null }),
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, unlistable: 1 } });
+    });
+
+    it("admits nothing when the profile folder is unknown", () => {
+      const result = windowsStepReadRoots({ JAVA_HOME: String.raw`C:\tools\jdk` }, host());
+      expect(result).toEqual({ roots: [], profile: undefined, refused: none });
+      expect(windowsReadRootAdmission(undefined, host())(String.raw`C:\tools\jdk`)).toEqual({});
+    });
+
+    it("keeps a home outside .m2 by its real path, and Maven's own conf folder with it", () => {
+      const maven = String.raw`C:\tools\maven`;
+      const jdk = String.raw`C:\Users\dev\Programs\jdk`;
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`C:\PROGRA~1\jdk`, MAVEN_HOME: maven, USERPROFILE: profile },
+        host({ [maven]: ["bin", "conf", "lib"] }, { [String.raw`C:\PROGRA~1\jdk`]: jdk }),
+      );
+      expect(result).toEqual({ roots: [jdk, maven], profile, refused: none });
+    });
+
+    it("admits a step's own toolchain folder by the same rules", () => {
+      const admit = windowsReadRootAdmission(
+        profile,
+        host({ [String.raw`C:\tools\secret`]: ["bin", ".npmrc"] }),
+      );
+      expect(admit(String.raw`C:\tools\node`)).toEqual({ root: String.raw`C:\tools\node` });
+      expect(admit(String.raw`C:\tools\secret`)).toEqual({ refusal: "credential" });
+      expect(admit(String.raw`C:\Users\dev\.m2\wrapper`)).toEqual({ refusal: "m2" });
+    });
+  });
+});
+
+describe("realDirectory (#4496)", () => {
+  const folder = String.raw`C:\tools\jdk`;
+
+  it("resolves a drive folder to its real drive path", () => {
+    const fs = { isDirectory: (): boolean => true, realpath: (): string => "C:/Tools/JDK" };
+    expect(realDirectory(folder, fs)).toBe(String.raw`C:\Tools\JDK`);
+  });
+
+  it("is no folder when the path is no drive folder or resolves off the drive", () => {
+    const resolves = (real: string): RealDirectoryFs => ({
+      isDirectory: (): boolean => true,
+      realpath: (): string => real,
+    });
+    expect(realDirectory(undefined, resolves(folder))).toBeUndefined();
+    expect(realDirectory("", resolves(folder))).toBeUndefined();
+    expect(realDirectory(String.raw`\\server\share`, resolves(folder))).toBeUndefined();
+    expect(realDirectory(folder, resolves(String.raw`\\server\share\jdk`))).toBeUndefined();
+    const missing: RealDirectoryFs = {
+      isDirectory: (): undefined => undefined,
+      realpath: (): string => folder,
+    };
+    expect(realDirectory(folder, missing)).toBeUndefined();
+  });
+
+  it("is no folder, never a throw, when the file system refuses the lookup", () => {
+    const refusing =
+      (error: string): (() => never) =>
+      (): never => {
+        throw Object.assign(new Error(error), { code: error });
+      };
+    const statRefused: RealDirectoryFs = {
+      isDirectory: refusing("EACCES"),
+      realpath: (): string => folder,
+    };
+    const realpathRefused = { isDirectory: (): boolean => true, realpath: refusing("EPERM") };
+    expect(realDirectory(folder, statRefused)).toBeUndefined();
+    expect(realDirectory(folder, realpathRefused)).toBeUndefined();
+  });
+});
+
+describe("realLocation (#4496)", () => {
+  const file = String.raw`C:\Users\dev\.netrc`;
+
+  it("resolves a file, which realDirectory leaves out, to its real drive path", () => {
+    const fs: RealDirectoryFs = {
+      isDirectory: (): boolean => false,
+      realpath: (): string => "D:/tools/jdk/netrc",
+    };
+    expect(realLocation(file, fs)).toBe(String.raw`D:\tools\jdk\netrc`);
+    expect(realDirectory(file, fs)).toBeUndefined();
+  });
+
+  it("is no location when the path is no drive path, resolves off the drive or is refused", () => {
+    const resolves = (real: string): RealDirectoryFs => ({
+      isDirectory: (): boolean => false,
+      realpath: (): string => real,
+    });
+    expect(realLocation("", resolves(file))).toBeUndefined();
+    expect(realLocation(String.raw`\\server\share\.netrc`, resolves(file))).toBeUndefined();
+    expect(realLocation(file, resolves(String.raw`\\server\share\netrc`))).toBeUndefined();
+    const missing: RealDirectoryFs = {
+      isDirectory: (): undefined => undefined,
+      realpath: (): never => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      },
+    };
+    expect(realLocation(file, missing)).toBeUndefined();
   });
 });
 

@@ -59,6 +59,15 @@ import {
   parseOpenCodeNativePolicyRequest,
   type OpenCodeNativeMcpGrants,
 } from "./opencodeNativePolicy.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  CodingScheduledWakes,
+  type ScheduledWakeHost,
+  type ScheduledWakePlan,
+  type ScheduledWakeStart,
+} from "./codingScheduledWakes.js";
+import { createRetainedSessionStore } from "./opencodeSessionRetention.js";
+import { startScheduledWakeTurn } from "./opencodeScheduledWakeTurn.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import {
   openCodeNativeMcpAdmission,
@@ -519,8 +528,15 @@ function boundConfigurationEnv(
   options: LaunchOptions,
 ): Readonly<Record<string, string>> {
   const content = env.OPENCODE_CONFIG_CONTENT;
+  // The launch profile decides which runs carry the binding (`launchEnvironment`: the native
+  // profile, or a run whose model needs its reasoning continued); a run it gave none keeps its
+  // whole configuration in the private file. This fixture's geometry asks for no reasoning
+  // continuation, so only the native profile must carry it: a native launch without it is a lost
+  // server-owned binding, never a run to qualify.
   if (content === undefined) {
-    if (options.toolProfile !== "direct") throw new Error("fixture-config-content-missing");
+    if ((options.toolProfile ?? "native") === "native") {
+      throw new Error("fixture-config-content-missing");
+    }
     return {};
   }
   const bound = JSON.parse(content) as Record<string, unknown>;
@@ -2434,6 +2450,88 @@ describe("pinned native OpenCode plan tool (T19)", () => {
       );
     },
     120_000,
+  );
+});
+
+// ─── the working-directory tool (#4546) ────────────────────────────────────────────────────────
+
+describe("pinned native OpenCode working-directory tool `cd` (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const TOOL = ["c", "d"].join("");
+  const isWorkingDirectoryTool = (id: string): boolean => id === TOOL;
+
+  // 2.4.2 adds a built-in tool that moves a session's working directory, onto another computer as
+  // well. Keiko binds a run to its workspace, so no mode may register or offer it: its own
+  // `machines` switch is stated off and its plugin is withheld, each a separate barrier.
+  it.skipIf(skip).each(ALL_MODES)(
+    "registers no cd tool and offers none to the model in %s",
+    async (mode) => {
+      await withRun({ mode, plugins: REGISTRY_PROBE }, async (run) => {
+        await scriptedTurn(run, read(FIXTURE_FILE));
+        expect(registeredToolIds(run).filter(isWorkingDirectoryTool)).toEqual([]);
+        expect(advertisedToolNames(run.gateway).filter(isWorkingDirectoryTool)).toEqual([]);
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "control: the producer ships the tool, and each of Keiko's two removals alone keeps it out",
+    async () => {
+      const open = { experimental: { machines: true }, plugins: [] };
+      expect((await registeredWith({ overlay: open })).filter(isWorkingDirectoryTool)).toEqual([
+        TOOL,
+      ]);
+      // The switch alone: the plugin is still withheld.
+      const switchOnly = await registeredWith({ overlay: { experimental: { machines: true } } });
+      expect(switchOnly.filter(isWorkingDirectoryTool)).toEqual([]);
+      // The withheld plugin alone: the switch stays off.
+      const pluginOnly = await registeredWith({ overlay: { plugins: [] } });
+      expect(pluginOnly.filter(isWorkingDirectoryTool)).toEqual([]);
+    },
+    300_000,
+  );
+});
+
+// ─── a tool whose every use is denied is not offered (#4546) ───────────────────────────────────
+
+describe("pinned native OpenCode tool visibility under a blanket denial (#4546)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  /** The tools the model is offered in the first turn under these configured permission rules. */
+  async function offeredUnder(
+    permissions: readonly Readonly<Record<string, string>>[],
+  ): Promise<readonly string[]> {
+    let names: readonly string[] = [];
+    await withRun({ overlay: { permissions } }, async (run) => {
+      await run.client.prompt(run.sessionId, "Answer without calling a tool.");
+      await expect
+        .poll(() => advertisedDefinitions(run.gateway).length, { timeout: 60_000 })
+        .toBeGreaterThan(0);
+      names = advertisedDefinitions(run.gateway).map(({ name }) => name);
+    });
+    return names;
+  }
+
+  const DENY_ALL = { action: "*", resource: "*", effect: "deny" };
+  const ALLOW_READ = { action: "read", resource: "*", effect: "allow" };
+  const NARROWER_DENIES = [
+    { action: "shell", resource: "git push *", effect: "deny" },
+    { action: "shell", resource: "rm *", effect: "deny" },
+  ];
+
+  // 2.4.1 kept a tool visible when narrower denials followed a blanket one, so the model was
+  // offered a tool no call of which could pass. Keiko's profiles state a blanket denial and then
+  // allow what they admit; the offered list must hold exactly the admitted tools.
+  it.skipIf(skip)(
+    "hides a tool that a blanket denial and narrower denials leave without any allowed use",
+    async () => {
+      const withNarrower = await offeredUnder([DENY_ALL, ALLOW_READ, ...NARROWER_DENIES]);
+      expect(withNarrower).toContain("read");
+      expect(withNarrower).not.toContain("shell");
+      expect(withNarrower).toEqual(await offeredUnder([DENY_ALL, ALLOW_READ]));
+    },
+    240_000,
   );
 });
 
@@ -4411,7 +4509,10 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     return join(run.fixture.state, "state", "opencode.db");
   }
 
-  /** Checks of half a second each: 35 s, past the producer's heartbeat and longest timer sleep. */
+  /**
+   * Checks of half a second each: 35 s, past the producer's lease heartbeat (20 s, a third of its
+   * 60 s lease) and its longest timer sleep (30 s).
+   */
   const HELD_LEASE_CHECKS = 70;
 
   /** The owner named in the producer's scheduler election row, read-only. */
@@ -4442,25 +4543,130 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
   }
 
   // Outside the native profile automations are off: the producer offers no tool, its API refuses
-  // to create one, so none can fire. On 2.4.1 without `automations: false` both were open.
-  it.skipIf(skip)(
-    "offers no automation in the direct profile, and its API refuses to create one",
-    async () => {
-      await withRun(
-        { mode: "autonomous-delivery", toolProfile: "direct", plugins: REGISTRY_PROBE },
-        async (run) => {
-          await scriptedTurn(run, read(FIXTURE_FILE));
-          expect(registeredToolIds(run).filter((id) => id.startsWith("automation"))).toEqual([]);
-          const created = await run.post("/api/experimental/automation", {
-            sessionID: run.sessionId,
-            name: "probe",
-            trigger: { type: "at", at: "in 1 second" },
-            action: PROMPT,
-          });
-          expect(created.status).toBe(403);
-          expect(automations(run)).toEqual([]);
-        },
+  // to create one, so none can fire. On 2.4.1 without `automations: false` both were open. The
+  // profiles are the launch profile's non-native ones: the mapped (direct) and the governed
+  // (code-mode) profile, each with the whole configuration in the run's private file.
+  const NON_NATIVE_PROFILES = ["direct", "code-mode"] as const;
+  const FOREIGN_PROMPT = "A foreign automation woke this session.";
+  /** Checks of half a second each: 70 s, past two of the producer's longest timer sleeps (30 s). */
+  const UNFIRED_CHECKS = 140;
+
+  /**
+   * A due row as an older runtime or a foreign write leaves it, in the run's own database: the
+   * runtime reads the table itself, so a profile with the scheduler on fires it at its next look.
+   */
+  function seedForeignDueAutomation(run: Run): void {
+    const db = new DatabaseSync(database(run));
+    try {
+      db.exec("PRAGMA busy_timeout = 5000");
+      const now = Date.now();
+      // The project and directory the runtime itself bound the session to.
+      const session = db
+        .prepare("SELECT project_id, directory FROM session_v2 WHERE id = ?")
+        .get(run.sessionId);
+      db.prepare(
+        `INSERT INTO automation (id, project_id, directory, session_id, status, name, trigger, action,
+           next_due_at, run_count, failures, tz, time_created, time_updated)
+         VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 'UTC', ?, ?)`,
+      ).run(
+        "aut_foreignrow1",
+        String(session?.project_id),
+        String(session?.directory),
+        run.sessionId,
+        "Foreign",
+        JSON.stringify({ type: "every", every: "30 minutes" }),
+        JSON.stringify({ type: "prompt", prompt: FOREIGN_PROMPT, to: { session: run.sessionId } }),
+        now - 1_000,
+        now,
+        now,
       );
+    } finally {
+      db.close();
+    }
+  }
+
+  const foreignPromptsDelivered = (run: Run): number =>
+    run.gateway.requests.filter((request) => lastUserText(request.body)?.includes(FOREIGN_PROMPT))
+      .length;
+
+  /** The overlay is the test-only seam that turns the scheduler back on (the red variant). */
+  function withNonNativeRun(
+    toolProfile: (typeof NON_NATIVE_PROFILES)[number],
+    overlay: Readonly<Record<string, unknown>>,
+    body: (run: Run) => Promise<void>,
+  ): Promise<void> {
+    return withRun(
+      { mode: "autonomous-delivery", toolProfile, overlay, plugins: REGISTRY_PROBE },
+      async (run) => {
+        await scriptedTurn(run, read(FIXTURE_FILE));
+        await body(run);
+      },
+    );
+  }
+
+  it.skipIf(skip).each(NON_NATIVE_PROFILES)(
+    "offers no automation in the %s profile, and its API refuses to create one",
+    async (profile) => {
+      await withNonNativeRun(profile, {}, async (run) => {
+        expect(registeredToolIds(run).filter((id) => id.startsWith("automation"))).toEqual([]);
+        const created = await run.post("/api/experimental/automation", {
+          sessionID: run.sessionId,
+          name: "probe",
+          trigger: { type: "at", at: "in 1 second" },
+          action: PROMPT,
+        });
+        expect(created.status).toBe(403);
+        expect(automations(run)).toEqual([]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip).each(NON_NATIVE_PROFILES)(
+    "never fires a due automation row in the %s profile",
+    async (profile) => {
+      await withNonNativeRun(profile, {}, async (run) => {
+        seedForeignDueAutomation(run);
+        const prompts = run.gateway.requests.length;
+        const messages = (await run.client.messages(run.sessionId)).length;
+        // Re-checked for longer than two of the producer's longest timer sleeps: the row
+        // stays active and unfired, no prompt reaches the model and the session gains no message.
+        for (let check = 0; check < UNFIRED_CHECKS; check += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const [row] = automations(run);
+          const unfired =
+            row?.status === "active" &&
+            row.run_count === 0 &&
+            run.gateway.requests.length === prompts &&
+            foreignPromptsDelivered(run) === 0 &&
+            (await run.client.messages(run.sessionId)).length === messages;
+          if (!unfired) throw new Error(`the runtime fired the row (check ${String(check)})`);
+        }
+      });
+    },
+    180_000,
+  );
+
+  // The control of the two cases above: with the scheduler on, the same API call creates an
+  // automation and the same row fires, so the absence they observe is the profile's doing.
+  it.skipIf(skip).each(NON_NATIVE_PROFILES)(
+    "control: the %s profile with automations on creates through the API and fires a due row",
+    async (profile) => {
+      await withNonNativeRun(profile, { automations: true }, async (run) => {
+        const created = await run.post("/api/experimental/automation", {
+          sessionID: run.sessionId,
+          name: "probe",
+          trigger: { type: "at", at: "in 1 hour" },
+          action: PROMPT,
+        });
+        expect(created.status).toBeLessThan(300);
+        expect(automations(run)).toHaveLength(1);
+        seedForeignDueAutomation(run);
+        await expect
+          .poll(() => foreignPromptsDelivered(run), { timeout: 60_000, interval: 500 })
+          .toBe(1);
+        expect(automations(run).find((row) => row.id === "aut_foreignrow1")?.run_count).toBe(1);
+      });
     },
     120_000,
   );
@@ -4581,7 +4787,7 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
           create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
         );
         const prompts = run.gateway.requests.length;
-        // Re-checked for longer than the producer's lease heartbeat (10 s) and its longest timer
+        // Re-checked for longer than the producer's lease heartbeat (20 s) and its longest timer
         // sleep (30 s): the automation stays unfired, no prompt reaches the model, and the lease
         // row still names Keiko, so the runtime looked and stood back rather than never looking.
         for (let check = 0; check < HELD_LEASE_CHECKS; check += 1) {
@@ -4612,6 +4818,166 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     },
     180_000,
   );
+
+  // Keiko's scheduled-wake path against the real runtime: the model schedules a prompt, the task's
+  // retained copy is looked at by the wake service, and only its wake turn releases the lease so
+  // the runtime fires the due automation, after which Keiko holds the lease again.
+  it.skipIf(skip)(
+    "wakes the task through Keiko when its automation is due, and the runtime never fires it itself",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        expect(holdSchedulerLease(database(run))).toBe(true);
+        await scriptedTurn(
+          run,
+          create({ name: "Soon", trigger: { type: "at", at: "in 1 second" }, action: PROMPT }),
+        );
+        const storeRoot = mkdtempSync(join(tmpdir(), "keiko-wake-store-"));
+        try {
+          const store = createRetainedSessionStore({ root: storeRoot });
+          await retainWakeTask(run, store);
+          await wakeThroughKeiko(run, store);
+        } finally {
+          rmSync(storeRoot, { recursive: true, force: true });
+        }
+      });
+    },
+    240_000,
+  );
+
+  /** Retains the run's task as Coding History does once a turn settled: no active session. */
+  async function retainWakeTask(
+    run: Run,
+    store: ReturnType<typeof createRetainedSessionStore>,
+  ): Promise<void> {
+    await expect
+      .poll(async () => Object.keys(await run.client.active()).length, {
+        timeout: 30_000,
+        interval: 250,
+      })
+      .toBe(0);
+    const retained = store.retain({
+      binding: {
+        taskId: "task-wake",
+        workspaceKey: createHash("sha256").update("wake").digest("hex"),
+        runtimeVersion: OPENCODE_PINNED_VERSION,
+        maxInputTokens: 24_000,
+      },
+      sessionId: run.sessionId,
+      directory: run.fixture.workspace,
+      sourceDatabase: database(run),
+      scheduleConsentMode: "autonomous-delivery",
+    });
+    expect(retained).toMatchObject({ ok: true });
+  }
+
+  interface WakeObservation {
+    readonly starts: ScheduledWakePlan[];
+    readonly atStart: { runCount: unknown; prompts: number; owner: unknown }[];
+    cancelled: number;
+  }
+
+  /** The orchestrator side of the wake service: it starts the wake turn on the live real run. */
+  function wakeHost(
+    run: Run,
+    sink: ReturnType<typeof createBufferedServerLogSink>,
+    seen: WakeObservation,
+  ): ScheduledWakeHost {
+    const runId = "run-wake-real";
+    return {
+      blocked: (): undefined => undefined,
+      taskAdmitted: (): boolean => true,
+      taskOwned: (): boolean => true,
+      liveTaskId: (): undefined => undefined,
+      serial: <T>(work: () => T): Promise<T> => Promise.resolve(work()),
+      start: (plan: ScheduledWakePlan): Promise<ScheduledWakeStart> => {
+        seen.starts.push(plan);
+        // The wake path is reached only after the automation is due; the runtime has not fired it.
+        seen.atStart.push({
+          runCount: automations(run)[0]?.run_count,
+          prompts: run.gateway.requests.length,
+          owner: leaseOwner(run),
+        });
+        const armed = startScheduledWakeTurn(
+          {
+            runId,
+            runRoot: run.fixture.state,
+            sessionId: run.sessionId,
+            ready: true,
+            runtimeAdapter: {
+              cancelTurn: (): void => {
+                seen.cancelled += 1;
+              },
+            },
+          },
+          { activityLog: sink },
+        );
+        return Promise.resolve(
+          armed
+            ? { ok: true, runId, mode: "autonomous-delivery" }
+            : { ok: false, refusal: "start-failed" },
+        );
+      },
+    };
+  }
+
+  async function wakeThroughKeiko(
+    run: Run,
+    store: ReturnType<typeof createRetainedSessionStore>,
+  ): Promise<void> {
+    const sink = createBufferedServerLogSink();
+    const seen: WakeObservation = { starts: [], atStart: [], cancelled: 0 };
+    const prompts = run.gateway.requests.length;
+    const wakes = new CodingScheduledWakes({
+      store: (): typeof store => store,
+      activityLog: sink,
+      host: wakeHost(run, sink, seen),
+    });
+    const { starts, atStart } = seen;
+    await expect
+      .poll(
+        async () => {
+          await wakes.tick();
+          return starts.length;
+        },
+        { timeout: 60_000, interval: 500 },
+      )
+      .toBe(1);
+    expect(starts[0]).toMatchObject({ taskId: "task-wake", intent: PROMPT.prompt });
+    expect(atStart).toEqual([{ runCount: 0, prompts, owner: SCHEDULER_HOLD_OWNER }]);
+    // Only now does the runtime fire: once, into the run's session. The runtime fires only as the
+    // elected leader, and while Keiko holds the lease it looks and stands back (the held-lease
+    // test above), so this fire is the evidence that Keiko's release handed the lease over. The
+    // runtime's own tenure is too short to sample reliably; the take-back below then proves Keiko
+    // holds it again.
+    await expect
+      .poll(() => automations(run)[0]?.run_count, { timeout: 90_000, interval: 100 })
+      .toBe(1);
+    await expect
+      .poll(() => leaseOwner(run), { timeout: 30_000, interval: 250 })
+      .toBe(SCHEDULER_HOLD_OWNER);
+    const delivered = run.gateway.requests.filter((request) =>
+      lastUserText(request.body)?.includes(PROMPT.prompt),
+    ).length;
+    expect(delivered).toBe(1);
+    expect(seen.cancelled).toBe(0);
+    const leaseOutcomes = sink.events
+      .filter((event) => event.op === "coding-runtime.schedule.lease")
+      .map((event) => event.extra?.outcome);
+    expect(leaseOutcomes).toEqual(expect.arrayContaining(["released", "fired"]));
+    const wakeOutcomes = sink.events
+      .filter((event) => event.op === "coding-runtime.schedule.wake")
+      .map((event) => event.extra?.outcome);
+    expect(wakeOutcomes).toContain("started");
+    // The next look settles the wake against the entry its run retained: the schedule fired.
+    await retainWakeTask(run, store);
+    await wakes.tick();
+    const settled = sink.events.filter(
+      (event) => event.op === "coding-runtime.schedule.wake" && event.extra?.outcome === "fired",
+    );
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.extra?.firedCount).toBe(1);
+    expect(starts).toHaveLength(1);
+  }
 });
 
 // ─── #4546 AC6: no plugin is installed or checked for updates during a run ──────────────────────

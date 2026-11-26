@@ -30,8 +30,9 @@ const HOMEBREW_CELLAR = /^(\/opt\/homebrew|\/usr\/local)\/Cellar\//u;
  * backend passes them as the native profile's denied read roots, and no toolchain root may contain
  * or sit inside one of them, so a `PATH` entry can never reopen what the denial closes.
  * `CREDENTIAL_PATH_DENY_PATTERNS` (keiko-contracts) remains the final, name-based kernel rule.
+ * The Windows step admission applies the same list under the profile folder (#4496).
  */
-const HOME_DENIED_LOCATIONS: readonly string[] = Object.freeze([
+export const NATIVE_HOME_DENIED_LOCATIONS: readonly string[] = Object.freeze([
   ".ssh",
   ".aws",
   ".gnupg",
@@ -51,7 +52,7 @@ const HOME_DENIED_LOCATIONS: readonly string[] = Object.freeze([
 ]);
 
 export function nativeHomeDeniedReadRoots(home: string): readonly string[] {
-  return HOME_DENIED_LOCATIONS.map((location) => join(home, location));
+  return NATIVE_HOME_DENIED_LOCATIONS.map((location) => join(home, location));
 }
 
 // Separator-aware (#4068): on Windows `relative` answers `..\x`, which a `../` test read as inside,

@@ -32,6 +32,7 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TURNS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_TOOL_STATES,
   CODING_SAFE_ACTIVITY_MESSAGE_ORIGINS,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS,
@@ -175,6 +176,27 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: ["pending", "running", "failed", "succeeded", "denied"],
+    },
+    // On a refused tool transition only (#4130 review lab): the call's state, the state the refused
+    // update asked for ("absent" when the call is not in the feed), and whether OpenCode or Keiko's
+    // own settlement sent it, so the log tells a lost update from a genuine regression.
+    refusedFromState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", ...CODING_SAFE_ACTIVITY_TOOL_STATES],
+    },
+    refusedToState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CODING_SAFE_ACTIVITY_TOOL_STATES,
+    },
+    refusedSignalSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["opencode", "keiko"],
     },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
@@ -690,9 +712,6 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       this.recordToolFailure(runId, entry);
       return ended;
     }
-    if (signal.signalId !== undefined) {
-      rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
-    }
     entry.feed.updatedAt = signal.occurredAt;
     const capacityDrop = capacityDropForApplication(
       entry,
@@ -701,12 +720,19 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       signal.occurredAt,
     );
     enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(runId, entry, { ...prior, capacityDrop });
+    const finalized = this.finalizeCapacityDrop(runId, entry, signal, { ...prior, capacityDrop });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
     if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     // A call that failed gets its line even when the feed dropped, displaced or refused it.
     this.recordToolFailure(runId, entry);
     return finalized;
+  }
+
+  // Only an applied signal counts as seen: one a capacity rollback refused is applied again when it
+  // is delivered again, so a refused terminal tool state cannot leave its row running.
+  private rememberAppliedSignal(entry: ProjectionEntry, signal: CodingSafeActivitySignal): void {
+    if (signal.signalId === undefined) return;
+    rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
   }
 
   // One body-free line per failed call: where it failed, the tool's closed class, the shell's exit
@@ -790,9 +816,10 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private finalizeCapacityDrop(
     runId: string,
     entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
     prior: PriorState & { readonly capacityDrop: DropCountChange | undefined },
   ): boolean {
-    const finalized = this.finalizeIngest(runId, entry, prior);
+    const finalized = this.finalizeIngest(runId, entry, signal, prior);
     const { capacityDrop } = prior;
     if (finalized && capacityDrop !== undefined) {
       this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
@@ -802,13 +829,21 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
 
   /**
    * Validates the feed after a signal has been applied and bounds enforced, and settles the
-   * ingest() call: notifies subscribers on success; on failure, rolls back to the pre-mutation
+   * ingest() call: on success remembers the applied signal's identity and then notifies
+   * subscribers, so a subscriber that delivers the same signal again synchronously sees it as
+   * already applied; on failure, rolls back to the pre-mutation
    * snapshot when one was taken (capacity rejection), or purges the entry entirely when validate
    * rejected state that isFeedNearProjectionLimit believed was within limits (a bug signal for
    * that threshold, per KEIKO-0878).
    */
-  private finalizeIngest(runId: string, entry: ProjectionEntry, prior: PriorState): boolean {
+  private finalizeIngest(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+    prior: PriorState,
+  ): boolean {
     if (validateCodingSafeActivityFeed(entry.feed).ok) {
+      this.rememberAppliedSignal(entry, signal);
       this.notify();
       return true;
     }
@@ -842,6 +877,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     reason: CodingSafeActivityDropReason,
     count: number,
     rejection?: ProjectionRejection,
+    refusal?: RefusedTransition,
   ): void {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
@@ -851,7 +887,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (next === previous) return;
     entry.feed = withDroppedCount(entry.feed, next, instant(this.now()));
     this.notify();
-    this.emitDropMilestones(runId, reason, previous, next, rejection);
+    this.emitDropMilestones(runId, reason, previous, next, rejection, refusal);
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
@@ -961,8 +997,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     runId: string,
     reason: CodingSafeActivityDropReason,
     rejection?: ProjectionRejection,
+    refusal?: RefusedTransition,
   ): false {
-    this.recordDrop(runId, reason, rejection);
+    this.recordDrops(runId, reason, 1, rejection, refusal);
     return false;
   }
 
@@ -1047,7 +1084,13 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     application: SignalApplication,
   ): boolean | undefined {
     const rejection = projectionRejection(application);
-    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    if (rejection !== undefined) {
+      const refusal =
+        rejection === "tool-transition-refused" && signal.kind === "tool"
+          ? refusedTransition(entry, signal)
+          : undefined;
+      return this.reject(runId, "projection-rejected", rejection, refusal);
+    }
     return application === "restatement-superseded"
       ? this.supersede(runId, entry, signal)
       : undefined;
@@ -1115,6 +1158,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     previous: number,
     next: number,
     rejection?: ProjectionRejection,
+    refusal?: RefusedTransition,
   ): void {
     this.activityLog?.write(
       activityLogEvent(
@@ -1131,6 +1175,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
           occurrenceCount: next,
           lossState: "event-dropped",
           ...(rejection === undefined ? {} : { rejection }),
+          ...refusal,
         },
       ),
     );
@@ -1822,6 +1867,29 @@ function supersededRestatement(
     callIdSha256: callIdDigest(signal.callId),
     ...(settled !== undefined && isSettledToolState(settled) ? { settledState: settled } : {}),
     ...(isRestatedToolState(signal.state) ? { restatedState: signal.state } : {}),
+  };
+}
+
+interface RefusedTransition {
+  readonly callIdSha256: string;
+  readonly refusedFromState: CodingSafeActivityToolState | "absent";
+  readonly refusedToState: CodingSafeActivityToolState;
+  readonly refusedSignalSource: "opencode" | "keiko";
+}
+
+// Read before the refused signal changes anything: a refusal leaves the feed as it was.
+function refusedTransition(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): RefusedTransition {
+  const existing = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  )?.state;
+  return {
+    callIdSha256: callIdDigest(signal.callId),
+    refusedFromState: existing ?? "absent",
+    refusedToState: signal.state,
+    refusedSignalSource: signal.messageId === undefined ? "keiko" : "opencode",
   };
 }
 

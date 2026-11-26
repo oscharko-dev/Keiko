@@ -62,6 +62,20 @@ raw.capabilities[0].toolCallingVerification = {
 const configPath = join(directory, "keiko.config.json");
 writeFileSync(configPath, JSON.stringify(raw), { mode: 0o600 });
 const secret = randomBytes(48).toString("hex");
+// The explicit env below replaces process.env for Keiko, so the hermetic outbound settings the
+// Playwright web server env carries (HERMETIC_OUTBOUND_ENV in dev-server-env.ts) are forwarded by
+// name. Without them the update preflight reads the public registry and its notice covers controls
+// whenever a newer release exists. Missing settings fail the start instead of running non-hermetic.
+const HERMETIC_OUTBOUND_ENV_NAMES = ["KEIKO_HTTP_PROXY", "KEIKO_HTTPS_PROXY", "KEIKO_NO_PROXY"];
+const hermeticOutboundEnv = Object.fromEntries(
+  HERMETIC_OUTBOUND_ENV_NAMES.map((name) => {
+    const value = process.env[name];
+    if (value === undefined || value === "") {
+      throw new Error(`jira-chat-4081 server needs ${name} from the Playwright web server env.`);
+    }
+    return [name, value];
+  }),
+);
 const log = createFileServerLogSink(join(directory, "logs"), { level: "debug" });
 setServerLogger(createServerLogger({ sink: log, level: "debug" }));
 const deps = buildUiHandlerDeps({
@@ -69,6 +83,7 @@ const deps = buildUiHandlerDeps({
   evidenceDir: join(directory, "evidence"),
   uiDbPath: join(directory, "ui.db"),
   env: {
+    ...hermeticOutboundEnv,
     KEIKO_STATE_DIR: directory,
     KEIKO_MEMORY_DIR: join(directory, "memory"),
     KEIKO_MEMORY_KEY: randomBytes(32).toString("base64"),

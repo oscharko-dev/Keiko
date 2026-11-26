@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +9,12 @@ import {
   acceptanceEvidenceSummary,
   runCheck,
 } from "../check-acceptance-evidence.mjs";
+
+// The complete case set the checker requires (scripts/acceptance-case-ids.json).
+const CASE_IDS = JSON.parse(
+  readFileSync(new URL("../acceptance-case-ids.json", import.meta.url), "utf8"),
+).caseIds;
+const allCases = (entry = (caseId) => ({ caseId, metExpectation: true })) => CASE_IDS.map(entry);
 
 const NO_RUNTIME = {
   dockerOnPath: false,
@@ -20,11 +27,11 @@ const NO_RUNTIME = {
 };
 
 const CERTIFYING = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   issue: 4492,
   platform: "darwin",
   arch: "arm64",
-  darwinRelease: "24.6.0",
+  osRelease: "24.6.0",
   node: "26.13.1",
   opencode: "2.2.5",
   userClass: "standard",
@@ -33,10 +40,7 @@ const CERTIFYING = {
   everyCaseMetExpectation: true,
   certifiesPromise: true,
   unmetPreconditions: [],
-  cases: [
-    { caseId: "verify-supervised-coding", metExpectation: true },
-    { caseId: "wrong-fix", metExpectation: true },
-  ],
+  cases: allCases(),
 };
 
 // The shape productionOpenCodeBackend.acceptance.test.ts writes per case (EvidenceEntry with an
@@ -81,13 +85,22 @@ const REAL_CASE = {
   observed: OBSERVED,
   metExpectation: true,
 };
-const REAL_SHAPE = { ...CERTIFYING, cases: [REAL_CASE] };
+const withRealCase = (realCase) =>
+  allCases((caseId) => (caseId === realCase.caseId ? realCase : { caseId, metExpectation: true }));
+const REAL_SHAPE = { ...CERTIFYING, cases: withRealCase(REAL_CASE) };
 
 function withObserved(patch) {
-  return { ...REAL_SHAPE, cases: [{ ...REAL_CASE, observed: { ...OBSERVED, ...patch } }] };
+  return {
+    ...REAL_SHAPE,
+    cases: withRealCase({ ...REAL_CASE, observed: { ...OBSERVED, ...patch } }),
+  };
 }
 
 describe("acceptanceEvidenceFailures (#4519)", () => {
+  it("reads a non-empty case set, so no all-cases assertion is vacuous", () => {
+    expect(CASE_IDS.length).toBeGreaterThan(0);
+  });
+
   it("certifies a standard user without a container runtime whose cases all met", () => {
     expect(acceptanceEvidenceFailures(CERTIFYING)).toEqual([]);
   });
@@ -113,7 +126,10 @@ describe("acceptanceEvidenceFailures (#4519)", () => {
       containerRuntime: { ...NO_RUNTIME, applicationPresent: true },
     };
     expect(acceptanceEvidenceFailures(planted)).toEqual(["container-runtime-present"]);
-    const missed = { ...CERTIFYING, cases: [{ caseId: "wrong-fix", metExpectation: false }] };
+    const missed = {
+      ...CERTIFYING,
+      cases: allCases((caseId) => ({ caseId, metExpectation: caseId !== "wrong-fix" })),
+    };
     expect(acceptanceEvidenceFailures(missed)).toEqual(["case-not-met"]);
     expect(acceptanceEvidenceFailures({ ...CERTIFYING, caseSetComplete: false })).toEqual([
       "case-set-incomplete",
@@ -122,15 +138,15 @@ describe("acceptanceEvidenceFailures (#4519)", () => {
 
   it("refuses evidence without its facts, another platform or another schema", () => {
     expect(acceptanceEvidenceFailures(null)).toEqual(["evidence-unreadable"]);
-    const bare = { schemaVersion: 4, platform: "darwin", userClass: "standard" };
+    const bare = { schemaVersion: 5, platform: "darwin", userClass: "standard" };
     expect(acceptanceEvidenceFailures(bare)).toEqual([
       "container-runtime-present",
       "unrecorded",
       "case-set-incomplete",
       "case-not-met",
     ]);
-    expect(acceptanceEvidenceFailures({ ...CERTIFYING, platform: "win32" })).toEqual(["platform"]);
-    expect(acceptanceEvidenceFailures({ ...CERTIFYING, schemaVersion: 3 })).toEqual([
+    expect(acceptanceEvidenceFailures({ ...CERTIFYING, platform: "linux" })).toEqual(["platform"]);
+    expect(acceptanceEvidenceFailures({ ...CERTIFYING, schemaVersion: 4 })).toEqual([
       "schema-version",
     ]);
   });
@@ -257,6 +273,237 @@ describe("acceptanceEvidenceFailures body-free scan (#4492 AC6)", () => {
   });
 });
 
+// The shape the Windows run writes (windowsAcceptancePreconditions.ts, #4492 AC3).
+const WINDOWS_NO_RUNTIME = {
+  dockerOnPath: false,
+  podmanOnPath: false,
+  otherClientOnPath: false,
+  dockerHostConfigured: false,
+  containerServiceInstalled: false,
+  runtimePipePresent: false,
+  applicationPresent: false,
+};
+const WINDOWS_CERTIFYING = {
+  ...CERTIFYING,
+  platform: "win32",
+  osRelease: "10.0.26100",
+  containerRuntime: WINDOWS_NO_RUNTIME,
+  services: { keikoGatewayServiceInstalled: false, keikoServiceCount: 0 },
+};
+
+describe("acceptanceEvidenceFailures on Windows (#4492 AC3)", () => {
+  it("certifies a standard user without a container runtime or a Keiko service", () => {
+    expect(acceptanceEvidenceFailures(WINDOWS_CERTIFYING)).toEqual([]);
+  });
+
+  it("names an administrator alone", () => {
+    const evidence = { ...WINDOWS_CERTIFYING, userClass: "administrator" };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual(["administrator"]);
+  });
+
+  it("names a reachable container runtime alone", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      containerRuntime: { ...WINDOWS_NO_RUNTIME, runtimePipePresent: true },
+    };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual(["container-runtime-present"]);
+  });
+
+  it.each([
+    ["the gateway service", { keikoGatewayServiceInstalled: true, keikoServiceCount: 1 }],
+    ["a Keiko-prefixed service", { keikoGatewayServiceInstalled: false, keikoServiceCount: 2 }],
+  ])("names %s alone", (_name, services) => {
+    expect(acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, services })).toEqual([
+      "service-installed",
+    ]);
+  });
+
+  it("names every failed precondition, not only the first", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      userClass: "administrator",
+      containerRuntime: { ...WINDOWS_NO_RUNTIME, dockerOnPath: true },
+      services: { keikoGatewayServiceInstalled: true, keikoServiceCount: 1 },
+      unmetPreconditions: ["administrator", "container-runtime-present", "service-installed"],
+      certifiesPromise: false,
+    };
+    expect(acceptanceEvidenceFailures(evidence)).toEqual([
+      "administrator",
+      "container-runtime-present",
+      "service-installed",
+    ]);
+  });
+
+  it("refuses a probe that could not run, as its own code", () => {
+    const evidence = {
+      ...WINDOWS_CERTIFYING,
+      userClass: "unknown",
+      containerRuntime: {},
+      services: undefined,
+      unmetPreconditions: [
+        "administrator-probe-failed",
+        "container-runtime-probe-failed",
+        "service-probe-failed",
+      ],
+      certifiesPromise: false,
+    };
+    const failures = acceptanceEvidenceFailures(evidence);
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        "administrator-probe-failed",
+        "container-runtime-probe-failed",
+        "service-probe-failed",
+      ]),
+    );
+    expect(failures).not.toContain("administrator");
+    expect(failures).not.toContain("service-installed");
+    expect(failures.filter((code) => code === "service-probe-failed")).toHaveLength(1);
+  });
+
+  it("refuses Windows evidence that does not record the services at all", () => {
+    const { services: _dropped, ...bare } = WINDOWS_CERTIFYING;
+    expect(acceptanceEvidenceFailures(bare)).toEqual(["service-probe-failed"]);
+  });
+
+  it("counts a Windows sign the evidence no longer records as present", () => {
+    const { runtimePipePresent: _dropped, ...shrunk } = WINDOWS_NO_RUNTIME;
+    expect(acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, containerRuntime: shrunk })).toEqual(
+      ["container-runtime-present"],
+    );
+  });
+
+  it("does not certify macOS-shaped signs on Windows", () => {
+    expect(
+      acceptanceEvidenceFailures({ ...WINDOWS_CERTIFYING, containerRuntime: NO_RUNTIME }),
+    ).toEqual(["container-runtime-present"]);
+  });
+
+  it("prints the Windows facts and the PASS line, naming the service check", () => {
+    const lines = { log: [], error: [] };
+    const directory = mkdtempSync(join(tmpdir(), "win-evidence-"));
+    const file = join(directory, "evidence.json");
+    writeFileSync(file, JSON.stringify(WINDOWS_CERTIFYING));
+    try {
+      expect(
+        runCheck(["node", "check", file], {
+          log: (line) => lines.log.push(line),
+          error: (line) => lines.error.push(line),
+        }),
+      ).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    expect(lines.log).toContain("check-acceptance-evidence: platform win32 10.0.26100 arm64");
+    expect(lines.log).toContain("check-acceptance-evidence: keiko service signs: none");
+    expect(lines.log.at(-1)).toContain("or Keiko service");
+  });
+});
+
+describe("--preconditions-only (#4492 AC3)", () => {
+  const MACHINE_ONLY = {
+    ...WINDOWS_CERTIFYING,
+    caseSetComplete: false,
+    everyCaseMetExpectation: false,
+    certifiesPromise: false,
+    cases: [],
+  };
+
+  function check(evidence, flag) {
+    const lines = { log: [], error: [] };
+    const directory = mkdtempSync(join(tmpdir(), "pre-evidence-"));
+    const file = join(directory, "evidence.json");
+    writeFileSync(file, JSON.stringify(evidence));
+    try {
+      const code = runCheck(["node", "check", file, ...(flag ? ["--preconditions-only"] : [])], {
+        log: (line) => lines.log.push(line),
+        error: (line) => lines.error.push(line),
+      });
+      return { code, ...lines };
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it("passes a machine whose preconditions are met, and says no result is certified", () => {
+    const result = check(MACHINE_ONLY, true);
+    expect(result.code).toBe(0);
+    expect(result.log.at(-1)).toContain("no case was run, so no result is certified");
+  });
+
+  it("refuses the same machine without the flag, for its missing cases", () => {
+    const result = check(MACHINE_ONLY, false);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("case-set-incomplete, case-not-met");
+  });
+
+  it("refuses a file that carries cases, so the PASS line never sits over a full-suite file", () => {
+    const withCases = {
+      ...MACHINE_ONLY,
+      cases: [{ caseId: "wrong-fix", metExpectation: true }],
+    };
+    const result = check(withCases, true);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("preconditions-only-with-cases");
+    expect(acceptanceEvidenceFailures(withCases, { preconditionsOnly: true })).toEqual([
+      "preconditions-only-with-cases",
+    ]);
+    const malformed = { ...MACHINE_ONLY, cases: "x" };
+    expect(acceptanceEvidenceFailures(malformed, { preconditionsOnly: true })).toEqual([
+      "preconditions-only-with-cases",
+    ]);
+  });
+
+  it("refuses a machine-only file that claims a result", () => {
+    for (const flag of ["caseSetComplete", "everyCaseMetExpectation", "certifiesPromise"]) {
+      const claimed = { ...MACHINE_ONLY, [flag]: true };
+      expect(acceptanceEvidenceFailures(claimed, { preconditionsOnly: true })).toEqual([
+        "preconditions-only-claims-result",
+      ]);
+    }
+    expect(check({ ...MACHINE_ONLY, certifiesPromise: true }, true).code).toBe(1);
+  });
+
+  it("still refuses an unmet precondition and a body-free violation", () => {
+    const evidence = { ...MACHINE_ONLY, userClass: "administrator", taskText: "x" };
+    const result = check(evidence, true);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("administrator");
+    expect(result.error[0]).toContain("body-free:/taskText");
+  });
+});
+
+describe("the complete case set (#4492)", () => {
+  it("refuses a result that misses a required case", () => {
+    const partial = { ...CERTIFYING, cases: [{ caseId: "wrong-fix", metExpectation: true }] };
+    expect(acceptanceEvidenceFailures(partial)).toEqual(["case-set-incomplete"]);
+  });
+
+  it("refuses a repeated case, which would inflate the met count", () => {
+    const repeated = { ...CERTIFYING, cases: [...allCases(), CERTIFYING.cases[0]] };
+    expect(acceptanceEvidenceFailures(repeated)).toEqual(["case-repeated"]);
+  });
+
+  it("refuses a case the task does not define, and a case without an id", () => {
+    const unknown = {
+      ...CERTIFYING,
+      cases: [...allCases(), { caseId: "extra", metExpectation: true }],
+    };
+    expect(acceptanceEvidenceFailures(unknown)).toEqual(["case-unexpected"]);
+    const anonymous = { ...CERTIFYING, cases: [...allCases(), { metExpectation: true }] };
+    expect(acceptanceEvidenceFailures(anonymous)).toEqual(["case-unexpected"]);
+  });
+});
+
+describe("the platform key", () => {
+  it("refuses a converted or inherited platform name without throwing", () => {
+    const converted = { ...WINDOWS_CERTIFYING, platform: ["win32"] };
+    expect(acceptanceEvidenceFailures(converted)).toContain("platform");
+    const inherited = { ...CERTIFYING, platform: "constructor" };
+    expect(acceptanceEvidenceFailures(inherited)).toContain("platform");
+    expect(() => acceptanceEvidenceSummary(inherited)).not.toThrow();
+  });
+});
+
 describe("acceptanceEvidenceSummary", () => {
   it("prints closed values and counts only", () => {
     expect(acceptanceEvidenceSummary(CERTIFYING)).toEqual([
@@ -264,7 +511,7 @@ describe("acceptanceEvidenceSummary", () => {
       "node 26.13.1, opencode 2.2.5",
       "user class standard",
       "container runtime signs: none",
-      "cases: 2 of 2 met, set complete true",
+      `cases: ${String(CASE_IDS.length)} of ${String(CASE_IDS.length)} met, set complete true`,
       "certifies the promise: true",
     ]);
     const signs = acceptanceEvidenceSummary({

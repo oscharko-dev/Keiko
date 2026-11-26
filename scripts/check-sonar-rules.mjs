@@ -10,10 +10,11 @@
 // Scope matches Sonar's: only files this branch changed against its base. A pre-existing finding in
 // untouched code is not this diff's to answer for, exactly as Sonar's new-code period decides.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getHeapStatistics } from "node:v8";
 
 import { ESLint } from "eslint";
 import sonarjs from "eslint-plugin-sonarjs";
@@ -233,5 +234,52 @@ export function existsInTree(path) {
   }
 }
 
+// One ESLint engine over the root and the `keiko-ui` type-aware programs needs about 4.7 GB for a
+// diff that touches both, more than Node's default heap on a hosted runner (#4562). The script
+// raises its own heap instead of its npm script line, which design evidence pins byte for byte.
+export const SONAR_RULES_HEAP_MB = 8192;
+
+export function needsLargerHeap(heapLimitBytes = getHeapStatistics().heap_size_limit) {
+  return heapLimitBytes < SONAR_RULES_HEAP_MB * 1024 * 1024 * 0.9;
+}
+
+export const SONAR_RULES_HEAP_RERUN_ENV = "KEIKO_SONAR_RULES_HEAP_RERUN";
+
+export function shouldRerunWithLargerHeap(
+  env = process.env,
+  heapLimitBytes = getHeapStatistics().heap_size_limit,
+) {
+  return env[SONAR_RULES_HEAP_RERUN_ENV] !== "1" && needsLargerHeap(heapLimitBytes);
+}
+
+// The re-run is marked in the child's environment, so a child that still reports a small heap
+// limit runs the analysis instead of re-executing itself forever.
+export function rerunWithLargerHeap(
+  script,
+  argv,
+  {
+    spawn = spawnSync,
+    exit = process.exit,
+    env = process.env,
+    write = (line) => process.stderr.write(line),
+  } = {},
+) {
+  const child = spawn(
+    process.execPath,
+    [`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, script, ...argv],
+    { stdio: "inherit", env: { ...env, [SONAR_RULES_HEAP_RERUN_ENV]: "1" } },
+  );
+  if (child.error !== undefined) throw child.error;
+  if (child.status === null) {
+    write(`check-sonar-rules: the analysis process ended by signal ${String(child.signal)}\n`);
+    exit(1);
+    return;
+  }
+  exit(child.status);
+}
+
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
-if (invokedPath === fileURLToPath(import.meta.url)) await main();
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  if (shouldRerunWithLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
+  else await main();
+}

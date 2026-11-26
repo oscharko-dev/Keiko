@@ -12,6 +12,19 @@ import {
   ripgrepRuntimeTargetKey,
 } from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { sha256 } from "./lib/digest.mjs";
+import {
+  nativeToolSetShapeIsValid,
+  STEP_NODE_LICENSE_SHA256,
+  STEP_NODE_PORTABLE_EXECUTABLE_PATH,
+  STEP_NODE_PORTABLE_LICENSE_PATH,
+  STEP_NODE_SOURCE_URL,
+  STEP_NODE_TOOL_NAME,
+  STEP_NODE_VERSION,
+  stepNodeAppliesTo,
+  stepNodeSbomBomRef,
+  stepNodeSigning,
+  stepNodeToolProvenance,
+} from "./lib/portable-step-node.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 export const WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION = 2;
@@ -293,6 +306,13 @@ const NATIVE_TOOL_KEYS = Object.freeze([
   "sizeBytes",
   "sbomBomRef",
   "signing",
+]);
+const STEP_NODE_SOURCE_KEYS = Object.freeze([
+  "sourceUrl",
+  "sourceSha256",
+  "patchSha256s",
+  "binarySha256",
+  "licenseSha256",
 ]);
 const NATIVE_TOOL_SOURCE_KEYS = Object.freeze([
   "commitSha",
@@ -975,11 +995,13 @@ function validateNativeAddons(manifest, failures, options) {
 
 /**
  * The pinned third-party executables a portable payload ships beside the Keiko-built helpers
- * (Epic #3897): today exactly ripgrep, the search dependency of the OpenCode coding runtime. A tool
- * is not a Node addon and not Keiko-built, so it has its own closed section rather than a second
- * `nativeAddons` entry, which every signing and qualification consumer pins to exactly one.
- * Absence stays parseable for artifacts produced before the tool shipped; a producer asks for
- * presence with `requireNativeTools`, and any consumer that finds a tool validates it fully.
+ * (Epic #3897): ripgrep, the search dependency of the OpenCode coding runtime, and on windows-x64
+ * the patched step Node.js its confined steps run (#4492). A tool is not a Node addon and not
+ * Keiko-built, so it has its own closed section rather than a second `nativeAddons` entry, which
+ * every signing and qualification consumer pins to exactly one. Absence stays parseable for
+ * artifacts produced before the tool shipped; a producer asks for presence with
+ * `requireNativeTools` (and `requireStepNode` on windows-x64), and any consumer that finds a tool
+ * validates it fully.
  */
 function validateNativeTools(manifest, failures, options) {
   const tools = manifest.nativeTools;
@@ -993,17 +1015,37 @@ function validateNativeTools(manifest, failures, options) {
     }
     return;
   }
-  if (!Array.isArray(tools) || tools.length !== 1) {
+  validateNativeToolSet(
+    tools,
+    portableTargetByName(manifest.artifact?.platformTarget),
+    failures,
+    options,
+  );
+}
+
+function validateNativeToolSet(tools, target, failures, options) {
+  const allowsStepNode = stepNodeAppliesTo(target);
+  if (!nativeToolSetShapeIsValid(tools) || (tools.length === 2 && !allowsStepNode)) {
     push(failures, "nativeTools", "must contain exactly one tool when present");
     return;
   }
-  const tool = tools[0];
+  validateRipgrepTool(tools[0], target, failures, options);
+  if (tools.length === 2) validateStepNodeTool(tools[1], target, failures, options);
+  if (options.requireStepNode === true && allowsStepNode && tools.length !== 2) {
+    push(
+      failures,
+      "nativeTools",
+      "must contain the pinned step Node.js for newly produced Windows artifacts",
+    );
+  }
+}
+
+function validateRipgrepTool(tool, target, failures, options) {
   const path = "nativeTools[0]";
   if (!isRecord(tool)) {
     push(failures, path, "must be an object");
     return;
   }
-  const target = portableTargetByName(manifest.artifact?.platformTarget);
   const approval = ripgrepApprovalForPortableTarget(target);
   exactKeysAt(tool, NATIVE_TOOL_KEYS, path, failures);
   validateNativeToolIdentity(tool, target, approval, path, failures);
@@ -1013,6 +1055,59 @@ function validateNativeTools(manifest, failures, options) {
   digestAt(tool, "shippedSha256", path, failures, options);
   positiveNumberAt(tool, "sizeBytes", path, failures);
   validateNativeHelperSigning(tool, target, path, failures, options);
+}
+
+/**
+ * The patched Node.js a Windows Coding step runs (#4492). Its bytes are pinned by the server and no
+ * lane signs it, so unlike every other tool its shipped digest is its unsigned digest and its
+ * signing state is one fixed record in every lane. The digests themselves are the server's pin,
+ * which the producer verifies against the built server; this validator holds the structure.
+ */
+function validateStepNodeTool(tool, target, failures, options) {
+  const path = "nativeTools[1]";
+  if (!isRecord(tool)) {
+    push(failures, path, "must be an object");
+    return;
+  }
+  exactKeysAt(tool, NATIVE_TOOL_KEYS, path, failures);
+  literalAt(tool, "name", STEP_NODE_TOOL_NAME, path, failures);
+  literalAt(tool, "kind", "native-tool", path, failures);
+  literalAt(tool, "version", STEP_NODE_VERSION, path, failures);
+  literalAt(tool, "platformTarget", target?.platformTarget, path, failures);
+  literalAt(tool, "architecture", target?.nodeArchitecture, path, failures);
+  literalAt(tool, "executablePath", STEP_NODE_PORTABLE_EXECUTABLE_PATH, path, failures);
+  literalAt(tool, "licensePath", STEP_NODE_PORTABLE_LICENSE_PATH, path, failures);
+  literalAt(tool, "sbomBomRef", stepNodeSbomBomRef(target?.platformTarget), path, failures);
+  validateStepNodeSource(tool, path, failures, options);
+  digestAt(tool, "unsignedSha256", path, failures, options);
+  digestAt(tool, "shippedSha256", path, failures, options);
+  literalAt(tool, "shippedSha256", tool.unsignedSha256, path, failures);
+  positiveNumberAt(tool, "sizeBytes", path, failures);
+  const signing = recordAt(tool, "signing", path, failures);
+  const expected = target === undefined ? {} : stepNodeSigning(target);
+  for (const key of Object.keys(expected)) {
+    literalAt(signing, key, expected[key], `${path}.signing`, failures);
+  }
+  exactKeysAt(signing, Object.keys(expected), `${path}.signing`, failures);
+}
+
+function validateStepNodeSource(tool, path, failures, options) {
+  const source = recordAt(tool, "source", path, failures);
+  const sourcePath = `${path}.source`;
+  exactKeysAt(source, STEP_NODE_SOURCE_KEYS, sourcePath, failures);
+  literalAt(source, "sourceUrl", STEP_NODE_SOURCE_URL, sourcePath, failures);
+  literalAt(source, "licenseSha256", STEP_NODE_LICENSE_SHA256, sourcePath, failures);
+  digestAt(source, "sourceSha256", sourcePath, failures, options);
+  digestAt(source, "binarySha256", sourcePath, failures, options);
+  literalAt(source, "binarySha256", tool.unsignedSha256, sourcePath, failures);
+  const patches = source.patchSha256s;
+  if (
+    !Array.isArray(patches) ||
+    patches.length === 0 ||
+    !patches.every((digest) => typeof digest === "string" && DIGEST_PATTERN.test(digest))
+  ) {
+    push(failures, `${sourcePath}.patchSha256s`, "must be a non-empty list of SHA-256 digests");
+  }
 }
 
 export function ripgrepApprovalForPortableTarget(target) {
@@ -1032,6 +1127,7 @@ export function nativeToolSbomBomRef(approval, platformTarget) {
  * rebind so the statement both write is, by construction, the same statement.
  */
 export function nativeToolProvenance(tool) {
+  if (tool.name === STEP_NODE_TOOL_NAME) return stepNodeToolProvenance(tool);
   return {
     architecture: tool.architecture,
     executablePath: tool.executablePath,

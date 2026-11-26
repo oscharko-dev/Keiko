@@ -1965,8 +1965,9 @@ function emitInvalidRuntimeEventDiagnostic(
 
 // A runtime exit is observed, not thrown. Its line still carries the Keiko-code frames of the site
 // that observed it (ADR-0173 D3), the frames every thrown failure line carries, so a customer's log
-// names the exit handler of the installed build (#3593).
-function emitRuntimeExitDiagnostic(
+// names the exit handler of the installed build (#3593). Exported so the Activity Log scenario
+// proves this exact line through the real writer and the support analyzer (#4495).
+export function emitRuntimeExitDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   code: number | null,

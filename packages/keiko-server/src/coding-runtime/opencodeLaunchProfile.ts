@@ -184,6 +184,10 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   // there only for the time-based prompt automation Keiko's scheduled wakes are built on
   // (`OPENCODE_NATIVE_ADMITTED_BUILT_IN_PLUGINS`, #4546).
   "opencode.tool.automation",
+  // Changes the session's working directory, also onto another computer. Its own `machines` switch
+  // is off, so the tool is never registered; the removal keeps a changed producer default from
+  // ever offering a tool that moves a run's directory (#4546).
+  "opencode.tool.cd",
   "opencode.tool.image-generate",
   // The remaining built-in plugins 2.4.x added each offer a capability with no owner in Keiko yet
   // (#4546): a tool that names another machine, one that interrupts sessions, a full-text search of
@@ -191,6 +195,9 @@ export const OPENCODE_WITHHELD_BUILT_IN_PLUGINS = Object.freeze([
   // memory the agent writes freely and a notice for forked sessions.
   "opencode.fork-notice",
   "opencode.home-memory",
+  // Lists the skills a connected MCP server serves and loads them from the server (2.4.2): skill
+  // text from a remote server would reach the model beside Keiko's sanitized skills.
+  "opencode.mcp.skill",
   "opencode.tool.machine",
   "opencode.tool.session-interrupt",
   "opencode.tool.session-search",
@@ -234,6 +241,7 @@ const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
   all_flags: false,
   artifacts: false,
   codemode_vm: false,
+  compaction_jobs: false,
   console_watches: false,
   full_codemode: false,
   home_memory: false,
@@ -242,6 +250,7 @@ const OPENCODE_CLOSED_EXPERIMENTS = Object.freeze({
   // run Keiko still holds; Keiko alone bounds the runtime's lifetime.
   location_idle_timeout: false,
   machines: false,
+  mcp_skills: false,
   media_blob: false,
   model_speeds: false,
   opencode_api: false,

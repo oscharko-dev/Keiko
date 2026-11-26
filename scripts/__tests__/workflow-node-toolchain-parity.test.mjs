@@ -219,8 +219,9 @@ describe("workflow Node toolchain parity", () => {
     // coding acceptance with a password-protected repository (#4530, repository-relay in
     // coding-workbench-customer-shape.yml) adds one. The macOS native boundary lane (#4521,
     // macos-native-boundary.yml) adds one. The macOS delivery forms as a standard account (#4520,
-    // standard-account-forms in npm-folder-qualify.yml) adds one.
-    expect(withSetupNode).toHaveLength(49);
+    // standard-account-forms in npm-folder-qualify.yml) adds one. The patched step Node.js (#4492,
+    // windows-step-node.yml) adds two: its build and its verify job.
+    expect(withSetupNode).toHaveLength(51);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

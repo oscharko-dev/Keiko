@@ -28,7 +28,12 @@ import {
 } from "./structuralExecution.js";
 import type { WorkspaceInfo } from "./types.js";
 
-import { codingRepositoryExcerpt } from "./codingRepositorySearchProjection.js";
+import {
+  codingRepositoryExcerpt,
+  codingRepositorySourceExcerpt,
+  prepareCodingRepositorySource,
+  type CodingRepositorySource,
+} from "./codingRepositorySearchProjection.js";
 import { boundCodingRepositoryResult } from "./codingRepositorySearchResult.js";
 import { buildMatcher } from "./repoSearchMatchers.js";
 import { repositoryPhysicalLines } from "./repoSearchLineSelection.js";
@@ -181,7 +186,7 @@ async function searchHits(
     result.atoms,
     request.mode === "literal",
   );
-  const finalObservation = projectionObservation(observation, context, projected.truncated);
+  const finalObservation = projectionObservation(observation, context, projected);
   context.onSearchObservation?.(finalObservation);
   return boundCodingRepositoryResult({
     ok: true,
@@ -212,8 +217,14 @@ function searchTruncationReasons(
 function projectionObservation(
   observation: CodingRepositorySearchObservation,
   context: CodingRepositoryContext,
-  truncated: boolean,
+  projected: ProjectedSearchHits,
 ): CodingRepositorySearchObservation {
+  const reasons = observation.diagnostics.coverageReasons;
+  const skipped = projected.staleHits + projected.misplacedHits + projected.unreadableHits;
+  const added = [
+    ...(projected.truncated ? (["timeout"] as const) : []),
+    ...(skipped > 0 ? (["io-error"] as const) : []),
+  ];
   return {
     metrics: {
       ...observation.metrics,
@@ -221,12 +232,29 @@ function projectionObservation(
     },
     diagnostics: {
       ...observation.diagnostics,
-      coverageIncomplete: observation.diagnostics.coverageIncomplete || truncated,
-      coverageReasons: truncated
-        ? [...new Set([...observation.diagnostics.coverageReasons, "timeout" as const])]
-        : observation.diagnostics.coverageReasons,
+      coverageIncomplete: observation.diagnostics.coverageIncomplete || added.length > 0,
+      coverageReasons: added.length === 0 ? reasons : [...new Set([...reasons, ...added])],
+      staleHitsSkipped: projected.staleHits,
+      misplacedHitsSkipped: projected.misplacedHits,
+      unreadableHitsSkipped: projected.unreadableHits,
     },
   };
+}
+
+interface ProjectionState {
+  readonly matcher: ReturnType<typeof buildMatcher>;
+  readonly query: RetrievalQuery;
+  /** The projected hit of each atom, by the atom's position in the scan's ranked order. */
+  readonly hits: (CodingRepositoryHit | undefined)[];
+  staleHits: number;
+  misplacedHits: number;
+  unreadableHits: number;
+}
+
+interface ProjectedSource {
+  readonly prepared: CodingRepositorySource;
+  readonly physicalLines: readonly string[];
+  readonly sourceLines: ReturnType<typeof repositorySourceLines> | undefined;
 }
 
 async function projectSearchHits(
@@ -234,24 +262,111 @@ async function projectSearchHits(
   query: RetrievalQuery,
   atoms: readonly EvidenceAtom[],
   literal: boolean,
-): Promise<{ readonly hits: readonly CodingRepositoryHit[]; readonly truncated: boolean }> {
+): Promise<ProjectedSearchHits> {
   const control = { ...context.control, deadlineAtMs: context.projectionDeadlineAtMs };
   const projection = { ...context, fs: executionControlledWorkspaceFs(context.fs, control) };
-  const hits: CodingRepositoryHit[] = [];
-  for (const atom of atoms) {
+  const state: ProjectionState = {
+    matcher: buildMatcher(query, literal ? { kind: "literal" } : undefined),
+    query,
+    hits: [],
+    staleHits: 0,
+    misplacedHits: 0,
+    unreadableHits: 0,
+  };
+  // A file's hits are projected together, from one read, one redaction and one line index, so
+  // ranked hits of several files never read a file twice and only one file is held at a time.
+  // Files go in the order of their best-ranked hit; the hits keep the scan's ranked order. A
+  // timeout keeps only the hits ranked before the best hit of the file that did not finish, so the
+  // result stays a strict prefix of the ranked order: a lower-ranked hit of an earlier file never
+  // survives without a higher-ranked hit of the unfinished one.
+  for (const file of atomsByFile(atoms)) {
     assertStructuralExecutionActive(context.control);
     try {
       assertStructuralExecutionActive(control);
-      hits.push(await projectSearchHit(projection, query, atom, literal));
+      await projectFile(projection, state, file);
     } catch (error) {
       assertStructuralExecutionActive(context.control);
       if (error instanceof StructuralExecutionStoppedError && error.reason === "timeout") {
-        return { hits, truncated: true };
+        return { ...projectedHits(state, file.atoms[0]?.position), truncated: true };
       }
       throw error;
     }
   }
-  return { hits, truncated: false };
+  return { ...projectedHits(state), truncated: false };
+}
+
+function projectedHits(
+  state: ProjectionState,
+  unfinishedBestPosition = state.hits.length,
+): Omit<ProjectedSearchHits, "truncated"> {
+  return {
+    hits: state.hits
+      .slice(0, unfinishedBestPosition)
+      .filter((hit): hit is CodingRepositoryHit => hit !== undefined),
+    staleHits: state.staleHits,
+    misplacedHits: state.misplacedHits,
+    unreadableHits: state.unreadableHits,
+  };
+}
+
+interface ProjectedSearchHits {
+  readonly hits: readonly CodingRepositoryHit[];
+  readonly truncated: boolean;
+  /** Hits whose file no longer holds the match at all: it changed after the scan. */
+  readonly staleHits: number;
+  /**
+   * Hits whose file still holds the match, but not at the reported lines, or that carry no lines.
+   * With an unchanged file that is a defect in the scan, so it is counted apart from a stale hit.
+   */
+  readonly misplacedHits: number;
+  /** Hits whose file could no longer be read after the scan. */
+  readonly unreadableHits: number;
+}
+
+interface FileAtoms {
+  readonly path: string;
+  readonly atoms: { readonly position: number; readonly atom: EvidenceAtom }[];
+}
+
+function atomsByFile(atoms: readonly EvidenceAtom[]): readonly FileAtoms[] {
+  const files = new Map<string, FileAtoms>();
+  atoms.forEach((atom, position) => {
+    const file = files.get(atom.scopePath) ?? { path: atom.scopePath, atoms: [] };
+    file.atoms.push({ position, atom });
+    files.set(atom.scopePath, file);
+  });
+  return [...files.values()];
+}
+
+async function projectFile(
+  context: CodingRepositoryContext,
+  state: ProjectionState,
+  file: FileAtoms,
+): Promise<void> {
+  const source = await projectedSource(context, state, file.path).catch(
+    (error: unknown): undefined => {
+      // A file the projection can no longer read (it vanished, its identity changed, it is no
+      // longer text or exceeds the size cap) loses its hits alone; nothing of it is shown. Denied
+      // and escaping paths, timeouts and cancellation are other error classes and still end the
+      // search: a file swapped for a link after the scan is refused, never skipped.
+      if (error instanceof WorkspaceReadError || error instanceof FileTooLargeError)
+        return undefined;
+      throw error;
+    },
+  );
+  if (source === undefined) {
+    state.unreadableHits += file.atoms.length;
+    return;
+  }
+  let holdsMatch: boolean | undefined;
+  const matchesAnywhere = (): boolean =>
+    (holdsMatch ??= matchesWithin(state, source, 0, source.physicalLines.length - 1));
+  for (const { position, atom } of file.atoms) {
+    const hit = projectSearchHit(state, source, atom, matchesAnywhere);
+    if (hit === "stale") state.staleHits += 1;
+    else if (hit === "misplaced") state.misplacedHits += 1;
+    else state.hits[position] = hit;
+  }
 }
 
 function searchObservation(
@@ -297,6 +412,9 @@ function searchExclusionObservation(
   | "binaryFilesSkipped"
   | "oversizedFilesSkipped"
   | "unreadableFilesSkipped"
+  | "staleHitsSkipped"
+  | "misplacedHitsSkipped"
+  | "unreadableHitsSkipped"
 > {
   const exclusions = result.diagnostics?.fileExclusionCounts ?? {
     binary: 0,
@@ -309,6 +427,9 @@ function searchExclusionObservation(
     binaryFilesSkipped: exclusions.binary,
     oversizedFilesSkipped: exclusions.oversized,
     unreadableFilesSkipped: exclusions.unreadable,
+    staleHitsSkipped: 0,
+    misplacedHitsSkipped: 0,
+    unreadableHitsSkipped: 0,
   };
 }
 
@@ -364,29 +485,53 @@ export async function executeCodingRepositoryRequest(
   }
 }
 
-async function projectSearchHit(
-  context: CodingRepositoryContext,
-  query: RetrievalQuery,
-  atom: EvidenceAtom,
-  literal: boolean,
-): Promise<CodingRepositoryHit> {
-  if (atom.lineRange === undefined)
-    throw new WorkspaceReadError("search coordinate missing", atom.scopePath);
-  const text = await readCodingText(context, atom.scopePath);
-  const range = atom.lineRange;
-  const matcher = buildMatcher(query, literal ? { kind: "literal" } : undefined);
-  const sourceLines =
-    query.kind === "natural-language" ? repositorySourceLines(text, atom.scopePath) : undefined;
-  if (
-    !repositoryPhysicalLines(text)
-      .slice(range.startLine - 1, range.endLine)
-      .some((line, index) => matcher.match(line, sourceLines?.[range.startLine - 1 + index]) > 0)
-  ) {
-    throw new WorkspaceReadError("search source changed", atom.scopePath);
+function matchesWithin(
+  state: ProjectionState,
+  source: ProjectedSource,
+  firstIndex: number,
+  lastIndex: number,
+): boolean {
+  for (let index = Math.max(0, firstIndex); index <= lastIndex; index += 1) {
+    const line = source.physicalLines[index];
+    if (line === undefined) return false;
+    if (state.matcher.match(line, source.sourceLines?.[index]) > 0) return true;
   }
-  return codingRepositoryExcerpt(
+  return false;
+}
+
+async function projectedSource(
+  context: CodingRepositoryContext,
+  state: ProjectionState,
+  path: string,
+): Promise<ProjectedSource> {
+  const text = await readCodingText(context, path);
+  return {
+    prepared: prepareCodingRepositorySource(text),
+    physicalLines: repositoryPhysicalLines(text),
+    sourceLines:
+      state.query.kind === "natural-language" ? repositorySourceLines(text, path) : undefined,
+  };
+}
+
+/**
+ * The hit's excerpt, or why it is left out: its file no longer holds the match (`stale`), or holds
+ * it only outside the reported lines (`misplaced`). Such a hit is never shown, and it no longer
+ * fails the search and every other hit with it.
+ */
+function projectSearchHit(
+  state: ProjectionState,
+  source: ProjectedSource,
+  atom: EvidenceAtom,
+  matchesAnywhere: () => boolean,
+): CodingRepositoryHit | "stale" | "misplaced" {
+  const range = atom.lineRange;
+  if (range === undefined) return "misplaced";
+  if (!matchesWithin(state, source, range.startLine - 1, range.endLine - 1)) {
+    return matchesAnywhere() ? "misplaced" : "stale";
+  }
+  return codingRepositorySourceExcerpt(
     atom.scopePath,
-    text,
+    source.prepared,
     range.startLine,
     range.endLine,
     CODING_REPOSITORY_LIMITS.snippetBytes,

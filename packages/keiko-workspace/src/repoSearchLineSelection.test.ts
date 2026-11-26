@@ -89,6 +89,47 @@ describe("collectBestLines", () => {
     expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
   });
 
+  it("never reports an indented block that ends before the matching line", () => {
+    // A TypeScript object key ending in ":" read as a Python block header: its block ended two
+    // lines before the match, and the hit pointed at those unrelated lines (#4130 review lab).
+    const text = [
+      "  description:",
+      '    "Read the attached documents.",',
+      "  inputSchema: schema(),",
+      "    maxDurationMs: SEARCH_DURATION_MS,",
+    ].join("\n");
+    const best = collectBestLines(
+      {
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("maxDurationMs") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
+  });
+
+  it("keeps a class attribute after a Python method body on its own line", () => {
+    const text = ["class Handler:", "    def run(self):", "        pass", "    needle = 1"].join(
+      "\n",
+    );
+    const best = collectBestLines(
+      {
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
+        matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      { truncated: false },
+    );
+
+    expect(best).toEqual([{ line: 4, startLine: 4, endLine: 4, score: 1 }]);
+  });
+
   it.each([
     [
       "a Python block at the last physical line",

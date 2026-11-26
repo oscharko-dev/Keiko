@@ -9743,6 +9743,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: [
         "editor.verification.windows-step-drives",
+        "editor.verification.windows-step-node",
         "editor.verification.windows-step-refused",
         "editor.verification.windows-step-supervisor",
         "runtime.confinement.unavailable",
@@ -9753,6 +9754,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     },
     requiredCausalOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-node",
       "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
@@ -9760,6 +9762,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLossOperations: [],
     requiredProofOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-node",
       "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",
@@ -9767,6 +9770,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "editor.verification.windows-step-drives",
+      "editor.verification.windows-step-node",
       "editor.verification.windows-step-refused",
       "editor.verification.windows-step-supervisor",
       "runtime.confinement.unavailable",

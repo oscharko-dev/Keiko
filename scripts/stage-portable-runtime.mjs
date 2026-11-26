@@ -63,6 +63,15 @@ import {
   verifyPinnedRuntimeFile,
 } from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import {
+  CODING_RUNTIME_RELEASES_FILE,
+  loadWindowsPortableApproval as loadStepNodeApproval,
+  resolveStepNodeRuntime,
+  STEP_NODE_LICENSE_EXPRESSION,
+  STEP_NODE_TOOL_NAME,
+  stageStepNodeTool,
+  stepNodeAppliesTo,
+} from "./lib/portable-step-node.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { NPM_PACK_STDIO_MAX_BUFFER } from "./package-surface-pack.mjs";
@@ -136,6 +145,7 @@ function parseArgs(argv) {
     nodeCacheDir: join(repoRoot, ".portable-runtime", "cache", "node"),
     nodeSha256: undefined,
     nodeVersion: undefined,
+    stepNodePackage: undefined,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     releaseId: 0,
     releaseTag: `v${rootPackage.version}`,
@@ -155,6 +165,7 @@ function parseArgs(argv) {
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
   validateAppleTeamIdentifierOption(options, target);
+  validateStepNodePackageOption(options, target);
   if (
     options.windowsGenerationProduction &&
     (target.platformTarget !== "windows-x64" || options.evaluation)
@@ -165,6 +176,12 @@ function parseArgs(argv) {
     assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
   }
   return options;
+}
+
+function validateStepNodePackageOption(options, target) {
+  if (options.stepNodePackage !== undefined && !stepNodeAppliesTo(target)) {
+    fail("--step-node-package is accepted only for the windows-x64 target");
+  }
 }
 
 function applyArg(argv, index, options) {
@@ -205,6 +222,7 @@ function applyArg(argv, index, options) {
     ["--out-dir", "outDir"],
     ["--release-id", "releaseId"],
     ["--release-tag", "releaseTag"],
+    ["--step-node-package", "stepNodePackage"],
     ["--target", "target"],
     ["--workflow-run-attempt", "workflowRunAttempt"],
     ["--workflow-run-id", "workflowRunId"],
@@ -1498,7 +1516,35 @@ function nativeAddonSbomComponent(addon) {
   };
 }
 
+function stepNodeSbomComponent(tool) {
+  return {
+    type: "application",
+    "bom-ref": tool.sbomBomRef,
+    name: "nodejs",
+    version: tool.version,
+    purl: tool.sbomBomRef,
+    licenses: [{ expression: STEP_NODE_LICENSE_EXPRESSION }],
+    hashes: [{ alg: "SHA-256", content: tool.shippedSha256 }],
+    externalReferences: [
+      {
+        type: "distribution",
+        url: tool.source.sourceUrl,
+        hashes: [{ alg: "SHA-256", content: tool.source.sourceSha256 }],
+      },
+    ],
+    properties: [
+      { name: "keiko:platform-target", value: tool.platformTarget },
+      { name: "keiko:architecture", value: tool.architecture },
+      ...tool.source.patchSha256s.map((digest) => ({ name: "keiko:patch-sha256", value: digest })),
+      { name: "keiko:unsigned-sha256", value: tool.unsignedSha256 },
+      { name: "keiko:executable-path", value: tool.executablePath },
+      { name: "keiko:license-path", value: tool.licensePath },
+    ],
+  };
+}
+
 function nativeToolSbomComponent(tool) {
+  if (tool.name === STEP_NODE_TOOL_NAME) return stepNodeSbomComponent(tool);
   return {
     type: "application",
     "bom-ref": tool.sbomBomRef,
@@ -1554,6 +1600,16 @@ export function thirdPartyNotices(manifest) {
 }
 
 function nativeToolNoticeLines(tool) {
+  if (tool.name === STEP_NODE_TOOL_NAME) {
+    return [
+      `Node.js ${tool.version} (the step Node.js of the Windows Coding Workbench)`,
+      "Copyright Node.js contributors. All rights reserved.",
+      "Licensed under the MIT license; the official 26.13.1 source plus libuv#5181 and one link-only patch.",
+      `The complete license is included at ${tool.licensePath}.`,
+      `Source: ${tool.source.sourceUrl}`,
+      "",
+    ];
+  }
   return [
     `ripgrep ${tool.version}`,
     "Copyright (c) 2015 Andrew Gallant.",
@@ -1900,6 +1956,24 @@ export function stageRipgrepTool(
   return [ripgrepToolManifestEntry(target, runtime.approved, staged, evaluation)];
 }
 
+// The step Node.js bytes come from the reviewed transport package; the pin they must match is the
+// one the built server enforces, read the way the native helpers' pin is read.
+function provisionedStepNodeRuntime(options) {
+  return resolveStepNodeRuntime({
+    approval: loadWindowsPortableApproval(),
+    catalog: JSON.parse(readFileSync(join(repoRoot, CODING_RUNTIME_RELEASES_FILE), "utf8")),
+    localTarball: options.stepNodePackage,
+    cacheDir: join(dirname(resolve(options.nodeCacheDir)), "coding-runtime-package"),
+  });
+}
+
+function stageStepNode(target, resourceRoot, options, hooks) {
+  return (hooks.stageStepNodeTool ?? stageStepNodeTool)(target, resourceRoot, {
+    onFailure: fail,
+    resolveRuntime: () => (hooks.resolveStepNodeRuntime ?? provisionedStepNodeRuntime)(options),
+  });
+}
+
 function buildSecureReadHelper(target, destination) {
   run(process.execPath, [
     join(repoRoot, "scripts", "build-secure-workspace-read.mjs"),
@@ -1998,16 +2072,11 @@ export async function verifyWindowsNativeHelpers(
 // (preparePackageSurface), while the scripts that only import this module's helpers, the secure-read
 // qualification and the sidecar preparation, run without a build and never get here.
 function loadWindowsPortableApproval() {
-  const result = spawnSync(
-    process.execPath,
-    [join(repoRoot, "scripts", "print-windows-portable-approval.mjs")],
-    { cwd: repoRoot, encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    const detail = (result.stderr ?? "").trim() || `exit ${String(result.status)}`;
-    fail(`could not read the Windows helper approval from the built server: ${detail}`);
+  try {
+    return loadStepNodeApproval();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "could not read the Windows helper approval");
   }
-  return JSON.parse(result.stdout);
 }
 
 function validateMacosRuntimeSupervisorSurface(supervisor) {
@@ -2663,9 +2732,12 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
   const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot, {
     evaluation: options.evaluation === true,
   });
-  const nativeTools = (hooks.stageRipgrepTool ?? stageRipgrepTool)(target, paths.resourceRoot, {
-    evaluation: options.evaluation === true,
-  });
+  const nativeTools = [
+    ...(hooks.stageRipgrepTool ?? stageRipgrepTool)(target, paths.resourceRoot, {
+      evaluation: options.evaluation === true,
+    }),
+    ...stageStepNode(target, paths.resourceRoot, options, hooks),
+  ];
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const staged = {
     nodeArchiveSha256,
@@ -2794,9 +2866,10 @@ function requireDarwinBuilder(target, step) {
 }
 
 function validateGeneratedManifest(manifest, evaluation) {
+  const required = { requireNativeTools: true, requireStepNode: true };
   const failures = evaluation
-    ? validatePortableEvaluationManifest(manifest, { requireNativeTools: true })
-    : validatePortableStagingManifest(manifest, { requireNativeTools: true });
+    ? validatePortableEvaluationManifest(manifest, required)
+    : validatePortableStagingManifest(manifest, required);
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 

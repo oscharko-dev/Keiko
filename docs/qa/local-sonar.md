@@ -97,6 +97,12 @@ passing unanalysed. When the organisation changes its profile, refresh the snaps
 `api/qualityprofiles/search?project=oscharko-dev_Keiko&organization=oscharko-dev` and
 `api/rules/search?qprofile=<key>&activation=true`, keeping each language's own rule keys.
 
+`check:sonar-rules` raises its own heap to 8 GB: it re-runs itself with `--max-old-space-size=8192`
+when Node's limit is lower. A diff that touches packages and `keiko-ui` builds two type-aware
+programs in one ESLint engine and needs about 4.7 GB, more than Node's default heap on a hosted
+runner (#4562). The flag lives in the script, not in its npm script line, because design evidence
+pins `package.json` byte for byte.
+
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
 is what this command runs. The full analysis on `dev` demands **zero** unresolved issues, so a
 single MINOR of this class turns `dev` red after the merge.

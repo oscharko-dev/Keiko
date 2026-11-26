@@ -1,0 +1,62 @@
+// #4492: writes the body-free build receipt of the patched Windows step Node.js next to the binary
+// (see .github/workflows/windows-step-node.yml). The receipt carries digests, sizes, versions and the
+// build flags only, in the shape of the other helper pins (`sha256`, `sizeBytes`, source digests), so
+// the product pin can be copied from it.
+//
+//   node scripts/write-windows-step-node-receipt.mjs --exe <node.exe> --source-sha256 <hex> \
+//     --patch <patch> --out <receipt.json> [--flag <name>=<value>]...
+import { execFileSync } from "node:child_process";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+import { sha256 } from "./lib/digest.mjs";
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+
+function values(name) {
+  const found = [];
+  process.argv.forEach((entry, index) => {
+    if (entry === name && process.argv[index + 1] !== undefined)
+      found.push(process.argv[index + 1]);
+  });
+  return found;
+}
+
+function required(name) {
+  const [value] = values(name);
+  if (value === undefined) throw new Error(`missing ${name}`);
+  return value;
+}
+
+function main() {
+  const exe = required("--exe");
+  const sourceSha256 = required("--source-sha256");
+  if (!SHA256_PATTERN.test(sourceSha256)) throw new Error("--source-sha256 must be a SHA-256");
+  const flags = Object.fromEntries(
+    values("--flag").map((entry) => {
+      const separator = entry.indexOf("=");
+      if (separator < 1) throw new Error(`--flag needs name=value: ${entry}`);
+      return [entry.slice(0, separator), entry.slice(separator + 1)];
+    }),
+  );
+  const receipt = {
+    schema: "keiko-windows-step-node-receipt-v1",
+    nodeVersion: "26.13.1",
+    patches: values("--patch").map((path) => ({
+      name: basename(path),
+      sha256: sha256(readFileSync(path)),
+    })),
+    libuvUpstream: "https://github.com/libuv/libuv/pull/5181",
+    source: { archive: "node-v26.13.1.tar.gz", sha256: sourceSha256 },
+    executable: {
+      path: "node.exe",
+      sha256: sha256(readFileSync(exe)),
+      sizeBytes: statSync(exe).size,
+      libuv: execFileSync(exe, ["-p", "process.versions.uv"], { encoding: "utf8" }).trim(),
+    },
+    build: flags,
+  };
+  writeFileSync(required("--out"), `${JSON.stringify(receipt, undefined, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(receipt.executable)}\n`);
+}
+
+main();

@@ -34,26 +34,21 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync,
-  constants,
   cpSync,
   existsSync,
-  fchmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { connect } from "node:net";
-import { homedir, release, tmpdir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -76,6 +71,13 @@ import {
   type FunctionalDiscoveryServer,
 } from "../test-support/functional-bff-server.js";
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import {
+  buildAcceptanceEvidence,
+  ownerPrivateEvidenceTarget,
+  writeOwnerPrivateEvidence,
+  type PreconditionFacts,
+} from "../test-support/acceptanceEvidence.js";
+import { probeWindowsPreconditions } from "../test-support/windowsAcceptancePreconditions.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import {
@@ -322,12 +324,12 @@ let evidenceTarget: string | undefined;
 beforeAll(() => {
   const file = process.env.KEIKO_ACCEPTANCE_EVIDENCE_FILE;
   if (file === undefined || file === "") return;
-  evidenceTarget = ownerPrivateEvidenceTarget(file);
+  evidenceTarget = ownerPrivateEvidenceTarget(file, REPOSITORY_ROOT);
 });
 
 afterAll(() => {
   if (evidenceTarget === undefined || evidence.length === 0) return;
-  writeOwnerPrivate(evidenceTarget, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
+  writeOwnerPrivateEvidence(evidenceTarget, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
 });
 
 function acceptanceEnabled(): boolean {
@@ -650,6 +652,20 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     },
   },
 ];
+
+// The checker certifies a result only when its case ids are exactly this set, so a case added,
+// renamed or removed here moves the set the checker requires in the same change.
+describe("the acceptance case set (#4492)", () => {
+  it("is exactly the set check-acceptance-evidence requires", () => {
+    const required = JSON.parse(
+      readFileSync(
+        new URL("../../../../scripts/acceptance-case-ids.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { readonly caseIds: readonly string[] };
+    expect(ACCEPTANCE_CASES.map((expectation) => expectation.id)).toEqual(required.caseIds);
+  });
+});
 
 describe.skipIf(!acceptanceEnabled())(
   "Coding acceptance task on macOS without a container runtime (#4492)",
@@ -1517,39 +1533,39 @@ function stepList(steps: unknown): readonly unknown[] {
   return Array.isArray(steps) ? steps : [];
 }
 
-function acceptanceEvidence(): Record<string, unknown> {
+/**
+ * The promise is for a standard user on a machine without a container runtime (and, on Windows,
+ * without an installed Keiko service); evidence taken anywhere else describes the product, but it
+ * does not certify that promise.
+ */
+function preconditionFacts(): PreconditionFacts {
+  if (process.platform === "win32") return probeWindowsPreconditions();
   const administrator = process.getuid?.() === 0 || groups().includes("admin");
   const containerRuntime = containerRuntimeFacts();
-  // The promise is for a standard user on a machine without a container runtime; evidence taken
-  // anywhere else describes the product, but it does not certify that promise.
-  const unmetPreconditions = [
-    ...(administrator ? ["administrator"] : []),
-    ...(Object.values(containerRuntime).some(Boolean) ? ["container-runtime-present"] : []),
-  ];
-  // Nor does a partial run (a filtered or interrupted suite) or one with a case that failed.
-  const recorded = new Set(evidence.map((entry) => entry.caseId));
-  const caseSetComplete =
-    evidence.length === ACCEPTANCE_CASES.length &&
-    ACCEPTANCE_CASES.every((expectation) => recorded.has(expectation.id));
-  const everyCaseMetExpectation = evidence.every(
-    (entry) => "metExpectation" in entry && entry.metExpectation,
-  );
   return {
-    schemaVersion: 4,
-    issue: 4492,
-    platform: process.platform,
-    arch: process.arch,
-    darwinRelease: release(),
-    node: process.versions.node,
-    opencode: OPENCODE_PINNED_VERSION,
     userClass: administrator ? "administrator" : "standard",
     containerRuntime,
-    caseSetComplete,
-    everyCaseMetExpectation,
-    certifiesPromise: unmetPreconditions.length === 0 && caseSetComplete && everyCaseMetExpectation,
-    unmetPreconditions,
-    cases: evidence,
+    unmetPreconditions: [
+      ...(administrator ? ["administrator"] : []),
+      ...(Object.values(containerRuntime).some(Boolean) ? ["container-runtime-present"] : []),
+    ],
   };
+}
+
+function acceptanceEvidence(): Record<string, unknown> {
+  // Nor does a partial run (a filtered or interrupted suite) or one with a case that failed.
+  const recorded = new Set(evidence.map((entry) => entry.caseId));
+  return buildAcceptanceEvidence({
+    preconditions: preconditionFacts(),
+    opencode: OPENCODE_PINNED_VERSION,
+    cases: evidence,
+    caseSetComplete:
+      evidence.length === ACCEPTANCE_CASES.length &&
+      ACCEPTANCE_CASES.every((expectation) => recorded.has(expectation.id)),
+    everyCaseMetExpectation: evidence.every(
+      (entry) => "metExpectation" in entry && entry.metExpectation,
+    ),
+  });
 }
 
 /**
@@ -1583,50 +1599,6 @@ function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
     ].some((path) => existsSync(path)),
     applicationPresent: applications.some((path) => existsSync(path)),
   };
-}
-
-/**
- * The evidence file's absolute path, refused when it lies inside this checkout. Symbolic links in
- * the existing part of the path are resolved first, so a link into the checkout is refused too.
- */
-function ownerPrivateEvidenceTarget(file: string): string {
-  const requested = resolve(file);
-  let existing = requested;
-  const missing: string[] = [];
-  while (!existsSync(existing) && dirname(existing) !== existing) {
-    missing.unshift(basename(existing));
-    existing = dirname(existing);
-  }
-  const target = join(realpathSync(existing), ...missing);
-  const fromCheckout = relative(realpathSync(REPOSITORY_ROOT), target);
-  const outside =
-    fromCheckout === ".." || fromCheckout.startsWith(`..${sep}`) || isAbsolute(fromCheckout);
-  if (!outside) throw new Error("acceptance-evidence-inside-checkout");
-  return target;
-}
-
-/**
- * Writes the evidence file owner-private: never through a symbolic link, into a directory only
- * its owner can enter, with mode 0600 whatever existed before.
- */
-function writeOwnerPrivate(target: string, content: string): void {
-  const directory = dirname(target);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(directory);
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
-    throw new Error("acceptance-evidence-directory-not-owner-private");
-  }
-  const descriptor = openSync(
-    target,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    fchmodSync(descriptor, 0o600);
-    writeSync(descriptor, content);
-  } finally {
-    closeSync(descriptor);
-  }
 }
 
 function groups(): readonly string[] {

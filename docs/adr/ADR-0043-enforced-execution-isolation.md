@@ -93,6 +93,24 @@ folder's drive letter.
 of its own inside the execution root, with the person's `%USERPROFILE%\.m2\repository` chained
 read-only behind it; every other backend keeps the project's closed "no script" skip.
 
+1.17 — #4492 amends D21 (2026-11-26): the Standalone/portable Windows payload carries the same
+patched step Node.js as the npm runtime package, at `runtime/step-node/node.exe`, staged from the
+digest-pinned `win32-x64` runtime package and verified against the same server pin; no signing lane
+signs it.
+
+1.18 — #4496 amends D21 (2026-11-26): a toolchain root inside or containing the profile's `.m2` is
+never granted, nor a toolchain folder (the step executable's own and the `JAVA_HOME`, `MAVEN_HOME`
+and `M2_HOME` folders) that directly holds a credential-named entry or cannot be listed;
+`MAVEN_HOME\conf` stays readable. Every containment test compares real drive paths (long names,
+links and junctions resolved), and `.m2` is compared both where the profile names it and where it
+really lies, so a relocated `.m2` cannot hide an overlap either; a folder whose real path cannot be
+resolved is no folder, and without a known profile folder every step is refused. As on macOS, no
+toolchain root may be a drive root or hold or sit inside one of the profile's credential stores:
+the macOS home denials (`.ssh`, `.aws`, `.cargo\credentials.toml`, `.config\gh`, …) plus the
+Windows credential and DPAPI folders under `AppData`, compared named and resolved (a credential file
+such as `.netrc` through a file link as well as a folder through a junction); and the step's
+execution root is refused when its real path cannot be resolved, never granted by its spelling.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1319,11 +1337,45 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   per-run profile (`Keiko.Step.<owner>-<16 hex>`) without a network capability, so the step reaches neither
   the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
   kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
+  - **The step ends with its root.** Once the root process has exited, the supervisor terminates
+    whatever is left in the job (a detached child, a watcher) and reports the root's own exit code
+    once the job holds no process, as macOS stops the whole scope when its root is reaped. Before
+    #4496 the supervisor waited for the job to empty, so a test command that left a daemon behind
+    held the step until its timeout (measured 2026-11-26, Windows 11 ARM64 guest, standard user:
+    the canary in `scripts/testing/test-windows-step-confinement.mjs` received no REAPED answer).
+    That canary is a guest proof, run as the standard user on the interactive desktop: a hosted
+    Windows Server 2025 x64 runner refuses every process a step starts with `EPERM`, so it is no
+    lane for it (#4561).
+    The supervisor ships inside the coding-runtime package, so the rule reaches an installation
+    with runtime 1.1.9; the published 1.1.8 still waits for the job to empty.
   - **Grants.** The execution root is the run's private copy of the workspace (below), granted for
     modification. The toolchain folder of the step's executable (a `bin` folder's parent) and the
     existing `JAVA_HOME`, `MAVEN_HOME` and `M2_HOME` folders are granted for reading, at most eight
-    grants, and no grant may hold the whole user profile. The step's `TEMP`, `TMP` and npm cache
-    stay inside the execution root.
+    grants, and no grant may hold the whole user profile. A toolchain root that is, holds or sits inside the
+    profile's `.m2` (bar its `repository` folder, which a Maven launcher is given explicitly) is
+    never granted, and neither is a toolchain folder that directly holds a credential-named entry
+    or cannot be listed. A drive root (`D:\`) is never granted, and no toolchain root may hold or sit
+    inside one of the profile's credential stores: the locations the macOS profile denies under the
+    home (`NATIVE_HOME_DENIED_LOCATIONS`) plus `AppData\Roaming\Microsoft\Credentials`,
+    `AppData\Local\Microsoft\Credentials`, `AppData\Roaming\Microsoft\Protect`,
+    `AppData\Roaming\Microsoft\Crypto` and `AppData\Roaming\GitHub CLI`; a `bin` folder beside a
+    store (`.cargo\bin`) stays grantable, as on macOS. Windows keeps a folder one level below a
+    drive (`C:\apache-maven-3.9.9`) grantable, unlike macOS's two-level rule, because that is where
+    Windows installs extract a JDK or Maven and no shared prefix sits there. The server admits every toolchain folder by its real drive path (long
+    names for 8.3 ones, links and junctions resolved), against the profile's real path, so a short
+    name, a junction or a relocated `.m2` (compared where it is named and where it really lies)
+    cannot hide an overlap; a folder whose real path cannot be resolved is no folder. The named
+    homes are judged once per resolution and once per real folder (refusals are counted on the
+    supervisor line by reason, `readRootRefusedDriveRootCount`, `readRootRefusedM2Count`,
+    `readRootRefusedCredentialCount`, `readRootRefusedUnlistableCount`); before each step the admitted
+    homes are admitted again, so a credential-named entry added to one later refuses the step, and so
+    is the executable's own folder, unless it lies in the execution root. A folder that is no drive path
+    (UNC, `\\?\`) is left out when a named home names it and refused when it is a step's own
+    toolchain folder, and every step is refused on a host whose profile folder is unknown
+    (`profileKnown`). A folder inside the execution root or inside another grant adds no grant.
+    Maven's own global settings in `MAVEN_HOME\conf` stay readable because Maven needs them. The
+    step's `TEMP`, `TMP` and npm cache stay inside the execution root. An execution root whose real
+    path cannot be resolved refuses the step.
   - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows
     grants an ordinary AppContainer lists `C:\` or `C:\Users` (measured 2026-11-25, ARM64 VM,
     standard user: `CreateProcessW` refuses a token that carries `isolatedWin32-volumeRootMinimal`
@@ -1354,13 +1406,49 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   - **Closed refusals.** A grant the user may not write (a toolchain an administrator installed
     outside `Program Files`), a protected environment and a step without free drive letters refuse
     the step with a closed reason. Windows PowerShell 5.1 and
-    PowerShell 7 fail inside the tree on registry access, and a Node.js child that opens pipes
-    hangs until a Node.js release ships libuv 1.53 (#4493); both are recorded limitations, not
-    silent failures.
+    PowerShell 7 fail inside the tree on registry access, and a stock Node.js child that opens pipes
+    hangs until a Node.js release ships libuv 1.53 (#4493); the first is a recorded limitation, not
+    a silent failure, and the second is answered by the confined step Node.js below.
   - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
     Windows Coding run and hands each step a private copy written from those bytes;
     `editor.verification.windows-step-supervisor` records whether it is available and whether a
     Maven step may read the person's repository (never its path).
+  - **Confined step Node.js (#4492).** Inside the AppContainer every official Node.js 26.13.1 hangs
+    as soon as it spawns a child with piped stdio, forks or runs `node --test`: libuv 1.52.1 names
+    its child pipes uniquely in the global pipe namespace, `CreateNamedPipeW` answers access denied
+    there, and libuv reads that as a name collision and retries forever (libuv#5181, fixed in libuv
+    1.53; no official Node.js carries it yet, nodejs/node#66282). Until one does, the Windows
+    runtime package and the Standalone/portable Windows payload carry `runtime/step-node/node.exe`
+    (the payload takes it from that package; its manifest names it as the second `nativeTools` entry
+    and no signing lane signs it, because a signature would change the pinned bytes), the official
+    26.13.1 source plus exactly that fix, built by `.github/workflows/windows-step-node.yml` from
+    `patches/node-26.13.1-libuv-5181.patch` and `patches/node-26.13.1-win-crates-synchronization.patch`
+    (the provenance of the pin), pinned by digest, size, source digest and patch digests in
+    `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build, by the package
+    inspection (the folder may hold exactly that one file) and by the server on every resolution
+    of a verification run's step backend, not per step: the folder's owner can restore every
+    timestamp after a rewrite, so no metadata match proves the bytes, and the steps execute the
+    file in place, so an owner-controlled swap after that check stays possible, as for every file
+    the owner can write. The server offers it only when the folder is a real folder that holds exactly the
+    pinned file (`editor.verification.windows-step-supervisor` field `stepNode`: `patched`, `absent`
+    or `mismatch`, with the missed check in `stepNodeMismatch`); the step then reads and executes that folder, finds it first on its `PATH`
+    through its drive letter (so every `node` resolved through the search path, including the bare
+    `node` a `node_modules\.bin\*.cmd` shim falls back to, runs it), runs a
+    command named `node` as it, and starts an install's `npm` and `npx` as
+    `<step node.exe> <install>\node_modules\npm\bin\npm-cli.js|npx-cli.js`, because the install's
+    `.cmd` prefers the stock `node.exe` beside it; a CLI script that is missing or resolves outside
+    the install's folder keeps the `.cmd` and is recorded. cmd.exe still prefers a `node` in the
+    step's current directory for a shim's bare `node`; such a file runs in the same AppContainer
+    with the same grants, so it widens nothing, and the step does not set
+    `NoDefaultCurrentDirectoryInExePath`, which would break a project's `mvnw` or `gradlew` called
+    from its folder. Each decision is one
+    `editor.verification.windows-step-node` line with closed values (`image`, `npmLaunch`,
+    `npmFallback`, `pathPrefixed`, `placement`). Without a verified step Node.js, absent or
+    mismatching, the step runs exactly as before, so a Maven-only project is unaffected and the log
+    names the absence. The verification reads the installed folder, which the person's account
+    owns, so a swap between the check and the step is outside the pin's reach; the folder is never
+    the execution root's. The pin is replaced, not extended, when a later build supersedes it, and
+    the package drops the build when an official Node.js carries libuv 1.53.
   - **Maven projects (#4492).** Without a container runtime a Maven project had no verification
     step, so its tests never ran. On the step backend the verifier now plans one step for the
     `test` kind: `mvn -B -o -Dmaven.repo.local=.keiko-maven-repository
@@ -1406,4 +1494,13 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     sockets, routes or pipes could not be set up and `0xE04B0002` when the runtime could not be
     created. The number on `runtime.confinement.tree-reaped` is the closed value that names them;
     the run settles with the supervisor's generic refusal.
+  - **Proofs.** The whole path of a start without a desktop is pinned through the real native tree:
+    refusal 18 settles the run with `runtime-supervisor-no-desktop` and names
+    `supervisor-no-desktop` on the `coding-runtime.exit` line (`codingRuntimeManager.test.ts`),
+    and the Workbench words that code as a signed-in desktop session
+    (`codingWorkbenchLabels.test.ts`). `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
+    `error_code` of `keiko_runtime_supervisor.c` and fails when one lacks its own word, shares a
+    word, or does not reach a run failure code the Workbench can word. The profile sweep's counts are
+    pinned from the launch response (`nativeRuntimeProcessBackend.windows-grants.test.ts`) and the
+    sweep itself by `gateway_profiles.test.c` on the Windows job.
 - **Scope.** D13 still holds.

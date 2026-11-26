@@ -214,6 +214,40 @@ describe("production coding repository handler composition", () => {
     });
   });
 
+  it("records a hit skipped because its file changed between scan and projection", async () => {
+    const read = nodeWorkspaceFs.readFileBytes;
+    if (read === undefined) throw new Error("fixture byte reader missing");
+    let reads = 0;
+    const { handler, events } = fixture(() => true, {
+      fs: {
+        ...nodeWorkspaceFs,
+        readFileBytes: async (path, ...args): Promise<Uint8Array> => {
+          const bytes = await read(path, ...args);
+          // The first read is the scan, the second the projection, which finds the file changed
+          // (same length, so the read stays complete).
+          if (!path.endsWith("example.ts") || ++reads !== 2) return bytes;
+          return new TextEncoder().encode(
+            new TextDecoder().decode(bytes).replace("parseConfig", "parseConfiX"),
+          );
+        },
+      },
+    });
+    const result = await handler.invoke(request, context());
+    expect(result).toMatchObject({ ok: true, kind: "search", hits: [] });
+    expect(reads).toBe(2);
+    expect(settledProof(events)).toMatchObject({
+      correlationId: context().correlationId,
+      state: "completed",
+      resultCount: 0,
+      staleHitsSkipped: 1,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
+      coverageIncomplete: true,
+      coverageReasons: ["io-error"],
+    });
+    expectDiagnosticRetention(events, 1);
+  });
+
   it("records unreadable and oversized exclusions from the real workspace producer", async () => {
     const read = nodeWorkspaceFs.readFileBytes;
     if (read === undefined) throw new Error("fixture byte reader missing");
@@ -482,6 +516,9 @@ describe("production coding repository handler composition", () => {
         state: "completed",
         filesScanned: 1,
         resultCount: 1,
+        staleHitsSkipped: 0,
+        misplacedHitsSkipped: 0,
+        unreadableHitsSkipped: 0,
         resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
       },
     });
@@ -509,6 +546,9 @@ describe("production coding repository handler composition", () => {
       reason: "none",
       filesScanned: 1,
       resultCount: 1,
+      staleHitsSkipped: 0,
+      misplacedHitsSkipped: 0,
+      unreadableHitsSkipped: 0,
       resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
     });
   });

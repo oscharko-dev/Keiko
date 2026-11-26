@@ -25,6 +25,7 @@ import {
   ripgrepRuntimeApproval,
   ripgrepRuntimeTargetKey,
   resolveVerifiedRipgrep,
+  ACTIVATION_STEP_NODE_TOOL_NAME,
   ripgrepActivationDigest,
   verifyPinnedRuntimeFile,
   verifyRipgrepExecutable,
@@ -468,7 +469,42 @@ describe("ripgrepActivationDigest", () => {
     expect(ripgrepActivationDigest(activation(overrides), "win32-x64")).toBeUndefined();
   });
 
-  it("refuses anything but exactly one tool in a record, for a supported target", () => {
+  it("still returns the signed digest when the step Node.js entry follows ripgrep", () => {
+    const [ripgrep] = (activation().nativeTools ?? []) as readonly unknown[];
+    const stepNode = { name: ACTIVATION_STEP_NODE_TOOL_NAME, executablePath: "x" };
+    expect(ripgrepActivationDigest({ nativeTools: [ripgrep, stepNode] }, "win32-x64")).toBe(SIGNED);
+  });
+
+  it.each([
+    ["a second ripgrep entry", [{ name: "ripgrep" }]],
+    ["an unnamed second entry", [{}]],
+    ["a non-object second entry", ["step-node"]],
+    ["two further entries", [{ name: ACTIVATION_STEP_NODE_TOOL_NAME }, { name: "other" }]],
+    ["the step Node.js first", "swapped"],
+  ])("refuses a tool set with %s", (_label, extra) => {
+    const [ripgrep] = (activation().nativeTools ?? []) as readonly unknown[];
+    const stepNode = { name: ACTIVATION_STEP_NODE_TOOL_NAME };
+    const nativeTools =
+      extra === "swapped" ? [stepNode, ripgrep] : [ripgrep, ...(extra as object[])];
+    expect(ripgrepActivationDigest({ nativeTools }, "win32-x64")).toBeUndefined();
+  });
+
+  it.each(["darwin-arm64", "darwin-x64", "linux-x64", "win32-arm64"] as const)(
+    "refuses a step Node.js companion on %s, where the payload carries exactly one tool",
+    (target) => {
+      const ripgrep = {
+        name: "ripgrep",
+        executablePath: ripgrepPortableExecutablePath(target),
+        unsignedSha256: ripgrepRuntimeApproval(target)?.binarySha256,
+        shippedSha256: SIGNED,
+      };
+      const stepNode = { name: ACTIVATION_STEP_NODE_TOOL_NAME, executablePath: "x" };
+      expect(ripgrepActivationDigest({ nativeTools: [ripgrep] }, target)).toBe(SIGNED);
+      expect(ripgrepActivationDigest({ nativeTools: [ripgrep, stepNode] }, target)).toBeUndefined();
+    },
+  );
+
+  it("refuses anything but one tool, or ripgrep plus step Node.js on Windows x64, in a record", () => {
     expect(ripgrepActivationDigest({ nativeTools: [] }, "win32-x64")).toBeUndefined();
     expect(ripgrepActivationDigest({}, "win32-x64")).toBeUndefined();
     expect(ripgrepActivationDigest({ nativeTools: "ripgrep" }, "win32-x64")).toBeUndefined();

@@ -24,6 +24,7 @@ function parseArgs(argv) {
     release: false,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     payloadRoot: join(repoRoot, ".portable-sidecar-payloads"),
+    stepNodePackage: undefined,
     target: "",
     windowsGenerationProduction: false,
   };
@@ -53,6 +54,9 @@ function validateOptions(options) {
   }
   if (options.evaluation && options.release)
     fail("--evaluation and --release are mutually exclusive");
+  if (options.stepNodePackage !== undefined && options.target !== "windows-x64") {
+    fail("--step-node-package requires the windows-x64 target");
+  }
 }
 
 function applyBooleanOption(arg, options) {
@@ -67,6 +71,7 @@ function applyValueOption(arg, value, options) {
   if (arg === "--target") options.target = value;
   else if (arg === "--out-dir") options.outDir = resolve(value);
   else if (arg === "--payload-root") options.payloadRoot = resolve(value);
+  else if (arg === "--step-node-package") options.stepNodePackage = resolve(value);
   else fail(`unsupported argument ${arg}`);
 }
 
@@ -94,6 +99,14 @@ function resolveCommitSha(env) {
 }
 
 const DEFAULT_WORKFLOW_RUN = Object.freeze({ runAttempt: 0, runId: 0 });
+
+// An offline or local build names the reviewed Windows runtime package it already holds; the stage
+// verifies it against the catalog exactly like the downloaded one.
+function stepNodePackageArguments(options) {
+  return options.stepNodePackage === undefined
+    ? []
+    : ["--step-node-package", options.stepNodePackage];
+}
 
 export function stageArgumentsForTarget(
   options,
@@ -139,7 +152,7 @@ export function stageArgumentsForTarget(
   if (options.evaluation === true) args.push("--evaluation-build");
   if (options.release === true) args.push("--release-build");
   if (options.windowsGenerationProduction === true) args.push("--windows-generation-production");
-  return args;
+  return [...args, ...stepNodePackageArguments(options)];
 }
 
 function workflowIdentity(env) {

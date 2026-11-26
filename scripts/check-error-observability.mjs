@@ -121,6 +121,10 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
   Object.entries({
+    "packages/keiko-server/src/editor/windowsStepSupervisor.ts:realDrivePath":
+      "A folder whose real path cannot be resolved cannot be shown to be the folder a grant reads, so it is no folder: a named toolchain home is left out, a step's own toolchain folder is refused before launch, and an unresolvable profile leaves profileKnown=false on the registered Windows step supervisor line and refuses every step. A protected credential location (a file or a folder) that cannot be resolved keeps its named path in every comparison. The I/O error class is intentionally not recorded, because every class leads to the same fail-closed outcome (#4496).",
+    "packages/keiko-server/src/editor/windowsStepSupervisor.ts:listEntryNames":
+      "An unlistable toolchain folder cannot be shown free of credentials, so it is refused fail-closed. The refusal reason `unlistable` is closed and counted in readRootRefusedUnlistableCount on the registered Windows step supervisor line; the I/O error class is intentionally not recorded, because every class leads to the same refusal (#4496).",
     "packages/keiko-connectors/src/atlassian-sync-classify.ts:parseAtlassianJsonValue":
       "Pure bounded JSON syntax validation returns unavailable data. Write transport, sync classification, and Jira/Confluence sync adapters propagate malformed-payload. Existing action/live-search and SyncRun owners project atlassian.action.outcome; real transition, live-search, both provider metadata and item-sync regressions reconstruct failures. Managed Jira arrays delegate to mcp.managed.lifecycle, proven through the real gateway/binder/SDK with malformed JSON. This replaces the retired legacy parseJsonRecord catch; no generic parser exemption.",
     "packages/keiko-connectors/src/atlassian-verification-probe.ts:parseAtlassianVerificationProbe":

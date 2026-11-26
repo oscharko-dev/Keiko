@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { HERMETIC_OUTBOUND_ENV } from "../support/dev-server-env.js";
 
 // Issue #3400 (epic #3384) — browser evidence for "Connect a Git change to Chat": the Git
 // window's toolbar exposes a "Connect to Chat" action, the resulting dialog resolves the active
@@ -73,7 +74,11 @@ export default defineConfig({
       url: `http://127.0.0.1:${String(modelPort)}/healthz`,
       reuseExistingServer: false,
       timeout: 30_000,
-      env: { KEIKO_OS_KEYCHAIN: "off", KEIKO_E2E_MODEL_PORT: String(modelPort) },
+      env: {
+        ...HERMETIC_OUTBOUND_ENV,
+        KEIKO_OS_KEYCHAIN: "off",
+        KEIKO_E2E_MODEL_PORT: String(modelPort),
+      },
     },
     {
       cwd: root,
@@ -86,6 +91,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 240_000,
       env: {
+        ...HERMETIC_OUTBOUND_ENV,
         KEIKO_OS_KEYCHAIN: "off",
         PATH: `${providerBin}${delimiter}${process.env.PATH ?? ""}`,
         KEIKO_GIT_CHANGE_CHAT_PROVIDER_STATE: providerStatePath,

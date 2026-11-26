@@ -454,7 +454,7 @@ export function ripgrepActivationDigest(
   runtimeManifest: Readonly<RipgrepRuntimeManifest> = RIPGREP_RUNTIME_MANIFEST,
 ): string | undefined {
   const approval = ripgrepRuntimeApproval(target, runtimeManifest);
-  const tool = approval === undefined ? undefined : onlyActivationTool(activation);
+  const tool = approval === undefined ? undefined : onlyActivationTool(activation, target);
   if (approval === undefined || tool === undefined) return undefined;
   const bound =
     tool.name === "ripgrep" &&
@@ -463,11 +463,32 @@ export function ripgrepActivationDigest(
   return bound ? shaOrUndefined(tool.shippedSha256) : undefined;
 }
 
-function onlyActivationTool(activation: unknown): Record<string, unknown> | undefined {
+/**
+ * The `name` of the activation entry for the patched step Node.js a Windows payload carries beside
+ * ripgrep (#4492, ADR-0043 D21). It is the only other tool an activation manifest may name, and it
+ * always follows ripgrep. The producer owns the same literal (`scripts/lib/portable-step-node.mjs`),
+ * and `stage-portable-step-node.test.mjs` pins the two together.
+ */
+export const ACTIVATION_STEP_NODE_TOOL_NAME = "step-node";
+
+// The only target whose payload carries the step Node.js companion (#4492, ADR-0043 D21).
+const STEP_NODE_TARGET = "win32-x64";
+
+// Ripgrep alone; on the Windows x64 target it may be followed by the step Node.js entry. Any other
+// set is refused, so every other target keeps its exactly-one-tool pin.
+function onlyActivationTool(
+  activation: unknown,
+  target: string,
+): Record<string, unknown> | undefined {
   if (!isRecord(activation)) return undefined;
-  const tools = activation.nativeTools;
-  const tool: unknown = Array.isArray(tools) && tools.length === 1 ? tools[0] : undefined;
-  return isRecord(tool) ? tool : undefined;
+  const tools: unknown = activation.nativeTools;
+  const maxTools = target === STEP_NODE_TARGET ? 2 : 1;
+  if (!Array.isArray(tools) || tools.length < 1 || tools.length > maxTools) return undefined;
+  const [tool, companion] = tools as readonly unknown[];
+  const companionAllowed =
+    companion === undefined ||
+    (isRecord(companion) && companion.name === ACTIVATION_STEP_NODE_TOOL_NAME);
+  return companionAllowed && isRecord(tool) ? tool : undefined;
 }
 
 function shaOrUndefined(value: unknown): string | undefined {

@@ -60,6 +60,12 @@ Run them in a clean checkout of the branch that carries the bump.
    the write flags from section 1 set; each fixture's diff against its predecessor is the drift.
    `opencodeRuntime.real.test.ts` and the `[functional-only]` backend suite take the parent of the
    payload as `KEIKO_OPENCODE_REAL_RESOURCE_ROOT`.
+   To prove that the previous runtime still starts under the new profile, set
+   `KEIKO_OPENCODE_PREVIOUS_REAL_BINARY` to the previous payload's `bin/opencode` (and, if the
+   payload is not laid out as `<root>/payload/bin/opencode`, `KEIKO_OPENCODE_PREVIOUS_REAL_RESOURCE_ROOT`
+   to `<root>`); `opencodeRuntime.real.test.ts` then starts it under the current composed launch
+   profile and checks info, the authentication refusal and a clean stdin-EOF exit. Keiko still
+   refuses to admit the earlier package (`runtime-outdated`); the test covers the raw binary only.
 5. Run `opencodeServiceInventory.test.ts`. It refuses an operation without a disposition, a stale
    disposition and an admitted set that differs from the pinned surface.
    `diffOpenCodeServiceOperations` lists the added, removed, moved and breaking operations between
@@ -151,7 +157,13 @@ the previous runtime packages republished), and nothing needs migrating:
 - The service inventory diff, for example 2.1.4 to 2.2.5: 149 to 169 operations with every admitted
   endpoint kept, 16 configuration settings added, and five built-in plugins added and three removed.
   From 2.2.5 to 2.4.1: 169 to 178 operations (the schedule operations replaced by automations),
-  29 more configuration settings and eight more built-in plugins (net).
+  29 more configuration settings and eight more built-in plugins (net). From 2.4.1 to 2.4.2: 178 to
+  188 operations (nine push operations and `experimental.skill.file`), two more settings and two
+  more built-in plugins, all closed (section 3.8 of the parity matrix).
+- A pin's `protocolSurfaceSha256` is the projection of the document the executable serves. Upstream's
+  committed `openapi.json` can name components differently (2.4.1, 2.4.2), so the report's digest is
+  a first estimate: take the final value from `opencodeServiceInventory.real.test.ts`, which compares
+  the live document with the pin, and write the fixture from that projection.
 - The real-binary suites above, on the new pin.
 - The parity matrix rows (T01–T22, S01–S19, C01–C09), each re-verified, or marked with what was not
   re-run.

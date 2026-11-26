@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { isCredentialNamedSegment, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { closeFileServerLogSinks, createActivityLogSink } from "../observability/index.js";
 import {
   expectActivityLogProof,
@@ -118,5 +118,12 @@ describe("privateStepWorkspace (#4496)", () => {
         "editor.verification.windows-step-copy",
       ),
     ).toEqual([]);
+  });
+
+  it("names the credential files the Windows step canary places beside the private copy", () => {
+    // scripts/testing/test-windows-step-confinement.mjs relies on these two names being left out.
+    expect(isCredentialNamedSegment(".env")).toBe(true);
+    expect(isCredentialNamedSegment("id_rsa")).toBe(true);
+    expect(isCredentialNamedSegment("index.ts")).toBe(false);
   });
 });

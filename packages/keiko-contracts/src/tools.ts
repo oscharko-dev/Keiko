@@ -391,6 +391,37 @@ export interface WindowsStepSupervisorCopy {
 }
 
 /**
+ * What keiko-tools decided for one step about the patched Node.js (#4492), as closed values only:
+ * the log carries them, never a path.
+ */
+export interface WindowsStepNodeDecision {
+  /** Whether the step's image is the step Node.js (`node`, or an npm or npx launched through it). */
+  readonly image: "step-node" | "resolved";
+  /** How `npm` or `npx` started: through the step Node.js, or through the install's own `.cmd`. */
+  readonly npmLaunch: "step-node" | "install-cmd" | "not-npm";
+  /** Why an npm or npx stayed on the install's `.cmd`. */
+  readonly npmFallback: "none" | "cli-missing" | "cli-outside-grant";
+  /** Whether the step Node.js folder leads the step's `PATH`. */
+  readonly pathPrefixed: boolean;
+  /** Whether the folder was used; a folder inside the execution root is never trusted. */
+  readonly placement: "applied" | "inside-execution-root";
+}
+
+/**
+ * The patched Node.js the confined steps run (#4492, ADR-0043 D21), verified against its pin by
+ * keiko-server before it is offered. Official Node.js 26.13.1 hangs inside an AppContainer on any
+ * child with piped stdio (libuv#5181); the patched build does not.
+ */
+export interface WindowsStepNode {
+  /** The folder holding exactly the verified `node.exe`; granted read and execute to the step. */
+  readonly directory: string;
+  /** The verified `node.exe` inside that folder. */
+  readonly executable: string;
+  /** Records the launch decision of one step; closed values, never a path. */
+  readonly record: (decision: WindowsStepNodeDecision) => void;
+}
+
+/**
  * The Windows execution-root backend (#4496, ADR-0043 D21). keiko-server supplies it from the
  * supervisor whose SHA-256 matches its pin, never from `PATH`; its presence is the backend's
  * availability. keiko-tools frames each step to it and ends the step through it.
@@ -404,10 +435,27 @@ export interface WindowsStepSupervisor {
   /** Absolute read-only directories a step's toolchains need besides its executable's own. */
   readonly readRoots: readonly string[];
   /**
+   * The person's profile folder by its real path (long names, links resolved); absent when it is
+   * unknown, and every step is then refused, since no grant can be shown to stay out of it.
+   */
+  readonly profile: string | undefined;
+  /**
+   * The real path of a toolchain folder (the step executable's own, and each of `readRoots` again
+   * before every step), or `undefined` when that folder is a drive root, holds or sits in the
+   * profile's `.m2` or a credential store, holds a credential-named entry, cannot be listed or is no
+   * drive path (#4496). The step is then refused.
+   */
+  readonly admitReadRoot: (directory: string) => string | undefined;
+  /**
    * The person's Maven repository, granted read-only to a step whose executable is Maven's
    * launcher and to no other step (#4492); absent when there is none.
    */
   readonly mavenRepository?: string | undefined;
+  /**
+   * The verified patched Node.js; absent when the runtime carries none or its bytes miss the pin,
+   * and the step then runs exactly as it did without one.
+   */
+  readonly stepNode?: WindowsStepNode | undefined;
 }
 
 export interface SandboxAttestation {

@@ -628,6 +628,30 @@ describe("portable assets stage helper", () => {
     expect(args).not.toContain("--apple-team-id");
   });
 
+  it("forwards a local step Node.js package only when one is named, and only to the stage", async () => {
+    const { stageArgumentsForTarget, runPortableAssetsStage } =
+      await import("../run-portable-assets-stage.mjs");
+    const approvals = loadPortableRuntimeApprovals(repoRoot);
+    const base = { outDir: "/tmp/out", payloadRoot: tempRoot(), target: "windows-x64" };
+    const workflow = { runAttempt: 3, runId: 987654321 };
+    const plain = stageArgumentsForTarget(base, approvals, "a".repeat(40), "0.2.14", workflow);
+    expect(plain).not.toContain("--step-node-package");
+
+    const local = stageArgumentsForTarget(
+      { ...base, stepNodePackage: "/abs/runtime-package.tgz" },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      workflow,
+    );
+    expect(local.slice(-2)).toEqual(["--step-node-package", "/abs/runtime-package.tgz"]);
+    expect(local.slice(0, -2)).toEqual(plain);
+    // The wrapper refuses it for a target that carries no step Node.js, before any staging starts.
+    expect(() =>
+      runPortableAssetsStage(["--target", "linux-x64", "--step-node-package", "/abs/x.tgz"], {}),
+    ).toThrow("--step-node-package requires the windows-x64 target");
+  });
+
   // ACCIDENT PREVENTION: absent by default, present exactly once when explicitly requested. There
   // is no environment variable and no approval-file field that can introduce the flag.
   it("omits the evaluation opt-in unless the caller asks for it, and then emits it exactly once", async () => {

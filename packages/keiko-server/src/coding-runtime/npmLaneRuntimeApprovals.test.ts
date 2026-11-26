@@ -55,19 +55,19 @@ describe("npm-lane runtime approvals", () => {
       helperSizeBytes: 128_512,
       helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
       helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
-      upstreamVersion: "2.4.1",
+      upstreamVersion: "2.4.2",
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "2",
-      executableTreeSha256: "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
+      executableTreeSha256: "d340f0ec1e6a40325355aede405fd77577f2589d82d06dd40dadd4bd54e1c4b5",
       licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
       protocolSchemaSha256: approvedRuntime().protocolSchema.sha256,
-      sbomSha256: "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0",
+      sbomSha256: "7ce365b082bfbf23db73af89b99e109a1321bca62bfcbc0ff9e15606971fb717",
       runtimeSupervisor: {
         // #4068: the pipe-relay supervisor (no installed service), built by MSVC 14.51 on
         // windows-latest exactly as the release builds it.
-        sha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+        sha256: "88dfffdcf4c9b3a2123109e9fb60a18a9e0e051988d84572b3f50b772057802b",
         sizeBytes: 255_488,
-        sourceTreeSha256: "57054c1e9614341b41b66146c4f2ba08b13bff0979f1db920c6d17e29f57060b",
+        sourceTreeSha256: "02e4e49bcfc95adfaf751048e072c067530397c1326350c136f5de6a4dc66b2d",
       },
     });
     const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];
@@ -139,6 +139,25 @@ describe("npm-lane runtime approvals", () => {
     expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].runtimeSupervisor).toBeUndefined();
   });
 
+  // #4492: the step Node.js is the patched official 26.13.1 build; only Windows names one, and the
+  // desktop package pins the same bytes as the npm package.
+  it("pins the patched Windows step Node.js for Windows only, with its source and patches", () => {
+    const stepNode = NPM_LANE_RUNTIME_APPROVALS["windows-x64"].stepNode;
+    expect(stepNode).toStrictEqual({
+      sha256: "761112aee049a108f38549439a720551fcaf0b850c85da2cc9a1e79277e9fc46",
+      sizeBytes: 100_574_720,
+      sourceSha256: "60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e",
+      patchSha256s: [
+        "8549a84f23e812688b12ab6de8cd5b6f2cb82aaa3d754ebbe3cd6527c67bd387",
+        "4370d95801980482c98693d3ca0ba178b69897f89c7851c5b5c0ea5025e5eacc",
+      ],
+    });
+    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.stepNode).toBe(stepNode);
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-arm64"].stepNode).toBeUndefined();
+    expect(NPM_LANE_RUNTIME_APPROVALS["macos-x64"].stepNode).toBeUndefined();
+    expect(Object.isFrozen(stepNode)).toBe(true);
+  });
+
   // #4359: Keiko admits exactly one OpenCode. The retired 1.1.4 packages (2.1.4) approve nothing;
   // their executable trees are only recognised so the person is told to update.
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
@@ -153,13 +172,16 @@ describe("npm-lane runtime approvals", () => {
 
   // #4546: an installation still holding a 2.2.5 runtime package is told to update, never that its
   // payload was tampered with.
-  it("names the retired 2.1.4 and 2.2.5 executable trees and nothing else", () => {
+  it("names the retired 2.1.4, 2.2.5 and 2.4.1 executable trees and nothing else", () => {
     expect([...NPM_LANE_RETIRED_EXECUTABLE_TREES].sort()).toEqual([
       "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
+      "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
       "2ebf820d99c5df9d9097268f763ae406aceff555322dbd1fcb66f1ff2b85cff8",
+      "4c93d7ebdb8deee2805770c2682eb938fb1ab91c710d77c5b2bf703ebe1ad836",
       "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
       "c29fb7e5a9593e8072f0694ca1156e761386901fb4f53ac527ca863d2d40eba0",
       "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
+      "dd29f79df0af9b1ce293465f2ff1e2dfb4e740872509d75b23c4948dd4d72131",
     ]);
     for (const approval of Object.values(NPM_LANE_RUNTIME_APPROVALS))
       expect(NPM_LANE_RETIRED_EXECUTABLE_TREES.has(approval.executableTreeSha256)).toBe(false);

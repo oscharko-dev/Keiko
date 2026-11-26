@@ -1263,6 +1263,75 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(activityLog.events)).not.toContain("Private late text");
   });
 
+  // #4130 review lab: four refused transitions could not be told apart in the log, so neither a lost
+  // update nor a genuine regression could be reconstructed. The drop line now names both states and
+  // who sent the update; the call itself appears only as a digest.
+  it.each([
+    [
+      "an OpenCode update that steps a running call back to pending",
+      { messageId: "msg_answer", state: "pending" },
+      { refusedFromState: "running", refusedToState: "pending", refusedSignalSource: "opencode" },
+    ],
+    [
+      "a Keiko settlement that reopens a settled call",
+      { state: "running", settle: true },
+      { refusedFromState: "succeeded", refusedToState: "running", refusedSignalSource: "keiko" },
+    ],
+  ] as const)("names the refused transition of %s", (_case, refused, expected) => {
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      activityLog,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_answer", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_answer",
+      callId: "call_private_id",
+      tool: "keiko_workspace_read",
+      state: "settle" in refused ? "succeeded" : "running",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        ...("messageId" in refused ? { messageId: refused.messageId } : {}),
+        callId: "call_private_id",
+        state: refused.state,
+        occurredAt: "2026-07-18T17:00:00.004Z",
+      }),
+    ).toBe(false);
+
+    const dropped = activityLog.events.filter(
+      (event) => event.op === "coding-runtime.safe-activity" && event.extra?.event === "dropped",
+    );
+    expect(dropped).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        extra: expect.objectContaining({
+          reason: "projection-rejected",
+          rejection: "tool-transition-refused",
+          ...expected,
+          callIdSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
+        }) as unknown,
+      }),
+    ]);
+    const [droppedLine] = dropped;
+    if (droppedLine === undefined) throw new Error("expected one refused-transition drop line");
+    expect(validateRegisteredActivityLogEvent(droppedLine)).toMatchObject({
+      op: "coding-runtime.safe-activity",
+    });
+    expect(JSON.stringify(activityLog.events)).not.toContain("call_private_id");
+  });
+
   it("reports the first fault drop at once however many capacity drops preceded it", () => {
     const records: ServerDiagnosticRecord[] = [];
     const projection = createCodingSafeActivityProjection({
@@ -1366,6 +1435,32 @@ describe("bounded coding safe-activity projection", () => {
     if (content?.feed.availability !== "available") return;
     expect(content.feed.turns.length).toBeLessThan(4);
     expect(JSON.stringify(content)).not.toContain("tail");
+  });
+
+  // A subscriber may deliver the same signal again while it is being notified. The identity is
+  // remembered before subscribers hear of the signal, so the re-delivery is a duplicate, not a
+  // second application of the same text.
+  it("treats a signal a subscriber re-delivers during notification as already applied", () => {
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user_1", "user"));
+    const signal = { ...text("msg_user_1", "once-only"), signalId: "evt_text_1" } as const;
+    const redelivered: boolean[] = [];
+    projection.subscribeContent(() => {
+      if (redelivered.length === 0) redelivered.push(projection.ingest(RUN_ID, signal));
+    });
+
+    expect(projection.ingest(RUN_ID, signal)).toBe(true);
+
+    expect(redelivered).toEqual([true]);
+    const serialized = JSON.stringify(projection.currentContent());
+    expect(serialized).toContain("once-only");
+    expect(serialized).not.toContain("once-onlyonce-only");
   });
 
   // #4546 (real-model lab F1): two answers of one turn ran into the output limit, so the turn went

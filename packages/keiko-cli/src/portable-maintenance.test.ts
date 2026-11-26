@@ -139,6 +139,7 @@ describe("managed install inspection follows the payload's own runtime record", 
         "portable managed install contains unknown entry: runtime/licenses",
         "portable managed install contains unknown entry: runtime/native",
         "portable managed install contains unknown entry: runtime/sidecars",
+        "portable managed install contains unknown entry: runtime/step-node",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -154,6 +155,7 @@ describe("managed install inspection follows the payload's own runtime record", 
         "portable managed install contains unknown entry: runtime/licenses",
         "portable managed install contains unknown entry: runtime/native",
         "portable managed install contains unknown entry: runtime/sidecars",
+        "portable managed install contains unknown entry: runtime/step-node",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -290,6 +292,8 @@ describe("portable native registration policy", () => {
         join(layout.resourceRoot, "runtime", "licenses", "usearch", "LICENSE"),
         join(layout.resourceRoot, "runtime", "native", "rg.exe"),
         join(layout.resourceRoot, "runtime", "licenses", "ripgrep", "LICENSE-MIT"),
+        join(layout.resourceRoot, "runtime", "step-node", "node.exe"),
+        join(layout.resourceRoot, "runtime", "licenses", "node-step", "LICENSE"),
         join(layout.resourceRoot, "runtime", "sidecars", "approved", "sidecar.bin"),
       ];
       for (const path of paths) {

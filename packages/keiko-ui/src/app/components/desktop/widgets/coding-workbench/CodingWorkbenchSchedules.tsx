@@ -61,19 +61,22 @@ function useTaskSchedules(
   readonly act: (scheduleId: string, action: CodingWorkbenchScheduleAction) => Promise<void>;
 } {
   const [schedules, setSchedules] = useState<readonly CodingWorkbenchSchedule[]>([]);
-  const [failed, setFailed] = useState(false);
+  const [listFailed, setListFailed] = useState(false);
+  // The task whose last pause, resume or delete failed: the list read that follows every change
+  // must not clear that alert, and another task never shows it.
+  const [actionFailedFor, setActionFailedFor] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  useScheduleList(taskId, `${String(runActive)}:${String(revision)}`, setSchedules, setFailed);
+  useScheduleList(taskId, `${String(runActive)}:${String(revision)}`, setSchedules, setListFailed);
   const act = useCallback(
     async (scheduleId: string, action: CodingWorkbenchScheduleAction): Promise<void> => {
       if (taskId === undefined) return;
       setBusy(true);
       try {
         await controlCodingSchedule(taskId, scheduleId, action);
-        setFailed(false);
+        setActionFailedFor(undefined);
       } catch (error) {
-        setFailed(true);
+        setActionFailedFor(taskId);
         reportScheduleFailure(action, error);
       } finally {
         setBusy(false);
@@ -82,6 +85,7 @@ function useTaskSchedules(
     },
     [taskId],
   );
+  const failed = listFailed || (taskId !== undefined && actionFailedFor === taskId);
   return { schedules, failed, busy, act };
 }
 

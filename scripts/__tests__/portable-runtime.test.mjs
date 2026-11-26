@@ -19,6 +19,8 @@ import { tmpdir } from "node:os";
 import { URL } from "node:url";
 import { dirname, join } from "node:path";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
+import { stageStepNodeTool } from "../lib/portable-step-node.mjs";
+import { fixtureStepNodeRuntime } from "./support/step-node-fixture.mjs";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -1057,8 +1059,15 @@ function assemblerArchiveSize(index, largeArchive) {
   return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
 }
 
+// A windows-x64 handoff carries ripgrep followed by the step Node.js; every other target carries
+// no tool set in this fixture.
 function assemblerFixtureCandidate(target, evaluation, stableLanes) {
-  return stableLanes ? stableLaneCandidate(target) : assemblerCandidate(target, evaluation);
+  const candidate = stableLanes
+    ? stableLaneCandidate(target)
+    : assemblerCandidate(target, evaluation);
+  return target.platformTarget === "windows-x64"
+    ? withStepNodeTool(withRipgrepTool(candidate))
+    : candidate;
 }
 
 function writeAssemblerFixture(
@@ -1224,6 +1233,7 @@ async function assembleStageForTest(
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
       sealMacosAppBundle: writeMacosSealFixture,
+      resolveStepNodeRuntime: () => fixtureStepNodeRuntime(),
       stageRipgrepTool: writeRipgrepToolFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
       verifyMacosAppBundleSeal: verifyMacosSealFixture,
@@ -1698,6 +1708,186 @@ describe("portable native tool manifest", () => {
       signatureVerified: true,
       notarizationRequired: false,
       notarizationVerified: false,
+    });
+  });
+});
+
+// The producer's own entry, appended after ripgrep; the signing lanes never touch it, so no helper
+// that syncs every tool's signing state to the lane may run after this.
+function withStepNodeTool(candidate) {
+  const target = portableTarget(candidate.artifact.platformTarget);
+  const [stepNode] = stageStepNodeTool(target, tempDir(), {
+    resolveRuntime: () => fixtureStepNodeRuntime(),
+  });
+  candidate.nativeTools = [...candidate.nativeTools, stepNode];
+  syncReviewedBinding(candidate);
+  return candidate;
+}
+
+describe("portable step Node.js manifest entry", () => {
+  const REQUIRE = { requireNativeTools: true, requireStepNode: true };
+
+  it("accepts ripgrep followed by the step Node.js in the production lane", () => {
+    const candidate = withStepNodeTool(withRipgrepTool(manifest()));
+    expect(validatePortableManifest(candidate, REQUIRE)).toEqual([]);
+  });
+
+  it("keeps a manifest produced before the step Node.js shipped parseable but requires it from a producer", () => {
+    const candidate = withRipgrepTool(manifest());
+    expect(validatePortableManifest(candidate, { requireNativeTools: true })).toEqual([]);
+    expect(validatePortableManifest(candidate, REQUIRE)).toContain(
+      "nativeTools: must contain the pinned step Node.js for newly produced Windows artifacts",
+    );
+  });
+
+  it.each(PORTABLE_TARGETS.filter((target) => target.platformTarget !== "windows-x64"))(
+    "never asks for the step Node.js on $platformTarget and refuses one there",
+    (target) => {
+      const candidate = withRipgrepTool(setManifestTargetCopy(target.platformTarget));
+      expect(validatePortableManifest(candidate, REQUIRE)).toEqual([]);
+      const stepNode = withStepNodeTool(withRipgrepTool(manifest())).nativeTools[1];
+      candidate.nativeTools = [...candidate.nativeTools, { ...stepNode }];
+      syncReviewedBinding(candidate);
+      expect(validatePortableManifest(candidate)).toContain(
+        "nativeTools: must contain exactly one tool when present",
+      );
+    },
+  );
+
+  it("holds the entry to the same fixed state in the staging and evaluation lanes", () => {
+    const staging = manifest();
+    setVerificationState(staging, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    addSidecarRuntime(staging, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
+    staging.release.releaseId = 0;
+    staging.artifact.assetId = 0;
+    withStepNodeTool(withRipgrepTool(staging));
+    staging.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(staging, REQUIRE)).toEqual([]);
+
+    const evaluation = withStepNodeTool(withRipgrepTool(evaluationManifest()));
+    expect(validatePortableEvaluationManifest(evaluation, REQUIRE)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a foreign name",
+      (tool) => (tool.name = "node"),
+      "nativeTools: must contain exactly one tool",
+    ],
+    ["a foreign kind", (tool) => (tool.kind = "node-native-addon"), "nativeTools[1].kind"],
+    ["another version", (tool) => (tool.version = "26.13.1"), "nativeTools[1].version"],
+    [
+      "another platform",
+      (tool) => (tool.platformTarget = "linux-x64"),
+      "nativeTools[1].platformTarget: must be windows-x64",
+    ],
+    [
+      "another executable path",
+      (tool) => (tool.executablePath = "runtime/step-node/other.exe"),
+      "nativeTools[1].executablePath: must be runtime/step-node/node.exe",
+    ],
+    [
+      "another license path",
+      (tool) => (tool.licensePath = "runtime/licenses/node/LICENSE"),
+      "nativeTools[1].licensePath: must be runtime/licenses/node-step/LICENSE",
+    ],
+    [
+      "another SBOM reference",
+      (tool) => (tool.sbomBomRef = "pkg:generic/node"),
+      "nativeTools[1].sbomBomRef",
+    ],
+    [
+      "a shipped digest that is not the unsigned digest",
+      (tool) => (tool.shippedSha256 = DIGEST_A),
+      "nativeTools[1].shippedSha256: must be",
+    ],
+    [
+      "an upstream digest that is not the entry's digest",
+      (tool) => (tool.source.binarySha256 = DIGEST_A),
+      "nativeTools[1].source.binarySha256: must be",
+    ],
+    [
+      "another source URL",
+      (tool) => (tool.source.sourceUrl = "https://example.test/node.tgz"),
+      "nativeTools[1].source.sourceUrl: must be https://nodejs.org/dist/v26.13.1/node-v26.13.1.tar.gz",
+    ],
+    [
+      "another license digest",
+      (tool) => (tool.source.licenseSha256 = DIGEST_A),
+      "nativeTools[1].source.licenseSha256: must be",
+    ],
+    [
+      "no patch digests",
+      (tool) => (tool.source.patchSha256s = []),
+      "nativeTools[1].source.patchSha256s: must be a non-empty list",
+    ],
+    [
+      "a malformed patch digest",
+      (tool) => (tool.source.patchSha256s = ["nope"]),
+      "nativeTools[1].source.patchSha256s: must be a non-empty list",
+    ],
+    [
+      "a signed claim",
+      (tool) => {
+        tool.signing.verificationStatus = "verified-production";
+        tool.signing.signatureVerified = true;
+      },
+      "nativeTools[1].signing.verificationStatus: must be unsigned-non-production",
+    ],
+    [
+      "an undeclared key",
+      (tool) => (tool.homepage = "https://example.test"),
+      "nativeTools[1].homepage: is not allowed",
+    ],
+    [
+      "an undeclared source key",
+      (tool) => (tool.source.mirror = "https://example.test"),
+      "nativeTools[1].source.mirror: is not allowed",
+    ],
+    [
+      "an undeclared signing key",
+      (tool) => (tool.signing.note = "x"),
+      "nativeTools[1].signing.note: is not allowed",
+    ],
+    ["an empty executable", (tool) => (tool.sizeBytes = 0), "nativeTools[1].sizeBytes"],
+  ])("refuses an entry with %s", (_label, mutate, expected) => {
+    const candidate = withStepNodeTool(withRipgrepTool(manifest()));
+    mutate(candidate.nativeTools[1]);
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate, REQUIRE).join("\n")).toContain(expected);
+  });
+
+  it("refuses the step Node.js in front of ripgrep", () => {
+    const candidate = withStepNodeTool(withRipgrepTool(manifest()));
+    candidate.nativeTools.reverse();
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toContain(
+      "nativeTools: must contain exactly one tool when present",
+    );
+  });
+
+  it("binds the entry in the reviewed binding and lists it in the verification summary", () => {
+    const candidate = withStepNodeTool(withRipgrepTool(manifest()));
+    candidate.releaseImpact.reviewedBinding.nativeTools[1].shippedSha256 = DIGEST_A;
+    expect(validatePortableManifest(candidate).join("\n")).toContain("nativeTools");
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate, REQUIRE)).toEqual([]);
+    const summary = portableVerificationSummaryForManifest(candidate).nativeTools;
+    expect(summary.map((tool) => tool.name)).toEqual(["ripgrep", "step-node"]);
+    expect(summary[1]).toMatchObject({
+      executablePath: "runtime/step-node/node.exe",
+      signatureVerified: false,
+      signingStatus: "unsigned-non-production",
     });
   });
 });
@@ -3114,6 +3304,29 @@ describe("assemblePortableReleaseAssets bounds", () => {
 
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
       "linux-x64.security.verificationPolicy must be production in a stable release (evaluation)",
+    );
+  });
+
+  it.each([
+    ["without the step Node.js", (staged) => staged.nativeTools.pop()],
+    [
+      "without any tool",
+      (staged) => {
+        delete staged.nativeTools;
+        delete staged.releaseImpact.reviewedBinding.nativeTools;
+      },
+    ],
+  ])("refuses a windows-x64 handoff %s", async (_name, mutate) => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stageRoot = join(bundleRoot, "artifacts", "portable-stage-windows-x64");
+    const staged = readStagedManifest(stageRoot);
+    mutate(staged);
+    syncReviewedBinding(staged);
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 native tool set is incomplete",
     );
   });
 

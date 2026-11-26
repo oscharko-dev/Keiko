@@ -75,7 +75,8 @@ const RIPGREP_SBOM_PATH = "runtime/licenses/ripgrep/sbom.cdx.json";
 
 /**
  * The executable paths of one target, as the npm lane reads them: Windows names its executables
- * with `.exe` and also carries the Job Object supervisor its runs launch through (#4068).
+ * with `.exe`, carries the Job Object supervisor its runs launch through (#4068) and the patched
+ * Node.js its confined verification steps run (#4492, ADR-0043 D21).
  */
 export function runtimePackageLayout(target) {
   const exe = target === "windows-x64" ? ".exe" : "";
@@ -85,6 +86,7 @@ export function runtimePackageLayout(target) {
     helperPath: `runtime/native/keiko-secure-workspace-read${exe}`,
     supervisorPath:
       target === "windows-x64" ? "runtime/native/keiko-runtime-supervisor.exe" : undefined,
+    stepNodePath: target === "windows-x64" ? "runtime/step-node/node.exe" : undefined,
   };
 }
 
@@ -96,6 +98,7 @@ function candidateFiles(target, ripgrep) {
     "package.json",
     layout.helperPath,
     ...(layout.supervisorPath === undefined ? [] : [layout.supervisorPath]),
+    ...(layout.stepNodePath === undefined ? [] : [layout.stepNodePath]),
     layout.executablePath,
     LICENSE_PATH,
     SBOM_PATH,
@@ -162,8 +165,20 @@ function licenseNotice(target, ripgrep) {
     `  Keiko ships the MIT text at \`${RIPGREP_PORTABLE_LICENSE_PATH}\` and`,
     `  records the component in \`${RIPGREP_SBOM_PATH}\`.`,
     `  Source: ${ripgrep.archiveUrl}`,
+    ...stepNodeNotice(layout),
     "",
   ].join("\n");
+}
+
+/** The Windows package also redistributes the patched Node.js its confined steps run (#4492). */
+function stepNodeNotice(layout) {
+  if (layout.stepNodePath === undefined) return [];
+  return [
+    `- \`${layout.stepNodePath}\`: Node.js 26.13.1, MIT License`,
+    "  (https://github.com/nodejs/node/blob/v26.13.1/LICENSE), built from the official source tarball",
+    "  plus libuv#5181 and one link-only patch; the pinned source and patch digests are recorded in",
+    "  the package receipt.",
+  ];
 }
 
 /**
@@ -232,7 +247,11 @@ export async function buildCodingRuntimeNpmPackage({
 }) {
   assertEmptyOutDir(outDir);
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
-  const { runBuild, runSupervisorBuild } = await nativeBuilders(target, prebuiltNativeDir, deps);
+  const { runBuild, runSupervisorBuild, runStepNodeStage } = await nativeBuilders(
+    target,
+    prebuiltNativeDir,
+    deps,
+  );
   const stageRipgrep = deps.stageRipgrep ?? stagePinnedNpmRipgrep;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
@@ -243,6 +262,7 @@ export async function buildCodingRuntimeNpmPackage({
     const status = await runBuild({ argv: [process.execPath, buildScript, target, helperPath] });
     if (status !== 0) throw new Error(`secure-workspace-read build failed with status ${status}`);
     const supervisor = await buildPackageSupervisor(target, outDir, runSupervisorBuild);
+    const stepNode = await stagePackageStepNode(target, outDir, runStepNodeStage);
     const ripgrep = await stageRipgrep(target, outDir);
     mkdirSync(dirname(join(outDir, RIPGREP_SBOM_PATH)), { recursive: true });
     writeFileSync(join(outDir, RIPGREP_SBOM_PATH), ripgrepSbomText(target, ripgrep, outDir));
@@ -254,6 +274,7 @@ export async function buildCodingRuntimeNpmPackage({
       name: manifest.name,
       outDir,
       ...(supervisor === undefined ? {} : { runtimeSupervisor: supervisor }),
+      ...(stepNode === undefined ? {} : { stepNode }),
       target,
     };
   } finally {
@@ -271,6 +292,8 @@ async function nativeBuilders(target, prebuiltNativeDir, deps) {
     runBuild: prebuilt?.runBuild ?? deps.runBuild ?? runSecureWorkspaceReadBuild,
     runSupervisorBuild:
       prebuilt?.runSupervisorBuild ?? deps.runSupervisorBuild ?? runRuntimeSupervisorBuild,
+    // No compiler makes the step Node.js: it is the prebuilt, digest-pinned CI artifact or nothing.
+    runStepNodeStage: prebuilt?.runStepNodeStage ?? deps.runStepNodeStage,
   };
 }
 
@@ -311,7 +334,11 @@ async function prebuiltNativeRunners(target, nativeDir, deps) {
     layout.supervisorPath === undefined
       ? undefined
       : verified(layout.supervisorPath, approval.runtimeSupervisor);
-  return { runBuild, runSupervisorBuild };
+  const runStepNodeStage =
+    layout.stepNodePath === undefined
+      ? undefined
+      : verified(layout.stepNodePath, approval.stepNode);
+  return { runBuild, runSupervisorBuild, runStepNodeStage };
 }
 
 function assertEmptyOutDir(outDir) {
@@ -348,6 +375,23 @@ async function buildPackageSupervisor(target, outDir, runSupervisorBuild) {
     sizeBytes: statSync(supervisorPath).size,
     sourceTreeSha256: hashHelperSourceTree(join(repoRoot, SUPERVISOR_SOURCE_DIR)),
   };
+}
+
+/**
+ * Stages the patched Windows step Node.js from its verified prebuilt bytes and returns the facts the
+ * server pins (#4492). A Windows package without one is refused: the step Node.js cannot be
+ * compiled here, so its absence means the prebuilt input was not supplied.
+ */
+async function stagePackageStepNode(target, outDir, runStepNodeStage) {
+  const relativePath = runtimePackageLayout(target).stepNodePath;
+  if (relativePath === undefined) return undefined;
+  if (runStepNodeStage === undefined) {
+    throw new Error("the Windows step Node.js needs a prebuilt input (--prebuilt-native-dir)");
+  }
+  const stepNodePath = join(outDir, ...relativePath.split("/"));
+  const status = await runStepNodeStage({ argv: [process.execPath, "step-node", stepNodePath] });
+  if (status !== 0) throw new Error(`step Node.js staging failed with status ${status}`);
+  return { sha256: sha256File(stepNodePath), sizeBytes: statSync(stepNodePath).size };
 }
 
 /** The approval compiled into this checkout for one target, with its pinned ripgrep. */
@@ -425,6 +469,7 @@ function assertCandidatePins(files, approval, packageDir, target) {
     ["LICENSE.md", sha256Text(licenseNotice(target, ripgrep))],
     [layout.helperPath, approval.helperSha256],
     ...supervisorPin(layout, approval),
+    ...stepNodePin(layout, approval),
     [LICENSE_PATH, approval.licenseSha256],
     [SBOM_PATH, approval.sbomSha256],
     [ripgrepPath, ripgrep.binarySha256],
@@ -458,6 +503,14 @@ function supervisorPin(layout, approval) {
     : [[layout.supervisorPath, approval.runtimeSupervisor.sha256]];
 }
 
+/** The step Node.js's pin entry: present exactly when both the layout and the approval name one. */
+function stepNodePin(layout, approval) {
+  if ((layout.stepNodePath === undefined) !== (approval.stepNode === undefined)) {
+    throw new Error("runtime candidate step Node.js approval mismatch");
+  }
+  return layout.stepNodePath === undefined ? [] : [[layout.stepNodePath, approval.stepNode.sha256]];
+}
+
 function assertExecutablePermissions(files, paths) {
   // A Windows host records no POSIX executable bit, so it cannot attest a macOS package's bits.
   if (process.platform === "win32") return;
@@ -482,6 +535,7 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
   assertCandidatePins(files, approval, packageDir, target);
   const layout = runtimePackageLayout(target);
   assertSupervisorCandidate(files, approval, layout);
+  assertStepNodeCandidate(files, approval, layout);
   const helper = files.find((file) => file.path === layout.helperPath);
   if (helper.sizeBytes !== approval.helperSizeBytes)
     throw new Error("runtime helper size mismatch");
@@ -522,6 +576,27 @@ function assertSupervisorCandidate(files, approval, layout) {
   }
 }
 
+/** The step Node.js must be the pinned binary: its size, on top of the digest every file carries. */
+function assertStepNodeCandidate(files, approval, layout) {
+  if (layout.stepNodePath === undefined) return;
+  const stepNode = files.find((file) => file.path === layout.stepNodePath);
+  if (stepNode.sizeBytes !== approval.stepNode.sizeBytes) {
+    throw new Error("runtime step Node.js size mismatch");
+  }
+}
+
+/** The Windows-only pins a receipt carries: the supervisor and the patched step Node.js. */
+function windowsPins(approval) {
+  return {
+    ...(approval.runtimeSupervisor === undefined
+      ? {}
+      : { runtimeSupervisor: { ...approval.runtimeSupervisor } }),
+    ...(approval.stepNode === undefined
+      ? {}
+      : { stepNode: { ...approval.stepNode, patchSha256s: [...approval.stepNode.patchSha256s] } }),
+  };
+}
+
 function runtimeCandidateReceipt({
   target,
   version,
@@ -549,9 +624,7 @@ function runtimeCandidateReceipt({
       sourceTreeSha256: approval.helperSourceTreeSha256,
       maxBytes: approval.helperMaxBytes,
     },
-    ...(approval.runtimeSupervisor === undefined
-      ? {}
-      : { runtimeSupervisor: { ...approval.runtimeSupervisor } }),
+    ...windowsPins(approval),
     opencode: {
       version: upstream.version,
       sourceCommit: upstream.commit,

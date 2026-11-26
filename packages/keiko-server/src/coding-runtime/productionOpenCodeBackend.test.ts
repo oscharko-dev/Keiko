@@ -59,6 +59,7 @@ import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support
 import {
   assertWindowsWorkspaceLocation,
   createProductionOpenCodeBackend,
+  grantableWindowsCheckout,
   liveQuestionSignal,
   onAnotherWindowsVolume,
   recordContextTelemetry,
@@ -2655,5 +2656,37 @@ describe("live question signal (#4491 audit)", () => {
     signal(`${composition.OPENCODE_STREAM_REOPENED_IDENTITY_PREFIX}2`);
     expect(observe).toHaveBeenCalledTimes(1);
     expect(events).toHaveLength(2);
+  });
+});
+
+// #4492: the inheritable read grant never reaches the profile or Keiko's state. A folder whose
+// name merely starts with two dots lies inside its parent; only a real parent step leaves it.
+describe("grantableWindowsCheckout", () => {
+  const input = {
+    processEnv: { USERPROFILE: String.raw`C:\Users\dev` },
+    runtimeStateRoot: String.raw`C:\Users\dev\keiko-state`,
+  };
+
+  it("grants an ordinary checkout inside the profile", () => {
+    expect(grantableWindowsCheckout(String.raw`C:\Users\dev\src\app`, input)).toBe(true);
+    expect(grantableWindowsCheckout(String.raw`C:\Users\dev\..app`, input)).toBe(true);
+  });
+
+  it("refuses a drive root, the profile, a folder above it and Keiko's state", () => {
+    for (const root of [
+      "C:\\",
+      String.raw`C:\Users\dev`,
+      String.raw`c:\users`,
+      String.raw`C:\Users\dev\keiko-state`,
+      String.raw`C:\Users\dev\keiko-state\runs`,
+    ]) {
+      expect(grantableWindowsCheckout(root, input), root).toBe(false);
+    }
+  });
+
+  it("refuses a checkout holding state in a folder named like ..keiko, or lying in it", () => {
+    const dotted = { ...input, runtimeStateRoot: String.raw`C:\Users\dev\src\..keiko` };
+    expect(grantableWindowsCheckout(String.raw`C:\Users\dev\src`, dotted)).toBe(false);
+    expect(grantableWindowsCheckout(String.raw`C:\Users\dev\src\..keiko\ws`, dotted)).toBe(false);
   });
 });

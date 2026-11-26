@@ -208,10 +208,10 @@ is the only promotion path and preserves the current complete install on failure
 Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
 manager launches only manifest-verified sidecar payloads from the attested managed install root.
 
-The schema-v2 OpenCode approval binds version `2.4.1` to commit
-`6f0514052a3c859894ad01bb14cc14dda1e44b96` and HTTP/SSE compatibility to the raw bytes of
+The schema-v2 OpenCode approval binds version `2.4.2` to commit
+`fc31a485317970bcf6be7b431a9830aaef875731` and HTTP/SSE compatibility to the raw bytes of
 `packages/protocol/openapi.json` at that commit (SHA-256
-`e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b`). Reformatted JSON does not
+`ad2b140ce534035fb7f36ac516c443b69cc453512d9ab1c4fc388499af5ca376`). Reformatted JSON does not
 satisfy this provenance. Codex is not an approved payload or support claim: pending redistribution
 or subscription-auth approval yields `redistribution-unapproved`, with no global-install fallback.
 
@@ -226,7 +226,14 @@ it:
    `npm run portable:prepare-sidecars` on each native target runner.
 3. Stages all four production portable targets from those approvals with
    `scripts/run-portable-assets-stage.mjs` (Linux x64 on Linux, Windows x64 on Windows, and both
-   macOS targets on native runners, with each native launcher compiled in place). Manual dispatch
+   macOS targets on native runners, with each native launcher compiled in place). The Windows
+   payload also carries the patched step Node.js `runtime/step-node/node.exe` (#4492): the stage
+   downloads the reviewed `win32-x64` runtime package of the newest catalog release for the approved
+   OpenCode from its transport prerelease `coding-runtime-<version>` (public, unauthenticated, no
+   token), verifies it against `docs/release/coding-runtime-npm-packages.json`, extracts that one
+   file and verifies it against `npmLaneRuntimeApprovals.ts`. That release must therefore be
+   published before a Windows payload can be staged; for an offline build pass the same tarball with
+   `--step-node-package <path>` to `run-portable-assets-stage.mjs`. Manual dispatch
    can smoke the same targets but cannot reach assembly or publication.
 4. Runs the real launch/setup, USearch, ripgrep, and secure-read smoke on each native target. The
    ripgrep smoke starts the staged `runtime/native/rg` (`rg.exe` on Windows) outside `PATH` and the
@@ -343,9 +350,10 @@ carries exactly the Windows helper and supervisor of the portable release. The s
 `8699612e…` (128,512 bytes) is the helper the 1.5.4 release build shipped at `d88ac1cb8…` (runner
 image `windows-2025-vs2026` 20261116, `/Brepro`). The supervisor was first built by the
 `relay-confinement` job of `windows-gateway-confinement.yml` (#4068); its step mode (#4496) changed
-its source, and so did its profile sweep and session check (#4495): the pin `d45a4d8d…` (255,488
-bytes, source tree `57054c1e…`) is the byte set the `portable-assets.yml` evaluation build compiled
-at `939da9f07`. A Windows runtime package that
+its source, and so did its profile sweep and session check (#4495) and the step that ends with its
+root (#4496): the pin `88dfffdc…` (255,488 bytes, source tree `02e4e49b…`) is the byte set the
+`relay-confinement` job compiled at `75d78002a` (run 45790698055) and again, byte for byte, at
+`a8a47112a` (run 45773380160). A Windows runtime package that
 carries it must be published before an npm installation can use it. `npmLaneRuntimeApprovals.ts`
 pins the npm lane and the desktop package to those bytes, and `npmLaneRuntimeApprovals.test.ts`
 fails when the npm and portable Windows pins diverge.
@@ -388,6 +396,22 @@ immutable Windows-only transports, neither version can ever carry a macOS packag
 runtime version for every target is 1.1.8 or higher. Keiko 1.5.5 declares
 `@oscharko-dev/keiko-coding-runtime-win32-x64` 1.1.7 in the root `optionalDependencies` beside the
 two darwin packages, so a Windows npm installation gets its runtime like a macOS one (#4068).
+
+**1.1.8 carries OpenCode 2.4.1 for every target (#4491).** All three packages were published to
+npm on 2026-11-26 from the transport prerelease `coding-runtime-1.1.8`. Each npm `dist.integrity`
+equals the SHA-512 of the reviewed tarball pinned in `docs/release/coding-runtime-npm-packages.json`.
+The root `optionalDependencies` declare 1.1.8 for `darwin-arm64`, `darwin-x64` and `win32-x64`, so
+the macOS packages leave 1.1.5 and the Windows package leaves 1.1.7 in the same change.
+
+**1.1.9 carries OpenCode 2.4.2 for every target (#4546, #4492, #4496).** Besides the upgrade, the
+Windows package carries the supervisor whose step ends with its root (`88dfffdc…`, the
+`relay-confinement` build) and the patched step Node.js `runtime/step-node/node.exe` (`761112ae…`,
+`windows-step-node.yml` run 45788444328), both checked against `npmLaneRuntimeApprovals.ts` before
+they are staged. The reviewed tarballs are pinned in `docs/release/coding-runtime-npm-packages.json`;
+two independent builds of each target on a macOS host (Node.js 26.13.1, npm 11.20.0) produced the
+same tarballs and byte-identical receipts on 2026-11-26. They are published from the transport
+prerelease `coding-runtime-1.1.9` once this catalog is on `dev`; the root `optionalDependencies`
+move to 1.1.9 only after the registry holds all three.
 
 _Reproducing the pinned bytes._ The reviewed 1.1.7 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the

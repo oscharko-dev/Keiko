@@ -23,6 +23,22 @@ export interface NpmLaneRuntimeSupervisorApproval {
   readonly sourceTreeSha256: string;
 }
 
+/**
+ * The patched Node.js a Windows package carries for its confined verification steps (#4492,
+ * ADR-0043 D21): the official 26.13.1 source plus libuv#5181, built by
+ * `.github/workflows/windows-step-node.yml`. Official 26.13.1 bundles libuv 1.52.1, whose unique
+ * child-pipe names hang `node --test`, forks and piped children inside an AppContainer. The pin
+ * restates what that build's receipt records, so the binary can never vouch for itself.
+ */
+export interface NpmLaneStepNodeApproval {
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  /** SHA-256 of the official `node-v26.13.1.tar.gz` the binary was built from. */
+  readonly sourceSha256: string;
+  /** SHA-256 of each patch applied to that source, in the order they were applied. */
+  readonly patchSha256s: readonly string[];
+}
+
 export interface CodingRuntimeArtifactApproval {
   readonly upstreamVersion: string;
   readonly adapterName: string;
@@ -38,6 +54,8 @@ export interface CodingRuntimeArtifactApproval {
   readonly helperMaxBytes?: number;
   /** Required on Windows, absent elsewhere; a Windows approval without it is refused. */
   readonly runtimeSupervisor?: NpmLaneRuntimeSupervisorApproval;
+  /** Windows only; a step without a verified step Node.js runs as before (ADR-0043 D21). */
+  readonly stepNode?: NpmLaneStepNodeApproval;
 }
 
 export interface NpmLaneRuntimeApproval extends CodingRuntimeArtifactApproval {
@@ -76,19 +94,42 @@ const HELPER_WINDOWS_X64 = {
   helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
 } as const;
 
+// CI run 45790698055 of windows-gateway-confinement.yml (artifact relay-runtime-supervisor-windows-x64)
+// on 75d78002a: the step-mode supervisor whose step ends with its root (#4496). Run 45773380160 built
+// the same source into the same bytes.
 const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
-  sha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+  sha256: "88dfffdcf4c9b3a2123109e9fb60a18a9e0e051988d84572b3f50b772057802b",
   sizeBytes: 255_488,
-  sourceTreeSha256: "57054c1e9614341b41b66146c4f2ba08b13bff0979f1db920c6d17e29f57060b",
+  sourceTreeSha256: "02e4e49bcfc95adfaf751048e072c067530397c1326350c136f5de6a4dc66b2d",
+});
+
+// CI run 45788444328 of windows-step-node.yml at 18449b133 (artifact
+// keiko-step-node-windows-x64-26.13.1-libuv-5181, libuv 1.52.1-keiko.5181).
+// A newer build replaces it by re-pinning these constants and nothing else.
+const STEP_NODE_WINDOWS_X64_SHA256 =
+  "761112aee049a108f38549439a720551fcaf0b850c85da2cc9a1e79277e9fc46";
+const STEP_NODE_WINDOWS_X64_SIZE_BYTES = 100_574_720;
+
+const STEP_NODE_WINDOWS_X64: NpmLaneStepNodeApproval = Object.freeze({
+  sha256: STEP_NODE_WINDOWS_X64_SHA256,
+  sizeBytes: STEP_NODE_WINDOWS_X64_SIZE_BYTES,
+  // node-v26.13.1.tar.gz, from https://nodejs.org/dist/v26.13.1/SHASUMS256.txt
+  sourceSha256: "60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e",
+  patchSha256s: Object.freeze([
+    // patches/node-26.13.1-libuv-5181.patch
+    "8549a84f23e812688b12ab6de8cd5b6f2cb82aaa3d754ebbe3cd6527c67bd387",
+    // patches/node-26.13.1-win-crates-synchronization.patch
+    "4370d95801980482c98693d3ca0ba178b69897f89c7851c5b5c0ea5025e5eacc",
+  ]),
 });
 
 const SHARED = {
   ...HELPER,
-  upstreamVersion: "2.4.1",
+  upstreamVersion: "2.4.2",
   adapterName: "keiko-coding-sidecar",
   adapterVersion: "2",
   licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
-  protocolSchemaSha256: "e5603c6115d74e3f47b5823187a3395aef013bcec3cf42db42bf30433550f92b",
+  protocolSchemaSha256: "ad2b140ce534035fb7f36ac516c443b69cc453512d9ab1c4fc388499af5ca376",
 } as const;
 
 export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
@@ -98,23 +139,24 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     ...SHARED,
     ...HELPER_MACOS_ARM64,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
-    executableTreeSha256: "dd29f79df0af9b1ce293465f2ff1e2dfb4e740872509d75b23c4948dd4d72131",
-    sbomSha256: "900f6be50d4f1a9b4a7292d48bcce37dbda9314265dc78d997f9cda10df73e25",
+    executableTreeSha256: "aefa2a550f7468a18e5abad1b90a2b5aba33703e126870272425dfcf808626df",
+    sbomSha256: "22fa09c084a0e2e1e875fd388f5c774172cf8e0c680ea3f58f1ca1c8b1aa7add",
   }),
   "macos-x64": Object.freeze({
     ...SHARED,
     ...HELPER_MACOS_X64,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
-    executableTreeSha256: "4c93d7ebdb8deee2805770c2682eb938fb1ab91c710d77c5b2bf703ebe1ad836",
-    sbomSha256: "1f4174f86c396d95c2461f10a8dd871b5e8fbeacdfc269b76067982103cee497",
+    executableTreeSha256: "803605436afeb74d8d42109b1471922077d1b150c687865347c73e19005c7330",
+    sbomSha256: "fb124f66425cae7ad93e8e75f29e1b9802f69ccee142e596a1dc43ee28c58d34",
   }),
   "windows-x64": Object.freeze({
     ...SHARED,
     ...HELPER_WINDOWS_X64,
     packageName: "@oscharko-dev/keiko-coding-runtime-win32-x64",
-    executableTreeSha256: "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
-    sbomSha256: "795f198efa475a69338173215605dd52609bb45b3a2bf470da6cbccffc52cbf0",
+    executableTreeSha256: "d340f0ec1e6a40325355aede405fd77577f2589d82d06dd40dadd4bd54e1c4b5",
+    sbomSha256: "7ce365b082bfbf23db73af89b99e109a1321bca62bfcbc0ff9e15606971fb717",
     runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
+    stepNode: STEP_NODE_WINDOWS_X64,
   }),
 });
 
@@ -133,11 +175,12 @@ export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = 
   executableTreeSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].executableTreeSha256,
   sbomSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].sbomSha256,
   runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,
+  stepNode: STEP_NODE_WINDOWS_X64,
 });
 
 /**
  * The executable-tree digests of retired runtime packages: 1.1.4 (OpenCode 2.1.4) and the packages
- * that carry OpenCode 2.2.5 (darwin 1.1.5, win32 1.1.7). They approve nothing: Keiko runs exactly
+ * that carry OpenCode 2.2.5 (darwin 1.1.5, win32 1.1.7) and 2.4.1. They approve nothing: Keiko runs exactly
  * one OpenCode, the current pin, so these packages are refused. The digests only let discovery tell
  * an installation that still holds one of them ("update Keiko") from a payload that was tampered
  * with (#4359, #4546).
@@ -149,4 +192,8 @@ export const NPM_LANE_RETIRED_EXECUTABLE_TREES: ReadonlySet<string> = new Set([
   "034b678cefefdf60a007550915d7521a5d0ed0848c613562140a08d3837c62c4",
   "d4792443ecee7527ba15c6a09a0799e68f9d6904bfe5022bdd1b15ac5eee7a87",
   "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
+  // OpenCode 2.4.1: macos-arm64, macos-x64, windows-x64.
+  "dd29f79df0af9b1ce293465f2ff1e2dfb4e740872509d75b23c4948dd4d72131",
+  "4c93d7ebdb8deee2805770c2682eb938fb1ab91c710d77c5b2bf703ebe1ad836",
+  "2849500e72a3a421e86fa2b07a0e72c98dd3358e05ae5c8522e1772083dc31c1",
 ]);

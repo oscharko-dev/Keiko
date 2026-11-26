@@ -14,6 +14,7 @@ import {
   type WindowsFilesystemGrant,
 } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import { CommandDeniedError } from "./errors.js";
+import { prependWindowsSearchPath, windowsPathContains } from "./windows-step-paths.js";
 
 /** What one supervised step needs once its environment is known. */
 export interface WindowsStepLaunch {
@@ -23,6 +24,8 @@ export interface WindowsStepLaunch {
   readonly args: readonly string[];
   readonly grants: readonly WindowsFilesystemGrant[];
   readonly recoveryHandle: string;
+  /** The patched Node.js folder that leads the step's `PATH` (#4492); absent for a step without it. */
+  readonly pathPrefix?: string | undefined;
 }
 
 const ENVIRONMENT_NAME = /^[A-Za-z_]\w{0,127}$/u;
@@ -46,44 +49,74 @@ export function quoteWindowsArgument(value: string): string {
   return quoted + "\\".repeat(backslashes * 2) + '"';
 }
 
-function contains(root: string, path: string): boolean {
-  const relative = win32.relative(root, path);
-  return relative === "" || (!relative.startsWith("..") && !win32.isAbsolute(relative));
-}
+const contains = windowsPathContains;
 
 /** The toolchain folder an executable belongs to: a `bin` folder's parent (a JDK, Maven). */
-function toolchainRoot(executable: string): string {
+export function windowsToolchainRoot(executable: string): string {
   const folder = win32.dirname(executable);
   return win32.basename(folder).toLowerCase() === "bin" ? win32.dirname(folder) : folder;
 }
 
+// `<profile>\.m2` holds the person's Maven settings and their credentials. A read root may hold
+// neither it nor anything inside it, except the repository folder the Maven launcher is given
+// explicitly (`windowsStepReadRoots`); `MAVEN_HOME\conf` is not under the profile and stays readable.
+function touchesMavenUserDirectory(root: string, profile: string): boolean {
+  const m2 = win32.join(profile, ".m2");
+  if (contains(root, m2)) return true;
+  return contains(m2, root) && !contains(win32.join(m2, "repository"), root);
+}
+
+// A drive path, the only form the supervisor grants: `X:\...`, never UNC, `\\?\` or rooted (#4496).
+const DRIVE_PATH = /^[A-Za-z]:\\/u;
+// A drive's root directory, which would open the whole drive for reading.
+const DRIVE_ROOT = /^[A-Za-z]:\\$/u;
+
+function refuseReadRoot(root: string, profile: string, command: string): void {
+  if (!win32.isAbsolute(root))
+    throw new CommandDeniedError("step read root is not absolute", command);
+  if (!DRIVE_PATH.test(root)) {
+    throw new CommandDeniedError("step read root is not a drive path", command);
+  }
+  if (DRIVE_ROOT.test(win32.normalize(root))) {
+    throw new CommandDeniedError("a step read root is a whole drive", command);
+  }
+  if (contains(root, profile)) {
+    throw new CommandDeniedError("a step read root holds the whole user profile", command);
+  }
+  if (touchesMavenUserDirectory(root, profile)) {
+    throw new CommandDeniedError(
+      "a step read root holds or sits in the Maven user folder",
+      command,
+    );
+  }
+}
+
 /**
- * The tree's grants: the execution root for modification, and read access to the toolchain of
- * the step's executable and to the supervisor's read roots. A directory inside the execution root
- * or inside another read grant adds nothing. A grant that would hold the whole user profile, and
- * more grants than the supervisor accepts, are refused.
+ * The tree's grants: the execution root for modification, and read access to the toolchain folder
+ * of the step's executable and to the supervisor's read roots. A directory inside the execution
+ * root or inside another read grant adds nothing. A step without a known profile, a grant that is
+ * no drive path, holds the whole user profile or reaches its `.m2`, and more grants than the
+ * supervisor accepts are refused. The caller passes real paths (`WindowsStepSupervisor.profile`,
+ * `admitReadRoot`), so a short name or a junction cannot hide an overlap.
  */
 export function windowsStepGrants(
   executionRoot: string,
-  executable: string,
+  toolchain: string,
   readRoots: readonly string[],
   command: string,
-  profile?: string,
+  profile: string | undefined,
 ): readonly WindowsFilesystemGrant[] {
-  const holdsProfile = (path: string): boolean =>
-    profile !== undefined && win32.isAbsolute(profile) && contains(path, profile);
-  if (holdsProfile(executionRoot)) {
+  if (profile === undefined || !DRIVE_PATH.test(profile)) {
+    throw new CommandDeniedError("the user profile folder is unknown", command);
+  }
+  if (contains(executionRoot, profile)) {
     throw new CommandDeniedError("the execution root holds the whole user profile", command);
   }
   const grants: WindowsFilesystemGrant[] = [
     { path: executionRoot, access: "modify", principal: "tree" },
   ];
-  for (const root of [toolchainRoot(executable), ...readRoots]) {
-    if (!win32.isAbsolute(root))
-      throw new CommandDeniedError("step read root is not absolute", command);
-    if (holdsProfile(root)) {
-      throw new CommandDeniedError("a step read root holds the whole user profile", command);
-    }
+  for (const root of [toolchain, ...readRoots]) {
+    refuseReadRoot(root, profile, command);
     if (grants.some((grant) => contains(grant.path, root))) continue;
     grants.push({ path: root, access: "read", principal: "tree" });
   }
@@ -114,6 +147,42 @@ export function windowsStepReadRoots(
   return [...readRoots, mavenRepository];
 }
 
+// The executable's own toolchain folder passes the same admission as the named homes, by its real
+// path; a folder inside the execution root is the workspace copy's own, which holds no credential.
+function admittedToolchain(
+  executable: string,
+  executionRoot: string,
+  supervisor: WindowsStepSupervisor,
+  command: string,
+): string {
+  const folder = windowsToolchainRoot(executable);
+  if (contains(executionRoot, folder)) return folder;
+  const admitted = supervisor.admitReadRoot(folder);
+  if (admitted === undefined) {
+    throw new CommandDeniedError(
+      "the step's toolchain folder is a whole drive, holds or sits in the Maven user folder or a credential store, holds a credential-named entry or cannot be read",
+      command,
+    );
+  }
+  return admitted;
+}
+
+// The named toolchain homes were admitted when the supervisor was resolved; each is admitted again
+// before every step, so a credential-named entry added to one later refuses the step instead of
+// reaching it (#4496). The Maven repository is the launcher's explicit exception and is not a home.
+function readmittedHomes(supervisor: WindowsStepSupervisor, command: string): readonly string[] {
+  return supervisor.readRoots.map((home) => {
+    const admitted = supervisor.admitReadRoot(home);
+    if (admitted === undefined) {
+      throw new CommandDeniedError(
+        "a toolchain home granted to this run is no longer admitted: it is a whole drive, holds or sits in the Maven user folder or a credential store, holds a credential-named entry or cannot be read",
+        command,
+      );
+    }
+    return admitted;
+  });
+}
+
 export function windowsStepLaunch(
   invocation: {
     readonly command: string;
@@ -124,21 +193,27 @@ export function windowsStepLaunch(
   executionRoot: string,
   supervisor: WindowsStepSupervisor,
   command: string,
-  profile: string | undefined,
+  stepNodeDirectory?: string,
 ): WindowsStepLaunch {
+  const readRoots = windowsStepReadRoots(executable, executionRoot, {
+    ...supervisor,
+    readRoots: readmittedHomes(supervisor, command),
+  });
   return {
     image: invocation.command,
     args: invocation.windowsVerbatimArguments
       ? invocation.args
       : invocation.args.map(quoteWindowsArgument),
+    // The step Node.js folder is read and execute only, like every other toolchain folder (#4492).
     grants: windowsStepGrants(
       executionRoot,
-      executable,
-      windowsStepReadRoots(executable, executionRoot, supervisor),
+      admittedToolchain(executable, executionRoot, supervisor, command),
+      stepNodeDirectory === undefined ? readRoots : [...readRoots, stepNodeDirectory],
       command,
-      profile,
+      supervisor.profile,
     ),
     recoveryHandle: randomBytes(16).toString("hex"),
+    ...(stepNodeDirectory === undefined ? {} : { pathPrefix: stepNodeDirectory }),
   };
 }
 
@@ -263,6 +338,25 @@ function throughSearchPath(
     .join(";");
 }
 
+// The step's variables with the patched Node.js folder first on `PATH` (#4492): `node` and every
+// `node_modules\.bin` shim, which falls back to `node` on `PATH`, then run the patched binary. A
+// step whose environment has no `PATH` gets one holding only that folder.
+function withStepNodeFirst(
+  env: Readonly<Record<string, string>>,
+  directory: string | undefined,
+): [string, string][] {
+  const entries = Object.entries(env);
+  if (directory === undefined) return entries;
+  if (!entries.some(([name]) => name.toUpperCase() === "PATH")) {
+    return [...entries, ["PATH", directory]];
+  }
+  return entries.map(([name, value]) =>
+    name.toUpperCase() === "PATH"
+      ? [name, prependWindowsSearchPath(value, directory)]
+      : [name, value],
+  );
+}
+
 /**
  * The launch and the grants, in the order the supervisor reads them. The image, the working
  * directory, the arguments and every variable name a granted directory through its drive letter;
@@ -278,7 +372,7 @@ export function windowsStepFrames(
 ): Buffer {
   const through = (value: string): string => throughWindowsStepDrives(value, drives);
   const carried = Object.fromEntries(
-    Object.entries(env)
+    withStepNodeFirst(env, launch.pathPrefix)
       .filter(([name]) => ENVIRONMENT_NAME.test(name))
       .map(([name, value]) => [
         name,
@@ -354,4 +448,28 @@ function decodeAnswer(kind: number, payload: Buffer): WindowsStepAnswer {
   }
   if (kind === 3 && payload.length === 2) return { kind: "refused", code: payload.readUInt16LE(0) };
   return { kind: "malformed" };
+}
+
+const WINDOWS_STEP_REFUSALS: ReadonlyMap<number, string> = new Map([
+  [7, "a directory the step needs is missing or is a link"],
+  [
+    8,
+    "this account may not grant the step a directory it needs, such as a toolchain an " +
+      "administrator installed outside Program Files",
+  ],
+  [12, "the user environment could not be closed to the step"],
+  // The words a Coding run gives refusals 18 and 19 (supervisorRefusal.ts, #4495).
+  [
+    18,
+    "Keiko was not started in a signed-in desktop session, for example over a remote shell " +
+      "or as a service",
+  ],
+  [19, "the path of Keiko's folder is too long; move it to a shorter path"],
+]);
+
+/** The closed words for a supervisor refusal code, which never ran the step. */
+export function windowsStepRefusal(code: number): string {
+  const reason =
+    WINDOWS_STEP_REFUSALS.get(code) ?? `the supervisor refused the launch (${String(code)})`;
+  return `Windows execution isolation refused the step: ${reason}`;
 }

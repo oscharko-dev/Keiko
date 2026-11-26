@@ -19,7 +19,7 @@ const RELEASE_154_SECURE_READ = {
 };
 const CURRENT_SUPERVISOR = {
   name: "keiko-runtime-supervisor",
-  unsignedSha256: "d45a4d8d6bcb51d8de1130fd002e28f2371701649b8dd89071cabff1261864c8",
+  unsignedSha256: "88dfffdcf4c9b3a2123109e9fb60a18a9e0e051988d84572b3f50b772057802b",
   sizeBytes: 255_488,
 };
 const RELEASE_HELPERS = [RELEASE_154_SECURE_READ, CURRENT_SUPERVISOR];

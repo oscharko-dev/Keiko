@@ -17,6 +17,7 @@ export {
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
 export {
+  NATIVE_HOME_DENIED_LOCATIONS,
   NATIVE_OPENSSL_ENV_NAMES,
   nativeHomeDeniedReadRoots,
   nativeOpenSslNodeOptions,

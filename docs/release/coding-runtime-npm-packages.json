@@ -72,6 +72,32 @@
         "sha256": "4082d4cff7e4f4d035c28f7092b165e27118ffc10d66a619101823caf76de6f0",
         "integrity": "sha512-xuvW2v7H1JUt65oQFcqiAJZv6T/t0RVEontqoOwM00vRN0UP1wdhVhGL+qCc+HbQp9teqGdVcdleGapLlWHtbA=="
       }
+    },
+    "1.1.9": {
+      "macos-arm64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+        "opencodeVersion": "2.4.2",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-arm64-1.1.9.tgz",
+        "sizeBytes": 116626473,
+        "sha256": "d44945259bc4ba73da848fa0a8512d30a4d89f1afd47e7b03c4ae31190e002b8",
+        "integrity": "sha512-na16PYuVPkbXzJVq/3/OmKjmnyFpt7HUgVsT4j4Lv+ob2MMPIzzPds1nvisvSqiD41R7d0xL+DMVua2pBZ8iog=="
+      },
+      "macos-x64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+        "opencodeVersion": "2.4.2",
+        "tarball": "oscharko-dev-keiko-coding-runtime-darwin-x64-1.1.9.tgz",
+        "sizeBytes": 116784795,
+        "sha256": "ac16a190240a72a35d7d3b4897fcdb5f604b2f57ea56713d2a8ef1df8fc20dbf",
+        "integrity": "sha512-uv5KK/8/cdQ3rr0NjHJVOG/8HK0D9NhSAD69uvouSEAIS1C/cFe055s3XcHiOUpjwNQa2EgQmsvUr4olTIOx1A=="
+      },
+      "windows-x64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-win32-x64",
+        "opencodeVersion": "2.4.2",
+        "tarball": "oscharko-dev-keiko-coding-runtime-win32-x64-1.1.9.tgz",
+        "sizeBytes": 171283717,
+        "sha256": "66c039e203d866c4654d96d2385541d320cafd7061d21399641b4a08f725cc4e",
+        "integrity": "sha512-+AYWF/bouSgL0hkTmym+yzygfmULsuICbRFA1XfFT2yyDyIwpzlUICWLHSRAo5LaFCPUTDAEfKQ8Fh/SqYnHXQ=="
+      }
     }
   }
 }

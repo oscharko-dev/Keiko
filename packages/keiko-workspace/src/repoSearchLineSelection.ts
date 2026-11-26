@@ -392,6 +392,11 @@ function pythonRange(lines: readonly string[], index: number): { start: number; 
     }
     end = i;
   }
+  // A line ending in ":" with less indent is also a TypeScript object key, a `case` label or a type
+  // annotation. Its indented block can end before the matched line; such a window does not enclose
+  // the match, and a hit reported with it points at unrelated lines. Like braceRange, the match then
+  // keeps its own line.
+  if (end < index) return { start: index + 1, end: index + 1 };
   return { start: start + 1, end: end + 1 };
 }
 
