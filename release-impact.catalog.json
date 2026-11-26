@@ -4932,7 +4932,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-11-26",
         "humanApproved": true,
-        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/4491#issuecomment-7199992729",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7199992729",
         "rationale": "On 2026-11-26 the repository owner ordered pull request #4562 (Windows Milestone 1 closure, carrying #4556) merged into dev, a new Keiko release, and a test of the published release on macOS and Windows. 1.5.9 also carries #4483, #4535, #4551, #4553, #4555 and #4558, merged since 1.5.8. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
       }
     }

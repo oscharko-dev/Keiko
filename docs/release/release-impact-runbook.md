@@ -31,7 +31,8 @@ does not satisfy those readers; never invent a comment or review id. The referen
 decision and does not independently grant publication authority.
 
 The catalog gate validates that every current-version entry is structurally reviewed and carries a
-non-empty durable approval reference. It does not call GitHub or infer authorization from a comment
+non-empty durable approval reference; for a stable current version that reference must have one of
+the two forms above, because the update preflight admits no other. It does not call GitHub or infer authorization from a comment
 phrase. Publication authority comes from the protected signed merge and, for the Actions path, the
 exact allowlisted non-bot dispatch guarded by `.github/workflows/release.yml`. Keep the reference
 useful for audit reconstruction; do not invent a review id or approval comment.

@@ -64,7 +64,7 @@ function entry(overrides = {}) {
     releaseTag: "v0.2.11",
     remediation: "no-action-required",
     review: {
-      approvalReference: "issue:#1691",
+      approvalReference: "github-pr-review:oscharko-dev/Keiko#1691#4243",
       humanApproved: true,
       rationale: "Reviewed release-note metadata.",
       reviewedAt: "2026-06-30",

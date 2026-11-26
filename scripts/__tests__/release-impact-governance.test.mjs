@@ -65,7 +65,7 @@ function entry(overrides = {}) {
     releaseTag: "v0.2.11",
     remediation: "no-action-required",
     review: {
-      approvalReference: "issue:#1690",
+      approvalReference: "github-pr-review:oscharko-dev/Keiko#1690#4242",
       humanApproved: true,
       rationale: "Reviewed for stable publish.",
       reviewedAt: "2026-06-30",
@@ -452,8 +452,9 @@ describe("release-impact governance", () => {
   });
 
   // Positive coverage for the same exception: a corrected `approvalReference` is legitimate audit
-  // metadata (the field is no longer format-enforced or GitHub-verified), so the append-only check
-  // must accept it as the sole allowed delta on a published entry.
+  // metadata (it is not GitHub-verified, and only the current stable release's reference is
+  // format-checked), so the append-only check must accept it as the sole allowed delta on a
+  // published entry.
   it("accepts an in-place correction to review.approvalReference alone", () => {
     const previousCatalog = catalog([oldEntry()]);
     const corrected = oldEntry({
@@ -469,6 +470,45 @@ describe("release-impact governance", () => {
 
     expect(messages(result)).not.toContain("changed in place");
     expect(result.ok).toBe(true);
+  });
+
+  // The update preflight treats a target whose reference has any other form as unreviewed, so every
+  // updating installation would report missing impact metadata (#4491: the 1.5.9 entry carried a
+  // comment URL and only the server's real-catalog test noticed).
+  it.each([
+    "https://github.com/oscharko-dev/Keiko/issues/4491#issuecomment-7199992729",
+    "issue:#1690",
+    "github-issue-comment:oscharko-dev/Keiko#4491",
+  ])("rejects a current stable approval reference the update preflight cannot admit: %s", (ref) => {
+    const result = validateReleaseImpactCatalog(
+      catalog([entry({ review: { ...entry().review, approvalReference: ref } })]),
+      rootManifest(),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain("form the update preflight admits");
+  });
+
+  it("accepts both approval reference forms the update preflight admits", () => {
+    for (const ref of [
+      "github-issue-comment:oscharko-dev/Keiko#4491#7199992729",
+      "github-pr-review:oscharko-dev/Keiko#1690#4242",
+    ]) {
+      const result = validateReleaseImpactCatalog(
+        catalog([entry({ review: { ...entry().review, approvalReference: ref } })]),
+        rootManifest(),
+      );
+      expect(messages(result)).toBe("");
+    }
+  });
+
+  it("checks the reference form only for the current stable release", () => {
+    const older = oldEntry({
+      review: { ...oldEntry().review, approvalReference: "https://example.invalid/historic" },
+    });
+    const result = validateReleaseImpactCatalog(catalog([older, entry()]), rootManifest());
+
+    expect(messages(result)).toBe("");
   });
 
   it("requires baseline supported-from coverage", () => {
