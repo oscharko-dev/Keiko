@@ -366,7 +366,9 @@ export function grantableWindowsCheckout(
 /** Whether `child` is `parent` or lies inside it; Windows compares paths case-insensitively. */
 function windowsPathContains(parent: string, child: string): boolean {
   const relative = win32.relative(win32.normalize(parent), win32.normalize(child));
-  return relative === "" || (!relative.startsWith("..") && !win32.isAbsolute(relative));
+  // Only a real parent step leaves the folder: a child may be named `..keiko`.
+  const leaves = relative === ".." || relative.startsWith("..\\");
+  return !leaves && !win32.isAbsolute(relative);
 }
 
 /**
