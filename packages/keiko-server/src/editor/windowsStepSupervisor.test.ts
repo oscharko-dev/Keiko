@@ -120,6 +120,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       correlationId: "step-supervisor-proof",
       outcome: "available",
       readRootCount: 0,
+      readRootRefusedDriveRootCount: 0,
       readRootRefusedM2Count: 0,
       readRootRefusedCredentialCount: 0,
       readRootRefusedUnlistableCount: 0,
@@ -269,7 +270,7 @@ describe("windowsStepReadRoots", () => {
 
   describe("a home that reaches the profile's .m2 or a credential (#4496)", () => {
     const profile = String.raw`C:\Users\dev`;
-    const none = { m2: 0, credential: 0, unlistable: 0 };
+    const none = { "drive-root": 0, m2: 0, credential: 0, unlistable: 0 };
     // `real` maps a short name or a junction to the folder it reaches, as the real host's
     // realpath does; every other path is its own real path.
     const host = (
@@ -353,6 +354,45 @@ describe("windowsStepReadRoots", () => {
         host({}, { "C:/Users/dev": profile }),
       );
       expect(result).toEqual({ roots: [], profile, refused: { ...none, m2: 1 } });
+    });
+
+    it.each(["D:\\", "e:\\"])("drops the drive root %s and counts it", (home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, "drive-root": 1 } });
+      expect(windowsReadRootAdmission(profile, host())(home)).toEqual({ refusal: "drive-root" });
+    });
+
+    it.each([
+      ["inside .ssh", String.raw`C:\Users\dev\.ssh\tools`],
+      ["inside .aws in another case", String.raw`c:\users\DEV\.AWS\cli`],
+      ["the folder that holds .cargo's credentials", String.raw`C:\Users\dev\.cargo`],
+      ["the folder that holds the gh store", String.raw`C:\Users\dev\.config`],
+      [
+        "the folder that holds the Windows credential store",
+        String.raw`C:\Users\dev\AppData\Roaming`,
+      ],
+      ["inside the DPAPI keys", String.raw`C:\Users\dev\AppData\Roaming\Microsoft\Protect\x`],
+      ["inside OpenCode's own state", String.raw`C:\Users\dev\.local\share\opencode\bin`],
+    ])("drops a home that is %s, as the macOS profile denies it", (_label, home) => {
+      const result = windowsStepReadRoots({ JAVA_HOME: home, USERPROFILE: profile }, host());
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+    });
+
+    it("drops a home inside a credential store the profile reaches through a junction", () => {
+      const relocated = host({}, { [String.raw`C:\Users\dev\.aws`]: String.raw`D:\aws` });
+      const result = windowsStepReadRoots(
+        { JAVA_HOME: String.raw`D:\aws\cli`, USERPROFILE: profile },
+        relocated,
+      );
+      expect(result).toEqual({ roots: [], profile, refused: { ...none, credential: 1 } });
+      expect(windowsReadRootAdmission(profile, relocated)(String.raw`D:\tools\cli`)).toEqual({
+        root: String.raw`D:\tools\cli`,
+      });
+    });
+
+    it("keeps a bin folder beside a credential store, as macOS keeps ~/.cargo/bin", () => {
+      const bin = String.raw`C:\Users\dev\.cargo\bin`;
+      expect(windowsReadRootAdmission(profile, host())(bin)).toEqual({ root: bin });
     });
 
     it("drops a home that holds a credential-named entry", () => {

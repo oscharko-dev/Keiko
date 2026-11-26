@@ -964,8 +964,10 @@ with a correlation id. `stepNodeMismatch` names the check a `mismatch` missed (`
 `extra-entries`, `not-ordinary-file`, `size`, `hash` or `unreadable`; `none` otherwise), so a log
 tells a stale package from a rewritten file. #4496 adds, as counts per reason and never as paths,
 the named toolchain homes left out, once per real folder however many homes name it (a home that
-is unset or does not resolve to a drive folder is not counted): `readRootRefusedM2Count` (the home
-holds or sits in the profile's `.m2`, named or relocated), `readRootRefusedCredentialCount` (it holds a credential-named entry) and
+is unset or does not resolve to a drive folder is not counted): `readRootRefusedDriveRootCount` (the
+home is a drive root), `readRootRefusedM2Count` (the home holds or sits in the profile's `.m2`,
+named or relocated), `readRootRefusedCredentialCount` (it holds or sits in one of the profile's
+credential stores, named or relocated, or holds a credential-named entry) and
 `readRootRefusedUnlistableCount` (it cannot be listed), and `profileKnown`: without a known profile
 folder every step is refused with "the user profile folder is unknown".
 

@@ -47813,6 +47813,12 @@
               "required": true
             },
             {
+              "name": "readRootRefusedDriveRootCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "readRootRefusedM2Count",
               "type": "integer",
               "dataClass": "count",

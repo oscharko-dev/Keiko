@@ -82,4 +82,48 @@ describe("coding repository search projection", () => {
     // One read by the scan and one by the projection for every file.
     expect([...reads.values()]).toEqual(Array.from({ length: 6 }, () => 2));
   });
+  it("keeps a strict ranked prefix when the deadline fires while a later file is projected", async () => {
+    const files = {
+      "a.html": "CodingProjectionProbe a1\nfiller\nCodingProjectionProbe a2",
+      "b.html": "CodingProjectionProbe b1\nfiller\nCodingProjectionProbe b2",
+      "c.html": "CodingProjectionProbe c1",
+    };
+    const full = await executeCodingRepositoryRequest(workspace, request, {
+      fs: memFs(ROOT, files),
+    });
+    if (!full.ok || full.kind !== "search") throw new Error("search result unavailable");
+    // The ranked order interleaves the files: a1 b1 c1 a2 b2. Projection goes a, b, c.
+    const ranked = full.hits.map((hit) => `${hit.path}:${String(hit.startLine)}`);
+    expect(ranked.slice(0, 2)).toEqual(["a.html:1", "b.html:1"]);
+
+    let now = 0;
+    const base = memFs(ROOT, files);
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    const reads = new Map<string, number>();
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: async (path, ...args): Promise<Uint8Array> => {
+          const count = (reads.get(path) ?? 0) + 1;
+          reads.set(path, count);
+          // The second read of b.html is its projection: the soft deadline passes during it.
+          if (path.endsWith("/b.html") && count === 2) now = 80;
+          return read(path, ...args);
+        },
+      },
+      nowMs: () => now,
+      deadlineAtMs: 100,
+      scanDeadlineAtMs: 50,
+      projectionDeadlineAtMs: 75,
+    });
+    if (!result.ok || result.kind !== "search") throw new Error("search result unavailable");
+    // Only the hits ranked before the best hit of the unfinished file b.html remain: a later hit
+    // of a.html must not survive without the higher-ranked b.html hit.
+    expect(result.hits.map((hit) => `${hit.path}:${String(hit.startLine)}`)).toEqual(
+      ranked.slice(0, 1),
+    );
+    expect(result.truncationReasons).toContain("time-limit");
+    expect(result.diagnostics?.coverageIncomplete).toBe(true);
+  });
 });

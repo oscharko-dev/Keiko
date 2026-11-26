@@ -834,6 +834,16 @@ function realRoot(fs: WorkspaceFs, root: string): string {
   }
 }
 
+// The real execution root a Windows step is granted. A root whose real path cannot be resolved is
+// refused: its lexical spelling could hide a short name or a junction from the profile check.
+export function windowsExecutionRoot(fs: WorkspaceFs, root: string, command: string): string {
+  try {
+    return fs.realPath(root);
+  } catch {
+    throw new CommandDeniedError("the execution root cannot be resolved", command);
+  }
+}
+
 function assertBareExecutable(command: string): void {
   if (command.length === 0 || hasNul(command) || hasPathSeparator(command)) {
     throw new CommandDeniedError("executable must be a bare PATH-resolved name", command);
@@ -1147,7 +1157,11 @@ function windowsStepTarget(
     throw new CommandDeniedError("the Windows step supervisor is unavailable", input.command);
   }
   const resolved = executable();
-  const executionRoot = realRoot(workspaceFsOf(deps), deps.workspace.root);
+  const executionRoot = windowsExecutionRoot(
+    workspaceFsOf(deps),
+    deps.workspace.root,
+    input.command,
+  );
   const plan = planWindowsStepNode({
     command: input.command,
     executable: resolved,

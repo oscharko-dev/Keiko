@@ -28,6 +28,7 @@ import {
   type ResolvedPortableOpenCodeRuntime,
 } from "../coding-runtime/productionOpenCodeBackend.js";
 import { discoverQualifiedPortableOpenCode } from "../coding-runtime/productionPortableCodingRuntime.js";
+import { NATIVE_HOME_DENIED_LOCATIONS } from "@oscharko-dev/keiko-sandbox";
 import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { isCredentialNamedSegment } from "@oscharko-dev/keiko-workspace";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
@@ -58,8 +59,10 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
       values: ["available", "no-runtime", "no-pin", "pin-mismatch"],
     },
     readRootCount: { type: "integer", dataClass: "count", required: true },
-    // #4496: named toolchain homes left out, by reason: they hold or sit in the profile's `.m2`,
-    // hold a credential-named entry, or cannot be listed. Never their paths.
+    // #4496: named toolchain homes left out, by reason: they are a drive root, hold or sit in the
+    // profile's `.m2`, hold or sit in a credential store or hold a credential-named entry, or
+    // cannot be listed. Never their paths.
+    readRootRefusedDriveRootCount: { type: "integer", dataClass: "count", required: true },
     readRootRefusedM2Count: { type: "integer", dataClass: "count", required: true },
     readRootRefusedCredentialCount: { type: "integer", dataClass: "count", required: true },
     readRootRefusedUnlistableCount: { type: "integer", dataClass: "count", required: true },
@@ -193,21 +196,49 @@ function windowsPathContains(parent: string, child: string): boolean {
 }
 
 /** Why a toolchain folder is not granted to a step; closed, so the log names it without a path. */
-export type WindowsReadRootRefusal = "m2" | "credential" | "unlistable";
+export type WindowsReadRootRefusal = "drive-root" | "m2" | "credential" | "unlistable";
 
-// A folder that holds or sits inside the profile's `.m2` would hand a read of its settings and
-// their credentials to the step; `MAVEN_HOME\conf` (Maven's own global settings) stays readable.
-// Both paths are real ones, and `.m2` is compared both where it is named and where it really lies,
-// so a short name, a junction or a relocated `.m2` cannot hide the overlap.
+// The profile's credential stores, as the macOS profile denies them under the home, plus the
+// Windows stores of the same kind (#4496). A read root may neither hold nor sit in one.
+const WINDOWS_PROFILE_CREDENTIAL_LOCATIONS: readonly string[] = Object.freeze([
+  ...NATIVE_HOME_DENIED_LOCATIONS,
+  "AppData/Roaming/Microsoft/Credentials",
+  "AppData/Local/Microsoft/Credentials",
+  "AppData/Roaming/Microsoft/Protect",
+  "AppData/Roaming/Microsoft/Crypto",
+  "AppData/Roaming/GitHub CLI",
+]);
+
+// A drive's root directory (`D:\`): granting it would open the whole drive for reading.
+const DRIVE_ROOT = /^[A-Za-z]:\\$/u;
+
+// Each protected folder where the profile names it and, when it differs, where it really lies.
+function protectedFolders(named: readonly string[], host: WindowsReadRootHost): readonly string[] {
+  return named.flatMap((folder) => {
+    const resolved = host.realDirectory(folder);
+    return resolved === undefined || resolved === folder ? [folder] : [folder, resolved];
+  });
+}
+
+function overlapsAny(root: string, folders: readonly string[]): boolean {
+  return folders.some(
+    (folder) => windowsPathContains(root, folder) || windowsPathContains(folder, root),
+  );
+}
+
+// A drive root opens the whole drive. A folder that holds or sits inside the profile's `.m2` would
+// hand a read of its settings and their credentials to the step; `MAVEN_HOME\conf` (Maven's own
+// global settings) stays readable. The same holds for the profile's credential stores. All paths
+// are real ones, and each protected folder is compared both where it is named and where it really
+// lies, so a short name, a junction or a relocated folder cannot hide the overlap.
 function readRootRefusal(
   root: string,
-  m2Folders: readonly string[],
+  protectedRoots: { readonly m2: readonly string[]; readonly credential: readonly string[] },
   host: WindowsReadRootHost,
 ): WindowsReadRootRefusal | undefined {
-  const overlaps = m2Folders.some(
-    (m2) => windowsPathContains(root, m2) || windowsPathContains(m2, root),
-  );
-  if (overlaps) return "m2";
+  if (DRIVE_ROOT.test(root)) return "drive-root";
+  if (overlapsAny(root, protectedRoots.m2)) return "m2";
+  if (overlapsAny(root, protectedRoots.credential)) return "credential";
   // A folder that cannot be listed cannot be shown free of credentials, so it is refused.
   const names = host.entryNames(root);
   if (names === undefined) return "unlistable";
@@ -219,14 +250,20 @@ type ReadRootAdmission = (root: string) => {
   readonly refusal?: WindowsReadRootRefusal;
 };
 
-// The admission of an already real folder against the profile's `.m2`, named and resolved. `.m2`
-// is resolved again on every admission, so one relocated after the supervisor was resolved is seen.
+// The admission of an already real folder against the profile's `.m2` and credential stores, named
+// and resolved. They are resolved again on every admission, so one relocated after the supervisor
+// was resolved is seen.
 function realReadRootAdmission(profile: string, host: WindowsReadRootHost): ReadRootAdmission {
-  const named = win32.join(profile, ".m2");
+  const m2 = [win32.join(profile, ".m2")];
+  const credential = WINDOWS_PROFILE_CREDENTIAL_LOCATIONS.map((location) =>
+    win32.join(profile, location),
+  );
   return (root) => {
-    const resolved = host.realDirectory(named);
-    const m2Folders = resolved === undefined || resolved === named ? [named] : [named, resolved];
-    const refusal = readRootRefusal(root, m2Folders, host);
+    const refusal = readRootRefusal(
+      root,
+      { m2: protectedFolders(m2, host), credential: protectedFolders(credential, host) },
+      host,
+    );
     return refusal === undefined ? { root } : { refusal };
   };
 }
@@ -262,7 +299,7 @@ export function windowsStepReadRoots(
   readonly refused: WindowsReadRootRefusals;
 } {
   const profile = host.realDirectory(env.USERPROFILE);
-  const refused = { m2: 0, credential: 0, unlistable: 0 };
+  const refused = { "drive-root": 0, m2: 0, credential: 0, unlistable: 0 };
   if (profile === undefined) return { roots: Object.freeze([]), profile, refused };
   const admit = realReadRootAdmission(profile, host);
   // Each real folder is judged and counted once, however many homes name it.
@@ -457,6 +494,7 @@ function recordResolution(
       {
         outcome: resolved.outcome,
         readRootCount: resolved.readRoots.length,
+        readRootRefusedDriveRootCount: refused["drive-root"],
         readRootRefusedM2Count: refused.m2,
         readRootRefusedCredentialCount: refused.credential,
         readRootRefusedUnlistableCount: refused.unlistable,

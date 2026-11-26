@@ -21682,6 +21682,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      readRootRefusedDriveRootCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       readRootRefusedM2Count: {
         type: "integer",
         dataClass: "count",

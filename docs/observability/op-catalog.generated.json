@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "322e276754aedd95ff0c442b39e5f386840cb51866d5575b198e82d7415a7eed",
+    "catalogDigest": "6c2da97f6232b1856ae65b526d9ed5affa788cafcad975032e5f4e4c7384aa2f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22532,8 +22532,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:105",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:416"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:108",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:453"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22560,6 +22560,11 @@
             "values": ["available", "no-runtime", "no-pin", "pin-mismatch"]
           },
           "readRootCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "readRootRefusedDriveRootCount": {
             "type": "integer",
             "dataClass": "count",
             "required": true
@@ -22616,8 +22621,8 @@
         "failureClasses": ["runtime-confinement-unavailable"],
         "proofIds": ["editor.verification.windows-step-supervisor.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:46",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:454"]
+        "registrationSite": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:47",
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepSupervisor.ts:491"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -114224,6 +114229,12 @@
                   "required": true
                 },
                 {
+                  "name": "readRootRefusedDriveRootCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "readRootRefusedM2Count",
                   "type": "integer",
                   "dataClass": "count",
@@ -127946,19 +127957,19 @@
     {
       "op": "editor.verification.windows-step-refused",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:108",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:111",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:49",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:50",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.windows-step-supervisor.copy-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:365",
+      "site": "packages/keiko-server/src/editor/windowsStepSupervisor.ts:402",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

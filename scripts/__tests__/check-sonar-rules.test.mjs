@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { ESLint } from "eslint";
 import sonarjs from "eslint-plugin-sonarjs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   changedLintableFiles,
@@ -15,6 +15,9 @@ import {
   needsLargerHeap,
   profileRules,
   QUALITY_PROFILE,
+  rerunWithLargerHeap,
+  SONAR_RULES_HEAP_RERUN_ENV,
+  shouldRerunWithLargerHeap,
   resolveBaseRef,
   SONAR_RULES_HEAP_MB,
   sonarRuleKey,
@@ -362,4 +365,45 @@ describe("createEngine", () => {
       rmSync(path, { force: true });
     }
   }, 120_000);
+});
+
+describe("rerunWithLargerHeap", () => {
+  const rerun = (child, env = {}) => {
+    const spawn = vi.fn(() => child);
+    const exit = vi.fn();
+    const write = vi.fn();
+    rerunWithLargerHeap("/x/check-sonar-rules.mjs", ["--base", "dev"], { spawn, exit, write, env });
+    return { spawn, exit, write };
+  };
+
+  it("passes argv after the script with the heap flag and marks the child", () => {
+    const { spawn } = rerun({ status: 0 }, { PATH: "p" });
+    const [executable, args, options] = spawn.mock.calls[0];
+    expect(executable).toBe(process.execPath);
+    expect(args).toEqual([
+      `--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`,
+      "/x/check-sonar-rules.mjs",
+      "--base",
+      "dev",
+    ]);
+    expect(options.env).toEqual({ PATH: "p", [SONAR_RULES_HEAP_RERUN_ENV]: "1" });
+  });
+
+  it("propagates the child's exit status", () => {
+    const { exit, write } = rerun({ status: 3 });
+    expect(exit).toHaveBeenCalledExactlyOnceWith(3);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("names the signal and exits 1 when the child was killed", () => {
+    const { exit, write } = rerun({ status: null, signal: "SIGKILL" });
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(write).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("SIGKILL"));
+  });
+
+  it("does not re-execute when the marker is set, whatever the heap limit", () => {
+    const small = 1024 * 1024 * 1024;
+    expect(shouldRerunWithLargerHeap({}, small)).toBe(true);
+    expect(shouldRerunWithLargerHeap({ [SONAR_RULES_HEAP_RERUN_ENV]: "1" }, small)).toBe(false);
+  });
 });

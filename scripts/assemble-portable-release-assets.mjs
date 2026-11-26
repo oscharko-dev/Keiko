@@ -686,7 +686,7 @@ function portableBundleRelativePaths(manifest, target, setupPath) {
 
 // The first rejected task in the given order, so a failure names the same path or target however
 // the digests finish; every task is awaited, so no stream is left running.
-async function settledInOrder(tasks) {
+export async function settledInOrder(tasks) {
   const settled = await Promise.allSettled(tasks);
   const rejected = settled.find((entry) => entry.status === "rejected");
   if (rejected !== undefined) throw rejected.reason;
@@ -712,18 +712,26 @@ function copyVerifiedBundleFile(sourceRoot, finalRoot, target, relativePath) {
 }
 
 // Files are validated and copied one after another, stopping at the first bad one; the digests
-// of the copied files are then compared, and the first mismatch in path order fails.
-async function copyPortableBundleFiles(sourceRoot, finalRoot, manifest, target, setupPath) {
+// of the copied files are then compared, and the first failure in path order wins, whether it is
+// a synchronous refusal or a digest mismatch. `copyFile` is the seam the tests inject.
+export async function copyPortableBundleFiles(
+  sourceRoot,
+  finalRoot,
+  manifest,
+  target,
+  setupPath,
+  copyFile = copyVerifiedBundleFile,
+) {
   mkdirSync(finalRoot, { recursive: false });
   const verifications = [];
-  try {
-    for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
-      verifications.push(copyVerifiedBundleFile(sourceRoot, finalRoot, target, relativePath));
+  for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
+    try {
+      verifications.push(copyFile(sourceRoot, finalRoot, target, relativePath));
+    } catch (error) {
+      // Recorded at its own position, so an earlier path's pending digest failure still wins.
+      verifications.push(Promise.reject(error));
+      break;
     }
-  } catch (error) {
-    // An earlier file's digest comparison is still running; it is awaited, never left unhandled.
-    await Promise.allSettled(verifications);
-    throw error;
   }
   await settledInOrder(verifications);
 }

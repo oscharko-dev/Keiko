@@ -68,12 +68,17 @@ function touchesMavenUserDirectory(root: string, profile: string): boolean {
 
 // A drive path, the only form the supervisor grants: `X:\...`, never UNC, `\\?\` or rooted (#4496).
 const DRIVE_PATH = /^[A-Za-z]:\\/u;
+// A drive's root directory, which would open the whole drive for reading.
+const DRIVE_ROOT = /^[A-Za-z]:\\$/u;
 
 function refuseReadRoot(root: string, profile: string, command: string): void {
   if (!win32.isAbsolute(root))
     throw new CommandDeniedError("step read root is not absolute", command);
   if (!DRIVE_PATH.test(root)) {
     throw new CommandDeniedError("step read root is not a drive path", command);
+  }
+  if (DRIVE_ROOT.test(win32.normalize(root))) {
+    throw new CommandDeniedError("a step read root is a whole drive", command);
   }
   if (contains(root, profile)) {
     throw new CommandDeniedError("a step read root holds the whole user profile", command);
@@ -155,7 +160,7 @@ function admittedToolchain(
   const admitted = supervisor.admitReadRoot(folder);
   if (admitted === undefined) {
     throw new CommandDeniedError(
-      "the step's toolchain folder holds or sits in the Maven user folder, holds a credential-named entry or cannot be read",
+      "the step's toolchain folder is a whole drive, holds or sits in the Maven user folder or a credential store, holds a credential-named entry or cannot be read",
       command,
     );
   }

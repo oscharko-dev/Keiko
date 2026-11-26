@@ -243,18 +243,43 @@ export function needsLargerHeap(heapLimitBytes = getHeapStatistics().heap_size_l
   return heapLimitBytes < SONAR_RULES_HEAP_MB * 1024 * 1024 * 0.9;
 }
 
-function rerunWithLargerHeap(script, argv) {
-  const child = spawnSync(
+export const SONAR_RULES_HEAP_RERUN_ENV = "KEIKO_SONAR_RULES_HEAP_RERUN";
+
+export function shouldRerunWithLargerHeap(
+  env = process.env,
+  heapLimitBytes = getHeapStatistics().heap_size_limit,
+) {
+  return env[SONAR_RULES_HEAP_RERUN_ENV] !== "1" && needsLargerHeap(heapLimitBytes);
+}
+
+// The re-run is marked in the child's environment, so a child that still reports a small heap
+// limit runs the analysis instead of re-executing itself forever.
+export function rerunWithLargerHeap(
+  script,
+  argv,
+  {
+    spawn = spawnSync,
+    exit = process.exit,
+    env = process.env,
+    write = (line) => process.stderr.write(line),
+  } = {},
+) {
+  const child = spawn(
     process.execPath,
     [`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, script, ...argv],
-    { stdio: "inherit" },
+    { stdio: "inherit", env: { ...env, [SONAR_RULES_HEAP_RERUN_ENV]: "1" } },
   );
   if (child.error !== undefined) throw child.error;
-  process.exit(child.status ?? 1);
+  if (child.status === null) {
+    write(`check-sonar-rules: the analysis process ended by signal ${String(child.signal)}\n`);
+    exit(1);
+    return;
+  }
+  exit(child.status);
 }
 
 const invokedPath = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  if (needsLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
+  if (shouldRerunWithLargerHeap()) rerunWithLargerHeap(invokedPath, process.argv.slice(2));
   else await main();
 }

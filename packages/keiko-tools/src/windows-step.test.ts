@@ -10,6 +10,7 @@ import type {
   WindowsStepNodeDecision,
   WindowsStepSupervisor,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import { makeWorkspace } from "./_support.js";
 import { CommandCancelledError, CommandDeniedError } from "./errors.js";
@@ -18,6 +19,8 @@ import {
   runCommand,
   type RunCommandDeps,
   type SpawnOptions,
+  windowsExecutionRoot,
+  workspaceFsOf,
 } from "./exec.js";
 import { buildWindowsShellInvocation } from "./windows-shell.js";
 import {
@@ -157,6 +160,14 @@ describe("windowsStepGrants", () => {
         /not a drive path/u,
       );
     }
+  });
+
+  it("refuses a read root that is a whole drive (#4496)", () => {
+    for (const drive of ["D:\\", "e:\\", "D:\\."]) {
+      expect(() => grants(root, String.raw`C:\t\x.exe`, [drive], "x")).toThrow(/whole drive/u);
+    }
+    expect(() => grants(root, String.raw`D:\node.exe`, [], "node")).toThrow(/whole drive/u);
+    expect(grants(root, String.raw`D:\tools\node.exe`, [], "node")).toHaveLength(2);
   });
 
   it("refuses a grant that holds the whole user profile", () => {
@@ -800,10 +811,28 @@ describe("runCommand on the windows-appcontainer backend (#4496)", () => {
   it("refuses a step whose toolchain folder the supervisor does not admit, before any launch", async () => {
     const h = harness({ admitReadRoot: () => undefined });
     await expect(runCommand(input(new AbortController().signal), h.deps)).rejects.toThrow(
-      /toolchain folder holds or sits in the Maven user folder, holds a credential-named entry/u,
+      /toolchain folder is a whole drive, holds or sits in the Maven user folder or a credential store/u,
     );
     expect(h.acquired).toEqual([]);
     expect(h.spawned).toEqual([]);
+  });
+
+  // Earlier checks of the working directory already fail closed on an unresolvable root; the step's
+  // own resolution refuses as well instead of granting the lexical spelling.
+  it("refuses an execution root that has no real path instead of granting its spelling", () => {
+    const fs = workspaceFsOf(harness().deps);
+    const unresolvable: WorkspaceFs = {
+      ...fs,
+      realPath: () => {
+        throw new Error("the root has no real path");
+      },
+    };
+    expect(() => windowsExecutionRoot(unresolvable, String.raw`C:\work\repo`, "node")).toThrow(
+      /execution root cannot be resolved/u,
+    );
+    expect(
+      windowsExecutionRoot({ ...fs, realPath: () => String.raw`C:\real\repo` }, "x", "node"),
+    ).toBe(String.raw`C:\real\repo`);
   });
 
   it("refuses every step on a host whose profile folder is unknown, before any launch", async () => {

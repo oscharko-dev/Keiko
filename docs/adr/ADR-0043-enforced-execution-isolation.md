@@ -104,7 +104,11 @@ and `M2_HOME` folders) that directly holds a credential-named entry or cannot be
 `MAVEN_HOME\conf` stays readable. Every containment test compares real drive paths (long names,
 links and junctions resolved), and `.m2` is compared both where the profile names it and where it
 really lies, so a relocated `.m2` cannot hide an overlap either; a folder whose real path cannot be
-resolved is no folder, and without a known profile folder every step is refused.
+resolved is no folder, and without a known profile folder every step is refused. As on macOS, no
+toolchain root may be a drive root or hold or sit inside one of the profile's credential stores:
+the macOS home denials (`.ssh`, `.aws`, `.cargo\credentials.toml`, `.config\gh`, …) plus the
+Windows credential and DPAPI folders under `AppData`, compared named and resolved; and the step's
+execution root is refused when its real path cannot be resolved, never granted by its spelling.
 
 ## Context
 
@@ -1349,19 +1353,27 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     grants, and no grant may hold the whole user profile. A toolchain root that is, holds or sits inside the
     profile's `.m2` (bar its `repository` folder, which a Maven launcher is given explicitly) is
     never granted, and neither is a toolchain folder that directly holds a credential-named entry
-    or cannot be listed. The server admits every toolchain folder by its real drive path (long
+    or cannot be listed. A drive root (`D:\`) is never granted, and no toolchain root may hold or sit
+    inside one of the profile's credential stores: the locations the macOS profile denies under the
+    home (`NATIVE_HOME_DENIED_LOCATIONS`) plus `AppData\Roaming\Microsoft\Credentials`,
+    `AppData\Local\Microsoft\Credentials`, `AppData\Roaming\Microsoft\Protect`,
+    `AppData\Roaming\Microsoft\Crypto` and `AppData\Roaming\GitHub CLI`; a `bin` folder beside a
+    store (`.cargo\bin`) stays grantable, as on macOS. Windows keeps a folder one level below a
+    drive (`C:\apache-maven-3.9.9`) grantable, unlike macOS's two-level rule, because that is where
+    Windows installs extract a JDK or Maven and no shared prefix sits there. The server admits every toolchain folder by its real drive path (long
     names for 8.3 ones, links and junctions resolved), against the profile's real path, so a short
     name, a junction or a relocated `.m2` (compared where it is named and where it really lies)
     cannot hide an overlap; a folder whose real path cannot be resolved is no folder. The named
     homes are judged once per resolution and once per real folder (refusals are counted on the
-    supervisor line by reason, `readRootRefusedM2Count`,
+    supervisor line by reason, `readRootRefusedDriveRootCount`, `readRootRefusedM2Count`,
     `readRootRefusedCredentialCount`, `readRootRefusedUnlistableCount`), and the executable's own
     folder again for each step, unless it lies in the execution root. A folder that is no drive path
     (UNC, `\\?\`) is left out when a named home names it and refused when it is a step's own
     toolchain folder, and every step is refused on a host whose profile folder is unknown
     (`profileKnown`). A folder inside the execution root or inside another grant adds no grant.
     Maven's own global settings in `MAVEN_HOME\conf` stay readable because Maven needs them. The
-    step's `TEMP`, `TMP` and npm cache stay inside the execution root.
+    step's `TEMP`, `TMP` and npm cache stay inside the execution root. An execution root whose real
+    path cannot be resolved refuses the step.
   - **Drive letters (step mode only; a Coding run's tree is unchanged).** No capability Windows
     grants an ordinary AppContainer lists `C:\` or `C:\Users` (measured 2026-11-25, ARM64 VM,
     standard user: `CreateProcessW` refuses a token that carries `isolatedWin32-volumeRootMinimal`

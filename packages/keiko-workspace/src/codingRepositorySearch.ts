@@ -276,7 +276,9 @@ async function projectSearchHits(
   // A file's hits are projected together, from one read, one redaction and one line index, so
   // ranked hits of several files never read a file twice and only one file is held at a time.
   // Files go in the order of their best-ranked hit; the hits keep the scan's ranked order. A
-  // timeout keeps the hits of the files projected so far, so the best-ranked hit is always kept.
+  // timeout keeps only the hits ranked before the best hit of the file that did not finish, so the
+  // result stays a strict prefix of the ranked order: a lower-ranked hit of an earlier file never
+  // survives without a higher-ranked hit of the unfinished one.
   for (const file of atomsByFile(atoms)) {
     assertStructuralExecutionActive(context.control);
     try {
@@ -285,7 +287,7 @@ async function projectSearchHits(
     } catch (error) {
       assertStructuralExecutionActive(context.control);
       if (error instanceof StructuralExecutionStoppedError && error.reason === "timeout") {
-        return { ...projectedHits(state), truncated: true };
+        return { ...projectedHits(state, file.atoms[0]?.position), truncated: true };
       }
       throw error;
     }
@@ -293,9 +295,14 @@ async function projectSearchHits(
   return { ...projectedHits(state), truncated: false };
 }
 
-function projectedHits(state: ProjectionState): Omit<ProjectedSearchHits, "truncated"> {
+function projectedHits(
+  state: ProjectionState,
+  unfinishedBestPosition = state.hits.length,
+): Omit<ProjectedSearchHits, "truncated"> {
   return {
-    hits: state.hits.filter((hit): hit is CodingRepositoryHit => hit !== undefined),
+    hits: state.hits
+      .slice(0, unfinishedBestPosition)
+      .filter((hit): hit is CodingRepositoryHit => hit !== undefined),
     staleHits: state.staleHits,
     misplacedHits: state.misplacedHits,
     unreadableHits: state.unreadableHits,
