@@ -1,13 +1,18 @@
-// Certifies the macOS and Windows promise of epic #4491 from the coding acceptance task's evidence file (#4519).
+// Certifies the macOS and Windows promise of epic #4491 from the coding acceptance task's evidence
+// file (#4519).
 //
 // The acceptance test writes body-free evidence when `KEIKO_ACCEPTANCE_EVIDENCE_FILE` is set
 // (docs/qa/coding-acceptance-task.md). This prints the facts a reviewer needs to trust the run (the
-// platform, the user class, every sign of a container runtime, the case set) and passes only when
-// the evidence certifies the promise: a standard user, no container runtime, on Windows also no
-// installed Keiko service, every case recorded and every case as expected. It recomputes each condition instead of trusting `certifiesPromise` alone,
-// and it names every precondition that failed.
+// platform, the user class, every sign of a container runtime, on Windows every sign of an installed
+// Keiko service, the case set) and passes only when the evidence certifies the promise: a standard
+// user, no container runtime, on Windows also no installed Keiko service, every case recorded and
+// every case as expected. It recomputes each condition instead of trusting `certifiesPromise`
+// alone, and it names every precondition that failed.
 //
-//   node scripts/check-acceptance-evidence.mjs <evidence.json>
+// With `--preconditions-only` it checks the preconditions alone, for a machine on which no case was
+// run (the Windows preconditions run, #4492 AC3); it then certifies the machine, never a result.
+//
+//   node scripts/check-acceptance-evidence.mjs <evidence.json> [--preconditions-only]
 
 import { pathToFileURL } from "node:url";
 
@@ -18,10 +23,12 @@ import { readJsonArgument } from "./lib/json-argument.mjs";
 const NAME = "check-acceptance-evidence";
 const SCHEMA_VERSION = 5;
 
-// The signs the acceptance test records (`containerRuntimeFacts`). A sign it stopped recording
-// counts as present, so a writer that drops or renames one fails closed instead of shrinking the
-// check; a sign it adds counts whenever it is not `false`, and is printed as `<sign>` unless its
-// key is printable.
+// The signs each platform's producer records: `containerRuntimeFacts` in the macOS acceptance test
+// and `windowsContainerRuntimeFacts` in windowsAcceptancePreconditions.ts. A sign a writer stopped
+// recording counts as present, so a writer that drops or renames one fails closed instead of
+// shrinking the check; a sign it adds counts whenever it is not `false`, and is printed as `<sign>`
+// unless its key is printable. They are signs of an installed or configured runtime, never proof
+// that an engine is reachable.
 const CONTAINER_RUNTIME_SIGNS = {
   darwin: [
     "dockerOnPath",
@@ -37,6 +44,7 @@ const CONTAINER_RUNTIME_SIGNS = {
     "podmanOnPath",
     "otherClientOnPath",
     "dockerHostConfigured",
+    "dockerServiceInstalled",
     "runtimePipePresent",
     "applicationPresent",
   ],
@@ -167,8 +175,10 @@ const PRECONDITIONS = [
   ],
 ];
 
-// The two probe failures the Windows run records (windowsAcceptancePreconditions.ts) are named by
-// the run itself: the checker sees them as unrecorded signs, which already refuse the evidence.
+// The names a run may record in `unmetPreconditions`: the ones recomputed above and the three
+// Windows probe failures (windowsAcceptancePreconditions.ts). A failed container or service probe
+// leaves its signs unrecorded, which the recomputed rules above refuse as present and installed; the
+// recorded code then says that the probe could not run.
 const PRECONDITION_NAMES = new Set([
   ...PRECONDITIONS.map(([name]) => name),
   "container-runtime-probe-failed",
@@ -198,18 +208,21 @@ const CASE_RULES = [
 ];
 
 /** The reasons the evidence does not certify the promise; empty when it does. */
-export function acceptanceEvidenceFailures(evidence) {
+export function acceptanceEvidenceFailures(evidence, { preconditionsOnly = false } = {}) {
   if (typeof evidence !== "object" || evidence === null) return ["evidence-unreadable"];
   const failures = PRECONDITIONS.filter(([, unmet]) => unmet(evidence)).map(([name]) => name);
   for (const precondition of recordedPreconditions(evidence)) {
     if (!failures.includes(precondition)) failures.push(precondition);
   }
   const bodyFree = bodyFreeViolations(evidence).slice(0, MAX_BODY_FREE_FAILURES);
+  const caseRules = preconditionsOnly ? [] : CASE_RULES;
   failures.push(
-    ...CASE_RULES.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
+    ...caseRules.filter(([, unmet]) => unmet(evidence)).map(([name]) => name),
     ...bodyFree.map((pointer) => `body-free:${pointer}`),
   );
-  if (evidence.certifiesPromise !== true && failures.length === 0) failures.push("not-certified");
+  if (!preconditionsOnly && evidence.certifiesPromise !== true && failures.length === 0) {
+    failures.push("not-certified");
+  }
   return failures;
 }
 
@@ -242,20 +255,28 @@ export function acceptanceEvidenceSummary(evidence) {
   ];
 }
 
+const PRECONDITIONS_ONLY_FLAG = "--preconditions-only";
+
+function passLine(evidence, preconditionsOnly) {
+  const environment = `a standard user without a container runtime${evidence.platform === "win32" ? " or Keiko service" : ""}`;
+  return preconditionsOnly
+    ? `PASS preconditions met: ${environment}; no case was run, so no result is certified`
+    : `PASS ${environment}, every case as expected`;
+}
+
 /** Reads the evidence named by `argv[2]` and returns the process exit code. */
 export function runCheck(argv, io = console) {
   const read = readJsonArgument(argv, io, { name: NAME, input: "evidence" });
   if ("exitCode" in read) return read.exitCode;
   const evidence = read.value;
+  const preconditionsOnly = argv.slice(3).includes(PRECONDITIONS_ONLY_FLAG);
   for (const line of acceptanceEvidenceSummary(evidence)) io.log(`${NAME}: ${line}`);
-  const failures = acceptanceEvidenceFailures(evidence);
+  const failures = acceptanceEvidenceFailures(evidence, { preconditionsOnly });
   if (failures.length > 0) {
     io.error(`${NAME}: FAIL does not certify the promise: ${failures.join(", ")}`);
     return 1;
   }
-  io.log(
-    `${NAME}: PASS a standard user without a container runtime${evidence.platform === "win32" ? " or Keiko service" : ""}, every case as expected`,
-  );
+  io.log(`${NAME}: ${passLine(evidence, preconditionsOnly)}`);
   return 0;
 }
 

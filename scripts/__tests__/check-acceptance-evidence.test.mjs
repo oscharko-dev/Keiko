@@ -263,6 +263,7 @@ const WINDOWS_NO_RUNTIME = {
   podmanOnPath: false,
   otherClientOnPath: false,
   dockerHostConfigured: false,
+  dockerServiceInstalled: false,
   runtimePipePresent: false,
   applicationPresent: false,
 };
@@ -378,6 +379,52 @@ describe("acceptanceEvidenceFailures on Windows (#4492 AC3)", () => {
     expect(lines.log).toContain("check-acceptance-evidence: platform win32 10.0.26100 arm64");
     expect(lines.log).toContain("check-acceptance-evidence: keiko service signs: none");
     expect(lines.log.at(-1)).toContain("or Keiko service");
+  });
+});
+
+describe("--preconditions-only (#4492 AC3)", () => {
+  const MACHINE_ONLY = {
+    ...WINDOWS_CERTIFYING,
+    caseSetComplete: false,
+    everyCaseMetExpectation: false,
+    certifiesPromise: false,
+    cases: [],
+  };
+
+  function check(evidence, flag) {
+    const lines = { log: [], error: [] };
+    const directory = mkdtempSync(join(tmpdir(), "pre-evidence-"));
+    const file = join(directory, "evidence.json");
+    writeFileSync(file, JSON.stringify(evidence));
+    try {
+      const code = runCheck(["node", "check", file, ...(flag ? ["--preconditions-only"] : [])], {
+        log: (line) => lines.log.push(line),
+        error: (line) => lines.error.push(line),
+      });
+      return { code, ...lines };
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it("passes a machine whose preconditions are met, and says no result is certified", () => {
+    const result = check(MACHINE_ONLY, true);
+    expect(result.code).toBe(0);
+    expect(result.log.at(-1)).toContain("no case was run, so no result is certified");
+  });
+
+  it("refuses the same machine without the flag, for its missing cases", () => {
+    const result = check(MACHINE_ONLY, false);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("case-set-incomplete, case-not-met");
+  });
+
+  it("still refuses an unmet precondition and a body-free violation", () => {
+    const evidence = { ...MACHINE_ONLY, userClass: "administrator", taskText: "x" };
+    const result = check(evidence, true);
+    expect(result.code).toBe(1);
+    expect(result.error[0]).toContain("administrator");
+    expect(result.error[0]).toContain("body-free:/taskText");
   });
 });
 

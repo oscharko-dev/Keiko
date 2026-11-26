@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { acceptanceEvidenceFailures } from "../../../../scripts/check-acceptance-evidence.mjs";
+import { OPENCODE_PINNED_VERSION } from "../coding-runtime/opencodeRuntimeVersions.js";
+import { buildAcceptanceEvidence } from "./acceptanceEvidence.js";
 import {
+  WINDOWS_PRECONDITION_CODES,
   keikoServiceNames,
   probeWindowsPreconditions,
   windowsUserClass,
@@ -43,6 +47,8 @@ interface SeamOverrides {
   /** `null`: `whoami` could not run. */
   readonly groups?: string | null;
   readonly gateway?: ScResult;
+  /** The answer for `com.docker.service`. */
+  readonly dockerService?: ScResult;
   readonly listing?: ScResult;
   /** `where.exe` could not run. */
   readonly whereUnrunnable?: boolean;
@@ -59,8 +65,12 @@ function seams(overrides: SeamOverrides = {}): WindowsProbeSeams {
       overrides.whereUnrunnable === true ? undefined : (overrides.programs ?? []).includes(program),
     whoamiGroups: () =>
       overrides.groups === null ? undefined : (overrides.groups ?? STANDARD_GROUPS),
-    sc: (args) =>
-      args.length === 2 ? (overrides.gateway ?? NO_SERVICES) : (overrides.listing ?? EMPTY_LISTING),
+    sc: (args) => {
+      if (args.length !== 2) return overrides.listing ?? EMPTY_LISTING;
+      return args[1] === "com.docker.service"
+        ? (overrides.dockerService ?? NO_SERVICES)
+        : (overrides.gateway ?? NO_SERVICES);
+    },
   };
 }
 
@@ -120,6 +130,7 @@ describe("probeWindowsPreconditions", () => {
       podmanOnPath: false,
       otherClientOnPath: false,
       dockerHostConfigured: false,
+      dockerServiceInstalled: false,
       runtimePipePresent: false,
       applicationPresent: false,
     });
@@ -145,6 +156,11 @@ describe("probeWindowsPreconditions", () => {
       "Podman Desktop under the user's programs",
       { present: ["C:\\Users\\u\\AppData\\Local\\Programs\\Podman Desktop"] },
     ],
+    [
+      "the per-user podman-desktop folder",
+      { present: ["C:\\Users\\u\\AppData\\Local\\Programs\\podman-desktop"] },
+    ],
+    ["the Docker Desktop service", { dockerService: { status: 0, stdout: "" } }],
   ] satisfies readonly (readonly [string, SeamOverrides])[])(
     "names a container runtime alone: %s",
     (_sign, overrides) => {
@@ -195,6 +211,12 @@ describe("probeWindowsPreconditions", () => {
     expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
   });
 
+  it("fails closed as its own code when the Docker Desktop service query cannot answer", () => {
+    const facts = probeWindowsPreconditions(seams({ dockerService: { status: null, stdout: "" } }));
+    expect(facts.containerRuntime).toEqual({});
+    expect(facts.unmetPreconditions).toEqual(["container-runtime-probe-failed"]);
+  });
+
   it.each([
     ["a gateway query that cannot run", { gateway: { status: null, stdout: "" } }],
     ["an unexpected gateway query status", { gateway: { status: 5, stdout: "" } }],
@@ -214,5 +236,90 @@ describe("probeWindowsPreconditions", () => {
       seams({ groups: ELEVATED_GROUPS, gateway: { status: 0, stdout: "" } }),
     );
     expect(JSON.stringify(facts)).not.toMatch(/S-1-|\\|NAME|Keiko[A-Z]/u);
+  });
+});
+
+// The probe's output wrapped by the production evidence builder, read by the production checker:
+// no evidence is restated here (#4492 AC3).
+const WINDOWS_HOST = { platform: "win32", arch: "arm64", osRelease: "10.0.26100", node: "26.13.1" };
+
+function checkedMachine(overrides: SeamOverrides): {
+  readonly failures: readonly string[];
+  readonly codes: readonly string[];
+} {
+  const preconditions = probeWindowsPreconditions(seams(overrides));
+  const evidence = buildAcceptanceEvidence({
+    preconditions,
+    opencode: OPENCODE_PINNED_VERSION,
+    cases: [],
+    caseSetComplete: false,
+    everyCaseMetExpectation: false,
+    host: WINDOWS_HOST,
+  });
+  return {
+    failures: acceptanceEvidenceFailures(evidence, { preconditionsOnly: true }),
+    codes: preconditions.unmetPreconditions,
+  };
+}
+
+const CODE_CASES = [
+  ["administrator", { groups: ELEVATED_GROUPS }, ["administrator"]],
+  ["administrator-probe-failed", { groups: null }, ["administrator-probe-failed"]],
+  ["container-runtime-present", { programs: ["docker"] }, ["container-runtime-present"]],
+  [
+    "container-runtime-probe-failed",
+    { whereUnrunnable: true },
+    ["container-runtime-present", "container-runtime-probe-failed"],
+  ],
+  ["service-installed", { gateway: { status: 0, stdout: "" } }, ["service-installed"]],
+  [
+    "service-probe-failed",
+    { listing: { status: null, stdout: "" } },
+    ["service-installed", "service-probe-failed"],
+  ],
+] satisfies readonly (readonly [string, SeamOverrides, readonly string[]])[];
+
+describe("probe output through the production evidence builder and checker", () => {
+  it("certifies the preconditions of a clean machine and nothing else", () => {
+    const { failures, codes } = checkedMachine({});
+    expect(codes).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+
+  it.each(CODE_CASES)("refuses %s, naming it", (code, overrides, expected) => {
+    const { failures, codes } = checkedMachine(overrides);
+    expect(codes).toContain(code);
+    expect(failures).toEqual(expected);
+  });
+
+  it("never reports a code the checker does not recognize, and every code is reachable", () => {
+    const emitted = new Set<string>();
+    for (const [, overrides] of CODE_CASES) {
+      const { failures, codes } = checkedMachine(overrides);
+      for (const code of codes) emitted.add(code);
+      expect(failures).not.toContain("precondition-unrecognized");
+    }
+    expect([...emitted].sort()).toEqual([...WINDOWS_PRECONDITION_CODES].sort());
+  });
+
+  it("refuses all three at once, naming each", () => {
+    const { failures } = checkedMachine({
+      groups: ELEVATED_GROUPS,
+      programs: ["docker"],
+      gateway: { status: 0, stdout: "" },
+    });
+    expect(failures).toEqual(["administrator", "container-runtime-present", "service-installed"]);
+  });
+
+  it("does not certify a machine as a result: the full check still refuses the missing cases", () => {
+    const evidence = buildAcceptanceEvidence({
+      preconditions: probeWindowsPreconditions(seams()),
+      opencode: OPENCODE_PINNED_VERSION,
+      cases: [],
+      caseSetComplete: false,
+      everyCaseMetExpectation: false,
+      host: WINDOWS_HOST,
+    });
+    expect(acceptanceEvidenceFailures(evidence)).toEqual(["case-set-incomplete", "case-not-met"]);
   });
 });

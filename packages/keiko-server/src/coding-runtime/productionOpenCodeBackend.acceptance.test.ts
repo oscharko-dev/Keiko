@@ -76,6 +76,12 @@ import {
   type FunctionalDiscoveryServer,
 } from "../test-support/functional-bff-server.js";
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import {
+  buildAcceptanceEvidence,
+  ownerPrivateEvidenceTarget,
+  writeOwnerPrivateEvidence,
+  type PreconditionFacts,
+} from "../test-support/acceptanceEvidence.js";
 import { probeWindowsPreconditions } from "../test-support/windowsAcceptancePreconditions.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -323,12 +329,12 @@ let evidenceTarget: string | undefined;
 beforeAll(() => {
   const file = process.env.KEIKO_ACCEPTANCE_EVIDENCE_FILE;
   if (file === undefined || file === "") return;
-  evidenceTarget = ownerPrivateEvidenceTarget(file);
+  evidenceTarget = ownerPrivateEvidenceTarget(file, REPOSITORY_ROOT);
 });
 
 afterAll(() => {
   if (evidenceTarget === undefined || evidence.length === 0) return;
-  writeOwnerPrivate(evidenceTarget, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
+  writeOwnerPrivateEvidence(evidenceTarget, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
 });
 
 function acceptanceEnabled(): boolean {
@@ -1518,13 +1524,6 @@ function stepList(steps: unknown): readonly unknown[] {
   return Array.isArray(steps) ? steps : [];
 }
 
-interface PreconditionFacts {
-  readonly userClass: string;
-  readonly containerRuntime: Readonly<Record<string, boolean>>;
-  readonly services?: object | undefined;
-  readonly unmetPreconditions: readonly string[];
-}
-
 /**
  * The promise is for a standard user on a machine without a container runtime (and, on Windows,
  * without an installed Keiko service); evidence taken anywhere else describes the product, but it
@@ -1545,32 +1544,19 @@ function preconditionFacts(): PreconditionFacts {
 }
 
 function acceptanceEvidence(): Record<string, unknown> {
-  const { userClass, containerRuntime, services, unmetPreconditions } = preconditionFacts();
   // Nor does a partial run (a filtered or interrupted suite) or one with a case that failed.
   const recorded = new Set(evidence.map((entry) => entry.caseId));
-  const caseSetComplete =
-    evidence.length === ACCEPTANCE_CASES.length &&
-    ACCEPTANCE_CASES.every((expectation) => recorded.has(expectation.id));
-  const everyCaseMetExpectation = evidence.every(
-    (entry) => "metExpectation" in entry && entry.metExpectation,
-  );
-  return {
-    schemaVersion: 5,
-    issue: 4492,
-    platform: process.platform,
-    arch: process.arch,
-    osRelease: release(),
-    node: process.versions.node,
+  return buildAcceptanceEvidence({
+    preconditions: preconditionFacts(),
     opencode: OPENCODE_PINNED_VERSION,
-    userClass,
-    containerRuntime,
-    ...(services === undefined ? {} : { services }),
-    caseSetComplete,
-    everyCaseMetExpectation,
-    certifiesPromise: unmetPreconditions.length === 0 && caseSetComplete && everyCaseMetExpectation,
-    unmetPreconditions,
     cases: evidence,
-  };
+    caseSetComplete:
+      evidence.length === ACCEPTANCE_CASES.length &&
+      ACCEPTANCE_CASES.every((expectation) => recorded.has(expectation.id)),
+    everyCaseMetExpectation: evidence.every(
+      (entry) => "metExpectation" in entry && entry.metExpectation,
+    ),
+  });
 }
 
 /**
@@ -1604,50 +1590,6 @@ function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
     ].some((path) => existsSync(path)),
     applicationPresent: applications.some((path) => existsSync(path)),
   };
-}
-
-/**
- * The evidence file's absolute path, refused when it lies inside this checkout. Symbolic links in
- * the existing part of the path are resolved first, so a link into the checkout is refused too.
- */
-function ownerPrivateEvidenceTarget(file: string): string {
-  const requested = resolve(file);
-  let existing = requested;
-  const missing: string[] = [];
-  while (!existsSync(existing) && dirname(existing) !== existing) {
-    missing.unshift(basename(existing));
-    existing = dirname(existing);
-  }
-  const target = join(realpathSync(existing), ...missing);
-  const fromCheckout = relative(realpathSync(REPOSITORY_ROOT), target);
-  const outside =
-    fromCheckout === ".." || fromCheckout.startsWith(`..${sep}`) || isAbsolute(fromCheckout);
-  if (!outside) throw new Error("acceptance-evidence-inside-checkout");
-  return target;
-}
-
-/**
- * Writes the evidence file owner-private: never through a symbolic link, into a directory only
- * its owner can enter, with mode 0600 whatever existed before.
- */
-function writeOwnerPrivate(target: string, content: string): void {
-  const directory = dirname(target);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(directory);
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
-    throw new Error("acceptance-evidence-directory-not-owner-private");
-  }
-  const descriptor = openSync(
-    target,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    fchmodSync(descriptor, 0o600);
-    writeSync(descriptor, content);
-  } finally {
-    closeSync(descriptor);
-  }
 }
 
 function groups(): readonly string[] {

@@ -192,19 +192,39 @@ which takes its machine reads as injectable seams so every branch is unit-tested
 Linux. Each unmet precondition is its own closed code, the evidence and the checker name every
 failed one (not just the first), and a probe that cannot run is its own code, never a pass:
 
-| Code                             | Refused when                                                                                                                                                                                                                                                          |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `administrator`                  | `whoami /groups /fo csv` lists `S-1-5-32-544` (BUILTIN\Administrators) in any state, or a mandatory integrity level of High or above. A split-token administrator's filtered token lists the group as deny-only, so it fails too: the promise is for a standard user. |
-| `container-runtime-present`      | `docker`, `podman`, `nerdctl`, `colima` or `limactl` on `PATH`; `DOCKER_HOST` or `CONTAINER_HOST` set; the pipe `\\.\pipe\docker_engine` or `\\.\pipe\podman-machine-default`; or an install folder of Docker, Podman, Podman Desktop or Rancher Desktop.             |
-| `service-installed`              | the `KeikoRuntimeGateway` service (ADR-0043 D19) answers `sc query`, or any service whose name starts with `Keiko` is listed by `sc query type= service state= all`.                                                                                                  |
-| `administrator-probe-failed`     | `whoami` cannot run, or its output is not a group list.                                                                                                                                                                                                               |
-| `container-runtime-probe-failed` | a container-runtime read throws; the signs are then unrecorded, which the checker also counts as present.                                                                                                                                                             |
-| `service-probe-failed`           | `sc.exe` cannot run or answers with a status other than installed or not found.                                                                                                                                                                                       |
+| Code                             | Refused when                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `administrator`                  | `whoami /groups /fo csv` lists `S-1-5-32-544` (BUILTIN\Administrators) in any state, or a mandatory integrity level of High or above. A split-token administrator's filtered token lists the group as deny-only, so it fails too: the promise is for a standard user.                                                                                              |
+| `container-runtime-present`      | `docker`, `podman`, `nerdctl`, `colima` or `limactl` on `PATH`; `DOCKER_HOST` or `CONTAINER_HOST` set; the pipe `\\.\pipe\docker_engine` or `\\.\pipe\podman-machine-default`; the `com.docker.service` service answers `sc query`; or an install folder of Docker, Podman, Podman Desktop (`Podman Desktop` or the per-user `podman-desktop`) or Rancher Desktop. |
+| `service-installed`              | the `KeikoRuntimeGateway` service (ADR-0043 D19) answers `sc query`, or any service whose name starts with `Keiko` is listed by `sc query type= service state= all`.                                                                                                                                                                                               |
+| `administrator-probe-failed`     | `whoami` cannot run, or its output is not a group list.                                                                                                                                                                                                                                                                                                            |
+| `container-runtime-probe-failed` | `where.exe` or the `com.docker.service` query cannot answer; the signs are then unrecorded, which the checker also counts as present.                                                                                                                                                                                                                              |
+| `service-probe-failed`           | `sc.exe` cannot run or answers with a status other than installed or not found.                                                                                                                                                                                                                                                                                    |
 
 The Windows evidence records booleans and counts only (`userClass`, the container-runtime signs, and
 `services.keikoGatewayServiceInstalled` and `services.keikoServiceCount`): never a path, a user
-name, a SID or a service name. The suite itself still runs on macOS only; the Windows cases follow
-in the later children of #4491, and this probe is what their evidence is certified against.
+name, a SID or a service name. The container probe counts installed or configured signs, not
+reachability: a runtime that is installed but stopped still refuses the machine. The full suite
+itself still runs on macOS only; the Windows cases follow in the later children of #4491, and this
+probe is what their evidence is certified against.
+
+**Running the preconditions in the Windows VM.** The producer is
+[`windowsAcceptancePreconditions.windows.test.ts`](../../packages/keiko-server/src/test-support/windowsAcceptancePreconditions.windows.test.ts),
+which runs only on Windows, runs no case and writes the same evidence file (schema 5, `cases: []`)
+with the same owner-private writer. Log in as the standard user to be certified (never an
+administrator, never an elevated shell), in a built checkout, and run in PowerShell:
+
+```powershell
+$env:KEIKO_ACCEPTANCE_EVIDENCE_FILE = "$env:USERPROFILE\keiko-acceptance\windows-preconditions.json"
+npx vitest run packages/keiko-server/src/test-support/windowsAcceptancePreconditions.windows.test.ts
+node scripts/check-acceptance-evidence.mjs $env:KEIKO_ACCEPTANCE_EVIDENCE_FILE --preconditions-only
+```
+
+The evidence file must lie outside the checkout. The test passes whenever the file is written; the
+checker's exit code is the verdict. It prints every unmet precondition by code, and on success says
+`PASS preconditions met ... no case was run, so no result is certified`: that certifies the machine,
+never a Windows result. Without `--preconditions-only` the same file fails with
+`case-set-incomplete, case-not-met`.
 
 **CI.** The job `repository-relay` of
 [`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)

@@ -10,13 +10,19 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
 
-export type WindowsPreconditionCode =
-  | "administrator"
-  | "administrator-probe-failed"
-  | "container-runtime-present"
-  | "container-runtime-probe-failed"
-  | "service-installed"
-  | "service-probe-failed";
+import { resolveWindowsSystemBinary } from "@oscharko-dev/keiko-security";
+
+/** Every code the probe can emit; the checker must recognize each of them. */
+export const WINDOWS_PRECONDITION_CODES = [
+  "administrator",
+  "administrator-probe-failed",
+  "container-runtime-present",
+  "container-runtime-probe-failed",
+  "service-installed",
+  "service-probe-failed",
+] as const;
+
+export type WindowsPreconditionCode = (typeof WINDOWS_PRECONDITION_CODES)[number];
 
 export type WindowsUserClass = "standard" | "administrator" | "unknown";
 
@@ -59,7 +65,16 @@ const ADMINISTRATORS_SID = "S-1-5-32-544";
 const EVERYONE_SID = "S-1-1-0";
 /** Mandatory integrity levels from High (12288) up mean an elevated token. */
 const HIGH_INTEGRITY_RID = 12288;
+/**
+ * The service Keiko 1.5.x registered (ADR-0043 D19). packages/keiko-cli names only its install
+ * folder, and a test-support module may not import keiko-cli (ADR-0019 direction 7), so the name
+ * is kept here.
+ */
 const KEIKO_GATEWAY_SERVICE = "KeikoRuntimeGateway";
+/** The Windows service of Docker Desktop. */
+const DOCKER_DESKTOP_SERVICE = "com.docker.service";
+/** Upper bound for one system tool, so a hung `sc.exe` cannot hang the probe. */
+const TOOL_TIMEOUT_MS = 10_000;
 const KEIKO_SERVICE_PREFIX = "Keiko";
 /** `sc.exe` status for a service that does not exist (ERROR_SERVICE_DOES_NOT_EXIST). */
 const SC_SERVICE_DOES_NOT_EXIST = 1060;
@@ -69,6 +84,7 @@ const CONTAINER_APPLICATION_FOLDERS = [
   "Podman",
   "RedHat\\Podman",
   "Podman Desktop",
+  "podman-desktop",
   "Rancher Desktop",
 ];
 
@@ -119,9 +135,10 @@ function applicationFolders(env: WindowsProbeSeams["env"]): readonly string[] {
 }
 
 /**
- * Signs that a container runtime is installed, conservatively: a client on `PATH`, a configured
- * `DOCKER_HOST` or `CONTAINER_HOST`, an engine named pipe, or the install folder of Docker Desktop,
- * Podman (Desktop) or Rancher Desktop. Presence counts, whether or not the runtime is running.
+ * Signs that a container runtime is installed or configured, conservatively: a client on `PATH`, a
+ * configured `DOCKER_HOST` or `CONTAINER_HOST`, an engine named pipe, the Docker Desktop service,
+ * or the install folder of Docker Desktop, Podman (Desktop) or Rancher Desktop. These are signs of
+ * presence, not proof that an engine is reachable, and they count whether or not it is running.
  */
 export function windowsContainerRuntimeFacts(
   seams: WindowsProbeSeams,
@@ -129,7 +146,8 @@ export function windowsContainerRuntimeFacts(
   const clients = ["docker", "podman", "nerdctl", "colima", "limactl"].map((program) =>
     seams.onPath(program),
   );
-  if (clients.includes(undefined)) return undefined;
+  const dockerService = serviceInstalled(seams, DOCKER_DESKTOP_SERVICE);
+  if (clients.includes(undefined) || dockerService === undefined) return undefined;
   const [docker, podman, ...others] = clients;
   return {
     dockerOnPath: docker === true,
@@ -137,6 +155,7 @@ export function windowsContainerRuntimeFacts(
     otherClientOnPath: others.includes(true),
     dockerHostConfigured:
       (seams.env.DOCKER_HOST ?? "") !== "" || (seams.env.CONTAINER_HOST ?? "") !== "",
+    dockerServiceInstalled: dockerService,
     runtimePipePresent: CONTAINER_PIPES.some((pipe) => seams.exists(pipe)),
     applicationPresent: applicationFolders(seams.env).some((folder) => seams.exists(folder)),
   };
@@ -152,8 +171,8 @@ export function keikoServiceNames(listing: string): readonly string[] {
   return [...names];
 }
 
-function gatewayServiceInstalled(seams: WindowsProbeSeams): boolean | undefined {
-  const { status } = seams.sc(["query", KEIKO_GATEWAY_SERVICE]);
+function serviceInstalled(seams: WindowsProbeSeams, name: string): boolean | undefined {
+  const { status } = seams.sc(["query", name]);
   if (status === 0) return true;
   return status === SC_SERVICE_DOES_NOT_EXIST ? false : undefined;
 }
@@ -163,7 +182,7 @@ function gatewayServiceInstalled(seams: WindowsProbeSeams): boolean | undefined 
  * `undefined` when `sc.exe` could not answer.
  */
 export function windowsServiceFacts(seams: WindowsProbeSeams): WindowsServiceFacts | undefined {
-  const installed = gatewayServiceInstalled(seams);
+  const installed = serviceInstalled(seams, KEIKO_GATEWAY_SERVICE);
   const listing = seams.sc(["query", "type=", "service", "state=", "all"]);
   if (installed === undefined || listing.status !== 0) return undefined;
   const names = new Set(keikoServiceNames(listing.stdout));
@@ -209,8 +228,19 @@ export function probeWindowsPreconditions(
   };
 }
 
-function systemTool(env: WindowsProbeSeams["env"], tool: string): string {
-  return win32.join(env.SystemRoot ?? "C:\\Windows", "System32", tool);
+/** Runs one System32 tool without a shell and with a timeout; a tool that never ran has no status. */
+function runSystemTool(
+  env: WindowsProbeSeams["env"],
+  tool: string,
+  args: readonly string[],
+): ScResult {
+  const result = spawnSync(resolveWindowsSystemBinary(tool, env), [...args], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+    timeout: TOOL_TIMEOUT_MS,
+  });
+  return { status: result.status, stdout: result.stdout };
 }
 
 /** The seams bound to this machine; only meaningful on Windows. */
@@ -219,19 +249,14 @@ export function realWindowsProbeSeams(env: NodeJS.ProcessEnv = process.env): Win
     env,
     exists: (path) => existsSync(path),
     onPath: (program): boolean | undefined => {
-      const result = spawnSync(systemTool(env, "where.exe"), [program], { encoding: "utf8" });
+      const { status } = runSystemTool(env, "where.exe", [program]);
       // `where.exe` answers 1 for a program that is not found; no status at all means it never ran.
-      return result.status === null || result.status > 1 ? undefined : result.status === 0;
+      return status === null || status > 1 ? undefined : status === 0;
     },
     whoamiGroups: (): string | undefined => {
-      const result = spawnSync(systemTool(env, "whoami.exe"), ["/groups", "/fo", "csv"], {
-        encoding: "utf8",
-      });
-      return result.status === 0 ? result.stdout : undefined;
+      const { status, stdout } = runSystemTool(env, "whoami.exe", ["/groups", "/fo", "csv"]);
+      return status === 0 ? stdout : undefined;
     },
-    sc: (args): ScResult => {
-      const result = spawnSync(systemTool(env, "sc.exe"), [...args], { encoding: "utf8" });
-      return { status: result.status, stdout: result.stdout };
-    },
+    sc: (args) => runSystemTool(env, "sc.exe", args),
   };
 }
