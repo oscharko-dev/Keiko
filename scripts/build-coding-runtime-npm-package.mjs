@@ -335,7 +335,9 @@ async function prebuiltNativeRunners(target, nativeDir, deps) {
       ? undefined
       : verified(layout.supervisorPath, approval.runtimeSupervisor);
   const runStepNodeStage =
-    layout.stepNodePath === undefined ? undefined : verified(layout.stepNodePath, approval.stepNode);
+    layout.stepNodePath === undefined
+      ? undefined
+      : verified(layout.stepNodePath, approval.stepNode);
   return { runBuild, runSupervisorBuild, runStepNodeStage };
 }
 
@@ -583,6 +585,18 @@ function assertStepNodeCandidate(files, approval, layout) {
   }
 }
 
+/** The Windows-only pins a receipt carries: the supervisor and the patched step Node.js. */
+function windowsPins(approval) {
+  return {
+    ...(approval.runtimeSupervisor === undefined
+      ? {}
+      : { runtimeSupervisor: { ...approval.runtimeSupervisor } }),
+    ...(approval.stepNode === undefined
+      ? {}
+      : { stepNode: { ...approval.stepNode, patchSha256s: [...approval.stepNode.patchSha256s] } }),
+  };
+}
+
 function runtimeCandidateReceipt({
   target,
   version,
@@ -610,17 +624,7 @@ function runtimeCandidateReceipt({
       sourceTreeSha256: approval.helperSourceTreeSha256,
       maxBytes: approval.helperMaxBytes,
     },
-    ...(approval.runtimeSupervisor === undefined
-      ? {}
-      : { runtimeSupervisor: { ...approval.runtimeSupervisor } }),
-    ...(approval.stepNode === undefined
-      ? {}
-      : {
-          stepNode: {
-            ...approval.stepNode,
-            patchSha256s: [...approval.stepNode.patchSha256s],
-          },
-        }),
+    ...windowsPins(approval),
     opencode: {
       version: upstream.version,
       sourceCommit: upstream.commit,

@@ -1,7 +1,9 @@
 // #4496 (ADR-0043 D21): the Windows execution-root backend of a governed verification run. The
 // supervisor is the runtime's own, verified against the same pin that admits a Windows Coding run;
 // each step gets a private copy written from those verified bytes. Without that supervisor the
-// backend is absent and a step is refused as isolation unavailable, exactly as before.
+// backend is absent and a step is refused as isolation unavailable, exactly as before. The
+// runtime's patched Node.js (#4492) is verified here too; without a verified one the steps run as
+// they did before and the log names it, so a project that needs no Node.js is unaffected.
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -28,6 +30,7 @@ import {
 import { discoverQualifiedPortableOpenCode } from "../coding-runtime/productionPortableCodingRuntime.js";
 import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "@oscharko-dev/keiko-verification";
+import type { NpmLaneStepNodeApproval } from "../coding-runtime/npmLaneRuntimeApprovals.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import {
@@ -37,6 +40,7 @@ import {
   type WindowsDriveHost,
   type WindowsStepDriveScope,
 } from "./windowsStepDrives.js";
+import { resolveStepNode, windowsStepNodeFor, windowsStepNodePin } from "./windowsStepNode.js";
 
 const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -55,6 +59,14 @@ const WINDOWS_STEP_SUPERVISOR_OPERATION = defineActivityLogOperation({
     readRootCount: { type: "integer", dataClass: "count", required: true },
     // #4492: whether a Maven step may read the person's repository; never its path.
     mavenRepository: { type: "boolean", dataClass: "closed-enum", required: true },
+    // #4492: the runtime's patched Node.js. `absent` runs the steps as before, `mismatch` is a
+    // build that is not the pinned one and is never offered.
+    stepNode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["patched", "absent", "mismatch"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -152,6 +164,8 @@ export interface WindowsStepSupervisorInput {
   readonly mavenRepository?: ((env: NodeJS.ProcessEnv) => string | undefined) | undefined;
   /** Injectable for tests; defaults to `subst.exe` in this logon session. */
   readonly driveHost?: WindowsDriveHost | undefined;
+  /** Injectable for tests; defaults to the step Node.js pin compiled into this server. */
+  readonly stepNodePin?: (() => NpmLaneStepNodeApproval | undefined) | undefined;
 }
 
 type SupervisorBinary =
@@ -251,6 +265,19 @@ function verifiedCopies(
   };
 }
 
+// The runtime's patched Node.js, looked for only beside a verified supervisor (#4492).
+function verifiedStepNode(
+  binary: SupervisorBinary,
+  input: WindowsStepSupervisorInput,
+): ReturnType<typeof resolveStepNode> {
+  return resolveStepNode({
+    supervisorPath: binary.outcome === "available" ? binary.helperPath : undefined,
+    pin: (input.stepNodePin ?? windowsStepNodePin)(),
+    isDirectory: isRealDirectory,
+    correlationId: input.correlationId,
+  });
+}
+
 /**
  * The supervisor a verification run's steps are framed to on Windows, or undefined on every other
  * platform and when no verified supervisor exists. Resolving it records the outcome.
@@ -265,6 +292,7 @@ export function resolveWindowsStepSupervisor(
   );
   const readRoots = windowsStepReadRoots(env);
   const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);
+  const stepNode = verifiedStepNode(binary, input);
   input.activityLog.write(
     activityLogEvent(
       WINDOWS_STEP_SUPERVISOR_OPERATION,
@@ -273,6 +301,7 @@ export function resolveWindowsStepSupervisor(
         outcome: binary.outcome,
         readRootCount: readRoots.length,
         mavenRepository: mavenRepository !== undefined,
+        stepNode: stepNode.outcome,
       },
     ),
   );
@@ -286,5 +315,6 @@ export function resolveWindowsStepSupervisor(
     acquire: verifiedCopies(binary.helperPath, binary.pin, drives),
     readRoots,
     mavenRepository,
+    ...(stepNode.outcome === "patched" ? { stepNode: windowsStepNodeFor(stepNode, input) } : {}),
   };
 }

@@ -931,6 +931,29 @@ shutting-down service (503), and any other closed adapter failure (502). The res
 same code and the request's correlation id; an unclassified error still reaches the top-level
 catch with its frames. Closed values, one count and one duration only.
 
+## Confined Windows verification steps and the step Node.js
+
+`editor.verification.windows-step-supervisor` records, once per resolution of a verification run's
+Windows step backend (#4496, #4492; ADR-0043 D21), the supervisor's closed `outcome`, the count of
+read roots, whether a Maven step may read the person's repository (`mavenRepository`) and, new with
+#4492, the runtime's patched Node.js as the closed `stepNode`: `patched` (the folder is a real
+folder that holds exactly the pinned `node.exe`), `absent` (the runtime carries none, this server
+has no pin, or there is no supervisor to find the runtime from) or `mismatch` (the folder, its
+contents or the bytes are not the pinned build; it is never offered). With `absent` or `mismatch`
+the steps run exactly as they did before, so a project that needs no Node.js is unaffected and the
+log names why a Node.js step may hang. A file that could not be read to verify it also answers
+`mismatch` and carries the diagnostic `editor.verification.windows-step-supervisor.step-node-unreadable`
+with a correlation id.
+
+`editor.verification.windows-step-node` records, at the start of each step that holds a verified
+step Node.js, what the step does with it, on the run's correlation id: `image` (`step-node` when the
+step starts the step Node.js directly, for a command named `node` or an npm or npx started through
+it, `resolved` otherwise), `npmLaunch` (`step-node`, `install-cmd` or `not-npm`), `npmFallback`
+(`none`, `cli-missing` when the install has no `npm-cli.js` or `npx-cli.js`, `cli-outside-grant`
+when it resolves outside the install's folder), `pathPrefixed` and `placement` (`applied`, or
+`inside-execution-root` for a folder the step may modify, which is never used). Closed values only:
+never a path.
+
 ## Gateway readiness, model activation and the tool-calling check
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,

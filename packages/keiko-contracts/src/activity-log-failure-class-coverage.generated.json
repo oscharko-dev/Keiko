@@ -47583,6 +47583,7 @@
         "start": [],
         "state": [
           "editor.verification.windows-step-drives",
+          "editor.verification.windows-step-node",
           "editor.verification.windows-step-refused",
           "editor.verification.windows-step-supervisor",
           "runtime.confinement.unavailable"
@@ -47594,6 +47595,10 @@
       "causalEdges": [
         {
           "op": "editor.verification.windows-step-drives",
+          "mode": "correlation"
+        },
+        {
+          "op": "editor.verification.windows-step-node",
           "mode": "correlation"
         },
         {
@@ -47612,6 +47617,7 @@
       "lossSignals": [],
       "resourceSignals": [
         "editor.verification.windows-step-drives",
+        "editor.verification.windows-step-node",
         "editor.verification.windows-step-refused",
         "editor.verification.windows-step-supervisor",
         "runtime.confinement.unavailable"
@@ -47651,6 +47657,54 @@
             "causeChain": false
           },
           "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "editor.verification.windows-step-node",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "image",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "npmFallback",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "npmLaunch",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "pathPrefixed",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "placement",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.verification.windows-step-node.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },
@@ -47708,6 +47762,12 @@
               "name": "readRootCount",
               "type": "integer",
               "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "stepNode",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": true
             }
           ],

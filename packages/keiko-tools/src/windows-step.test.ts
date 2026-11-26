@@ -526,11 +526,12 @@ function harness(options: HarnessOptions = {}): Harness {
     workspace: info,
     policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
     commandRules: options.commandRules ?? [{ executable: "node" }],
-    spawn: (command, args, options): ChildProcess => {
-      spawned.push({ command, args: [...args], options });
+    spawn: (command, args, spawnOptions): ChildProcess => {
+      spawned.push({ command, args: [...args], options: spawnOptions });
       return child as unknown as ChildProcess;
     },
-    resolveExecutable: options.resolveExecutable ?? (() => String.raw`C:\tools\node\node.exe`),
+    resolveExecutable:
+      options.resolveExecutable ?? ((): string => String.raw`C:\tools\node\node.exe`),
     ...(options.windowsStepNodeProbe === undefined
       ? {}
       : { windowsStepNodeProbe: options.windowsStepNodeProbe }),
@@ -670,11 +671,13 @@ describe("runCommand with the patched step Node.js (#4492)", () => {
   it("records no launch decision for a step whose supervisor copy could not be acquired", async () => {
     const { node, seen } = recordingStepNode();
     const h = harness({ stepNode: node });
+    const supervisor = h.deps.windowsStepSupervisor;
+    if (supervisor === undefined) throw new Error("the harness carries a supervisor");
     const deps: RunCommandDeps = {
       ...h.deps,
       windowsStepSupervisor: {
-        ...(h.deps.windowsStepSupervisor as WindowsStepSupervisor),
-        acquire: () => {
+        ...supervisor,
+        acquire: (): never => {
           throw new CommandDeniedError("no free drive letter", "node");
         },
       },

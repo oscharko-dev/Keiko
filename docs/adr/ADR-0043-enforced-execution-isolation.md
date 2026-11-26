@@ -1365,13 +1365,36 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   - **Closed refusals.** A grant the user may not write (a toolchain an administrator installed
     outside `Program Files`), a protected environment and a step without free drive letters refuse
     the step with a closed reason. Windows PowerShell 5.1 and
-    PowerShell 7 fail inside the tree on registry access, and a Node.js child that opens pipes
-    hangs until a Node.js release ships libuv 1.53 (#4493); both are recorded limitations, not
-    silent failures.
+    PowerShell 7 fail inside the tree on registry access, and a stock Node.js child that opens pipes
+    hangs until a Node.js release ships libuv 1.53 (#4493); the first is a recorded limitation, not
+    a silent failure, and the second is answered by the confined step Node.js below.
   - **Supervisor.** The server verifies the runtime's supervisor against the same pin that admits a
     Windows Coding run and hands each step a private copy written from those bytes;
     `editor.verification.windows-step-supervisor` records whether it is available and whether a
     Maven step may read the person's repository (never its path).
+  - **Confined step Node.js (#4492).** Inside the AppContainer every official Node.js 26.13.1 hangs
+    as soon as it spawns a child with piped stdio, forks or runs `node --test`: libuv 1.52.1 names
+    its child pipes uniquely in the global pipe namespace, `CreateNamedPipeW` answers access denied
+    there, and libuv reads that as a name collision and retries forever (libuv#5181, fixed in libuv
+    1.53; no official Node.js carries it yet, nodejs/node#66282). Until one does, the Windows
+    runtime package carries `runtime/step-node/node.exe`, the official 26.13.1 source plus exactly
+    that fix (`.github/workflows/windows-step-node.yml`), pinned by digest, size, source digest and
+    patch digests in `NpmLaneRuntimeApprovals` (`stepNode`) and verified by the release build and at
+    every launch. The server offers it only when the folder is a real folder that holds exactly the
+    pinned file (`editor.verification.windows-step-supervisor` field `stepNode`: `patched`, `absent`
+    or `mismatch`); the step then reads and executes that folder, finds it first on its `PATH`
+    through its drive letter (so `node` and every `node_modules\.bin\*.cmd` shim run it), runs a
+    command named `node` as it, and starts an install's `npm` and `npx` as
+    `<step node.exe> <install>\node_modules\npm\bin\npm-cli.js|npx-cli.js`, because the install's
+    `.cmd` prefers the stock `node.exe` beside it; a CLI script that is missing or resolves outside
+    the install's folder keeps the `.cmd` and is recorded. Each decision is one
+    `editor.verification.windows-step-node` line with closed values (`image`, `npmLaunch`,
+    `npmFallback`, `pathPrefixed`, `placement`). Without a verified step Node.js, absent or
+    mismatching, the step runs exactly as before, so a Maven-only project is unaffected and the log
+    names the absence. The verification reads the installed folder, which the person's account
+    owns, so a swap between the check and the step is outside the pin's reach; the folder is never
+    the execution root's. The pin is replaced, not extended, when a later build supersedes it, and
+    the package drops the build when an official Node.js carries libuv 1.53.
   - **Maven projects (#4492).** Without a container runtime a Maven project had no verification
     step, so its tests never ran. On the step backend the verifier now plans one step for the
     `test` kind: `mvn -B -o -Dmaven.repo.local=.keiko-maven-repository
