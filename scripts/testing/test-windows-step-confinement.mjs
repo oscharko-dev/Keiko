@@ -9,13 +9,34 @@
 // the host's loopback, ends with its own exit code, and a step that never ends is ended by KRC1
 // with 137.
 //
-//   node scripts/testing/test-windows-step-confinement.mjs --helper <keiko-runtime-supervisor.exe>
+// Canaries for the #4496 acceptance criteria, each printed as a body-free PASS/FAIL line and, with
+// `--json <file>`, written as booleans and error codes only:
+//   (a) from inside a step the internet, the host's loopback and another process's named pipe are
+//       refused;
+//   (b) a detached child and an `fs.watch` watcher a step started are gone when the step ends,
+//       whether it exited by itself or KRC1 ended it;
+//   (c) a file outside the execution root and the private state can be neither read nor written,
+//       and the credential-named files of the workspace stay out of reach. The product never grants
+//       a credential-named file: keiko-server runs steps in a private copy of the workspace that
+//       leaves every credential-named entry out (`windowsStepWorkspace.ts`, ADR-0043 D21), so the
+//       canary places such files in the real workspace next to that copy, as the product does.
+//
+//   node scripts/testing/test-windows-step-confinement.mjs --helper <keiko-runtime-supervisor.exe> [--json <file>]
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
@@ -33,32 +54,108 @@ const STEP_EXIT = 7;
 const RESPONSE_LAUNCHED = 1;
 const RESPONSE_REAPED = 2;
 const RESPONSE_ERROR = 3;
+const OBSERVE_SAMPLES = 10;
+const OBSERVE_INTERVAL_MS = 200;
+const CHILD_FILES = ["heartbeat.pid", "heartbeat.txt", "watcher.pid", "watcher.txt"];
 
 const STEP_SOURCE = String.raw`const fs = require("node:fs");
 const net = require("node:net");
-function tcp(host, port) {
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+function settle(open) {
   return new Promise((resolve) => {
-    const socket = net.connect({ host, port });
+    const socket = open();
     const timer = setTimeout(() => { socket.destroy(); resolve("timeout"); }, 3000);
     socket.on("connect", () => { clearTimeout(timer); socket.destroy(); resolve("connected"); });
     socket.on("error", (error) => { clearTimeout(timer); resolve("error:" + error.code); });
   });
 }
+const tcp = (host, port) => settle(() => net.connect({ host, port }));
+const pipe = (name) => settle(() => net.connect({ path: name }));
 function attempt(action) {
   try { action(); return "ok"; } catch (error) { return "error:" + error.code; }
 }
+const read = (file) => attempt(() => fs.readFileSync(file, "utf8"));
+const write = (file) => attempt(() => fs.writeFileSync(file, "step"));
+const ready = () => ["heartbeat.pid", "watcher.pid", "heartbeat.txt", "watcher.txt"].every(
+  (name) => fs.existsSync(name) && (name.endsWith(".pid") || fs.statSync(name).size > 0));
+async function startChildren() {
+  const outcome = {};
+  for (const name of ["heartbeat", "watcher"]) {
+    outcome[name] = attempt(() => spawn(process.execPath, [path.join(process.cwd(), name + ".js")],
+      { detached: true, stdio: "ignore", windowsHide: true }).unref());
+  }
+  for (let wait = 0; wait < 100 && !ready(); wait += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  outcome.ready = ready();
+  return outcome;
+}
 (async () => {
-  if (process.argv[2] === "forever") { setInterval(() => {}, 1000); return; }
+  const mode = process.argv[2];
+  if (mode === "forever") { setInterval(() => {}, 1000); return; }
+  if (mode === "forever-detached") {
+    const children = await startChildren();
+    console.log("STEP " + JSON.stringify({ children }));
+    setInterval(() => {}, 1000);
+    return;
+  }
+  if (mode === "detached") {
+    console.log("STEP " + JSON.stringify({ children: await startChildren() }));
+    process.exitCode = ${String(STEP_EXIT)};
+    return;
+  }
+  const env = process.env;
   const answer = {
-    write: attempt(() => fs.writeFileSync("written.txt", "step")),
-    outside: attempt(() => fs.readFileSync(process.env.KEIKO_STEP_OUTSIDE, "utf8")),
+    write: write("written.txt"),
+    outside: read(env.KEIKO_STEP_OUTSIDE),
+    outsideWrite: write(env.KEIKO_STEP_OUTSIDE_WRITE),
+    privateRead: read(env.KEIKO_STEP_PRIVATE_READ),
+    privateWrite: write(env.KEIKO_STEP_PRIVATE_WRITE),
+    credentialRead: read(env.KEIKO_STEP_CREDENTIAL),
+    credentialWrite: write(env.KEIKO_STEP_CREDENTIAL),
+    keyRead: read(env.KEIKO_STEP_KEY),
+    keyWrite: write(env.KEIKO_STEP_KEY),
     internet: await tcp("1.1.1.1", 443),
-    loopback: await tcp("127.0.0.1", Number(process.env.KEIKO_STEP_HOST_PORT)),
+    loopback: await tcp("127.0.0.1", Number(env.KEIKO_STEP_HOST_PORT)),
+    pipe: await pipe(env.KEIKO_STEP_PIPE),
   };
   console.log("STEP " + JSON.stringify(answer));
   process.exitCode = ${String(STEP_EXIT)};
 })();
 `;
+
+// Children a step starts detached; they write their own pid and a heartbeat into the root.
+const HEARTBEAT_SOURCE = `const fs = require("node:fs");
+fs.writeFileSync("heartbeat.pid", String(process.pid));
+setInterval(() => fs.appendFileSync("heartbeat.txt", "x"), 200);
+`;
+const WATCHER_SOURCE = `const fs = require("node:fs");
+fs.writeFileSync("watcher.pid", String(process.pid));
+fs.watch(".", (_event, name) => {
+  if (name === "heartbeat.txt") {
+    try { fs.appendFileSync("watcher.txt", "e"); } catch { /* the root is going away */ }
+  }
+});
+setInterval(() => {}, 1000);
+`;
+
+// Body-free canary results: a closed id, the criterion, a verdict and a short error code at most.
+const results = [];
+
+function observedCode(value) {
+  return typeof value === "string" && /^[A-Za-z0-9:_-]{1,40}$/u.test(value) ? value : undefined;
+}
+
+function check(id, criterion, pass, observed) {
+  const code = observedCode(observed);
+  results.push({ id, criterion, pass, ...(code === undefined ? {} : { observed: code }) });
+  console.log(
+    `windows-step-confinement: ${pass ? "PASS" : "FAIL"} ${criterion} ${id}${code === undefined ? "" : ` (${code})`}`,
+  );
+}
+
+const refused = (value) => typeof value === "string" && value.startsWith("error:");
 
 function helperArgument() {
   const index = process.argv.indexOf("--helper");
@@ -67,9 +164,34 @@ function helperArgument() {
   return helper;
 }
 
+function jsonArgument() {
+  const index = process.argv.indexOf("--json");
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
 function startHostListener() {
   const server = createServer((socket) => socket.destroy());
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
+
+// Another process's named pipe: it counts every connection it accepts.
+async function startPipeServer() {
+  const path = String.raw`\\.\pipe\keiko-canary-` + randomBytes(8).toString("hex");
+  const state = { path, connections: 0 };
+  state.server = createServer((socket) => {
+    state.connections += 1;
+    socket.destroy();
+  });
+  await new Promise((resolve) => state.server.listen(path, resolve));
+  // Positive control: the harness itself reaches its pipe, so a refusal later is the step's.
+  await new Promise((resolve) => {
+    const control = connect({ path });
+    control.on("connect", () => control.destroy());
+    control.on("close", resolve);
+  });
+  check("pipe-positive-control", "(a)", state.connections === 1);
+  state.connections = 0;
+  return state;
 }
 
 // One KRS1 answer after another, as the supervisor writes them on descriptor 4.
@@ -112,66 +234,102 @@ function subst(target) {
   throw new Error("no drive letter is free for the step");
 }
 
-function stage(helper, root, hostPort, drives, argument) {
-  const execution = join(root, "execution");
-  const outside = join(root, "outside");
-  const supervisorDirectory = join(root, "supervisor");
-  for (const directory of [execution, outside, supervisorDirectory]) {
-    mkdirSync(directory, { recursive: true });
-  }
-  const supervisor = join(supervisorDirectory, "keiko-runtime-supervisor.exe");
-  copyFileSync(helper, supervisor);
-  writeFileSync(join(execution, "step.js"), STEP_SOURCE);
-  writeFileSync(join(outside, "secret.txt"), "outside");
-  const environment = [
+// The folders of one staged step. Only `execution` (modify) and the Node.js copy (read) are
+// granted: `outside` is a sibling of the root, `privateState` stands in for Keiko's private state,
+// and `workspace` is the real workspace whose credential-named files the product's private copy
+// leaves out of the granted root.
+function stageFolders(root) {
+  const folders = {
+    execution: join(root, "execution"),
+    outside: join(root, "outside"),
+    privateState: join(root, "private-state"),
+    workspace: join(root, "workspace"),
+    supervisorDirectory: join(root, "supervisor"),
+  };
+  for (const directory of Object.values(folders)) mkdirSync(directory, { recursive: true });
+  const supervisor = join(folders.supervisorDirectory, "keiko-runtime-supervisor.exe");
+  writeFileSync(join(folders.execution, "step.js"), STEP_SOURCE);
+  writeFileSync(join(folders.execution, "heartbeat.js"), HEARTBEAT_SOURCE);
+  writeFileSync(join(folders.execution, "watcher.js"), WATCHER_SOURCE);
+  writeFileSync(join(folders.outside, "secret.txt"), "outside");
+  writeFileSync(join(folders.privateState, "state.db"), "private");
+  writeFileSync(join(folders.workspace, ".env"), "SECRET=1");
+  writeFileSync(join(folders.workspace, "id_rsa"), "key");
+  return { ...folders, supervisor };
+}
+
+function stepEnvironment(folders, hostPort, pipePath, tempDrive) {
+  return [
+    ["KEIKO_STEP_CREDENTIAL", join(folders.workspace, ".env")],
     ["KEIKO_STEP_HOST_PORT", String(hostPort)],
-    ["KEIKO_STEP_OUTSIDE", join(outside, "secret.txt")],
+    ["KEIKO_STEP_KEY", join(folders.workspace, "id_rsa")],
+    ["KEIKO_STEP_OUTSIDE", join(folders.outside, "secret.txt")],
+    ["KEIKO_STEP_OUTSIDE_WRITE", join(folders.outside, "written-by-step.txt")],
+    ["KEIKO_STEP_PIPE", pipePath],
+    ["KEIKO_STEP_PRIVATE_READ", join(folders.privateState, "state.db")],
+    ["KEIKO_STEP_PRIVATE_WRITE", join(folders.privateState, "written-by-step.txt")],
     ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
-    ["TEMP", execution],
-    ["TMP", execution],
-  ].sort(([left], [right]) => left.localeCompare(right));
+    ["TEMP", tempDrive],
+    ["TMP", tempDrive],
+  ];
+}
+
+function stage(helper, root, context, drives, argument) {
+  const folders = stageFolders(root);
+  copyFileSync(helper, folders.supervisor);
   // Step mode joins the arguments verbatim; these paths hold no quote or trailing backslash.
-  const workDrive = subst(execution);
+  const workDrive = subst(folders.execution);
   const nodeDrive = subst(dirname(stepNode(root)));
   drives.push(workDrive, nodeDrive);
   const args = [`"${workDrive.drive}\\step.js"`, ...(argument === undefined ? [] : [argument])];
+  const environment = stepEnvironment(
+    folders,
+    context.hostPort,
+    context.pipe.path,
+    `${workDrive.drive}\\`,
+  );
   const frames = Buffer.concat([
     launchFrame(
       randomBytes(16).toString("hex"),
       `${nodeDrive.drive}\\node.exe`,
       `${workDrive.drive}\\`,
       args,
-      environment.map(([name, value]) =>
-        name === "TEMP" || name === "TMP" ? [name, `${workDrive.drive}\\`] : [name, value],
-      ),
+      environment,
     ),
     grantsFrame([
-      { access: GRANT_MODIFY, path: execution },
+      { access: GRANT_MODIFY, path: folders.execution },
       { access: GRANT_READ, path: dirname(stepNode(root)) },
     ]),
   ]);
-  return { supervisor, frames, execution };
+  return { ...folders, frames };
 }
 
-function run(supervisor, frames) {
+function start(supervisor, frames) {
   const child = spawn(supervisor, ["--step-supervised"], {
     stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
   });
   const received = answers(child.stdio[4]);
-  let stdout = "";
+  const output = { stdout: "" };
   child.stdout.on("data", (chunk) => {
-    stdout += String(chunk);
+    output.stdout += String(chunk);
   });
   // A supervisor that ended closes its control pipe; its answers decide the proof.
   child.stdio[3].on("error", (error) => void error);
   child.stdio[3].write(frames);
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  return new Promise((resolve) =>
+  const closed = new Promise((resolve) =>
     child.once("close", (code) => {
       clearTimeout(deadline);
-      resolve({ code, stdout, received });
+      resolve(code);
     }),
   );
+  return { child, received, output, closed };
+}
+
+async function run(supervisor, frames) {
+  const started = start(supervisor, frames);
+  const code = await started.closed;
+  return { code, stdout: started.output.stdout, received: started.received };
 }
 
 // Each answer as `kind` or `kind:code` for an error, for a failure message.
@@ -200,23 +358,176 @@ function reapedExit(received) {
   return reaped.payload.readUInt32LE(0);
 }
 
-async function boundaries(helper, root, hostPort, drives) {
-  const { supervisor, frames, execution } = stage(helper, join(root, "a"), hostPort, drives);
-  const { code, stdout, received } = await run(supervisor, frames);
+function stepAnswer({ code, stdout, received }) {
   const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith("STEP "));
   assert.notEqual(
     line,
     undefined,
-    `the step reported its probes (supervisor ${String(code)}, answers ${describe(received)}): ${stdout.slice(0, 400)}`,
+    `the step reported its probes (supervisor ${String(code)}, answers ${describe(received)})`,
   );
-  const answer = JSON.parse(line.slice(5));
-  assert.equal(answer.write, "ok", "the step writes its execution root");
-  assert.equal(existsSync(join(execution, "written.txt")), true);
-  assert.notEqual(answer.outside, "ok", "a sibling folder stays unreadable");
-  assert.notEqual(answer.internet, "connected", "the internet is unreachable");
-  assert.notEqual(answer.loopback, "connected", "the host's loopback is unreachable");
-  assert.equal(reapedExit(received), STEP_EXIT, "the step's own exit code is reported");
-  return answer;
+  return JSON.parse(line.slice(5));
+}
+
+const fileText = (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
+
+function checkNetwork(answer, pipe) {
+  check("internet-refused", "(a)", answer.internet !== "connected", answer.internet);
+  check("loopback-refused", "(a)", answer.loopback !== "connected", answer.loopback);
+  check("pipe-refused", "(a)", refused(answer.pipe), answer.pipe);
+  check("pipe-server-saw-no-connection", "(a)", pipe.connections === 0);
+}
+
+function checkOutside(answer, staged) {
+  check("write-into-root-allowed", "(c)", answer.write === "ok", answer.write);
+  check("write-landed-in-root", "(c)", existsSync(join(staged.execution, "written.txt")));
+  check("outside-read-refused", "(c)", refused(answer.outside), answer.outside);
+  check("outside-write-refused", "(c)", refused(answer.outsideWrite), answer.outsideWrite);
+  check(
+    "outside-file-not-created",
+    "(c)",
+    !existsSync(join(staged.outside, "written-by-step.txt")),
+  );
+  check("private-read-refused", "(c)", refused(answer.privateRead), answer.privateRead);
+  check("private-write-refused", "(c)", refused(answer.privateWrite), answer.privateWrite);
+  check(
+    "private-state-untouched",
+    "(c)",
+    !existsSync(join(staged.privateState, "written-by-step.txt")) &&
+      fileText(join(staged.privateState, "state.db")) === "private",
+  );
+}
+
+function checkCredentials(answer, staged) {
+  check("credential-read-refused", "(c)", refused(answer.credentialRead), answer.credentialRead);
+  check("credential-write-refused", "(c)", refused(answer.credentialWrite), answer.credentialWrite);
+  check("key-read-refused", "(c)", refused(answer.keyRead), answer.keyRead);
+  check("key-write-refused", "(c)", refused(answer.keyWrite), answer.keyWrite);
+  check(
+    "credential-files-untouched",
+    "(c)",
+    fileText(join(staged.workspace, ".env")) === "SECRET=1" &&
+      fileText(join(staged.workspace, "id_rsa")) === "key",
+  );
+  check(
+    "granted-root-holds-no-credential-file",
+    "(c)",
+    !existsSync(join(staged.execution, ".env")) && !existsSync(join(staged.execution, "id_rsa")),
+  );
+}
+
+async function boundaries(helper, root, context, drives) {
+  const staged = stage(helper, join(root, "a"), context, drives);
+  const outcome = await run(staged.supervisor, staged.frames);
+  const answer = stepAnswer(outcome);
+  checkNetwork(answer, context.pipe);
+  checkOutside(answer, staged);
+  checkCredentials(answer, staged);
+  check("step-exit-code-reported", "(c)", reapedExit(outcome.received) === STEP_EXIT);
+}
+
+const sizeOf = (path) => (existsSync(path) ? statSync(path).size : 0);
+
+function childPid(execution, name) {
+  const pid = Number(fileText(join(execution, `${name}.pid`)));
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+// Whether `pid` is still a process of this host, from `tasklist`.
+function processAlive(pid) {
+  const command = join(
+    process.env.SystemRoot ?? String.raw`C:\Windows`,
+    "System32",
+    "tasklist.exe",
+  );
+  const listing = spawnSync(command, ["/FI", `PID eq ${String(pid)}`, "/FO", "CSV", "/NH"], {
+    encoding: "utf8",
+  });
+  return listing.stdout.includes(`,"${String(pid)}",`);
+}
+
+// After the step ended: both children started, then neither runs and neither file grows any more.
+async function observeChildren(label, execution, answer) {
+  const pids = {
+    heartbeat: childPid(execution, "heartbeat"),
+    watcher: childPid(execution, "watcher"),
+  };
+  const before = CHILD_FILES.map((name) => sizeOf(join(execution, name)));
+  const started = answer.children?.ready === true && !Object.values(pids).includes(undefined);
+  check(`${label}-children-started`, "(b)", started);
+  let grew = false;
+  for (let sample = 0; sample < OBSERVE_SAMPLES; sample += 1) {
+    await new Promise((resolve) => setTimeout(resolve, OBSERVE_INTERVAL_MS)); // NOSONAR javascript:S9382 -- a bounded observation window after the reaped answer.
+    const now = CHILD_FILES.map((name) => sizeOf(join(execution, name)));
+    grew ||= now.some((size, index) => size !== before[index]);
+  }
+  check(`${label}-heartbeat-stopped`, "(b)", !grew);
+  for (const [name, pid] of Object.entries(pids)) {
+    check(`${label}-${name}-process-gone`, "(b)", pid !== undefined && !processAlive(pid));
+  }
+}
+
+async function detachedChildren(helper, root, context, drives) {
+  const staged = stage(helper, join(root, "c"), context, drives, "detached");
+  const outcome = await run(staged.supervisor, staged.frames);
+  const answer = stepAnswer(outcome);
+  check("detached-step-exit-code-reported", "(b)", reapedExit(outcome.received) === STEP_EXIT);
+  await observeChildren("detached", staged.execution, answer);
+}
+
+// Until the step has reported its children.
+async function untilReported(started) {
+  while (!started.output.stdout.includes("STEP ")) {
+    if (started.child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 100)); // NOSONAR javascript:S9382 -- each check waits for the step's report.
+  }
+  return stepAnswer({ code: undefined, stdout: started.output.stdout, received: started.received });
+}
+
+// A step that never ends: KRC1 after the launch, then the supervisor reports 137.
+async function endedByControl(helper, root, context, drives, argument) {
+  const folder = join(root, argument === "forever" ? "b" : "d");
+  const staged = stage(helper, folder, context, drives, argument);
+  const started = start(staged.supervisor, staged.frames);
+  while (!started.received.some((answer) => answer.kind === RESPONSE_LAUNCHED)) {
+    if (started.child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 100)); // NOSONAR javascript:S9382 -- each check waits for the previous answer.
+  }
+  const answer = argument === "forever" ? undefined : await untilReported(started);
+  started.child.stdio[3].write(terminateFrame());
+  await started.closed;
+  return { exit: reapedExit(started.received), staged, answer };
+}
+
+async function killedStep(helper, root, context, drives) {
+  const { exit, staged, answer } = await endedByControl(
+    helper,
+    root,
+    context,
+    drives,
+    "forever-detached",
+  );
+  check("kill-step-with-children-exit-137", "(b)", exit === 137, String(exit));
+  await observeChildren("killed", staged.execution, answer);
+}
+
+async function suite(helper, root, context, drives) {
+  copyStepNode(root);
+  await boundaries(helper, root, context, drives);
+  const plain = await endedByControl(helper, root, context, drives, "forever");
+  check("kill-ends-step-with-137", "(c)", plain.exit === 137, String(plain.exit));
+  await detachedChildren(helper, root, context, drives);
+  await killedStep(helper, root, context, drives);
+}
+
+function writeSummary(path) {
+  const summary = {
+    schema: "keiko.windows-step-canaries/1",
+    platform: process.platform,
+    pass: results.length > 0 && results.every((entry) => entry.pass),
+    results,
+  };
+  if (path !== undefined) writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`);
+  return summary.pass;
 }
 
 async function main() {
@@ -225,46 +536,25 @@ async function main() {
     return;
   }
   const helper = helperArgument();
+  const jsonPath = jsonArgument();
   const root = mkdtempSync(join(tmpdir(), "keiko-step-confinement-"));
   const host = await startHostListener();
+  const pipe = await startPipeServer();
   const drives = [];
   try {
-    const hostPort = host.address().port;
-    copyStepNode(root);
-    const answer = await boundaries(helper, root, hostPort, drives);
-    const ended = await endedByControl(helper, root, hostPort, drives);
-    assert.equal(ended, 137, "KRC1 ends the step's job with 137");
-    console.log(
-      `windows-step-confinement: PASS (outside=${answer.outside}, internet=${answer.internet}, loopback=${answer.loopback}, cancelled=${String(ended)})`,
-    );
+    await suite(helper, root, { hostPort: host.address().port, pipe }, drives);
+  } catch (error) {
+    check("harness-completed", "harness", false, error instanceof Error ? error.name : undefined);
+    console.log(`windows-step-confinement: ${error instanceof Error ? error.message : "failed"}`);
   } finally {
     host.close();
+    pipe.server.close();
     for (const drive of drives) drive.release();
     rmSync(root, { force: true, recursive: true, maxRetries: 5 });
   }
-}
-
-// A step that never ends: KRC1 after the launch, then the supervisor reports 137.
-async function endedByControl(helper, root, hostPort, drives) {
-  const { supervisor, frames } = stage(helper, join(root, "b"), hostPort, drives, "forever");
-  const child = spawn(supervisor, ["--step-supervised"], {
-    stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
-  });
-  const received = answers(child.stdio[4]);
-  // A supervisor that ended closes its control pipe; its answers decide the proof.
-  child.stdio[3].on("error", (error) => void error);
-  child.stdio[3].write(frames);
-  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  const closed = new Promise((resolve) => child.once("close", resolve));
-  while (!received.some((answer) => answer.kind === RESPONSE_LAUNCHED)) {
-    if (child.exitCode !== null) break;
-    await new Promise((resolve) => setTimeout(resolve, 100)); // NOSONAR javascript:S9382 -- each check waits for the previous answer.
-  }
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  child.stdio[3].write(terminateFrame());
-  await closed;
-  clearTimeout(deadline);
-  return reapedExit(received);
+  const pass = writeSummary(jsonPath);
+  console.log(`windows-step-confinement: ${pass ? "PASS" : "FAIL"}`);
+  process.exitCode = pass ? 0 : 1;
 }
 
 await main();
