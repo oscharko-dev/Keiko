@@ -1,0 +1,125 @@
+name: Windows step Node.js build
+
+# #4492 (ADR-0043 D20/D21): builds the Node.js the confined Windows verification steps run, from the
+# official v26.13.1 source tarball plus exactly libuv#5181 (patches/node-26.13.1-libuv-5181.patch).
+# Official Node.js 26.13.1 bundles libuv 1.52.1, whose unique child-pipe names live in the global
+# pipe namespace; inside an AppContainer CreateNamedPipeW answers ERROR_ACCESS_DENIED, libuv reads
+# that as a name collision and retries forever, so `node --test`, Vitest forks and Jest workers hang.
+# libuv 1.53.0 fixes it and no Node.js release carries 1.53 yet (nodejs/node#66282).
+#
+# Only node.exe is used by a step, so the npm and corepack bundles are not built (`nonpm nocorepack`;
+# they are JavaScript beside the binary and never part of it). OpenSSL is built without assembly so
+# the build needs no NASM; ICU stays Node's default full-ICU build. The artifact is not wired into
+# the product launch path by this workflow.
+
+on:
+  push:
+    paths:
+      - "patches/node-26.13.1-libuv-5181.patch"
+      - ".github/workflows/windows-step-node.yml"
+      - "scripts/testing/test-windows-step-node.mjs"
+      - "scripts/write-windows-step-node-receipt.mjs"
+      - "scripts/lib/windows-supervisor-protocol.mjs"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: windows-step-node-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_SOURCE_VERSION: "26.13.1"
+  NODE_SOURCE_URL: https://nodejs.org/dist/v26.13.1/node-v26.13.1.tar.gz
+  # From https://nodejs.org/dist/v26.13.1/SHASUMS256.txt
+  NODE_SOURCE_SHA256: 60c6cdf11c3e9d5932fccd0eafae77f1152661584e129047684cb8646f228d3e
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Record the official Node.js used as the stock control
+        run: |
+          $stock = (Get-Command node).Source
+          "STOCK_NODE=$stock" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $stock -p "process.versions.uv"
+      - name: Fetch and verify the official source tarball
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\n-dl | Out-Null
+          Invoke-WebRequest -Uri $env:NODE_SOURCE_URL -OutFile C:\n-dl\node.tar.gz
+          $actual = (Get-FileHash -Algorithm SHA256 C:\n-dl\node.tar.gz).Hash.ToLowerInvariant()
+          if ($actual -ne $env:NODE_SOURCE_SHA256) { throw "source SHA-256 mismatch: $actual" }
+          # A short path: the Node.js build trips over deep paths.
+          New-Item -ItemType Directory -Force -Path C:\n | Out-Null
+          tar -xzf C:\n-dl\node.tar.gz -C C:\n --strip-components=1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-Content C:\n\deps\uv\include\uv\version.h | Select-String "UV_VERSION_(MAJOR|MINOR|PATCH)"
+      - name: Apply the libuv#5181 patch
+        run: |
+          Push-Location C:\n
+          git apply --check -p1 "$env:GITHUB_WORKSPACE\patches\node-26.13.1-libuv-5181.patch"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply -p1 "$env:GITHUB_WORKSPACE\patches\node-26.13.1-libuv-5181.patch"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          if (-not (Select-String -Path C:\n\deps\uv\src\win\pipe.c -Pattern "TokenIsAppContainer" -Quiet)) {
+            throw "the patch did not reach deps/uv/src/win/pipe.c"
+          }
+      - name: Build node.exe (vcbuild release x64)
+        shell: cmd
+        working-directory: C:\n
+        run: vcbuild.bat release x64 nonpm nocorepack openssl-no-asm
+      - name: Canary on the runner
+        run: |
+          $exe = "C:\n\out\Release\node.exe"
+          $uv = & $exe -p "process.versions.uv"
+          if ($uv -ne "1.52.1-keiko.5181") { throw "unexpected libuv version: $uv" }
+          & $exe -p "process.version"
+          & $exe -e "const r=require('node:child_process').spawnSync(process.execPath,['-e','process.stdout.write(`ok`)'],{encoding:'utf8',timeout:60000}); if(r.stdout!=='ok') process.exit(1)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Collect the binary, its digest and the build receipt
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path step-node-out | Out-Null
+          Copy-Item C:\n\out\Release\node.exe step-node-out\node.exe
+          $hash = (Get-FileHash -Algorithm SHA256 step-node-out\node.exe).Hash.ToLowerInvariant()
+          "$hash  node.exe" | Out-File -FilePath step-node-out\node.exe.sha256 -Encoding ascii
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property catalog_productDisplayVersion
+          $python = (python --version) -join ""
+          node scripts/write-windows-step-node-receipt.mjs --exe step-node-out\node.exe `
+            --source-sha256 $env:NODE_SOURCE_SHA256 --patch patches\node-26.13.1-libuv-5181.patch `
+            --out step-node-out\build-receipt.json `
+            --flag "command=vcbuild release x64 nonpm nocorepack openssl-no-asm" `
+            --flag "runnerImage=$env:ImageOS $env:ImageVersion" --flag "visualStudio=$vs" `
+            --flag "python=$python"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-Content step-node-out\build-receipt.json
+          (Get-Item step-node-out\node.exe).Length
+      - name: Build the runtime supervisor as the release does
+        run: |
+          New-Item -ItemType Directory -Force -Path relay-out | Out-Null
+          node scripts/build-runtime-supervisor.mjs windows-x64 "$PWD\relay-out\keiko-runtime-supervisor.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prove the binary inside the supervisor's AppContainer
+        run: node scripts/testing/test-windows-step-node.mjs --helper relay-out/keiko-runtime-supervisor.exe --node step-node-out/node.exe --stock-node "$env:STOCK_NODE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: keiko-step-node-windows-x64-26.13.1-libuv-5181
+          path: |
+            step-node-out/node.exe
+            step-node-out/node.exe.sha256
+            step-node-out/build-receipt.json
+          if-no-files-found: error
+          retention-days: 30
