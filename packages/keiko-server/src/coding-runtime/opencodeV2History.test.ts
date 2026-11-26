@@ -1002,6 +1002,19 @@ describe("OpenCode V2 live streamed text", () => {
       expect(live.pull([part("text", "a".repeat(65_536))])).toEqual([]);
     });
 
+    it("names an answer the bound cut while it streams, once, and one that fits never", () => {
+      const live = streaming();
+      live.start("text", 0);
+      live.delta("text", 0, "a".repeat(65_536));
+      expect(live.pull([empty("text")]).some((signal) => signal.kind === "text-cut")).toBe(false);
+      live.delta("text", 0, "b");
+      expect(live.pull([empty("text")])).toEqual([
+        expect.objectContaining({ kind: "text-cut", part: "answer" }),
+      ]);
+      live.delta("text", 0, "c");
+      expect(live.pull([empty("text")])).toEqual([]);
+    });
+
     it("cuts a finished answer longer than the part bound where the stream stopped and never fails the read", () => {
       const captureMessages = vi.fn((): boolean => true);
       const live = streaming({ runId: "run-live", activityLog: undefined, captureMessages });
@@ -2063,9 +2076,14 @@ describe("OpenCode V2 assistant text over the part bound (#3897)", () => {
       const long = character.repeat(70_000);
 
       const events = projection.project("ses_long", [user, answer(long)], undefined);
-      const text = events
-        .map((event) => projection.takeSignal(event))
-        .find((signal) => signal?.kind === "text" && signal.messageId === "msg_assistant");
+      const signals = events.map((event) => projection.takeSignal(event));
+      const text = signals.find(
+        (signal) => signal?.kind === "text" && signal.messageId === "msg_assistant",
+      );
+      // The timeline shows a prefix, so it names the answer as cut: the cut is shown, never silent.
+      expect(signals.filter((signal) => signal?.kind === "text-cut")).toEqual([
+        expect.objectContaining({ kind: "text-cut", messageId: "msg_assistant", part: "answer" }),
+      ]);
 
       const bytes = text?.kind === "text" ? Buffer.byteLength(text.text, "utf8") : 0;
       expect(bytes).toBeLessThanOrEqual(65_536);

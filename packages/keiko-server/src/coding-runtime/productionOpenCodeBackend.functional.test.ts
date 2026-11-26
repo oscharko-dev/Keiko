@@ -697,6 +697,29 @@ async function readAnswerPage(
   return (await response.json()) as CodingAppSessionAnswerResponse;
 }
 
+// Reads an answer page by page, each page from the offset the text held so far ends at.
+async function readWholeAnswer(
+  source: {
+    readonly baseUrl: string;
+    readonly cookie: string;
+    readonly runId: string;
+    readonly messageId: string;
+    readonly length: number;
+  },
+  whole: string,
+): Promise<string> {
+  if (whole.length >= source.length) return whole;
+  const query = new URLSearchParams({
+    runId: source.runId,
+    messageId: source.messageId,
+    offset: String(whole.length),
+  });
+  const { page } = await readAnswerPage(source.baseUrl, source.cookie, query.toString());
+  if (page === null || page.text.length === 0) throw new Error("an answer page was not served");
+  expect(page.truncated).toBe(false);
+  return readWholeAnswer(source, whole + page.text);
+}
+
 async function expectWholeAnswerReadable(
   baseUrl: string,
   cookie: string,
@@ -708,18 +731,10 @@ async function expectWholeAnswerReadable(
   const [answer] = answers;
   if (answer === undefined) throw new Error("the feed names no full answer");
   expect(answer.truncated).toBe(false);
-  let whole = "";
-  while (whole.length < answer.length) {
-    const query = new URLSearchParams({
-      runId,
-      messageId: answer.messageId,
-      offset: String(whole.length),
-    });
-    const { page } = await readAnswerPage(baseUrl, cookie, query.toString());
-    if (page === null || page.text.length === 0) throw new Error("an answer page was not served");
-    expect(page.truncated).toBe(false);
-    whole += page.text;
-  }
+  const whole = await readWholeAnswer(
+    { baseUrl, cookie, runId, messageId: answer.messageId, length: answer.length },
+    "",
+  );
   expect(whole).toHaveLength(answer.length);
   expect(whole.startsWith(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX)).toBe(true);
   expect(whole.endsWith(FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL)).toBe(true);

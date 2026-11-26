@@ -263,6 +263,35 @@ describe("CodingWorkbenchTimeline complete answers", () => {
 });
 
 describe("CodingWorkbenchTimeline answer reading edge cases", () => {
+  it("marks a cut a newer page reports before the feed does, and offers no copy", async () => {
+    const kept = `${LONG_ANSWER.slice(0, 50_000)}\n\nkept-end`;
+    servePages(kept, true);
+    // The feed still names the answer as whole; only its pages already know the cut.
+    const { container } = render(<LiveTimeline feed={feedOf(namedMessage(kept, 16_000))} />);
+
+    await waitFor(() => {
+      expect(answerText(container)).toContain("kept-end");
+    });
+    expect(container.querySelectorAll(`.${styles.truncationMark}`)).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Copy answer as Markdown" })).toBeNull();
+  });
+
+  it("marks a reasoning the memory bound cut to nothing without reading a page", () => {
+    const message: CodingSafeActivityMessage = {
+      messageId: MESSAGE_ID,
+      role: "assistant",
+      occurredAt: AT,
+      segments: [{ kind: "text", text: "The answer.", truncated: false }],
+      truncated: false,
+      fullReasoning: { length: 0, truncated: true },
+    };
+    const { container } = render(<LiveTimeline feed={feedOf(message)} />);
+    const block = container.querySelector(`.${styles.cmpReasoning}`);
+    expect(block).not.toBeNull();
+    expect(block?.querySelector(`.${styles.truncationMark}`)).not.toBeNull();
+    expect(pageRequest).not.toHaveBeenCalled();
+  });
+
   it("marks the cut when the server no longer has the answer", async () => {
     pageRequest.mockResolvedValue({ schemaVersion: "1", page: null });
     const { container } = render(<LiveTimeline feed={feedOf(namedMessage(LONG_ANSWER, 16_000))} />);

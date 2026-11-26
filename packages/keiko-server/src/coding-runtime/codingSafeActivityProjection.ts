@@ -69,6 +69,7 @@ import {
   createRetainedTexts,
   FULL_TEXT_RESERVE,
   fullTextFor,
+  markSourceCut,
   releaseUnlistedTexts,
   restoreRetainedTexts,
   retainedText,
@@ -156,6 +157,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
         "late-restatement",
         "feed-bound",
         "retention-bound",
+        "source-bound",
       ],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: false },
@@ -346,6 +348,13 @@ export type CodingSafeActivitySignal =
       readonly messageId: string;
       readonly text: string;
     })
+  // The source showed only a prefix of an assistant text part (the live part bound), so the text
+  // the projection holds is cut and the feed marks it.
+  | (SignalBase & {
+      readonly kind: "text-cut";
+      readonly messageId: string;
+      readonly part: CodingSafeActivityTextPart;
+    })
   | (SignalBase & {
       readonly kind: "tool";
       readonly messageId?: string | undefined;
@@ -530,10 +539,10 @@ function rollbackSnapshot(entry: ProjectionEntry): PriorState {
   };
 }
 
-const TEXT_PARTS: readonly CodingSafeActivityTextPart[] = ["answer", "reasoning"];
+const TEXT_PARTS: ReadonlySet<CodingSafeActivityTextPart> = new Set(["answer", "reasoning"]);
 type TextCounts = Record<
   CodingSafeActivityTextPart,
-  { readonly named: number; readonly clipped: number }
+  { readonly named: number; readonly clipped: number; readonly sourceCut: number }
 >;
 type TextFactEvent = `${CodingSafeActivityTextPart}-${"retained" | "clipped"}`;
 
@@ -733,13 +742,17 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       if (clipped > before[part].clipped) {
         this.writeTextFact(runId, `${part}-clipped`, "retention-bound", clipped);
       }
+      const { sourceCut } = entry.texts.counts[part];
+      if (sourceCut > before[part].sourceCut) {
+        this.writeTextFact(runId, `${part}-clipped`, "source-bound", sourceCut);
+      }
     }
   }
 
   private writeTextFact(
     runId: string,
     event: TextFactEvent,
-    reason: "feed-bound" | "retention-bound",
+    reason: "feed-bound" | "retention-bound" | "source-bound",
     occurrenceCount: number,
   ): void {
     this.activityLog?.write(
@@ -890,6 +903,10 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const cancelled = cancelOpenTools(entry.feed.turns, occurredAt);
     if (cancelled > 0) {
       entry.feed.updatedAt = occurredAt;
+      // Each settled call gains its origin; the feed is brought back under its bounds, as after an
+      // ingest, before any subscriber reads it.
+      enforceFeedBounds(entry, this.limits);
+      releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
       this.notify();
     }
     this.activityLog?.write(
@@ -1205,6 +1222,7 @@ function applySignal(
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
   if (signal.kind === "text") return applyText(entry, signal, limits);
   if (signal.kind === "reasoning") return applyReasoning(entry, signal, limits);
+  if (signal.kind === "text-cut") return applyTextCut(entry, signal);
   if (signal.kind === "plan") return applyPlan(entry, signal, limits);
   return applyTool(entry, signal, limits);
 }
@@ -1419,15 +1437,12 @@ function textCandidateBytes(
   return bytes({ ...measuredMessage(message), segments, truncated });
 }
 
-// An assistant message is measured as if it already named its answer at the largest size, so the
-// `fullAnswer` the feed may add later never pushes a fitting message over its byte bound.
+// An assistant message is always measured as if it named its answer and its reasoning at the
+// largest size, also once it names them: a named text keeps growing while the model streams, and
+// its longer `fullAnswer` or `fullReasoning` must never push a fitting message over its byte bound.
 function measuredMessage(message: MutableMessage): MutableMessage {
   return message.role === "assistant"
-    ? {
-        ...message,
-        fullAnswer: message.fullAnswer ?? FULL_TEXT_RESERVE,
-        fullReasoning: message.fullReasoning ?? FULL_TEXT_RESERVE,
-      }
+    ? { ...message, fullAnswer: FULL_TEXT_RESERVE, fullReasoning: FULL_TEXT_RESERVE }
     : message;
 }
 
@@ -1461,6 +1476,30 @@ function applyReasoning(
   const { retained, kept } = retainText(entry.texts, "reasoning", message.messageId, text);
   if (!retained.feedClosed) appendReasoning(message, retained, kept, limits);
   if (retained.truncated && message.reasoning !== undefined) {
+    message.reasoning = { text: message.reasoning.text, truncated: true };
+  }
+  syncFullReasoning(entry, message, retained);
+  return "accepted";
+}
+
+// A text the source cut: what the projection holds is all there is, and the feed marks it cut. The
+// source names only assistant parts; another role is refused like misplaced reasoning.
+function applyTextCut(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "text-cut" }>,
+): SignalApplication {
+  const located = locateMessage(entry, signal.messageId);
+  if (located === undefined) return "message-unknown";
+  const { message, turn } = located;
+  if (message.role !== "assistant") return "reasoning-role-invalid";
+  const { retained } = retainText(entry.texts, signal.part, message.messageId, "");
+  if (!markSourceCut(entry.texts, retained)) return "accepted";
+  if (signal.part === "answer") {
+    markMessageTruncated(message, turn);
+    syncFullAnswer(entry, message, retained);
+    return "accepted";
+  }
+  if (message.reasoning !== undefined) {
     message.reasoning = { text: message.reasoning.text, truncated: true };
   }
   syncFullReasoning(entry, message, retained);
@@ -1623,9 +1662,24 @@ function settledPresentation(
     ...facts,
     ...(origin === undefined ? {} : { failureOrigin: origin }),
     ...(origin === undefined || refusalCause === undefined ? {} : { refusalCause }),
-    ...(detailOmitted === true ? { detailOmitted } : toolText(command, output, errorText)),
+    ...(keepsOmission(detailOmitted, newer)
+      ? { detailOmitted: true }
+      : toolText(command, output, errorText)),
   };
   return Object.keys(presentation).length === 0 ? undefined : Object.freeze(presentation);
+}
+
+// A row whose detail the feed shed stays without it until an update supplies the detail again; the
+// feed's byte budget then decides afresh whether it fits.
+function keepsOmission(
+  detailOmitted: boolean | undefined,
+  newer: CodingSafeActivityToolPresentation | undefined,
+): boolean {
+  if (detailOmitted !== true) return false;
+  if (newer?.detailOmitted === true) return true;
+  return (
+    newer?.command === undefined && newer?.output === undefined && newer?.errorText === undefined
+  );
 }
 
 function settledFailureOrigin(
@@ -1656,13 +1710,6 @@ function toolText(
   };
 }
 
-/**
- * At the per-turn bound the newest call replaces the oldest settled one, as a full message list
- * replaces its oldest assistant message. Dropping the newest call instead froze everything derived
- * from the feed (the run phase, the Changes refresh signal) for the rest of a long turn. Each
- * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
- * has not settled is never displaced.
- */
 /** Settles every call still pending or running as cancelled; returns how many it settled. */
 function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): number {
   let cancelled = 0;
@@ -1683,6 +1730,13 @@ function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): num
   return cancelled;
 }
 
+/**
+ * At the per-turn bound the newest call replaces the oldest settled one, as a full message list
+ * replaces its oldest assistant message. Dropping the newest call instead froze everything derived
+ * from the feed (the run phase, the Changes refresh signal) for the rest of a long turn. Each
+ * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
+ * has not settled is never displaced.
+ */
 function evictOldestSettledTool(turn: MutableTurn): boolean {
   const index = turn.tools.findIndex(({ state }) => state !== "pending" && state !== "running");
   if (index < 0) return false;
@@ -2034,6 +2088,9 @@ function validSignal(signal: CodingSafeActivitySignal): boolean {
   if (!validSignalBase(signal)) return false;
   if (signal.kind === "message") return validMessageSignal(signal);
   if (signal.kind === "text" || signal.kind === "reasoning") return validTextSignal(signal);
+  if (signal.kind === "text-cut") {
+    return safeId(signal.messageId) && TEXT_PARTS.has(signal.part);
+  }
   if (signal.kind === "plan") return validPlanSignal(signal);
   return validToolSignal(signal);
 }
@@ -2156,6 +2213,7 @@ const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readon
   message: ["messageId", "role", "origin", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
+  "text-cut": ["messageId", "part"],
   plan: ["anchorMessageId", "steps"],
   tool: ["messageId", "callId", "tool", "state", "presentation"],
 };

@@ -294,7 +294,10 @@ export interface CodingSafeActivityReasoning {
  * it streams, so `length` only grows; `truncated` is the retention bound's own visible cut.
  */
 export interface CodingSafeActivityFullAnswer {
-  /** UTF-16 code units of the complete answer the server holds. */
+  /**
+   * UTF-16 code units of the complete answer the server holds; 0 only together with `truncated`,
+   * for a text the memory bound left no room for.
+   */
   readonly length: number;
   /** True when the server's memory bound shortened the answer it holds. */
   readonly truncated: boolean;
@@ -730,7 +733,9 @@ function validateFullText(
   }
   const before = errors.length;
   errors.push(...exactKeys(value, ["length", "truncated"], textPath));
-  if (!validAnswerLength(value.length)) errors.push(`${textPath}.length is invalid`);
+  // Length 0 names a text the memory bound cut to nothing; an uncut text is never named empty.
+  const emptyCut = value.length === 0 && value.truncated === true;
+  if (!emptyCut && !validAnswerLength(value.length)) errors.push(`${textPath}.length is invalid`);
   if (typeof value.truncated !== "boolean") errors.push(`${textPath}.truncated must be a boolean`);
   return errors.length === before;
 }

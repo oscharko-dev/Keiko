@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
@@ -51,8 +51,8 @@ describe("retained model texts", () => {
     expect(kept).toBe("ab");
     expect(retained).toMatchObject({ text: "ab", truncated: true });
     expect(retainText(store, "answer", "m", "c").kept).toBe("");
-    expect(store.counts.answer).toEqual({ named: 0, clipped: 1 });
-    expect(store.counts.reasoning).toEqual({ named: 0, clipped: 0 });
+    expect(store.counts.answer).toEqual({ named: 0, clipped: 1, sourceCut: 0 });
+    expect(store.counts.reasoning).toEqual({ named: 0, clipped: 0, sourceCut: 0 });
   });
 
   it("lets reasoning fill at most half the bound, so a later answer still fits whole", () => {
@@ -138,12 +138,25 @@ describe("live text deltas", () => {
     ]);
   });
 
+  it("never serializes a gain too long for a delta", () => {
+    const store = createRetainedTexts(10 * CODING_SAFE_ACTIVITY_ANSWER_PAGE_MAX_CHARS);
+    retainText(store, "answer", "big", "y".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS + 1));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(takeTextDeltas(store, ALL, Number.MAX_SAFE_INTEGER)).toEqual([]);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it("carries at most the contract's number of deltas and none for an unlisted message", () => {
     const store = createRetainedTexts(100_000);
+    // The unlisted text comes first, so only the listing check keeps it out of a free slot.
+    retainText(store, "answer", "unlisted", "secret");
     for (let index = 0; index <= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS; index += 1) {
       retainText(store, "answer", `m${String(index)}`, "t");
     }
-    retainText(store, "answer", "unlisted", "secret");
     const deltas = takeTextDeltas(store, (id) => id !== "unlisted", 1_000_000);
     expect(deltas).toHaveLength(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS);
     expect(deltas.some((delta) => delta.messageId === "unlisted")).toBe(false);

@@ -44,16 +44,22 @@ export function useJoinedFollow(
   return { paused: streamPaused || list.paused, jump, reportList };
 }
 
-/** The rows a feed shows: its messages and its tool calls. */
-export function feedRowCount(feed: AvailableCodingSafeActivityFeed | null): number {
-  let count = 0;
-  for (const turn of feed?.turns ?? []) count += turn.messages.length + turn.tools.length;
-  return count;
+/**
+ * The identities of the rows a feed shows: its messages and its tool calls. A count could not tell
+ * an arrival from the eviction of an old turn in the same update; identities can.
+ */
+export function feedRowKeys(feed: AvailableCodingSafeActivityFeed | null): readonly string[] {
+  const keys: string[] = [];
+  for (const turn of feed?.turns ?? []) {
+    for (const message of turn.messages) keys.push(`message:${message.messageId}`);
+    for (const tool of turn.tools) keys.push(`tool:${tool.callId}`);
+  }
+  return keys;
 }
 
 /**
  * The way back to the newest activity once the reader scrolled up and the stream stopped following
- * it, with the number of rows that arrived since. It sits at the stream's lower edge; its own text
+ * it, with the number of rows that arrived since, however many old rows the feed let go meanwhile. It sits at the stream's lower edge; its own text
  * stays out of the log's announcements, so a growing count never interrupts a screen reader.
  */
 function jumpLabel(fresh: number, t: CodingWorkbenchTranslate): string {
@@ -64,21 +70,21 @@ function jumpLabel(fresh: number, t: CodingWorkbenchTranslate): string {
 
 export function JumpToLatest({
   paused,
-  rowCount,
+  rowKeys,
   onJump,
   t,
 }: {
   readonly paused: boolean;
-  readonly rowCount: number;
+  readonly rowKeys: readonly string[];
   readonly onJump: () => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  // The row count when following paused, kept as derived state so a resume forgets it.
-  const [since, setSince] = useState<number | null>(null);
-  if (paused && since === null) setSince(rowCount);
+  // The rows shown when following paused, kept as derived state so a resume forgets them.
+  const [since, setSince] = useState<ReadonlySet<string> | null>(null);
+  if (paused && since === null) setSince(new Set(rowKeys));
   if (!paused && since !== null) setSince(null);
-  if (!paused) return null;
-  const fresh = Math.max(0, rowCount - (since ?? rowCount));
+  if (!paused || since === null) return null;
+  const fresh = rowKeys.reduce((count, rowKey) => (since.has(rowKey) ? count : count + 1), 0);
   return (
     <div className={styles.cmpJumpToLatest} aria-live="off">
       <button type="button" className={styles.button} onClick={onJump}>

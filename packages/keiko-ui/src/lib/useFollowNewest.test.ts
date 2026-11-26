@@ -41,6 +41,11 @@ function growingRegion(clientHeight: number): {
       scrollTop = Math.max(0, Math.min(next, scrollHeight - clientHeight));
     },
   });
+  Object.defineProperty(element, "scrollTo", {
+    value: ({ top }: { readonly top: number }): void => {
+      element.scrollTop = top;
+    },
+  });
   return {
     element,
     grow: (height: number): void => {
@@ -356,6 +361,23 @@ describe("useFollowNewest", () => {
       result.current.resume();
     });
     expect(element.scrollTop).toBe(700);
+    grow(1_600);
+    element.append(document.createElement("p"));
+    await waitFor(() => {
+      expect(element.scrollTop).toBe(1_300);
+    });
+  });
+
+  it("follows content that changes after End resumed following", async () => {
+    const { element, grow } = growingRegion(300);
+    const { result } = renderBound(element);
+    element.tabIndex = 0;
+    fireEvent.keyDown(element, { key: "Home" });
+    expect(result.current.paused).toBe(true);
+    fireEvent.keyDown(element, { key: "End" });
+    expect(result.current.paused).toBe(false);
+    expect(element.scrollTop).toBe(700);
+    // The End key press is the reader's input, yet it asked for the newest content.
     grow(1_600);
     element.append(document.createElement("p"));
     await waitFor(() => {

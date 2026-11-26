@@ -13,7 +13,7 @@ import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
   JumpToLatest,
   ListFollowContext,
-  feedRowCount,
+  feedRowKeys,
   useJoinedFollow,
   type ListFollow,
 } from "./CodingWorkbenchJumpToLatest";
@@ -224,9 +224,13 @@ describe("the wait for the model's first step", () => {
   });
 });
 
+function rows(count: number): readonly string[] {
+  return Array.from({ length: count }, (_, index) => `row:${String(index)}`);
+}
+
 function JumpProbe(props: {
   readonly paused: boolean;
-  readonly rowCount: number;
+  readonly rowKeys: readonly string[];
   readonly onJump: () => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
@@ -235,7 +239,7 @@ function JumpProbe(props: {
 
 function Jump(props: {
   readonly paused: boolean;
-  readonly rowCount: number;
+  readonly rowKeys: readonly string[];
   readonly onJump: () => void;
 }): ReactNode {
   return (
@@ -248,34 +252,44 @@ function Jump(props: {
 describe("the way back to the newest step", () => {
   it("appears only while following paused and counts the rows that arrived since", () => {
     const onJump = vi.fn();
-    const { rerender } = render(<Jump paused={false} rowCount={5} onJump={onJump} />);
+    const { rerender } = render(<Jump paused={false} rowKeys={rows(5)} onJump={onJump} />);
     expect(screen.queryByRole("button")).toBeNull();
-    rerender(<Jump paused rowCount={5} onJump={onJump} />);
+    rerender(<Jump paused rowKeys={rows(5)} onJump={onJump} />);
     expect(screen.getByRole("button")).toHaveTextContent("Jump to latest");
-    rerender(<Jump paused rowCount={6} onJump={onJump} />);
+    rerender(<Jump paused rowKeys={rows(6)} onJump={onJump} />);
     expect(screen.getByRole("button")).toHaveTextContent("1 new step · Jump to latest");
-    rerender(<Jump paused rowCount={8} onJump={onJump} />);
+    rerender(<Jump paused rowKeys={rows(8)} onJump={onJump} />);
     expect(screen.getByRole("button")).toHaveTextContent("3 new steps · Jump to latest");
     fireEvent.click(screen.getByRole("button"));
     expect(onJump).toHaveBeenCalledOnce();
-    rerender(<Jump paused={false} rowCount={8} onJump={onJump} />);
+    rerender(<Jump paused={false} rowKeys={rows(8)} onJump={onJump} />);
     expect(screen.queryByRole("button")).toBeNull();
     // A later pause counts from its own start, not from the first one.
-    rerender(<Jump paused rowCount={9} onJump={onJump} />);
+    rerender(<Jump paused rowKeys={rows(9)} onJump={onJump} />);
     expect(screen.getByRole("button")).toHaveTextContent(/^Jump to latest$/u);
   });
 
   it("speaks German", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
-    const { rerender } = render(<Jump paused rowCount={1} onJump={vi.fn()} />);
-    rerender(<Jump paused rowCount={3} onJump={vi.fn()} />);
+    const { rerender } = render(<Jump paused rowKeys={rows(1)} onJump={vi.fn()} />);
+    rerender(<Jump paused rowKeys={rows(3)} onJump={vi.fn()} />);
     expect(screen.getByRole("button")).toHaveTextContent("2 neue Schritte · Zum Neuesten");
   });
 
-  it("counts a feed's messages and tool calls as its rows", () => {
-    expect(feedRowCount(null)).toBe(0);
-    expect(feedRowCount(feedOf([FAILED_TEST], [userMessage("msg-1")]))).toBe(2);
+  it("names a feed's messages and tool calls as its rows", () => {
+    expect(feedRowKeys(null)).toEqual([]);
+    expect(feedRowKeys(feedOf([FAILED_TEST], [userMessage("msg-1")]))).toEqual([
+      "message:msg-1",
+      `tool:${FAILED_TEST.callId}`,
+    ]);
+  });
+
+  it("counts an arrival that came with the eviction of an old row", () => {
+    const { rerender } = render(<Jump paused rowKeys={rows(5)} onJump={vi.fn()} />);
+    // The oldest row leaves as a new one arrives: the row count stays 5.
+    rerender(<Jump paused rowKeys={[...rows(6)].slice(1)} onJump={vi.fn()} />);
+    expect(screen.getByRole("button")).toHaveTextContent("1 new step · Jump to latest");
   });
 });
 

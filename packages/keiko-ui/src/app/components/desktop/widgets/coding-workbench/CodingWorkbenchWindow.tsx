@@ -205,7 +205,7 @@ import {
 } from "./CodingWorkbenchRunStatus";
 import { failedCommandCount } from "./CodingWorkbenchToolDetail";
 import {
-  feedRowCount,
+  feedRowKeys,
   JumpToLatest,
   ListFollowContext,
   useJoinedFollow,
@@ -2028,7 +2028,7 @@ function WorkbenchColumns({
             <CodingWorkbenchChangesView changes={journeyChanges} pairing={state.pairing} />
             <JumpToLatest
               paused={joinedFollow.paused}
-              rowCount={feedRowCount(activity.feed)}
+              rowKeys={feedRowKeys(activity.feed)}
               onJump={joinedFollow.jump}
               t={t}
             />

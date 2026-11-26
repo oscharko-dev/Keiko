@@ -142,6 +142,26 @@ describe("a shell call's command, output and duration", () => {
     expect(detail.command?.text).toContain("curl");
     expect(detail.errorText?.text).toContain("rejected");
   });
+
+  it("redacts a token that a bidi or zero-width mark splits", () => {
+    const tail = TOKEN.slice(-12);
+    for (const at of [6, 28]) {
+      for (const mark of ["\u202E", "\u200B"]) {
+        const hidden = `${TOKEN.slice(0, at)}${mark}${TOKEN.slice(at)}`;
+        const state = {
+          status: "error",
+          input: { command: `echo ${hidden}` },
+          content: [{ type: "text", text: `token is ${hidden}` }],
+          error: { message: `rejected ${hidden}` },
+        };
+        const shown = JSON.stringify(
+          openCodeToolDetail("shell", shellPart(state), state, "failed"),
+        );
+        expect(shown).not.toContain(TOKEN);
+        expect(shown).not.toContain(tail);
+      }
+    }
+  });
 });
 
 describe("an output's preview", () => {
@@ -187,6 +207,30 @@ describe("an output's preview", () => {
     expect(toolOutputPreview(raw)?.head).toBe(
       ["red and hidden cursor", "title done", "link docs", "saved up", "cut ", "open "].join("\n"),
     );
+  });
+
+  it("drops terminal control strings whole, terminated or cut off at the line end", () => {
+    const esc = "\u001B";
+    const raw = [
+      `a ${esc}Pq#0;2;0;0;0#0~~${esc}\\b`,
+      `c ${esc}_app payload${esc}\\d`,
+      `e ${esc}^privacy${esc}\\f ${esc}Xstring${esc}\\g`,
+      `h ${esc}Pnever closed`,
+      "next line",
+    ].join("\n");
+    expect(toolOutputPreview(raw)?.head).toBe(
+      ["a b", "c d", "e f g", "h ", "next line"].join("\n"),
+    );
+  });
+
+  it("trims a long blank prefix and suffix in linear time, and blank output to nothing", () => {
+    const blank = "\n".repeat(1_000_000);
+    expect(toolOutputPreview(`${blank}first\n  \nlast${blank}`)).toMatchObject({
+      head: "first\n  \nlast",
+      lineCount: 3,
+    });
+    expect(toolOutputPreview(" \n".repeat(1_000_000))).toBeUndefined();
+    expect(toolOutputPreview("one\ntwo\n\n \n")).toMatchObject({ head: "one\ntwo", lineCount: 2 });
   });
 
   it("keeps what a line said before a trailing carriage return", () => {

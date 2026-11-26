@@ -1260,10 +1260,22 @@ function shownText(
   held: CodingWorkbenchAnswerText | undefined,
 ): ShownAnswer {
   if (full === undefined) return { source: carried, state: carriedCut ? "cut" : "whole" };
-  const source = held !== undefined && held.text.length >= carried.length ? held.text : carried;
-  if (held?.failed === true) return { source, state: "failed" };
-  if (source.length < full.length) return { source, state: "loading" };
-  return { source, state: full.truncated ? "cut" : "whole" };
+  if (held === undefined) {
+    return { source: carried, state: wholeOrCut(carried, full, false) };
+  }
+  const source = held.text.length >= carried.length ? held.text : carried;
+  if (held.failed) return { source, state: "failed" };
+  // A newer page can report the cut before the next feed update does: either source marks it.
+  return { source, state: wholeOrCut(source, full, held.truncated) };
+}
+
+function wholeOrCut(
+  source: string,
+  full: NonNullable<CodingSafeActivityMessage["fullAnswer"]>,
+  heldCut: boolean,
+): ShownAnswer["state"] {
+  if (source.length < full.length) return "loading";
+  return full.truncated || heldCut ? "cut" : "whole";
 }
 
 function shownAnswer(

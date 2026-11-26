@@ -35,6 +35,7 @@ import {
 import { CodingAppSessionDenialWindows, DENIAL_ALERT_THRESHOLD } from "./denialWindows.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { validateCodingSafeActivityAnswerPage } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1003,9 +1004,12 @@ describe("app-session answer pages", () => {
     ["another run", { runId: "run-other" }],
     ["another message", { messageId: "msg-other" }],
     ["another part", { part: "reasoning" }],
-    ["another offset", { offset: 3 }],
+    // A valid page in itself (it lies inside the answer), so only the identity check rejects it.
+    ["another offset", { offset: 3, text: "Review\n" }],
   ] as const)("fails closed when the source returns a page of %s", (_label, override) => {
-    const { channel, cookie } = answerChannel(() => ({ ...PAGE, ...override }));
+    const page = { ...PAGE, ...override };
+    expect(validateCodingSafeActivityAnswerPage(page).ok).toBe(true);
+    const { channel, cookie } = answerChannel(() => page);
     const result = handleCodingAppSessionAnswerPage(
       answerCtx("runId=run-answer&messageId=msg-answer&offset=0", cookie),
       deps(channel),

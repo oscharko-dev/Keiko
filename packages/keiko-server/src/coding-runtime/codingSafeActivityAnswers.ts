@@ -39,6 +39,8 @@ export interface RetainedText {
 export interface RetainedTextCounts {
   named: number;
   clipped: number;
+  /** Texts the source showed only a prefix of (a live part bound), so the held text is cut. */
+  sourceCut: number;
 }
 
 export interface RetainedTexts {
@@ -63,7 +65,10 @@ export function createRetainedTexts(maxChars: number): RetainedTexts {
     maxChars,
     chars: 0,
     reasoningChars: 0,
-    counts: { answer: { named: 0, clipped: 0 }, reasoning: { named: 0, clipped: 0 } },
+    counts: {
+      answer: { named: 0, clipped: 0, sourceCut: 0 },
+      reasoning: { named: 0, clipped: 0, sourceCut: 0 },
+    },
   };
 }
 
@@ -158,6 +163,18 @@ function splitPendingSurrogate(text: string): { readonly whole: string; readonly
     : { whole: text, pending: "" };
 }
 
+/**
+ * Marks a held text cut by its source: nothing more of it arrives, and the feed shows the cut. True
+ * the first time, so the cut is counted once.
+ */
+export function markSourceCut(store: RetainedTexts, retained: RetainedText): boolean {
+  if (retained.truncated) return false;
+  retained.truncated = true;
+  retained.pendingHighSurrogate = "";
+  store.counts[retained.part].sourceCut += 1;
+  return true;
+}
+
 /** Releases the texts of messages the feed no longer lists (an evicted turn or message). */
 export function releaseUnlistedTexts(
   store: RetainedTexts,
@@ -173,15 +190,16 @@ export function releaseUnlistedTexts(
 
 /**
  * The full-text naming a message's feed part needs: absent when the carried part is the whole text,
- * otherwise the text's whole length and whether the memory bound cut it. `firstNamed` is true the
- * first time the text is named, for its single body-free record.
+ * otherwise the text's whole length and whether the memory bound cut it. A text the bound cut to
+ * nothing is still named, at length 0, so the cut stays visible. `firstNamed` is true the first time
+ * the text is named, for its single body-free record.
  */
 export function fullTextFor(
   carried: number,
   retained: RetainedText,
 ): { readonly full: CodingSafeActivityFullAnswer | undefined; readonly firstNamed: boolean } {
   const { length } = retained.text;
-  if (length === 0 || (length <= carried && !retained.truncated)) {
+  if (!retained.truncated && (length === 0 || length <= carried)) {
     return { full: undefined, firstNamed: false };
   }
   const firstNamed = !retained.named;
@@ -238,6 +256,10 @@ export function takeTextDeltas(
     const offset = retained.published;
     retained.published = retained.text.length;
     if (offset >= retained.text.length || !listed(retained.messageId)) continue;
+    // A gain too long for a delta, or past the delta count, is read as pages: decided before its
+    // text is sliced or serialized, so a multi-megabyte gain costs nothing here.
+    if (retained.text.length - offset > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS) continue;
+    if (deltas.length >= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS) continue;
     const delta: CodingSafeActivityTextDelta = {
       messageId: retained.messageId,
       part: retained.part,
@@ -245,13 +267,7 @@ export function takeTextDeltas(
       text: retained.text.slice(offset),
     };
     const cost = utf8.encode(JSON.stringify(delta)).length + 1;
-    if (
-      delta.text.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS ||
-      deltas.length >= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS ||
-      used + cost > budgetBytes
-    ) {
-      continue;
-    }
+    if (used + cost > budgetBytes) continue;
     deltas.push(delta);
     used += cost;
   }

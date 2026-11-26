@@ -703,6 +703,13 @@ describe("coding safe-activity contract — full answer", () => {
     expect(
       validateCodingSafeActivityFeed(withFullReasoning({ length: 0, truncated: false })).ok,
     ).toBe(false);
+    // A reasoning the memory bound left no room for is named empty and cut.
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: 0, truncated: true })).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(withFullReasoning({ length: -1, truncated: true })).ok,
+    ).toBe(false);
     expect(
       validateCodingSafeActivityFeed(
         withFullReasoning({ length: 10, text: "raw", truncated: false }),

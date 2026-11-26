@@ -715,7 +715,11 @@ feed, under a per-run memory bound, and the feed message names the answer's whol
 (`fullAnswer`) when its segments carry less. `coding-runtime.safe-activity` records
 `event=answer-retained reason=feed-bound` the first time an answer outgrows the feed, and
 `event=answer-clipped reason=retention-bound` at `warn` when the memory bound cut one, which the
-message then shows as cut; `occurrenceCount` is the run's running count of each. The Workbench reads
+message then shows as cut; `occurrenceCount` is the run's running count of each. The live history's
+part bound (a text part up to 64 KiB, a reasoning part up to 16 KiB of UTF-8) is the one bound
+before the projection: a longer part reaches the timeline as its prefix and is shown as cut, recorded
+once per part as `event=answer-clipped reason=source-bound` (`reasoning-clipped` for reasoning) at
+`warn`, while Coding History keeps the part whole for the restored run. The Workbench reads
 the rest of a named answer page by page through the authenticated app-session channel:
 pages of at most 256 Ki characters. `coding-app-session.answer-page.read` writes one summary line
 per answer read, under the run's id: `outcome=served` once the page that reaches the answer's end

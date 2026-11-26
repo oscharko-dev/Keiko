@@ -17263,6 +17263,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "late-restatement",
           "feed-bound",
           "retention-bound",
+          "source-bound",
         ],
       },
       occurrenceCount: {

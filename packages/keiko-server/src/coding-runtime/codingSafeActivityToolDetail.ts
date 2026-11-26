@@ -145,9 +145,12 @@ function displayLines(text: string): readonly string[] {
     .replaceAll("\r\n", "\n")
     .split("\n")
     .map((line) => finalConsoleState(line));
-  while (lines.length > 0 && lines.at(-1)?.trim() === "") lines.pop();
-  while (lines.length > 0 && lines[0]?.trim() === "") lines.shift();
-  return lines;
+  // One slice, never a shift per line: a large blank prefix stays linear.
+  const first = lines.findIndex((line) => line.trim() !== "");
+  if (first === -1) return [];
+  let end = lines.length;
+  while (lines[end - 1]?.trim() === "") end -= 1;
+  return lines.slice(first, end);
 }
 
 // What a console line finally showed: the last segment a carriage return left, skipping the empty
@@ -181,9 +184,10 @@ export function boundedToolText(
 }
 
 function cleanToolText(raw: string): string {
-  // ANSI colour and cursor sequences carry no text a reader needs; the redactor then sees plain text.
-  const plain = stripTerminalSequences(raw);
-  return stripUnsafeFormatChars(redactContent(plain, "preserve"));
+  // ANSI colour and cursor sequences carry no text a reader needs, and a bidi or zero-width mark
+  // inside a token would hide it from the credential patterns: both go before the redactor runs.
+  const plain = stripUnsafeFormatChars(stripTerminalSequences(raw));
+  return redactContent(plain, "preserve");
 }
 
 const ESC = "\u001b";
@@ -191,8 +195,9 @@ const BEL = "\u0007";
 
 /**
  * Removes terminal escape sequences (ECMA-48) in one forward scan, without a regex: CSI (`ESC [`,
- * its parameter and intermediate bytes and its final byte), OSC (`ESC ]` up to BEL or `ESC \\`) and
- * the two-character `ESC` forms. A sequence cut off early ends at the first byte that cannot belong
+ * its parameter and intermediate bytes and its final byte), the control strings OSC, DCS, SOS, PM
+ * and APC (`ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _`, each up to BEL or `ESC \\`) and the
+ * two-character `ESC` forms. A sequence cut off early ends at the first byte that cannot belong
  * to it, so it never swallows the next line.
  */
 function stripTerminalSequences(text: string): string {
@@ -212,7 +217,7 @@ function stripTerminalSequences(text: string): string {
 function terminalSequenceEnd(text: string, start: number): number {
   const kind = text.charAt(start + 1);
   if (kind === "[") return csiEnd(text, start + 2);
-  if (kind === "]") return oscEnd(text, start + 2);
+  if (CONTROL_STRING_INTRODUCERS.has(kind)) return controlStringEnd(text, start + 2);
   const code = text.codePointAt(start + 1) ?? 0;
   return code >= 0x30 && code <= 0x7e ? start + 2 : start + 1;
 }
@@ -227,7 +232,10 @@ function csiEnd(text: string, from: number): number {
   return text.length;
 }
 
-function oscEnd(text: string, from: number): number {
+// OSC, DCS, SOS, PM and APC carry a payload up to their string terminator.
+const CONTROL_STRING_INTRODUCERS: ReadonlySet<string> = new Set(["]", "P", "X", "^", "_"]);
+
+function controlStringEnd(text: string, from: number): number {
   for (let index = from; index < text.length; index += 1) {
     const char = text.charAt(index);
     if (char === BEL) return index + 1;

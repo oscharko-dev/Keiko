@@ -76,21 +76,22 @@ function setFollowing(
   if (element !== null) anchorScroll(element, following);
 }
 
+// Home pauses following at the start; End resumes it exactly as the way back to the newest step
+// does, so the reader's own key press does not keep suppressing the follow it just asked for.
 function navigateTranscript(
   event: KeyboardEvent,
   element: HTMLElement,
-  stickRef: FollowNewest["stickRef"],
-  setPaused: (paused: boolean) => void,
+  binding: RegionBinding,
 ): void {
   if (event.target !== element || event.defaultPrevented) return;
   if (event.isComposing || hasNavigationModifier(event)) return;
   if (event.key !== "Home" && event.key !== "End") return;
   event.preventDefault();
-  setFollowing(element, stickRef, setPaused, event.key === "End");
-  element.scrollTo({
-    top: stickRef.current ? element.scrollHeight : 0,
-    behavior: "instant",
-  });
+  if (event.key === "End") binding.resume();
+  else {
+    setFollowing(element, binding.stickRef, binding.setPaused, false);
+    element.scrollTo({ top: 0, behavior: "instant" });
+  }
   reportTranscriptNavigation();
 }
 
@@ -120,13 +121,14 @@ interface RegionBinding {
   readonly readerActedRef: { current: boolean };
   readonly setPaused: (paused: boolean) => void;
   readonly onContentChange: () => void;
+  readonly resume: () => void;
 }
 
 function bindRegion(element: HTMLElement, binding: RegionBinding): () => void {
-  const { stickRef, readerActedRef, setPaused, onContentChange } = binding;
+  const { stickRef, readerActedRef, onContentChange } = binding;
   anchorScroll(element, stickRef.current);
   const onKeyDown = (event: KeyboardEvent): void => {
-    navigateTranscript(event, element, stickRef, setPaused);
+    navigateTranscript(event, element, binding);
   };
   const onReaderInput = (): void => {
     readerActedRef.current = true;
@@ -148,7 +150,7 @@ function bindRegion(element: HTMLElement, binding: RegionBinding): () => void {
 }
 
 function useRegionBinding(binding: RegionBinding): RefCallback<HTMLElement> {
-  const { scrollRef, stickRef, readerActedRef, setPaused, onContentChange } = binding;
+  const { scrollRef, stickRef, readerActedRef, setPaused, onContentChange, resume } = binding;
   return useCallback(
     (element: HTMLElement | null): (() => void) | undefined => {
       scrollRef.current = element;
@@ -159,13 +161,14 @@ function useRegionBinding(binding: RegionBinding): RefCallback<HTMLElement> {
         readerActedRef,
         setPaused,
         onContentChange,
+        resume,
       });
       return (): void => {
         unbind();
         if (scrollRef.current === element) scrollRef.current = null;
       };
     },
-    [scrollRef, stickRef, readerActedRef, setPaused, onContentChange],
+    [scrollRef, stickRef, readerActedRef, setPaused, onContentChange, resume],
   );
 }
 
@@ -208,12 +211,19 @@ export function useFollowNewest(
     endRef.current = { top: element.scrollTop, height: element.scrollHeight };
   }, [scrollRef]);
 
+  const resume = useCallback((): void => {
+    readerActedRef.current = false;
+    setFollowing(scrollRef.current, stickRef, setPaused, true);
+    scrollToEnd();
+  }, [scrollRef, scrollToEnd]);
+
   const regionRef = useRegionBinding({
     scrollRef,
     stickRef,
     readerActedRef,
     setPaused,
     onContentChange: scrollToEnd,
+    resume,
   });
 
   const onScroll = useCallback((): void => {
@@ -226,12 +236,6 @@ export function useFollowNewest(
     }
     endRef.current = undefined;
     setFollowing(element, stickRef, setPaused, atEnd);
-  }, [scrollRef, scrollToEnd]);
-
-  const resume = useCallback((): void => {
-    readerActedRef.current = false;
-    setFollowing(scrollRef.current, stickRef, setPaused, true);
-    scrollToEnd();
   }, [scrollRef, scrollToEnd]);
 
   useEffect(() => {

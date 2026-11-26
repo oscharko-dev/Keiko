@@ -878,8 +878,15 @@ the whole length (`fullAnswer`), and segment shedding for such a message loses n
 Workbench reads the rest page by page (256 Ki characters) through the authenticated app-session
 channel, `GET /api/coding-workbench/app-session/channel/answer`, which fails closed to a page-free reply
 for an unpaired session, an unknown run, message or offset, or a run or message id that is not a safe
-identifier. Only the memory bound or a failed read
-marks an answer as cut. History detail joins the store's chunks of one answer back into one message
+identifier. Only the memory bound, the live history's part bound or a failed read marks an answer as
+cut. The live history's part bound is the one bound before the projection (D8): it shows a text part
+up to 64 KiB and a reasoning part up to 16 KiB of UTF-8, while the part streams and once it is
+finished. A longer part reaches the projection as that prefix and a `text-cut` signal, so the feed
+names the answer (or reasoning) as cut (`fullAnswer.truncated`, `fullReasoning.truncated`), its
+pages carry exactly that prefix, and the Activity Log records `answer-clipped` or
+`reasoning-clipped` with reason `source-bound`. Coding History captures the persisted part whole,
+so the restored run shows that answer complete. A text the memory bound left no room for at all is
+named with length 0 and marked cut. History detail joins the store's chunks of one answer back into one message
 by their binding source id, and the restored timeline shows that answer whole. The display
 projection's History capture stores the complete answer, not the feed's prefix, and a later capture
 extends the chunks an earlier one stored (upsert); a chunk joins only the start its source id names
@@ -1253,7 +1260,9 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   show words the model never wrote in that order, so such a part shows what it has until the history
   shows it complete. Text is bounded by the history's own part bound (64 KiB), reasoning by the
   projection bound, cut on a whole character exactly where the projection cuts the finished part, so
-  the live text is always a prefix of what the history later shows; a half surrogate pair waits for
+  the live text is always a prefix of what the history later shows; a part that bound cut, live or
+  finished, is named to the timeline as cut (the `text-cut` signal), never shown as whole, while
+  Coding History keeps the finished part whole; a half surrogate pair waits for
   its other half. When the history shows the part complete and extends what streamed, the persisted
   text takes over and the live text is spent, so nothing is appended twice; a complete text that does
   not extend the shown text keeps the shown text and is counted, because the timeline cannot take
