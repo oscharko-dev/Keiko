@@ -1705,9 +1705,9 @@ function WorkbenchColumns({
   onSelectLocation,
   runWorkspace,
   repositoryRoot,
-  runIsActive,
   taskBranchMove,
 }: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+  const runIsActive = runIsActiveFrom(state);
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const connectors = useCodingWorkbenchConnectors();
