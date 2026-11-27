@@ -1,10 +1,11 @@
-import { StrictMode } from "react";
+import { StrictMode, useReducer } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
   useCodingWorkbenchRuntimeStream,
   useCodingWorkbenchPairingEffect,
+  useCodingWorkbenchSessionRenewalEffect,
   useCodingWorkbenchWorkspaceEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
   POST_RUN_DESCRIPTION_POLL_MAX_MS,
@@ -13,11 +14,14 @@ import {
 } from "./coding-workbench-runtime-effects";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
+  notifyCodingAppSessionChanged,
   redeemCodingAppSessionPairingNavigation,
+  requestCodingAppSessionReinspection,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
 import {
+  codingWorkbenchRuntimeReducer,
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
@@ -555,5 +559,40 @@ describe("useCodingWorkbenchRuntimeStream reconnect reporting", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("useCodingWorkbenchSessionRenewalEffect", () => {
+  function refusedWindow(): { readonly mutation: () => CodingWorkbenchRuntimeState["mutation"] } {
+    const refused = codingWorkbenchRuntimeReducer(createInitialCodingWorkbenchRuntimeState(), {
+      kind: "mutation-failed",
+      error: {
+        code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+        message: "redacted",
+        retryable: false,
+        correlationId: "corr-previous-session",
+      },
+    });
+    const view = renderHook(() => {
+      const [state, dispatch] = useReducer(codingWorkbenchRuntimeReducer, refused);
+      useCodingWorkbenchSessionRenewalEffect(dispatch);
+      return state;
+    });
+    return { mutation: () => view.result.current.mutation };
+  }
+
+  it("keeps a refusal while the same session is only inspected again", () => {
+    const window_ = refusedWindow();
+    act(() => requestCodingAppSessionReinspection());
+    expect(window_.mutation()).toMatchObject({
+      status: "error",
+      error: { correlationId: "corr-previous-session" },
+    });
+  });
+
+  it("drops the refusal of the previous session once a new session arrives", async () => {
+    const window_ = refusedWindow();
+    act(() => notifyCodingAppSessionChanged());
+    await waitFor(() => expect(window_.mutation()).toMatchObject({ status: "idle", error: null }));
   });
 });

@@ -760,6 +760,26 @@ describe("mode selection, setup plans, and mutation failures", () => {
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
 
+  it("drops a refusal given under an earlier session, and leaves every other mutation alone", () => {
+    const failed = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-failed",
+      error: {
+        code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+        message: "redacted",
+        retryable: false,
+        correlationId: "corr-previous-session",
+      },
+    });
+    const renewed = codingWorkbenchRuntimeReducer(failed, { kind: "session-renewed" });
+    expect(renewed.mutation).toMatchObject({ status: "idle", error: null });
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "req-1",
+    });
+    expect(codingWorkbenchRuntimeReducer(pending, { kind: "session-renewed" })).toBe(pending);
+  });
+
   it("marks a cancelled Start as idle but not succeeded, and the next action starts clean", () => {
     const pending = codingWorkbenchRuntimeReducer(readyState(), {
       kind: "mutation-start",
