@@ -248,7 +248,7 @@ export const SUPPORT_RELEASE_REGISTRY_SNAPSHOTS = [
   },
   {
     release: "1.5.9",
-    sourceCommit: "2e4048f5c604a825074a2c796face2bb44d8cc18",
+    sourceCommit: "a8a014cb59a3527296e2c5a37be8c6b607a51762",
     registryVersion: 1,
     schemaDigest: "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
     catalogDigest: "3593da5a020a6e002a08a3db8b130a8b4341a5a51fca34d094fa5d32c7c1a79c",
