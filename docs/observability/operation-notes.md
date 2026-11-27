@@ -1073,7 +1073,12 @@ wait; disconnecting a browser does not cancel shared discovery or start another 
 Workbench profile describes the model chosen in its picker (`modelId`) and its own observed
 verification, rather than the gateway-wide state. `model-verification-pending` means that a check of
 that model is already running; a tracked model nobody activated is `conversation-not-ready`;
-`tool-calling-unverified` records an unknown tool capability without dispatching a probe.
+`tool-calling-unverified` records an unknown tool capability without dispatching a probe. The
+Workbench tells the two meanings of `conversation-not-ready` apart from the catalog (absent
+`conversationReady` is "not activated yet in this session", `false` is a failed check) and, for the
+first, offers the person's own activation in place (U-12, #4491). It posts to the same readiness
+route as Settings > Models; `gateway.readiness.started` and `.completed` then carry the closed
+`surface` (`settings`, `coding-workbench`, `chat`), `settings` when the request names none.
 See [ADR-0171](../adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 The tool-calling check runs in two steps (#4351, owner decision 2026-11-13): first as production works, the

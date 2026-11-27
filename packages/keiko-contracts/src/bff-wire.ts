@@ -3072,7 +3072,16 @@ export interface GatewayReadinessOptions {
    * Workbench origin is accepted from the wire; the on-demand origin is set by the server itself.
    */
   readonly purpose?: "coding-workbench-auto" | "on-demand" | undefined;
+  /**
+   * The surface a person started this explicit activation from, so the Activity Log shows where it
+   * came from (U-12, #4491). Informational only: it never changes what is probed. Absent means the
+   * Settings > Models list; only the closed values below are accepted from the wire.
+   */
+  readonly surface?: GatewayReadinessSurface | undefined;
 }
+
+/** The person-facing surfaces that can start an explicit model activation (ADR-0171 D2). */
+export type GatewayReadinessSurface = "coding-workbench" | "chat";
 
 export interface GatewayReadinessRequest {
   readonly modelId?: string | undefined;

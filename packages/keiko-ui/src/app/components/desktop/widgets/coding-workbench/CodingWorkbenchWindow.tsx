@@ -218,6 +218,10 @@ import {
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
+import { CodingWorkbenchModelActivation } from "./CodingWorkbenchModelActivation";
+import type { WorkbenchModelReadiness } from "./codingWorkbenchModelReadiness";
+import { useWorkbenchModelNotice } from "./useWorkbenchModelNotice";
+import type { ModelActivation } from "@/lib/useModelActivation";
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIdentityEvidence } from "./useCodingWorkbenchIdentityEvidence";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
@@ -1059,6 +1063,7 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  onOpenSettings,
   leftRun,
   onLeftRun,
 }: {
@@ -1070,6 +1075,8 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  /** Opens Settings > Models, where a model's readiness check is explained. */
+  readonly onOpenSettings?: (() => void) | undefined;
   /** The run this window left with New task, persisted in its window configuration. */
   readonly leftRun?: string | undefined;
   readonly onLeftRun?: ((runId: string | undefined) => void) | undefined;
@@ -1177,12 +1184,13 @@ export function CodingWorkbenchWindow({
     activationTrigger,
     refresh: refreshCheckout,
   });
-  const alert = visibleAlert(
+  const { alert, modelReadiness, modelActivation } = useWorkbenchModelNotice({
     state,
+    catalog: chatCatalog,
     t,
-    repositoryRoot === null && !runIsActive,
-    authority.errorMessage,
-  );
+    setupVisible: repositoryRoot === null && !runIsActive,
+    authorityError: authority.errorMessage,
+  });
   const taskBranchMove = movedTaskBranch(history.detail, {
     repositoryRoot,
     checkoutBranch: branchInventory.currentBranch,
@@ -1218,6 +1226,9 @@ export function CodingWorkbenchWindow({
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
       alert={alert}
+      modelReadiness={modelReadiness}
+      modelActivation={modelActivation}
+      onOpenSettings={onOpenSettings}
       workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
       research={research}
@@ -1503,6 +1514,10 @@ interface WorkbenchContentProps {
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
   readonly alert: string | null;
+  /** The not-activated / failed-check fact about the Workbench's model, and the in-place action. */
+  readonly modelReadiness: WorkbenchModelReadiness | null;
+  readonly modelActivation: ModelActivation;
+  readonly onOpenSettings: (() => void) | undefined;
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
   readonly research: UseCodingWorkbenchResearchResult;
@@ -1659,6 +1674,11 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
         <WorkbenchHeader columns={columns} />
         <div className={styles.body}>
           <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+          <CodingWorkbenchModelActivation
+            readiness={columns.modelReadiness}
+            activation={columns.modelActivation}
+            onOpenSettings={columns.onOpenSettings}
+          />
           <CodingWorkbenchToolCheck state={state} onCheck={columns.actions.setSelectedModel} />
           <WorkbenchStatusNotice state={state} />
           <WorkbenchColumns {...columns} />
@@ -1728,11 +1748,12 @@ function workbenchStartBlocker(
   authorityError: string | null,
   locationState: WorkbenchExecutionLocationState,
   taskBranchMove: TaskBranchMove | null,
+  modelReadiness: WorkbenchModelReadiness | null,
 ): string | null {
   if (!locationState.ready) return t(locationBlockerKey(locationState));
   if (taskBranchMove !== null)
     return t("codingWorkbench.composer.taskBranchMoved", { ...taskBranchMove });
-  return startBlockedReason(state, t, showSetup, authorityError);
+  return startBlockedReason(state, t, showSetup, authorityError, modelReadiness);
 }
 
 // The repository catalog reloads when the selected folder's workspace is found lost or back (#4491).
@@ -1794,6 +1815,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   taskBranchMove,
+  modelReadiness,
 }: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
   const runIsActive = runIsActiveFrom(state);
   const t = useCodingWorkbenchTranslate();
@@ -1813,6 +1835,7 @@ function WorkbenchColumns({
     authority.errorMessage,
     locationState,
     taskBranchMove,
+    modelReadiness,
   );
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so

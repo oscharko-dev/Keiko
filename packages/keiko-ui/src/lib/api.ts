@@ -39,6 +39,7 @@ import type {
   GitSyncPreview,
   GatewayReadinessOptions,
   GatewayReadinessReport,
+  GatewayReadinessSurface,
   EditorDocumentVersion,
   EditorCompletionContextSelectors,
   EditorCompletionWireRequest,
@@ -895,6 +896,19 @@ export async function runGatewayReadiness(
       ...(options === undefined ? {} : { options }),
     }),
   });
+}
+
+/**
+ * Activates one chat model from a surface other than the Settings list. It is the same route and
+ * the same basic-chat readiness check Settings > Models runs (ADR-0171 D2); the surface only tells
+ * the Activity Log where the person asked for it. Resolves to whether the chat probe passed.
+ */
+export async function activateChatModelFromSurface(
+  modelId: string,
+  surface: GatewayReadinessSurface,
+): Promise<boolean> {
+  const report = await runGatewayReadiness(modelId, { surface });
+  return report.probes.some((probe) => probe.name === "chat" && probe.status === "passed");
 }
 
 export interface ChatModelDeactivation {

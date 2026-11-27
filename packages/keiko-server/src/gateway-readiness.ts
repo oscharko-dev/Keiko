@@ -25,6 +25,7 @@ import type {
   GatewayReadinessProbeResult,
   GatewayReadinessReport,
   GatewayReadinessRequest,
+  GatewayReadinessSurface,
   GatewayToolCallingOutcome,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -335,6 +336,12 @@ const GATEWAY_READINESS_BUSY_RETAINED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// Where a person started an explicit activation (U-12): the route is the same, the surface is the
+// one closed fact the log adds. Absent on the wire means the Settings > Models list.
+const READINESS_WIRE_SURFACES: readonly GatewayReadinessSurface[] = ["coding-workbench", "chat"];
+const READINESS_LOG_SURFACES = ["settings", "coding-workbench", "chat"] as const;
+type ReadinessLogSurface = (typeof READINESS_LOG_SURFACES)[number];
+
 // Readiness checks explicitly started in Settings use these operations. Configuration-owned
 // startup chat checks and the Workbench's separate capability checks retain the automatic
 // operations (`gateway.readiness.automatic.*`); conversation entry points start no probes.
@@ -352,6 +359,12 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["settings"],
+    },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: READINESS_LOG_SURFACES,
     },
     ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
@@ -378,6 +391,12 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["settings"],
+    },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: READINESS_LOG_SURFACES,
     },
     overallStatus: {
       type: "string",
@@ -528,7 +547,14 @@ function parseReadinessOptions(raw: Record<string, unknown>): GatewayReadinessOp
     ...(includeDeepProbes !== undefined ? { includeDeepProbes } : {}),
     ...(maxContextTokens !== undefined ? { maxContextTokens } : {}),
     ...(purpose !== undefined ? { purpose } : {}),
+    ...readinessSurfaceOption(raw.surface),
   };
+}
+
+// Only a closed value is accepted from the wire; anything else leaves the surface absent.
+function readinessSurfaceOption(value: unknown): { readonly surface?: GatewayReadinessSurface } {
+  const surface = READINESS_WIRE_SURFACES.find((candidate) => candidate === value);
+  return surface === undefined ? {} : { surface };
 }
 
 function uniqueProbeNames(values: readonly unknown[]): readonly GatewayReadinessProbeName[] {
@@ -900,6 +926,7 @@ function logReadinessStarted(
   deps: UiHandlerDeps,
   correlationId: string,
   trigger: GatewayReadinessTrigger,
+  surface: ReadinessLogSurface,
   modelId: string,
   probeCount: number,
   timeouts: ProbeTimeoutEvidence,
@@ -908,7 +935,7 @@ function logReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), ...timeouts, trigger, probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, trigger, surface, probeCount },
     ),
   );
 }
@@ -917,6 +944,7 @@ function logReadinessCompleted(
   deps: UiHandlerDeps,
   correlationId: string,
   trigger: GatewayReadinessTrigger,
+  surface: ReadinessLogSurface,
   report: GatewayReadinessReport,
   durationMs: number,
 ): void {
@@ -927,6 +955,7 @@ function logReadinessCompleted(
       {
         ...modelIdEvidence(report.modelId),
         trigger,
+        surface,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
@@ -985,7 +1014,15 @@ function logReadinessRunStarted(
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
+  logReadinessStarted(
+    deps,
+    run.correlationId,
+    run.trigger,
+    run.surface,
+    modelId,
+    names.length,
+    timeouts,
+  );
 }
 
 // The legacy-named initialization helper records one configuration-owned startup chat check.
@@ -1034,13 +1071,21 @@ function logReadinessRunCompleted(
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessCompleted(deps, run.correlationId, run.trigger, report, Date.now() - run.startedAtMs);
+  logReadinessCompleted(
+    deps,
+    run.correlationId,
+    run.trigger,
+    run.surface,
+    report,
+    Date.now() - run.startedAtMs,
+  );
 }
 
 interface ReadinessRunEvidence {
   readonly correlationId: string;
   readonly automatic: boolean;
   readonly trigger: GatewayReadinessTrigger | undefined;
+  readonly surface: ReadinessLogSurface;
   // Set only for a run the Workbench's own verification started (`runWorkbenchProbe`).
   readonly workbench: WorkbenchRunEvidence | undefined;
   readonly startedAtMs: number;
@@ -2577,6 +2622,7 @@ function readinessRunEvidence(
     correlationId,
     automatic: request.options?.purpose === "coding-workbench-auto",
     trigger,
+    surface: request.options?.surface ?? "settings",
     workbench,
     startedAtMs: Date.now(),
   };

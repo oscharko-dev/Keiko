@@ -414,6 +414,51 @@ describe("gateway readiness route", () => {
     );
   });
 
+  // U-12 (#4491): the same explicit activation can be started from the Workbench; the log says where
+  // from through one closed value, and a value outside the closed set is dropped, not logged.
+  it.each([
+    [undefined, "settings"],
+    ["coding-workbench", "coding-workbench"],
+    ["chat", "chat"],
+    ["somewhere-else", "settings"],
+  ] as const)(
+    "records the surface %s of an activation as %s on both lines of the check",
+    async (requested, recorded) => {
+      const events: ServerLogEvent[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsWith(
+          gatewayConfig(),
+          vi.fn(() => Promise.resolve(jsonResponse(chatPayload("OK"), 200))),
+        ),
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      await handleGatewayReadiness(
+        {
+          ...ctx({
+            modelId: "test-chat-model",
+            options: { probes: [], ...(requested === undefined ? {} : { surface: requested }) },
+          }),
+          correlationId: "corr-surface-route-0001",
+        },
+        deps,
+      );
+
+      const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+      expect(readiness.map((event) => [event.op, event.extra?.surface])).toEqual([
+        ["gateway.readiness.started", recorded],
+        ["gateway.readiness.completed", recorded],
+      ]);
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.started.line",
+          formatActivityLogProofLine(readiness[0] ?? {}),
+        ),
+      ).toMatchObject({ trigger: "settings", surface: recorded });
+      deps.store.close();
+    },
+  );
+
   // The full id serves provider selection and the response; the log carries only the digest of the
   // whole id, never a truncated prefix that two long ids could share (#3557 review).
   it("logs a long configured model id only as a whole-id digest", async () => {

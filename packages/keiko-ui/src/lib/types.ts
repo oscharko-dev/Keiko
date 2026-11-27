@@ -428,6 +428,7 @@ export type {
   GatewayReadinessProbeName,
   GatewayReadinessProbeResult,
   GatewayReadinessProbeStatus,
+  GatewayReadinessSurface,
   GatewayReadinessReport,
   GatewayReadinessRequest,
   GatewayReadinessVerifiedCapabilities,

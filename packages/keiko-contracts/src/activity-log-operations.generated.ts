@@ -26681,6 +26681,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["settings"],
       },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["settings", "coding-workbench", "chat"],
+      },
       overallStatus: {
         type: "string",
         dataClass: "closed-enum",
@@ -26884,6 +26890,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["settings"],
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["settings", "coding-workbench", "chat"],
       },
       chatProbeTimeoutMs: {
         type: "integer",

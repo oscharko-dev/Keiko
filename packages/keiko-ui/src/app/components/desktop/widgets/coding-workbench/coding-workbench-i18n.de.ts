@@ -880,6 +880,14 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Modell ist nicht aktiviert oder hat seine Bereitschaftsprüfung nicht bestanden. Aktiviere es in Einstellungen > Modelle oder wähle ein anderes aktiviertes Modell.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "Das Gateway hat noch nicht bestätigt, dass dieses Modell Tools aufrufen kann. Wähle Tool-Aufrufe prüfen, um es jetzt zu prüfen, oder wähle ein anderes bereites Modell.",
+  "codingWorkbench.source.unavailableReason.conversation-not-activated":
+    "{model} ist in dieser Sitzung noch nicht aktiviert.",
+  "codingWorkbench.source.unavailableReason.conversation-check-failed":
+    "{model} hat die Bereitschaftsprüfung nicht bestanden.",
+  "codingWorkbench.source.unavailableReason.conversation-request-failed":
+    "Keiko konnte das Gateway nicht erreichen, um {model} zu aktivieren.",
+  "codingWorkbench.modelActivation.action": "{model} aktivieren",
+  "codingWorkbench.modelActivation.settings": "Details unter Einstellungen > Modelle",
   "codingWorkbench.toolCheck.action": "Tool-Aufrufe prüfen",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",

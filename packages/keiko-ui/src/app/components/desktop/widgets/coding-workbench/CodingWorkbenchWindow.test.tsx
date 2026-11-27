@@ -45,7 +45,11 @@ import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import type { FilesSearchResponse, ProjectWithAvailability } from "@/lib/types";
+import type {
+  FilesSearchResponse,
+  GatewayReadinessReport,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import {
   CodingWorkbenchWindow,
@@ -6060,6 +6064,183 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       });
       render(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expect(screen.queryByRole("button", { name: "Check tool calling" })).not.toBeInTheDocument();
+    });
+  });
+
+  // U-12 (#4491): after every start a configured model is simply not activated in this server
+  // process (ADR-0171 D2). The Workbench says so and offers the person's own activation in place;
+  // it is the same route and readiness check Settings > Models runs. A failed check is a different
+  // fact with a different sentence and no retry button here.
+  describe("a model that is not activated in this session", () => {
+    const NOT_ACTIVATED: ModelCapability = { ...MODEL_A, conversationReady: undefined };
+    const FAILED_CHECK: ModelCapability = { ...MODEL_A, conversationReady: false };
+    const notReadySource = (): ReturnType<typeof liveState>["source"] => ({
+      status: "ready",
+      value: {
+        runtimePreference: "managed-gateway",
+        modelSource: "keiko-model-gateway",
+        runtimeSource: "keiko-sidecar",
+        available: false,
+        unavailableReason: "conversation-not-ready",
+        verification: UNVERIFIED_GATEWAY,
+      },
+      error: null,
+    });
+    const report = (chat: "passed" | "failed"): GatewayReadinessReport => ({
+      modelId: "model-a",
+      checkedAt: "2026-11-27T08:00:00.000Z",
+      overallStatus: chat === "passed" ? "ready" : "failed",
+      probes: [{ name: "chat", status: chat, latencyMs: 120, evidence: "chat probe" }],
+      verifiedCapabilities: {},
+    });
+    const readinessCalls = (fetchMock: ReturnType<typeof vi.fn>): unknown[][] =>
+      fetchMock.mock.calls.filter(([url]) => url === "/api/gateway/readiness");
+    const stubReadiness = (answer: () => Promise<Response>): ReturnType<typeof vi.fn> => {
+      const fetchMock = vi.fn(answer);
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    };
+    const jsonOk = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const renderNotReady = (model: ModelCapability, onOpenSettings?: () => void): void => {
+      chatCatalogMock.models = [model];
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: "model-a",
+          source: notReadySource(),
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" onOpenSettings={onOpenSettings} />);
+    };
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("says it is not activated yet and offers the activation, with no Settings detour", async () => {
+      renderNotReady(NOT_ACTIVATED);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a is not activated yet in this session.",
+      );
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: /Settings > Models/u })).not.toBeInTheDocument();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("says a failed check is a failure and offers no activation, only the details", async () => {
+      const onOpenSettings = vi.fn();
+      renderNotReady(FAILED_CHECK, onOpenSettings);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a did not pass its readiness check.",
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
+      expect(onOpenSettings).toHaveBeenCalledOnce();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("calls the activation route once, from the Workbench, and shows the checking state", async () => {
+      let settle: (response: Response) => void = () => undefined;
+      const fetchMock = stubReadiness(() => new Promise<Response>((resolve) => (settle = resolve)));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+      expect(JSON.parse(String((readinessCalls(fetchMock)[0]?.[1] as RequestInit).body))).toEqual({
+        modelId: "model-a",
+        options: { surface: "coding-workbench" },
+      });
+      expect(screen.getByTestId("coding-workbench-model-activation-checking")).toHaveTextContent(
+        /still checking this model/u,
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/is not activated yet in this session/u)).not.toBeInTheDocument();
+      expect(await axe(document.body)).toHaveNoViolations();
+      await act(async () => {
+        settle(jsonOk(report("passed")));
+        await Promise.resolve();
+      });
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    it("makes the model selectable and removes the notice once the check passes", async () => {
+      stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      renderNotReady(NOT_ACTIVATED);
+      const refreshed = vi.fn();
+      window.addEventListener("keiko:gateway-model-readiness-updated", refreshed);
+      try {
+        await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+        await waitFor(() => expect(refreshed).toHaveBeenCalledOnce());
+      } finally {
+        window.removeEventListener("keiko:gateway-model-readiness-updated", refreshed);
+      }
+      // The announcement is what refreshes the catalog and the source; model them as production does.
+      chatCatalogMock.models = [MODEL_A];
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: "model-a" }),
+        actions: actions(),
+      });
+      cleanup();
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /Coding model/u })).toHaveTextContent("model-a");
+    });
+
+    it("tells the truth when the readiness check fails, and links to Settings", async () => {
+      stubReadiness(() => Promise.resolve(jsonOk(report("failed"))));
+      const onOpenSettings = vi.fn();
+      renderNotReady(NOT_ACTIVATED, onOpenSettings);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByText("model-a did not pass its readiness check.")).toHaveRole(
+        "alert",
+      );
+      expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
+      expect(onOpenSettings).toHaveBeenCalledOnce();
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("does not call a failed request a failed check", async () => {
+      stubReadiness(() => Promise.reject(new TypeError("Failed to fetch")));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(
+        await screen.findByText("Keiko could not reach the gateway to activate model-a."),
+      ).toHaveRole("alert");
+    });
+
+    it("names the last used model when none is selected", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+      try {
+        chatCatalogMock.models = [NOT_ACTIVATED, { ...MODEL_B, conversationReady: undefined }];
+        runtimeHookMock.mockReturnValue({
+          state: liveState({
+            canStart: false,
+            selectedModelId: null,
+            source: notReadySource(),
+          }),
+          actions: actions(),
+        });
+        render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+        expect(screen.getByRole("button", { name: "Activate model-b" })).toBeInTheDocument();
+      } finally {
+        window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+      }
     });
   });
 

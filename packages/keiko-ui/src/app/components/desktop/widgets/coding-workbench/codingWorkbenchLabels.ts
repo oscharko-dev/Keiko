@@ -12,6 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
+import type { WorkbenchModelReadiness } from "./codingWorkbenchModelReadiness";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 import type {
   CodingWorkbenchResourceStatus,
@@ -771,6 +772,25 @@ function readinessStartBlocker(
   );
 }
 
+const MODEL_READINESS_KEYS: Readonly<
+  Record<WorkbenchModelReadiness["kind"], CodingWorkbenchMessageKey>
+> = {
+  "not-activated": "codingWorkbench.source.unavailableReason.conversation-not-activated",
+  "check-failed": "codingWorkbench.source.unavailableReason.conversation-check-failed",
+  "request-failed": "codingWorkbench.source.unavailableReason.conversation-request-failed",
+};
+
+// "Not activated yet" is the normal state after every start; "did not pass its readiness check" is a
+// failure. The server reports both as one reason, so the sentence is chosen from the catalog's fact.
+function modelReadinessText(
+  readiness: WorkbenchModelReadiness | null,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return readiness === null
+    ? null
+    : t(MODEL_READINESS_KEYS[readiness.kind], { model: readiness.modelId });
+}
+
 // The standing conditions: properties of the selected source or of this installation, not a failed
 // action. They come after actionable refresh failures (one alert at a time — reporting a standing
 // condition first would swallow the recoverable error). Pairing remains in the lifecycle narration,
@@ -779,6 +799,7 @@ function standingConditionAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
+  modelReadiness: WorkbenchModelReadiness | null,
 ): string | null {
   // The source's own unavailability reason and next step. It reaches a SIGHTED operator only here:
   // the header chip renders "<label> — unavailable" with no reason, and the only other renderer of
@@ -788,7 +809,7 @@ function standingConditionAlert(
   // says nothing about the model source, so there is nothing to duplicate.
   const sourceReason = sourceVerificationPending(state.source.value)
     ? null
-    : sourceUnavailableReasonText(state.source.value, t);
+    : (modelReadinessText(modelReadiness, t) ?? sourceUnavailableReasonText(state.source.value, t));
   if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
@@ -937,6 +958,7 @@ export function visibleAlert(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
   authorityError: string | null = null,
+  modelReadiness: WorkbenchModelReadiness | null = null,
 ): string | null {
   if (state.mutation.error) {
     return actionFailureAlert(
@@ -948,7 +970,7 @@ export function visibleAlert(
   const refreshAlert = refreshFailureAlert(state, t);
   if (refreshAlert !== null) return refreshAlert;
   if (!setupVisible && authorityError !== null) return authorityError;
-  return standingConditionAlert(state, t, setupVisible);
+  return standingConditionAlert(state, t, setupVisible, modelReadiness);
 }
 
 export function startBlockedReason(
@@ -956,10 +978,11 @@ export function startBlockedReason(
   t: CodingWorkbenchTranslate,
   setupVisible: boolean,
   authorityError: string | null = null,
+  modelReadiness: WorkbenchModelReadiness | null = null,
 ): string | null {
   if (state.canStart) return null;
   if (state.mutation.status === "pending") return t("codingWorkbench.composer.blocked.busy");
-  const alert = visibleAlert(state, t, setupVisible, authorityError);
+  const alert = visibleAlert(state, t, setupVisible, authorityError, modelReadiness);
   if (alert !== null) return alert;
   if (state.pairing === "unknown") return t("codingWorkbench.composer.blocked.pairing");
   if (state.pairing === "unpaired") return t("codingWorkbench.composer.blocked.unpaired");

@@ -31506,6 +31506,12 @@
               "required": true
             },
             {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "toolCallingOutcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -31659,6 +31665,12 @@
               "name": "rerankerProbeTimeoutMs",
               "type": "integer",
               "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {

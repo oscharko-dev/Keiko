@@ -20,6 +20,10 @@ tool-calling proof. Every chat model is inactive in each server process until th
 it in Settings > Models, and that activation is its readiness check; a pick or a Send in Chat and a
 pick or Start in the Coding Workbench no longer start a basic-chat check. Only activated models are
 offered and elected as an automatic default, and the Workbench proves tool calling only for them.
+Clarified 2026-11-27 (U-12, #4491): the person may start that same activation from the Coding
+Workbench's own notice for a model that is not activated yet. It is the same route and check as
+Settings > Models, started only by that person's click; activation stays manual, per process and
+unprobed in the background. The log records the starting surface.
 
 ## Context
 

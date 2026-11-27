@@ -236,6 +236,7 @@ export function CodingWorkbenchWindowHost({
         historySelection={historySelection}
         onHistorySelectionHandled={() => context.updateCfg(handledHistoryPatch(restoringHistory))}
         onOpenHistory={() => context.openWindow("codingHistory")}
+        onOpenSettings={() => context.openWindow("settings", { initialTab: "models" })}
         leftRun={typeof cfg.leftRunId === "string" ? cfg.leftRunId : undefined}
         onLeftRun={(leftRunId) => context.updateCfg({ leftRunId })}
         activationTrigger={activationTrigger}
