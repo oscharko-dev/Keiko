@@ -1,4 +1,4 @@
-# Public API surface — 1.5.9
+# Public API surface — 1.5.10
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -111,6 +111,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.5.10: CLI entrypoints, root exports and UI stores are unchanged. The Git status response gains
+  the optional `stagedDigest` field, which older clients ignore, and `keiko start` and
+  `keiko restart` refuse a state directory inside the start folder (#4491).
 - 1.5.9: CLI entrypoints are unchanged. The root barrel only adds exports: the connected-folder
   Chat tool (`createConnectedFolderToolBudget`, `executeConnectedFolderToolRequest` and their
   types), the turn-scoped workspace index, the workspace path-case and ignore helpers

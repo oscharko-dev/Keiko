@@ -4935,6 +4935,72 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7199992729",
         "rationale": "On 2026-11-26 the repository owner ordered pull request #4562 (Windows Milestone 1 closure, carrying #4556) merged into dev, a new Keiko release, and a test of the published release on macOS and Windows. 1.5.9 also carries #4483, #4535, #4551, #4553, #4555 and #4558, merged since 1.5.8. The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-27-keiko-1.5.10-night-findings",
+      "packageVersion": "1.5.10",
+      "releaseTag": "v1.5.10",
+      "supportedFrom": [
+        "0.2.0",
+        "1.5.0",
+        "1.5.1",
+        "1.5.2",
+        "1.5.3",
+        "1.5.4",
+        "1.5.5",
+        "1.5.6",
+        "1.5.7",
+        "1.5.8",
+        "1.5.9"
+      ],
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Windows Full access runs can commit on a checkout that converts line endings, the autonomy mode can be saved again after a conflict, Chat no longer confirms a remembered statement while memory is off, and the Coding Workbench, the Git window and keiko start are repaired.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Windows Full access can commit: governed staging stores the object Git's own add stores when it checks the verified bytes out unchanged, and still refuses mixed line breaks and other conversions. #4491",
+        "The autonomy mode can be saved again after another window saved a mode or Keiko's state started over; the page reads the server's revision and saves once more.",
+        "Chat says that nothing was saved when Chat memory is off or has no vault, instead of confirming a remembered statement.",
+        "Coding Workbench: a repository cloned again at the same path names its cause with Retry, the branch choice applies to the shown repository, a follow-up after a model-created task branch is accepted, stale refusals and following after approvals are repaired.",
+        "Git window: a generated commit message survives Create branch first and a status read, Undo and Restore refresh the Changes list, and Regenerate is offered only where the server accepts it.",
+        "keiko start and keiko restart refuse a state directory inside the start folder and name the reason; Coding History rename keeps focus, editor language features no longer duplicate after a reload, and Windows example paths and a stranded step drive letter are fixed."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-27",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#0",
+        "rationale": "On 2026-11-27 the repository owner ordered Keiko 1.5.10 prepared from the defects found while testing 1.5.9 as a customer (pull request #4568). The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
+      }
     }
   ]
 }

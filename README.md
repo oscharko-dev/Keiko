@@ -128,6 +128,16 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
 
+## What's new in 1.5.10
+
+- **Windows Full access can commit.** Git for Windows converts line endings by default, and governed staging used to refuse every conversion, so each Full access run ended at the Git stage. Keiko now stages the same object Git's own `git add` stores when it can prove that it checks the verified bytes out unchanged, and still refuses mixed line breaks and every other conversion.
+- **Autonomy mode can be saved again.** After another window saved a mode, or after Keiko's state started over, saving failed with a conflict. The page now reads the server's current revision and saves once more.
+- **"Merke dir" is honest while Chat memory is off.** Keiko says that nothing was saved instead of confirming it, and names the missing vault when memory is on without one.
+- **Coding Workbench.** A repository cloned again at the same path names its real cause with Retry, the branch choice applies to the repository the window shows, a follow-up after the model created its own task branch is accepted, a stale refusal from a previous session is dropped, and the stream keeps following after an approval or a changeset review. A commit proposal no longer shows "Waiting for approval" once Full access has executed it.
+- **Git window.** A generated commit message survives "Create branch first" and a status read, Undo and Restore refresh the Changes list, and Regenerate is offered only where the server accepts it.
+- **`keiko start`** refuses a state directory inside the start folder and names the reason, instead of ending in "Keiko stopped while it was starting".
+- **Repairs.** Coding History rename keeps keyboard focus, editor language features no longer appear twice after a reload, and Windows example paths and a stranded Windows step drive letter are fixed.
+
 ## What's new in 1.5.9
 
 - **Windows without administrator rights or Docker.** As a standard user on Windows 11, a Coding run's verification steps run confined in an AppContainer: only the run's private copy of the workspace is writable, the toolchain folders are readable and the step has no network. Credential stores, the Maven settings and whole drives are never granted. Runs end succeeded in Ask for approval, Supervised workspace and Full access, from the npm and the Standalone form, on a Windows 11 guest; the qualification on real Windows hardware remains open ([#4068](https://github.com/oscharko-dev/Keiko/issues/4068)).
