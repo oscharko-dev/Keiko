@@ -6086,10 +6086,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       },
       error: null,
     });
-    const report = (chat: "passed" | "failed"): GatewayReadinessReport => ({
+    const report = (chat: "passed" | "failed" | "skipped"): GatewayReadinessReport => ({
       modelId: "model-a",
       checkedAt: "2026-11-27T08:00:00.000Z",
-      overallStatus: chat === "passed" ? "ready" : "failed",
+      overallStatus: chat === "passed" ? "ready" : chat === "failed" ? "failed" : "partial",
       probes: [{ name: "chat", status: chat, latencyMs: 120, evidence: "chat probe" }],
       verifiedCapabilities: {},
     });
@@ -6211,6 +6211,35 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
       expect(onOpenSettings).toHaveBeenCalledOnce();
       expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("keeps Activate offered when the chat probe reached no verdict", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("skipped"))));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(
+        screen.queryByText("model-a did not pass its readiness check."),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("model-a is not activated yet in this session.")).toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
+    });
+
+    // ADR-0171 D2: opening the Workbench never activates or checks a model; only the click does.
+    it("makes no readiness call on mount or rerender, until the button is clicked", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      renderNotReady(NOT_ACTIVATED);
+      cleanup();
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(0);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
     });
 
     it("does not call a failed request a failed check", async () => {

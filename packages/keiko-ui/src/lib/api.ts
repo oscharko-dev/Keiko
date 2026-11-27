@@ -901,14 +901,17 @@ export async function runGatewayReadiness(
 /**
  * Activates one chat model from a surface other than the Settings list. It is the same route and
  * the same basic-chat readiness check Settings > Models runs (ADR-0171 D2); the surface only tells
- * the Activity Log where the person asked for it. Resolves to whether the chat probe passed.
+ * the Activity Log where the person asked for it. Resolves to the chat probe's verdict; a probe that
+ * reached none (a timeout, a transient overload) is "inconclusive", never a failure (the contract
+ * leaves `conversationReady` absent for it).
  */
 export async function activateChatModelFromSurface(
   modelId: string,
   surface: GatewayReadinessSurface,
-): Promise<boolean> {
+): Promise<"passed" | "failed" | "inconclusive"> {
   const report = await runGatewayReadiness(modelId, { surface });
-  return report.probes.some((probe) => probe.name === "chat" && probe.status === "passed");
+  const chat = report.probes.find((probe) => probe.name === "chat")?.status;
+  return chat === "passed" || chat === "failed" ? chat : "inconclusive";
 }
 
 export interface ChatModelDeactivation {

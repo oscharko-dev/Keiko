@@ -67,7 +67,9 @@ async function runActivation(
   surface: GatewayReadinessSurface,
 ): Promise<ModelActivationFailure | undefined> {
   try {
-    return (await activateChatModelFromSurface(modelId, surface)) ? undefined : "check-failed";
+    const verdict = await activateChatModelFromSurface(modelId, surface);
+    // An inconclusive probe is not a failure: back to idle, so the catalog decides and Activate stays.
+    return verdict === "failed" ? "check-failed" : undefined;
   } catch (error) {
     // Body-free: the failure class and the failed request's own correlation id, never the model.
     reportClientDiagnostic("[keiko] model activation request failed", {

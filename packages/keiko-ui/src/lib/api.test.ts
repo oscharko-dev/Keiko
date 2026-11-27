@@ -2587,15 +2587,16 @@ describe("runGatewayReadiness", () => {
   });
 
   it.each([
-    ["passes", "passed", true],
-    ["fails", "failed", false],
+    ["passes", "passed", "passed"],
+    ["fails", "failed", "failed"],
+    ["ends without a verdict", "skipped", "inconclusive"],
   ] as const)(
     "activates a model from a surface through the same route and says whether the chat check %s",
     async (_label, chat, expected) => {
       const report = {
         modelId: "test-chat-model",
         checkedAt: "2026-11-27T09:00:00.000Z",
-        overallStatus: chat === "passed" ? "ready" : "failed",
+        overallStatus: chat === "passed" ? "ready" : "partial",
         probes: [{ name: "chat", status: chat, latencyMs: 80, evidence: "chat probe" }],
         verifiedCapabilities: {},
       };
