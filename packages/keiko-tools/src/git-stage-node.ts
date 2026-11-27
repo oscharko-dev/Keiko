@@ -363,16 +363,55 @@ const ADMITTED_VALUES: readonly ReadonlySet<string>[] = [
   new Set(["unspecified", "unset", "set", "auto"]),
   new Set(["unspecified", "unset", "lf", "crlf"]),
 ];
+function attributeRowAdmitted(row: readonly string[]): boolean {
+  return row.every((value, index) => ADMITTED_VALUES[index]?.has(value) === true);
+}
 export async function gitStageAttributesSupported(
   ctx: GitStageEffectContext,
   paths: readonly string[],
 ): Promise<boolean> {
   const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
-  return (
-    values?.every((row) =>
-      row.every((value, index) => ADMITTED_VALUES[index]?.has(value) === true),
-    ) ?? false
+  return values?.every(attributeRowAdmitted) ?? false;
+}
+/**
+ * The object Git's own staging would store for each file's current bytes, without writing anything:
+ * the raw reader's judgement of a converted file whose index stat data is absent or stale (#4491).
+ * An entry is `undefined` when staging would refuse the file (a filter driver, `ident`, an encoding,
+ * a conversion that does not round-trip), so the caller keeps treating it as modified. The whole
+ * result is `undefined` when the attributes or the configuration cannot be read. Every hash runs with
+ * all configured filter drivers overridden, so no driver can run.
+ */
+export async function gitStagedObjectIdOf(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  files: readonly GitStageFile[],
+): Promise<ReadonlyMap<string, string | undefined> | undefined> {
+  if (files.length === 0) return new Map();
+  const names = await ctx.filterDriverNames();
+  if (names === undefined || !filterDriversOverridable(names)) return undefined;
+  const admitted = await readAttributeValues(
+    ctx,
+    STAGE_ATTRIBUTES,
+    files.map((file) => file.path),
   );
+  const stages = admitted === undefined ? undefined : await fileStages(ctx, files, lineEndings);
+  if (admitted === undefined || stages === undefined) return undefined;
+  const result = new Map<string, string | undefined>();
+  for (const [position, file] of files.entries()) {
+    const row = admitted[position];
+    const stage =
+      row !== undefined && attributeRowAdmitted(row) ? stages.get(file.path) : undefined;
+    result.set(file.path, await stagedObjectIdOfFile(ctx, file, stage)); // NOSONAR typescript:S9382 -- one Git hash at a time, bounded by the reader's byte budget
+  }
+  return result;
+}
+function stagedObjectIdOfFile(
+  ctx: GitStageEffectContext,
+  file: GitStageFile,
+  stage: FileStage | undefined,
+): Promise<string | undefined> {
+  if (stage === undefined || file.mode === "0") return Promise.resolve(undefined);
+  return stagedObjectId(ctx, file, stage, false);
 }
 /**
  * Objects are created from the verified bytes without any filter driver; the only conversion is

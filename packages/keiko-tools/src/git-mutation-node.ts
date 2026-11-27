@@ -64,6 +64,7 @@ import {
   readGitBaseState,
   readGitWorktreeSnapshot,
   type NodeGitWorktreeReaderDeps,
+  type GitStagedObjectIdPort,
 } from "./git-worktree-snapshot-node.js";
 import {
   gitHeadStateObjectId,
@@ -78,6 +79,7 @@ import {
   gitStageFilesSupported,
   filterDriversOverridable,
   unstageExactFiles,
+  gitStagedObjectIdOf,
   type GitStageEffectContext,
   type GitStageLineEndings,
 } from "./git-stage-node.js";
@@ -775,6 +777,48 @@ export async function readGitStageSupport(
   );
 }
 
+// The only Git runs the read-only staged-object port may make: the object hash (never `-w`) and the
+// attribute lookup, after the leading `-c` overrides that neutralise every configured filter driver.
+function readOnlyStageArgv(argv: readonly string[]): boolean {
+  let at = 0;
+  while (argv[at] === "-c") at += 2;
+  const subcommand = argv[at];
+  return (
+    (subcommand === "hash-object" || subcommand === "check-attr") &&
+    !argv.includes("-w") &&
+    !argv.includes("--stdin-paths")
+  );
+}
+
+/**
+ * The raw reader's staged-object port (#4491): what Git's staging would store for a file's bytes,
+ * computed by the very conversion the verified staging uses (`gitStagedObjectIdOf`), under the same
+ * governed lane, effective `core.autocrlf` and filter-driver neutralisation. It writes no object and
+ * never touches the index, so "staged as X" and "the working tree reads as X" agree.
+ */
+export function createGitStagedObjectIdPort(
+  deps: NodeGitWorktreeReaderDeps,
+): GitStagedObjectIdPort {
+  const ctx = buildRunContext({ ...deps, policy: deps.policy });
+  return async (files) => {
+    const config = await readStageConfig(ctx);
+    if (config === undefined) return undefined;
+    const effect: GitStageEffectContext = {
+      workspaceRoot: deps.workspace.root,
+      fs: workspaceFsOf(ctx.runDeps),
+      authorized: () => !ctx.signal.aborted,
+      check: () => Promise.resolve(!ctx.signal.aborted),
+      filterDriverNames: () => Promise.resolve(config.filterDrivers),
+      run: (argv, stdin) => {
+        if (!readOnlyStageArgv(argv)) throw new Error("git-staged-object-port-denied");
+        return runOne(ctx, argv, stdin);
+      },
+      indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+    };
+    return gitStagedObjectIdOf(effect, config.lineEndings, files);
+  };
+}
+
 export function createNodeGitMutationAdapter(
   deps: NodeGitMutationAdapterDeps,
 ): GitLocalMutationAdapter {
@@ -814,6 +858,7 @@ export {
   readStagedConflictMarkerFileCount,
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
+  type GitStagedObjectIdPort,
 } from "./git-worktree-snapshot-node.js";
 export { readGitStageCandidate } from "./git-stage-node.js";
 export { gitCommitMessageDigest } from "./git-index-identity.js";

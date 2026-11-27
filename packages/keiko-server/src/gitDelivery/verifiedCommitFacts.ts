@@ -1,6 +1,7 @@
 import {
   GitRawWorktreeReadError,
   readGitRawChangesAtHead,
+  createGitStagedObjectIdPort,
   readGitRemoteAliases,
   readGitBaseState,
   gitCommitMessageDigest,
@@ -67,12 +68,13 @@ export async function readVerifiedCommitFacts(
 ): Promise<VerifiedCommitFacts> {
   if (!context.stillAuthorized() || context.signal?.aborted === true)
     throw new Error("verified-commit-authority-unavailable");
-  const deps = {
+  const readBase = {
     workspace: context.workspace,
     processEnv: seams.processEnv,
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   };
+  const deps = { ...readBase, stagedObjectIds: createGitStagedObjectIdPort(readBase) };
   // ONE raw read supplies the facts AND an unclean candidate's blocking paths, so the paths can never
   // contradict the refusal they ride on. They used to come from a second read taken after this one,
   // with no cross-check (review finding on PR #3452).

@@ -24,6 +24,7 @@ import {
   readGitIndexTreeDigest,
   gitBlobObjectId,
   readGitRawChangesAtHead,
+  createGitStagedObjectIdPort,
   readGitIndexEntries,
   readGitTreeEntries,
   readGitBlobText,
@@ -147,11 +148,13 @@ export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
 ): Parameters<typeof readGitRawChangesAtHead>[0] {
-  return {
+  const base = {
     workspace: context.workspace,
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(execution, context.correlationId),
   };
+  // The raw reader judges a stat-dirty converted file through the staging's own conversion (#4491).
+  return { ...base, stagedObjectIds: createGitStagedObjectIdPort(base) };
 }
 export async function runtimeGitStatus(
   context: VerifiedCommitRunContext,

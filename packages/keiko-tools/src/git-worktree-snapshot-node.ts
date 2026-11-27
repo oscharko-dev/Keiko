@@ -39,6 +39,7 @@ import {
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
+import type { GitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { GitHeadState } from "./git-head-state.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
@@ -120,6 +121,16 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
   }),
 });
 
+/**
+ * The object Git's own staging would store for each file's current bytes, computed without running
+ * any repository-configured filter driver and without writing an object (git-stage-node.ts
+ * `gitStagedObjectIdOf`). `undefined`, or an `undefined` entry, means "cannot tell": the raw reader
+ * then keeps the file as modified.
+ */
+export type GitStagedObjectIdPort = (
+  files: readonly GitStageFile[],
+) => Promise<ReadonlyMap<string, string | undefined> | undefined>;
+
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
   // The read-only port every containment check of this lane resolves through (exec.ts
@@ -138,6 +149,9 @@ export interface NodeGitWorktreeReaderDeps {
   // deps-level seam, exec.ts): production composition boundaries wire it once so no call on the
   // lane is silently unobservable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  // How a stat-dirty file Git's staging converts is judged by the raw reader (#4491). Absent: such a
+  // file stays modified.
+  readonly stagedObjectIds?: GitStagedObjectIdPort | undefined;
 }
 
 interface ReadContext {

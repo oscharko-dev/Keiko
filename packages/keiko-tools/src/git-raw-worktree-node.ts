@@ -13,7 +13,10 @@ import {
   type GitIndexStat,
 } from "./git-index-stat.js";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import {
+  readGitStageFile,
+  type GitStageFile,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { GitChangedFile, GitStatusCode } from "@oscharko-dev/keiko-contracts";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
@@ -119,6 +122,10 @@ interface WorkingInspection {
   readonly status: GitStatusCode;
   readonly bytes: number;
   readonly untracked: boolean;
+  // A regular file whose raw bytes differ from the index object while the modes agree: Git's staging
+  // may still store exactly this index object after a line-ending conversion, so the scan asks the
+  // staged-object port before it keeps the "M" (#4491).
+  readonly convertible?: GitStageFile;
 }
 // Regular files differ by the execute bit only when `core.fileMode` is on; a link never matches a file.
 function sameMode(fileMode: string, indexMode: string, honourExecuteBit: boolean): boolean {
@@ -139,10 +146,17 @@ async function inspectWorkingFile(
   if (index === undefined)
     return { status: " ", bytes: file.bytes.length, untracked: file.mode !== "0" };
   if (file.mode === "0") return { status: "D", bytes: 0, untracked: false };
-  const same =
-    sameMode(file.mode, index.mode, await scan.fileMode()) &&
-    gitBlobObjectId(file.bytes, index.objectId.length) === index.objectId;
-  return { status: same ? " " : "M", bytes: file.bytes.length, untracked: false };
+  if (!sameMode(file.mode, index.mode, await scan.fileMode()))
+    return { status: "M", bytes: file.bytes.length, untracked: false };
+  if (gitBlobObjectId(file.bytes, index.objectId.length) === index.objectId)
+    return { status: " ", bytes: file.bytes.length, untracked: false };
+  const regular = file.mode !== "120000" && index.mode !== "120000";
+  return {
+    status: "M",
+    bytes: file.bytes.length,
+    untracked: false,
+    ...(regular ? { convertible: file } : {}),
+  };
 }
 /** Reads the changes of a born HEAD; an unborn HEAD fails closed with `git-raw-unborn-head`. */
 export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promise<GitRawChanges> {
@@ -219,6 +233,7 @@ async function scanPaths(
   paths: readonly string[],
 ): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
+  const convertible = new Map<string, GitStageFile>();
   let total = 0;
   let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
@@ -239,11 +254,43 @@ async function scanPaths(
     }
     const working = await workingStatus(scan, path, MAX_CONTENT_BYTES - total);
     total += working.bytes;
+    collectConvertible(convertible, path, working);
     const staged = indexStatus(scan.head.get(path), scan.index.get(path));
     if (staged !== " " || working.status !== " " || working.untracked)
       changes.push(changed(path, staged, working.status, working.untracked));
   }
-  return { changes, truncated, deniedPathCount };
+  return {
+    changes: await settleConvertedFiles(scan, changes, convertible),
+    truncated,
+    deniedPathCount,
+  };
+}
+function collectConvertible(
+  convertible: Map<string, GitStageFile>,
+  path: string,
+  working: WorkingInspection,
+): void {
+  if (working.convertible !== undefined) convertible.set(path, working.convertible);
+}
+// A stat-dirty file whose bytes Git's staging would convert to exactly the index object is clean in
+// the working tree, as `git status` says; the judgement runs through the staging's own conversion
+// with every filter driver neutralised, never through a Git process that could run one. Without the
+// port, or when it cannot answer for a file, the file stays modified (fail closed).
+async function settleConvertedFiles(
+  scan: ScanInputs,
+  changes: readonly GitChangedFile[],
+  convertible: ReadonlyMap<string, GitStageFile>,
+): Promise<readonly GitChangedFile[]> {
+  const port = scan.deps.stagedObjectIds;
+  if (port === undefined || convertible.size === 0) return changes;
+  const stagedAs = await port([...convertible.values()]);
+  if (stagedAs === undefined) return changes;
+  return changes.flatMap((change) => {
+    const objectId = convertible.has(change.path) ? stagedAs.get(change.path) : undefined;
+    if (objectId === undefined || objectId !== scan.index.get(change.path)?.objectId)
+      return [change];
+    return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
+  });
 }
 async function workingStatus(
   scan: ScanInputs,

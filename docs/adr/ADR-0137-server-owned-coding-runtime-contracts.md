@@ -2386,7 +2386,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
   neutralization; an unreadable configuration refuses), and the check before the index is promoted
   re-reads the effective line-ending mode and refuses when it differs from the one the objects
-  were hashed under (PR #4568 review). It is an option of the stage tool rather than a tool of its own, so the
+  were hashed under (PR #4568 review). The raw status reader judges a stat-dirty converted file
+  (Keiko's index-info entries carry no stat data, and Windows stat data never matches) through the
+  same conversion the staging uses, never through a Git process that could run a filter, so a CRLF
+  file staged as its LF form reads as clean in the working tree, as `git status` says (#4491). It is an option of the stage tool rather than a tool of its own, so the
   catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
   a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely

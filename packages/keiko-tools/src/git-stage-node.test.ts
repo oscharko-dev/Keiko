@@ -11,6 +11,8 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +25,13 @@ import { GIT_STAGE_CANDIDATE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/int
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
+import { readGitRawChanges } from "./git-raw-worktree-node.js";
+import type { NodeGitWorktreeReaderDeps } from "./git-worktree-snapshot-node.js";
+import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
 import {
   gitStageFilesSupported,
+  gitStagedObjectIdOf,
+  type GitStageLineEndings,
   readGitStageCandidate,
   stageExactFiles,
   type GitStageEffectContext,
@@ -263,6 +270,132 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(git(repo, ["show", ":a.txt"])).toBe("v1\nv2\n");
     expect(checkedOut(repo)).toBe("v1\r\nv2\r\n");
     expect(git(repo, ["-c", "core.autocrlf=true", "diff", "--name-only"]).trim()).toBe("");
+  });
+
+  // #4506 AC1: Keiko's own index entry carries no stat data, so the commit-facts reader must judge
+  // the CRLF working file the way `git status` does (converted), or every staged file on a Windows
+  // checkout reads as unstaged and the commit proof never forms.
+  it.each(["autocrlf", "eol=crlf"] as const)(
+    "lets the raw reader see a CRLF file staged under %s as clean in the working tree",
+    async (setting) => {
+      const repo = plainRepository("v1\r\nv2\r\n");
+      if (setting === "autocrlf") git(repo, ["config", "core.autocrlf", "true"]);
+      else writeFileSync(join(repo, ".git", "info", "attributes"), `a.txt ${setting}\n`);
+      const mode = setting === "autocrlf" ? "autocrlf-true" : "exact";
+      await expect(stageExactFiles(context(repo), request(repo), mode)).resolves.toBe(true);
+      // A later mtime defeats the stat shortcut, as Windows' differing stat data does: both
+      // readers must then compare the converted content.
+      const later = new Date(Date.now() + 5000);
+      utimesSync(join(repo, "a.txt"), later, later);
+      expect(git(repo, ["status", "--porcelain=v1", "--untracked-files=no"]).trim()).toBe(
+        "M  a.txt",
+      );
+      expect(await rawFlags(repo, withPort(repo, mode))).toEqual([["a.txt", true, false]]);
+    },
+  );
+
+  function withPort(
+    repo: string,
+    mode: GitStageLineEndings,
+    calls: string[][] = [],
+  ): Pick<NodeGitWorktreeReaderDeps, "stagedObjectIds"> {
+    return {
+      stagedObjectIds: (files): ReturnType<typeof gitStagedObjectIdOf> => {
+        calls.push(files.map((file) => file.path));
+        return gitStagedObjectIdOf(context(repo), mode, files);
+      },
+    };
+  }
+
+  async function rawFlags(
+    repo: string,
+    port: Pick<NodeGitWorktreeReaderDeps, "stagedObjectIds">,
+  ): Promise<(string | boolean)[][]> {
+    const raw = await readGitRawChanges({
+      workspace: workspaceInfo(repo),
+      processEnv: { PATH: process.env.PATH ?? "" },
+      ...port,
+    });
+    return raw.changes.map((change) => [change.path, change.staged, change.unstaged]);
+  }
+
+  function touchLater(repo: string, name = "a.txt"): void {
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(repo, name), later, later);
+  }
+
+  it("keeps a CRLF file staged raw (text=auto, CR already in the index) clean in the working tree", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n", "v1\r\n");
+    writeFileSync(join(repo, ".git", "info", "attributes"), "a.txt text=auto\n");
+    await expect(stageExactFiles(context(repo), request(repo), "exact")).resolves.toBe(true);
+    touchLater(repo);
+    expect(await rawFlags(repo, withPort(repo, "exact"))).toEqual([["a.txt", true, false]]);
+  });
+
+  it("still reports a genuinely modified CRLF file under autocrlf as unstaged", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    writeFileSync(join(repo, "a.txt"), "v1\r\nv3\r\n");
+    touchLater(repo);
+    expect(await rawFlags(repo, withPort(repo, "autocrlf-true"))).toEqual([["a.txt", true, true]]);
+  });
+
+  it("keeps the converted file modified when no staged-object port is supplied", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    touchLater(repo);
+    expect(await rawFlags(repo, {})).toEqual([["a.txt", true, true]]);
+    expect(await rawFlags(repo, { stagedObjectIds: () => Promise.resolve(undefined) })).toEqual([
+      ["a.txt", true, true],
+    ]);
+  });
+
+  it("lets the governed port factory judge a converted file clean without writing an object", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    touchLater(repo);
+    const before = git(repo, ["count-objects", "-v"]);
+    const port = createGitStagedObjectIdPort({
+      workspace: workspaceInfo(repo),
+      processEnv: { PATH: process.env.PATH ?? "" },
+    });
+    expect(await rawFlags(repo, { stagedObjectIds: port })).toEqual([["a.txt", true, false]]);
+    expect(git(repo, ["count-objects", "-v"])).toBe(before);
+  });
+
+  it("never offers a symlink to the staged-object port", async () => {
+    const repo = plainRepository("v1\n");
+    symlinkSync("a.txt", join(repo, "l"));
+    git(repo, ["add", "l"]);
+    git(repo, ["-c", "commit.gpgsign=false", "commit", "-qm", "link"]);
+    rmSync(join(repo, "l"));
+    symlinkSync("other", join(repo, "l"));
+    const calls: string[][] = [];
+    expect(await rawFlags(repo, withPort(repo, "exact", calls))).toEqual([["l", false, true]]);
+    expect(calls.flat()).not.toContain("l");
+  });
+
+  it("never runs a configured filter driver while judging a stat-dirty file", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    const marker = join(repo, "..", `${repo.split("/").pop() ?? "r"}-driver-ran`);
+    dirs.push(marker);
+    git(repo, ["config", "filter.mark.clean", `touch '${marker}' && cat`]);
+    writeFileSync(join(repo, ".git", "info", "attributes"), "a.txt filter=mark\n");
+    touchLater(repo);
+    expect(await rawFlags(repo, withPort(repo, "exact"))).toEqual([["a.txt", false, true]]);
+    expect(existsSync(marker)).toBe(false);
+    // Positive control: Git itself runs the driver when it stages the file.
+    git(repo, ["add", "a.txt"]);
+    expect(existsSync(marker)).toBe(true);
   });
 
   it("stages a file Git leaves unchanged under autocrlf=true as its exact bytes", async () => {
