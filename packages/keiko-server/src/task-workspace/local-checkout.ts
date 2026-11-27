@@ -654,11 +654,24 @@ interface LocalInvalidationLogger {
   readonly clear: () => void;
 }
 
+const MAX_LOGGED_CORRELATIONS = 16;
+
+// An uncorrelated refusal adds nothing once any line exists for the pointer; a correlated one is
+// new unless that exact correlation was logged. Past the bound nothing more is logged.
+function alreadyLogged(logged: ReadonlySet<string>, correlationId: string | undefined): boolean {
+  if (logged.size >= MAX_LOGGED_CORRELATIONS) return true;
+  return correlationId === undefined ? logged.size > 0 : logged.has(correlationId);
+}
+
 function createLocalInvalidationLogger(
   activityLog: WorkspaceActivityLogSeam,
 ): LocalInvalidationLogger {
   let lastInvalidatedPointer: string | null = null;
-  let lastInvalidationCorrelated = false;
+  // The correlation ids already logged for this pointer. A refusal under a new correlation (the
+  // start's own request, after a UI pre-read logged the drift under the route's) is a different
+  // fact to a reader; polling repeats one correlation or none and stays suppressed. Bounded so a
+  // stream of distinct ids cannot grow it or flood the log.
+  const loggedCorrelations = new Set<string>();
   const record = (
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
@@ -668,15 +681,19 @@ function createLocalInvalidationLogger(
   ): void => {
     const key = `${pointer.workspaceId}\0${pointer.updatedAt}`;
     const correlated = correlationId !== undefined && correlationId !== UNKNOWN_CORRELATION_ID;
-    if (lastInvalidatedPointer === key && (!correlated || lastInvalidationCorrelated)) return;
+    const sameKey = lastInvalidatedPointer === key;
+    if (!sameKey) loggedCorrelations.clear();
+    if (sameKey && alreadyLogged(loggedCorrelations, correlated ? correlationId : undefined))
+      return;
     lastInvalidatedPointer = key;
-    lastInvalidationCorrelated = correlated;
+    loggedCorrelations.add(correlated ? correlationId : "");
     logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, driftCause, cause);
   };
   return {
     record,
     clear: (): void => {
       lastInvalidatedPointer = null;
+      loggedCorrelations.clear();
     },
   };
 }

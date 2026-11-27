@@ -1362,6 +1362,9 @@ function recordRuntimeStartFailure(
  */
 type StartScopeGap =
   | "no-active-workspace"
+  // The identity proof could not run (a transient read failure): not a drifted pointer, so it stays
+  // the generic authority failure and never asks the window to bind again.
+  | "identity-proof-failed"
   | "no-principal"
   | "conversation-not-admitted"
   | "prior-run-missing"
@@ -4338,12 +4341,29 @@ export class CodingRuntimeOrchestrator {
   // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
   // start cannot resolve right now — fail closed, never launch against an unproven workspace.
   private activeWorkspaceOrUndefined(correlationId?: string): ActiveWorkspaceView | undefined {
+    const lookup = this.activeWorkspaceLookup(correlationId);
+    return "active" in lookup ? lookup.active : undefined;
+  }
+
+  // Tells a pointer the server has none for from a proof that could not run: the first is a binding
+  // to re-establish, the second must not be answered as one.
+  private activeWorkspaceLookup(
+    correlationId?: string,
+  ): { readonly active: ActiveWorkspaceView | undefined } | { readonly proofFailed: true } {
     try {
-      return this.deps.workspaceLifecycle.getActive(correlationId);
+      return { active: this.deps.workspaceLifecycle.getActive(correlationId) };
     } catch (error) {
-      if (isIdentityProofFailure(error)) return undefined;
+      if (isIdentityProofFailure(error)) return { proofFailed: true };
       throw error;
     }
+  }
+
+  private startActiveWorkspace(
+    correlationId?: string,
+  ): { readonly active: ActiveWorkspaceView } | { readonly gap: StartScopeGap } {
+    const lookup = this.activeWorkspaceLookup(correlationId);
+    if ("proofFailed" in lookup) return { gap: "identity-proof-failed" };
+    return lookup.active === undefined ? { gap: "no-active-workspace" } : { active: lookup.active };
   }
 
   public getHistory(): CodingRuntimeHistory | undefined {
@@ -4686,8 +4706,9 @@ export class CodingRuntimeOrchestrator {
         readonly unverifiedPredecessor?: boolean;
       }
     | { readonly gap: StartScopeGap; readonly detail?: string } {
-    const active = this.activeWorkspaceOrUndefined(correlationId);
-    if (!active) return { gap: "no-active-workspace" };
+    const found = this.startActiveWorkspace(correlationId);
+    if ("gap" in found) return found;
+    const { active } = found;
     // The run starts in the repository the person sees or not at all: the request states the root
     // the Workbench shows, and the server's global pointer is not allowed to differ from it.
     if (

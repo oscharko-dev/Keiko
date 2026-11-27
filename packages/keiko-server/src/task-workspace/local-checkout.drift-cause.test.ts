@@ -144,6 +144,22 @@ describe("active-pointer read drift cause", () => {
     expectRefusedAs("folder-identity-changed");
   });
 
+  it("logs the start's own correlation after the route's, once each, and never floods on polling", () => {
+    const route = "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b22";
+    git("checkout", "-q", "-b", "other");
+    expect(lifecycle.getActive(route)).toBeUndefined();
+    expect(lifecycle.getActive(route)).toBeUndefined();
+    expect(lifecycle.getActive()).toBeUndefined();
+    expect(lifecycle.getActive(CORRELATION_ID)).toBeUndefined();
+    expect(lifecycle.getActive(CORRELATION_ID)).toBeUndefined();
+    expect(driftLines().map((line) => line.correlationId)).toEqual([route, CORRELATION_ID]);
+    // A stream of distinct ids stays bounded.
+    for (let index = 0; index < 100; index += 1) {
+      lifecycle.getActive(`3f2b8a52-0d6e-4c1a-9a57-${String(index).padStart(12, "0")}`);
+    }
+    expect(driftLines().length).toBeLessThanOrEqual(16);
+  });
+
   it("logs a proven binding without any refusal line", () => {
     expect(lifecycle.getActive(CORRELATION_ID)).toBeDefined();
     expect(driftLines()).toEqual([]);

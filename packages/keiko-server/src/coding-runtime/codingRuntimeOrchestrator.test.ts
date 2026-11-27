@@ -111,6 +111,7 @@ import {
   ACTIVITY_LOG_OPERATION_REGISTRY,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { TaskWorkspaceError } from "../task-workspace/errors.js";
 import { CODING_WORKBENCH_RUNTIME_ORIGINS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 type OptionalOrchestratorDeps = Pick<
@@ -327,10 +328,17 @@ interface FixtureOptions {
   readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
   // The server has no active workspace: its pointer was invalidated (a repository deleted and
   // cloned again at the same path), while the Workbench still shows the repository.
-  readonly noActiveWorkspace?: boolean | undefined;
+  // `proof-failed`: the identity proof could not run, which is not a missing pointer.
+  readonly noActiveWorkspace?: boolean | "proof-failed" | undefined;
 }
 
-function fixtureActiveWorkspace(noActiveWorkspace: boolean | undefined, root: string): unknown {
+function fixtureActiveWorkspace(
+  noActiveWorkspace: boolean | "proof-failed" | undefined,
+  root: string,
+): unknown {
+  if (noActiveWorkspace === "proof-failed") {
+    throw new TaskWorkspaceError("IDENTITY_PROOF_FAILED", "The identity proof could not run.");
+  }
   if (noActiveWorkspace === true) return undefined;
   return {
     instance: {
@@ -3250,6 +3258,26 @@ describe("CodingRuntimeOrchestrator", () => {
         correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",
         operation: "coding-runtime.start",
         code: "stage=start-scope:reason=no-active-workspace",
+      }),
+    );
+  });
+
+  // A proof that could not run is not a drifted pointer: answering it as a selection mismatch would
+  // make the window bind again on a transient read failure, so it stays the generic refusal, with
+  // its own closed reason in the diagnostic.
+  it("keeps a start whose identity proof could not run on the generic refusal", async () => {
+    const captured = captureDiagnostics();
+    const f = fixtureFrom({ diagnostics: captured.diagnostics, noActiveWorkspace: "proof-failed" });
+
+    expect(await f.orchestrator.start(start, "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b14")).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        code: "stage=start-scope:reason=identity-proof-failed",
       }),
     );
   });
