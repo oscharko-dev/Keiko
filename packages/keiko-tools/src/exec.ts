@@ -871,8 +871,14 @@ export function appendWindow(window: StreamWindow, chunk: Buffer): void {
     const first = window.tail[window.tailFirst];
     if (first === undefined) break;
     const cut = Math.min(excess, first.length);
-    if (cut === first.length) window.tailFirst += 1;
-    else window.tail[window.tailFirst] = first.subarray(cut);
+    if (cut === first.length) {
+      // Release the slot before leaving it: a consumed chunk must not stay referenced until the
+      // next compaction, or up to TAIL_COMPACT_MIN dead chunks pin memory past the window bound.
+      window.tail[window.tailFirst] = EMPTY_BUFFER;
+      window.tailFirst += 1;
+    } else {
+      window.tail[window.tailFirst] = first.subarray(cut);
+    }
     window.lastDropped = first[cut - 1];
     window.tailBytes -= cut;
     window.dropped += cut;
@@ -885,6 +891,7 @@ export function appendWindow(window: StreamWindow, chunk: Buffer): void {
 // amortized cost of a dropped chunk stays constant and the array never holds more than twice the
 // live chunks (plus the compaction threshold).
 const TAIL_COMPACT_MIN = 1_024;
+const EMPTY_BUFFER = Buffer.alloc(0);
 
 function compactTail(window: StreamWindow): void {
   if (window.tailFirst < TAIL_COMPACT_MIN || window.tailFirst * 2 < window.tail.length) return;

@@ -1748,6 +1748,24 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
     },
   );
 
+  it("releases every dropped tail chunk at once, so dead chunks are never pinned before compaction", () => {
+    const budget = 4_096;
+    const chunkSize = 1_024;
+    const stream = newStreamWindow(budget);
+    for (let write = 0; write < 200; write += 1) {
+      appendWindow(stream, Buffer.alloc(chunkSize, 97 + (write % 26)));
+    }
+    // Far fewer than the compaction threshold have been consumed, yet none may still hold bytes.
+    expect(stream.tailFirst).toBeGreaterThan(0);
+    expect(stream.tailFirst).toBeLessThan(1_024);
+    for (let slot = 0; slot < stream.tailFirst; slot += 1) {
+      expect(stream.tail[slot]?.length, `slot ${String(slot)}`).toBe(0);
+    }
+    const live = stream.tail.reduce((sum, chunk) => sum + chunk.length, 0);
+    expect(live).toBeLessThanOrEqual(budget + chunkSize);
+    expect(live).toBe(stream.tailBytes);
+  });
+
   it("keeps the retained tail correct across compaction of 300k one-byte writes", () => {
     const stream = newStreamWindow(4_096);
     for (let write = 0; write < 300_000; write += 1) {
