@@ -91,17 +91,24 @@ interface ApprovalBinding {
 interface PendingApproval extends ApprovalBinding {
   readonly requestId: string;
   readonly expiresAtMs: number;
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 interface ApprovedAction extends ApprovalBinding {
   readonly approvalAuthorityDigest: string;
   readonly expiresAtMs: number;
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 export interface CodingToolApprovalObservation extends ApprovalBinding {
   readonly requestId: string;
   readonly expiresAt: string;
   readonly nowMs: number;
+  /** The ask showed the person command lines; its approval is then bound to `planDigest`. */
+  readonly planShown?: boolean | undefined;
+  readonly planDigest?: string | undefined;
 }
 
 export interface CodingToolApprovalActivation {
@@ -114,8 +121,15 @@ export interface CodingToolApprovalActivation {
 
 export type CommitToolRequest = Extract<CodingToolActionRequest, { readonly action: "delivery" }>;
 export interface CodingToolApprovalProofVerifier {
-  /** Hands out, once, the plan digest the person approved for this tool call; absent when none. */
-  readonly takeVerificationPlan?: (runId: string, actionId: string) => string | undefined;
+  /**
+   * Hands out, once, the digest of the command lines the person was shown when they approved THIS
+   * call (ADR-0124 D6); absent when the approval showed none. The digest lives on the approved
+   * record the call's own consumption spent, so it cannot be bound under another call's identity.
+   */
+  readonly takeApprovedPlan?: (input: {
+    readonly runId: string;
+    readonly request: ApprovableToolRequest;
+  }) => string | undefined;
   readonly matchesDelivery?: (runId: string, request: CommitToolRequest) => boolean;
   readonly consumeDelivery?: (runId: string, request: CommitToolRequest) => object | undefined;
   readonly matchesStage?: (runId: string, proposalId: string) => boolean;
@@ -157,11 +171,6 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
    * wait reads (ADR-0124 D6). A decline grants nothing: it only ends that run's wait for that id.
    */
   readonly declineProposal?: (runId: string, proposalId: string) => void;
-  /**
-   * Binds the digest of the command lines a governed verification ask showed the person to that
-   * ask's tool call (ADR-0124 D6). A later run of the call re-plans and refuses on a mismatch.
-   */
-  readonly bindVerificationPlan: (runId: string, actionId: string, planDigest: string) => void;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -217,15 +226,12 @@ export function createCodingToolApprovalBridge(
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
   const declined = new Set<string>();
-  const plans = new Map<string, string>();
+  const consumedPlans = new Map<string, string>();
   return {
-    bindVerificationPlan: (runId, actionId, planDigest): void => {
-      rememberPlan(plans, permissionKey(runId, actionId), planDigest);
-    },
-    takeVerificationPlan: (runId, actionId): string | undefined => {
-      const key = permissionKey(runId, actionId);
-      const digest = plans.get(key);
-      plans.delete(key);
+    takeApprovedPlan: ({ runId, request }): string | undefined => {
+      const key = requestBindingKey(runId, request);
+      const digest = consumedPlans.get(key);
+      consumedPlans.delete(key);
       return digest;
     },
     ...(commitService === undefined ? {} : commitApprovalMethods(commitService)),
@@ -239,10 +245,10 @@ export function createCodingToolApprovalBridge(
     observePermission: (input): boolean => observePermission(pending, approved, bindings, input),
     activatePermission: (input): boolean => activatePermission(pending, approved, bindings, input),
     matches: (input): boolean => matchesApprovedAction(approved, input),
-    consume: (input): boolean => consumeApprovedAction(approved, input),
+    consume: (input): boolean => consumeApprovedAction(approved, consumedPlans, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, bindings, runId);
-      forgetRunPlans(plans, runId);
+      forgetRunPlans(consumedPlans, runId);
       forgetRunKeys(declined, runId);
       commitService?.invalidate();
       gitService?.invalidate();
@@ -368,6 +374,7 @@ function activatePermission(
 
 function consumeApprovedAction(
   approved: Map<string, ApprovedAction>,
+  consumedPlans: Map<string, string>,
   input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
@@ -375,7 +382,25 @@ function consumeApprovedAction(
   },
 ): boolean {
   if (!matchesApprovedAction(approved, input)) return false;
-  approved.delete(requestBindingKey(input.runId, input.request));
+  const key = requestBindingKey(input.runId, input.request);
+  if (!carryPlan(approved.get(key), consumedPlans, key)) return false;
+  approved.delete(key);
+  return true;
+}
+
+/**
+ * An approval that showed command lines hands their digest to the call that spends it. It fails
+ * closed: an approval that showed commands but holds no digest, or a full hand-over table, spends
+ * nothing, so the check at run time can never be skipped by an absent entry (ADR-0124 D6).
+ */
+function carryPlan(
+  record: ApprovedAction | undefined,
+  consumedPlans: Map<string, string>,
+  key: string,
+): boolean {
+  if (record?.planShown !== true) return true;
+  if (record.planDigest === undefined || consumedPlans.size >= MAX_APPROVED_RECORDS) return false;
+  consumedPlans.set(key, record.planDigest);
   return true;
 }
 
@@ -416,6 +441,10 @@ function approvedActionMatches(
   ].every(Boolean);
 }
 
+function validPlan(input: CodingToolApprovalObservation): boolean {
+  return input.planDigest === undefined || DIGEST_PATTERN.test(input.planDigest);
+}
+
 function validBinding(input: CodingToolApprovalObservation): boolean {
   return (
     input.runId.length > 0 &&
@@ -426,7 +455,8 @@ function validBinding(input: CodingToolApprovalObservation): boolean {
     input.actionId.length <= 512 &&
     input.idempotencyKey.length <= 512 &&
     input.targetId.length <= 512 &&
-    DIGEST_PATTERN.test(input.proof.approvalDigest)
+    DIGEST_PATTERN.test(input.proof.approvalDigest) &&
+    validPlan(input)
   );
 }
 
@@ -491,21 +521,10 @@ function forgetRunKeys(keys: Set<string>, runId: string): void {
   }
 }
 
-const MAX_PLAN_BINDINGS = 256;
-
 function forgetRunPlans(plans: Map<string, string>, runId: string): void {
   const prefix = `${runId}\u0000`;
   for (const key of plans.keys()) {
     if (key.startsWith(prefix)) plans.delete(key);
-  }
-}
-
-function rememberPlan(plans: Map<string, string>, key: string, digest: string): void {
-  plans.delete(key);
-  plans.set(key, digest);
-  for (const oldest of plans.keys()) {
-    if (plans.size <= MAX_PLAN_BINDINGS) break;
-    plans.delete(oldest);
   }
 }
 

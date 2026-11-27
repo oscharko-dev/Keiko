@@ -1518,7 +1518,6 @@ interface CreateBackendRunInput {
 function verificationPreviewFor(
   input: ProductionCodingRuntimeResolverInput,
   context: Pick<CodingRuntimeTrustedContext, "workspaceRoot">,
-  approvals: Pick<CodingToolApprovalBridge, "bindVerificationPlan">,
 ): Pick<ProductionRuntimeBackendInput, "verificationPreview"> {
   const previewCommands = input.verificationRunner.previewCommands;
   if (previewCommands === undefined) return {};
@@ -1526,7 +1525,6 @@ function verificationPreviewFor(
     verificationPreview: createVerificationApprovalPreview({
       workspaceRoot: context.workspaceRoot,
       runner: { previewCommands },
-      bindPlan: approvals.bindVerificationPlan,
       diagnostics: input.diagnostics,
     }),
   };
@@ -1554,7 +1552,7 @@ function createBackendRun({
     minted,
     toolFacade,
     codingToolApprovals,
-    ...verificationPreviewFor(input, context, codingToolApprovals),
+    ...verificationPreviewFor(input, context),
     authorityLifecycle: authorityLifecycle({
       authority,
       controller,

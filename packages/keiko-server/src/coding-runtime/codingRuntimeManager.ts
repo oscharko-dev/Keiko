@@ -306,6 +306,13 @@ export type CodingRuntimeApprovalIssueResult =
     };
 
 /** Maps a verifier id and the run's correlation id to the approval card's preview. */
+/** What a pending verification ask shows, and the digest of the plan that was shown. */
+export interface CodingVerificationPreviewResult {
+  readonly preview: CodingWorkbenchVerificationPreview;
+  /** Set only when command lines were shown; the approval is then bound to it. */
+  readonly planDigest?: string | undefined;
+}
+
 export type CodingVerificationPreviewPort = (
   verifierId: string,
   runId: string,
@@ -315,7 +322,7 @@ export type CodingVerificationPreviewPort = (
     /** The package folder the ask named; absent means the workspace root. */
     readonly packageDir?: string | undefined;
   },
-) => CodingWorkbenchVerificationPreview;
+) => CodingVerificationPreviewResult;
 
 export interface CodingRuntimeManagerDeps {
   readonly supervisor?: RuntimeProcessSupervisor | undefined;
@@ -3362,10 +3369,11 @@ function sidecarRuntimeEvent(
       retryable: false,
     });
   }
-  if (!observeCodingToolApproval(active, event, request.actionKind)) {
+  const shown = shownVerification(event, active);
+  if (!observeCodingToolApproval(active, event, request.actionKind, shown)) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event, active));
+  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event, shown));
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
@@ -3447,10 +3455,10 @@ function rememberApprovalReview(
 
 function approvalReviewFacts(
   event: SidecarPermissionEvent,
-  active: Pick<ActiveRuntime, "context" | "verificationPreview">,
+  shown: CodingVerificationPreviewResult | undefined,
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
   if (event.nativeAction !== undefined) return nativeActionReviewFacts(event);
-  if (event.actionKind === "verification-command") return verificationReviewFacts(event, active);
+  if (event.actionKind === "verification-command") return verificationReviewFacts(event, shown);
   if (event.actionKind !== "file-edit") return undefined;
   const declared = event.allowedRelativePaths ?? [];
   const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -3475,18 +3483,27 @@ function approvalReviewFacts(
  * what Approve runs, not a bare class label. Transient review-channel state only, like the native
  * action facts; the preview port is body-free in every log and the ask itself stays content-free.
  */
-function verificationReviewFacts(
+function shownVerification(
   event: SidecarPermissionEvent,
   active: Pick<ActiveRuntime, "context" | "verificationPreview">,
-): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+): CodingVerificationPreviewResult | undefined {
   const port = active.verificationPreview;
-  if (port === undefined || event.commandLabel === undefined) return undefined;
+  if (event.actionKind !== "verification-command" || port === undefined) return undefined;
+  if (event.commandLabel === undefined) return undefined;
+  return port(event.commandLabel, active.context.runId, {
+    actionId: event.actionId,
+    packageDir: event.packageDir,
+  });
+}
+
+function verificationReviewFacts(
+  event: SidecarPermissionEvent,
+  shown: CodingVerificationPreviewResult | undefined,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  if (shown === undefined) return undefined;
   return {
     requestId: event.requestId,
-    verificationPreview: port(event.commandLabel, active.context.runId, {
-      actionId: event.actionId,
-      packageDir: event.packageDir,
-    }),
+    verificationPreview: shown.preview,
     paths: [],
     pathsTruncated: false,
     fileCount: 0,
@@ -3821,6 +3838,7 @@ function observeCodingToolApproval(
   active: ActiveRuntime,
   event: SidecarPermissionEvent,
   actionKind: CodingWorkbenchSupervisedActionKind | undefined,
+  shown?: CodingVerificationPreviewResult,
 ): boolean {
   const bridge = active.codingToolApprovals;
   if (
@@ -3850,6 +3868,10 @@ function observeCodingToolApproval(
     proof: { approvalId: event.approvalId, approvalDigest: event.approvalDigest },
     expiresAt: event.expiresAt,
     nowMs: active.nowMs(),
+    // An ask that showed command lines binds its approval to them (ADR-0124 D6).
+    ...(shown === undefined
+      ? {}
+      : { planShown: shown.preview.status === "commands", planDigest: shown.planDigest }),
   });
 }
 

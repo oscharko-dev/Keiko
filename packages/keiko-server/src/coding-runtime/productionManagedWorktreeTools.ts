@@ -1831,10 +1831,11 @@ function verificationPlanChanged(
   >,
   kind: VerificationKind,
 ): VerificationPortResult | undefined {
-  const bound = input.approvalProofVerifier?.takeVerificationPlan?.(
-    input.authorityRef.runId,
-    request.actionId,
-  );
+  // The digest rides on the approval record this very call spent, so it is bound to this call.
+  const bound = input.approvalProofVerifier?.takeApprovedPlan?.({
+    runId: input.authorityRef.runId,
+    request,
+  });
   const preview = input.verificationRunner.previewCommands;
   if (bound === undefined || preview === undefined) return undefined;
   if (verificationPlanDigestOf(input, preview, request, kind) === bound) return undefined;
@@ -1854,8 +1855,9 @@ function verificationPlanDigestOf(
     const plan = preview({
       projectId: input.workspaceRoot,
       kinds: [kind],
+      // `targetPath` is not part of the plan: only `targeted-test` carries one (the request
+      // parser rejects it for every other verifier), and a targeted test shows and binds nothing.
       ...(request.packageDir === undefined ? {} : { packageDir: request.packageDir }),
-      ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
     });
     return plan.kind === "steps" ? verificationPlanDigest(plan.steps) : undefined;
   } catch (error) {

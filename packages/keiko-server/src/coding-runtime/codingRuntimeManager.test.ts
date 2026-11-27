@@ -5996,7 +5996,10 @@ describe("governed-assist approval reviewability", () => {
       },
       verificationPreview: (verifierId, correlationId) => {
         asked.push([verifierId, correlationId]);
-        return { status: "commands", commands: ["mvn -B test"], truncated: false };
+        return {
+          preview: { status: "commands", commands: ["mvn -B test"], truncated: false },
+          planDigest: "d".repeat(64),
+        };
       },
       nowIso: () => "2026-07-07T13:00:00.000Z",
     });

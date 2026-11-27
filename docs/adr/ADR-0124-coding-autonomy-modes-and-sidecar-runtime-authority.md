@@ -300,7 +300,24 @@ unresolved monorepo package name no command yet and say so in a plain sentence; 
 falls back to the class label with a closed reason (`workspace-unresolved`, `no-runnable-step`,
 `preview-failed`) logged body-free on `coding-runtime.approval`, and never blocks the decision. The
 preview never enters a runtime event, snapshot, evidence or the Activity Log. Known gap: the floor
-does not mask a Maven `-Dpassword=` system property.
+does not mask a Maven `-Dpassword=` system property; the preview therefore also masks
+credential-named options itself (`--name=v`, `--name v`, `-Dname=v`, `NAME=v` prefixes, quoted
+whole arguments, `-u user:pass`, URL userinfo) in `commandLineRedaction.ts`, a linear scan local to
+this one line.
+
+The shown plan is bound to the approval, not to the child's claim. The ask carries the digest of
+the shown command lines (command, arguments, folder, script body) and marks that it showed any;
+`observePermission` stores both on the pending record, activation moves them to the approved-action
+record, and the one consumption that spends that record hands the digest to the call that spends
+it (`takeApprovedPlan`). A child that asks under another `actionId` than the call runs with
+therefore spends nothing and receives no digest. Consumption fails closed: an approval that showed
+commands but holds no digest, or a full hand-over table, is not spent. The run then plans again
+exactly as the preview did (one planning function, the ask's package folder; a `targetPath` exists
+only for `targeted-test`, which shows and binds nothing) and refuses a differing plan with the closed
+reason `verification-plan-changed`. Accepted residual: between that re-plan and the runner's own
+plan the workspace could change again (a TOCTOU window); runs are serial and the runner plans from
+the same files immediately after, so the window is accepted. Fields are body-free in the Activity
+Log.
 
 The V2 governed ask a generated OpenCode plugin sends (`action: "permission-request"`) also names the
 tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id). It is

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CodingWorkbenchVerificationPreview } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
   CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS,
@@ -22,17 +23,18 @@ const BEARER = "Bearer abcdefghijklmnop1234567890";
 const PASSWORD = "hunter2-very-secret";
 
 interface Fixture {
-  readonly port: ReturnType<typeof createVerificationApprovalPreview>;
+  readonly port: (
+    ...args: Parameters<ReturnType<typeof createVerificationApprovalPreview>>
+  ) => CodingWorkbenchVerificationPreview;
   readonly records: ServerDiagnosticRecord[];
-  readonly bound: [string, string, string][];
+  readonly result: ReturnType<typeof createVerificationApprovalPreview>;
   readonly asked: VerificationPreviewInput[];
 }
 
 function fixture(plan: VerificationCommandPreview | Error): Fixture {
   const records: ServerDiagnosticRecord[] = [];
-  const bound: [string, string, string][] = [];
   const asked: VerificationPreviewInput[] = [];
-  const port = createVerificationApprovalPreview({
+  const result = createVerificationApprovalPreview({
     workspaceRoot: "/work/tree",
     runner: {
       previewCommands: (input): VerificationCommandPreview => {
@@ -41,11 +43,12 @@ function fixture(plan: VerificationCommandPreview | Error): Fixture {
         return plan;
       },
     },
-    bindPlan: (runId, actionId, digest): void => void bound.push([runId, actionId, digest]),
     diagnostics: { record: (record): void => void records.push(record) },
     now: () => new Date("2026-11-27T10:00:00.000Z"),
   });
-  return { port, records, bound, asked };
+  const port = (...args: Parameters<typeof result>): CodingWorkbenchVerificationPreview =>
+    result(...args).preview;
+  return { port, result, records, asked };
 }
 
 const steps = (...entries: readonly string[][]): VerificationCommandPreview => ({
@@ -211,23 +214,17 @@ describe("verification approval preview", () => {
   });
 
   describe("binds the approval to the plan it showed (ADR-0124 D6)", () => {
-    it("binds the digest of the planned steps to the ask's tool call", () => {
+    it("returns the digest of the planned steps with the shown commands", () => {
       const planned = steps(["npm", "run", "test"]);
-      const { port, bound } = fixture(planned);
-      port("test", RUN_ID, { actionId: "session:call-1" });
-      expect(bound).toEqual([
-        [
-          RUN_ID,
-          "session:call-1",
-          verificationPlanDigest(planned.kind === "steps" ? planned.steps : []),
-        ],
-      ]);
+      const { result } = fixture(planned);
+      expect(result("test", RUN_ID, { actionId: "session:call-1" }).planDigest).toBe(
+        verificationPlanDigest(planned.kind === "steps" ? planned.steps : []),
+      );
     });
 
-    it("binds nothing when no command is shown", () => {
-      const { port, bound } = fixture({ kind: "host-dependent", probeFailures: 0 });
-      port("test", RUN_ID, { actionId: "session:call-1" });
-      expect(bound).toEqual([]);
+    it("returns no digest when no command is shown", () => {
+      const { result } = fixture({ kind: "host-dependent", probeFailures: 0 });
+      expect(result("test", RUN_ID, {}).planDigest).toBeUndefined();
     });
 
     it("digests command, arguments, folder and script body, so a rewritten script changes it", () => {

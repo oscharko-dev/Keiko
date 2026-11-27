@@ -1901,6 +1901,7 @@ describe("production managed worktree tools", () => {
       readonly approved: string;
       readonly now: string;
       readonly packageDir?: string;
+      readonly targetPath?: string;
     }): Promise<{
       readonly result: unknown;
       readonly runToReport: ReturnType<typeof vi.fn>;
@@ -1954,8 +1955,10 @@ describe("production managed worktree tools", () => {
         approvalProofVerifier: {
           matches: () => false,
           consume: () => false,
-          takeVerificationPlan: (runId, actionId) =>
-            runId === "run-verification-1" && actionId === "verification-1" ? digest : undefined,
+          takeApprovedPlan: ({ runId, request }) =>
+            runId === "run-verification-1" && request.actionId === "verification-1"
+              ? digest
+              : undefined,
         },
         verificationRunner: {
           runToReport,
@@ -1975,6 +1978,7 @@ describe("production managed worktree tools", () => {
           idempotencyKey: "verification-key",
           verifierId: "test",
           ...(options.packageDir === undefined ? {} : { packageDir: options.packageDir }),
+          ...(options.targetPath === undefined ? {} : { targetPath: options.targetPath }),
         }),
       });
       return { result, runToReport, records, replanned };
@@ -1996,6 +2000,18 @@ describe("production managed worktree tools", () => {
         }),
       ]);
       expect(JSON.stringify(records)).not.toContain("rm -rf");
+    });
+
+    it("a test call cannot carry a targetPath, so the re-plan never refuses spuriously for one", async () => {
+      const { result, runToReport, replanned } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        targetPath: "packages/app/src/a.test.ts",
+      });
+      // The request parser rejects it before any plan exists; nothing is planned, bound or run.
+      expect(JSON.stringify(result)).not.toContain("verification-plan-changed");
+      expect(replanned).toEqual([]);
+      expect(runToReport).not.toHaveBeenCalled();
     });
 
     it("re-plans with the package folder the call names and runs when nothing changed", async () => {

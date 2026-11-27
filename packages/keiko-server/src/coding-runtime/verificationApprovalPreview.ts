@@ -13,7 +13,10 @@ import type {
   VerificationPreviewInput,
   VerificationPreviewStep,
 } from "../editor/verificationRunner.js";
-import type { CodingVerificationPreviewPort } from "./codingRuntimeManager.js";
+import type {
+  CodingVerificationPreviewPort,
+  CodingVerificationPreviewResult,
+} from "./codingRuntimeManager.js";
 import { redactCommandLineCredentials } from "./commandLineRedaction.js";
 
 /** The verifier ids whose command lines come from the project's own scripts. */
@@ -30,8 +33,6 @@ export interface VerificationApprovalPreviewInput {
   readonly runner: {
     readonly previewCommands: (input: VerificationPreviewInput) => VerificationCommandPreview;
   };
-  /** Remembers the digest of what the person is shown, for the run to compare (ADR-0124 D6). */
-  readonly bindPlan?: ((runId: string, actionId: string, planDigest: string) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly now?: (() => Date) | undefined;
 }
@@ -157,8 +158,10 @@ function reportPreview(
 export function createVerificationApprovalPreview(
   input: VerificationApprovalPreviewInput,
 ): CodingVerificationPreviewPort {
-  return (verifierId, runId, ask): CodingWorkbenchVerificationPreview => {
-    if (!isScriptVerifier(verifierId)) return { status: "deferred", reason: "targeted-test" };
+  return (verifierId, runId, ask): CodingVerificationPreviewResult => {
+    if (!isScriptVerifier(verifierId)) {
+      return { preview: { status: "deferred", reason: "targeted-test" } };
+    }
     let plan: VerificationCommandPreview;
     try {
       plan = input.runner.previewCommands({
@@ -169,25 +172,24 @@ export function createVerificationApprovalPreview(
     } catch (error) {
       const reason = failureReason(error);
       reportPreview(input, runId, reason);
-      return { status: "unavailable", reason };
+      return { preview: { status: "unavailable", reason } };
     }
-    return previewOf(input, runId, ask.actionId, plan);
+    return previewOf(input, runId, plan);
   };
 }
 
 function previewOf(
   input: VerificationApprovalPreviewInput,
   runId: string,
-  actionId: string | undefined,
   plan: VerificationCommandPreview,
-): CodingWorkbenchVerificationPreview {
+): CodingVerificationPreviewResult {
   const failures = plan.probeFailures;
   if (failures > 0)
     reportPreview(input, runId, "package-probe-failed", `failures=${String(failures)}`);
   const preview = previewFromPlan(plan);
   if (preview.status === "unavailable") reportPreview(input, runId, preview.reason);
-  if (plan.kind === "steps" && preview.status === "commands" && actionId !== undefined) {
-    input.bindPlan?.(runId, actionId, verificationPlanDigest(plan.steps));
-  }
-  return preview;
+  // The digest travels with the ask and is stored on the approval record the call itself spends.
+  return plan.kind === "steps" && preview.status === "commands"
+    ? { preview, planDigest: verificationPlanDigest(plan.steps) }
+    : { preview };
 }

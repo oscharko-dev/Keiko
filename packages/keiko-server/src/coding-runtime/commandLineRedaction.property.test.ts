@@ -31,7 +31,8 @@ const VALUES = ["hunter2", "s3cr3t-value", "a.b/c:d", "x".repeat(40), "tok_9F8e7
 const SAFE_VALUES = ["true", "4", "dot", "src/app"] as const;
 const SPACES = [" ", "  ", "\t"] as const;
 
-type Shape = "equals" | "define" | "space" | "quoted";
+type Shape = "equals" | "define" | "space" | "quoted" | "wrapped" | "env" | "unbalanced";
+const SHAPES = ["equals", "define", "space", "quoted", "wrapped", "env", "unbalanced"] as const;
 
 interface Case {
   readonly name: string;
@@ -45,7 +46,7 @@ interface Case {
 const generateCase: Generator<Case> = (random) => ({
   name: random.pick(NAMES),
   value: random.pick(VALUES),
-  shape: random.pick(["equals", "define", "space", "quoted"] as const),
+  shape: random.pick(SHAPES),
   before: arrayOf((r) => r.pick(SAFE_NAMES), 0, 3)(random).map((word) => `--${word}`),
   after: arrayOf((r) => r.pick(SAFE_VALUES), 0, 3)(random),
   space: random.pick(SPACES),
@@ -57,6 +58,9 @@ function render(item: Case): string {
     define: `-D${item.name}=${item.value}`,
     space: `--${item.name} ${item.value}`,
     quoted: `--${item.name}="${item.value} with spaces"`,
+    wrapped: `"--${item.name}=${item.value} with spaces"`,
+    env: `${item.name.replace(/[^A-Za-z0-9_]/gu, "_")}=${item.value}`,
+    unbalanced: `"oops --${item.name}=${item.value}`,
   }[item.shape];
   return ["mvn", ...item.before, option, ...item.after].join(item.space);
 }
@@ -66,7 +70,7 @@ const MASKING = { name: "credential-named options are masked wherever they sit" 
 
 describe("redactCommandLineCredentials (properties)", () => {
   it("masks the value of every credential-named option, in every spelling", async () => {
-    const seen = { equals: 0, define: 0, space: 0, quoted: 0 };
+    const seen = Object.fromEntries(SHAPES.map((shape) => [shape, 0])) as Record<Shape, number>;
     await checkProperty({
       ...MASKING,
       generate: generateCase,
@@ -82,7 +86,7 @@ describe("redactCommandLineCredentials (properties)", () => {
       },
     });
     const { runs } = propertySettings(MASKING);
-    for (const shape of ["equals", "define", "space", "quoted"] as const) {
+    for (const shape of SHAPES) {
       assertFrequencyFloor({
         what: `the ${shape} spelling`,
         count: seen[shape],
