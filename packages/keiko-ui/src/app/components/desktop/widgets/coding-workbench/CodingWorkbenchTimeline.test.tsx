@@ -446,8 +446,8 @@ describe("CodingWorkbenchTimeline", () => {
     expect(trust.querySelector('[data-state="waiting-for-trust"]')).toHaveTextContent(
       "Waiting for approval",
     );
-    expect(trust).toHaveTextContent("this workspace's package scripts are not allowed yet");
-    expect(trust).toHaveTextContent("Allow package scripts for verification");
+    expect(trust).toHaveTextContent("you have not yet trusted this repository's build files");
+    expect(trust).toHaveTextContent("Trust this repository's build files");
 
     const empty = card("no-runnable-steps");
     expect(empty.open).toBe(true);
@@ -902,7 +902,7 @@ describe("CodingWorkbenchTimeline", () => {
       const text = (state: string): string =>
         container.querySelector(`[data-tool-state="${state}"]`)?.textContent ?? "";
       expect(text("waiting-for-trust")).toContain("Wartet auf Freigabe");
-      expect(text("waiting-for-trust")).toContain("noch nicht zugelassen");
+      expect(text("waiting-for-trust")).toContain("noch nicht freigegeben");
       expect(text("no-runnable-steps")).toContain("Nichts auszuführen");
       expect(text("no-runnable-steps")).toContain("für diese Anfrage nichts gefunden");
       expect(text("no-runnable-steps")).not.toContain("definiert kein Skript");

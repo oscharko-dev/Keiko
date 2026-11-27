@@ -1563,7 +1563,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.failed-check":
     "Eine Verifizierungsprüfung wurde ausgeführt und ist fehlgeschlagen. Das Modell hat die fehlerhaften Stellen erhalten.",
   "codingWorkbench.activity.verification.waiting-for-trust":
-    "Die Verifizierung ist nicht gelaufen: Die Paket-Skripte dieses Workspace sind noch nicht zugelassen. Lasse im Kopfbereich der Coding Workbench die Paket-Skripte für die Verifizierung zu und verifiziere dann erneut.",
+    "Die Verifizierung ist nicht gelaufen: Du hast die Build-Dateien dieses Repositorys noch nicht freigegeben. Wähle oben in der Coding Workbench „Build-Dateien dieses Repositorys vertrauen“ und verifiziere dann erneut.",
   "codingWorkbench.activity.verification.no-runnable-steps":
     "Die Verifizierung ist nicht gelaufen: Der Verifizierer hat für diese Anfrage nichts gefunden, was er ausführen kann, etwa weil das gewählte Paket kein test-, lint- oder build-Skript hat. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.not-run":
@@ -1750,12 +1750,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.githubAccess.error.unknown-repository":
     "Dieser Pfad ist kein geöffnetes Projekt. Öffne das Repository als Projekt, bevor du seinen GitHub-Issue-Zugriff änderst.",
   "codingWorkbench.trust.restrictedNotice":
-    "Die Verifizierung muss die Paket-Skripte dieses Repositorys ausführen, sie sind aber noch nicht freigegeben.",
+    "Um ihre Arbeit zu prüfen, muss Keiko die Build-Dateien dieses Repositorys ausführen (zum Beispiel pom.xml oder package.json). Erlaube das, sobald du diesem Repository vertraust.",
   "codingWorkbench.trust.runWaitingNotice":
-    "Dieser Run ist pausiert: Er muss die Paket-Skripte dieses Task-Workspace ausführen, um seine Arbeit zu verifizieren, und nur du kannst sie für genau dieses Manifest zulassen. Der Run läuft von selbst weiter, sobald du entschieden hast.",
+    "Dieser Run wartet auf dich. Um seine Arbeit zu prüfen, muss Keiko die Build-Dateien dieses Repositorys ausführen (zum Beispiel pom.xml oder package.json). Erlaube das, sobald du diesem Repository vertraust; nur du kannst das entscheiden. Der Run läuft von selbst weiter, sobald du entschieden hast.",
   "codingWorkbench.trust.driftNotice":
-    "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Ob du sie zulässt, entscheidest du für genau dieses Manifest.",
-  "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
+    "Du vertraust diesem Repository bereits, aber diese Aufgabe hat dessen Build-Dateien geändert (zum Beispiel pom.xml oder package.json). Erlaube das, sobald du die Änderung angesehen hast; nur du kannst das entscheiden.",
+  "codingWorkbench.trust.allow": "Build-Dateien dieses Repositorys vertrauen",
   "codingWorkbench.trust.allowing": "Wird zugelassen…",
   "codingWorkbench.revert.region": "Letzter Durchgang",
   "codingWorkbench.revert.summary":

@@ -25,8 +25,8 @@ vi.mock("@/lib/client-diagnostics", () => ({
   reportClientDiagnostic: diagnostic,
 }));
 
-const ALLOW = "Allow package scripts for verification";
-const RUN_WAITING_NOTICE = /This run is paused/u;
+const ALLOW = "Trust this repository's build files";
+const RUN_WAITING_NOTICE = /This run is waiting for you/u;
 
 function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTrustStatus {
   return {
@@ -126,7 +126,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
     await waitFor(() => expect(mutateTrust).toHaveBeenNthCalledWith(2, "/worktree-a", "grant"));
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: /Allow package scripts/u }),
+        screen.queryByRole("button", { name: /Trust this repository's build files/u }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -214,6 +214,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
       <CodingWorkbenchTrustAffordance binding={binding()} pauseReason="workspace-script-trust" />,
     );
 
+    expect(await screen.findByRole("alert")).toHaveTextContent(RUN_WAITING_NOTICE);
     expect(await screen.findByText(RUN_WAITING_NOTICE)).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: ALLOW })).toBeEnabled();
   });

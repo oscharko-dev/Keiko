@@ -1506,7 +1506,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.failed-check":
     "A verification check ran and failed. The model received the failing locations.",
   "codingWorkbench.activity.verification.waiting-for-trust":
-    "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
+    "Verification has not run: you have not yet trusted this repository's build files. Choose Trust this repository's build files at the top of the Coding Workbench, then verify again.",
   "codingWorkbench.activity.verification.no-runnable-steps":
     "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
@@ -1684,12 +1684,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.githubAccess.error.unknown-repository":
     "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
   "codingWorkbench.trust.restrictedNotice":
-    "Verification needs to run this repository's package scripts, and they are not yet trusted.",
+    "To check its work, Keiko needs to run this repository's build files (for example pom.xml or package.json). Allow this once you trust this repository.",
   "codingWorkbench.trust.runWaitingNotice":
-    "This run is paused: it needs to run this workspace's package scripts to verify its work, and only you can allow them for exactly these manifest bytes. The run continues by itself once you decide.",
+    "This run is waiting for you. To check its work, Keiko needs to run this repository's build files (for example pom.xml or package.json). Allow this once you trust this repository; only you can decide. The run continues by itself as soon as you do.",
   "codingWorkbench.trust.driftNotice":
-    "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
-  "codingWorkbench.trust.allow": "Allow package scripts for verification",
+    "You already trusted this repository, but this task has changed its build files (for example pom.xml or package.json). Allow this once you have looked at the change; only you can decide.",
+  "codingWorkbench.trust.allow": "Trust this repository's build files",
   "codingWorkbench.trust.allowing": "Allowing…",
   "codingWorkbench.revert.region": "Last turn",
   "codingWorkbench.revert.summary":

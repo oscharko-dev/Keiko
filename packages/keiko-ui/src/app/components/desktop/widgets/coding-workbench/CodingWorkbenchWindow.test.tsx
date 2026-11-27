@@ -4930,7 +4930,7 @@ describe("Codex subscription sign-in surface", () => {
 // when Start arrived and keeps it for the run's life, so the composer chips, the session context
 // bar and the Git target must keep naming THAT workspace. Following the pointer instead labelled a
 // run in A with B's root and branch and opened B's Git — an invitation to act on the wrong tree.
-// #3390 wave: the header's "Allow package scripts for verification" affordance. It reads the SAME
+// #3390 wave: the header's "Trust this repository's build files" affordance. It reads the SAME
 // server-owned trust status the Editor's own trust surface reads, keyed on the bound repository —
 // the operator no longer has to already know the Editor's own command to unblock a run refused
 // WORKSPACE_TRUST_REQUIRED (2026-09-05 real run).
@@ -4951,7 +4951,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
 
     await user.click(
-      await screen.findByRole("button", { name: "Allow package scripts for verification" }),
+      await screen.findByRole("button", { name: "Trust this repository's build files" }),
     );
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
@@ -4994,7 +4994,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
 
     const action = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     expect(action).toBeEnabled();
     expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko");
@@ -5017,7 +5017,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     // Repository grant fires first while the repo is restricted...
     const repositoryAction = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     await user.click(repositoryAction);
     await waitFor(() =>
@@ -5028,7 +5028,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     // root. Granting it too clears the affordance — proving each grant target is accepted
     // independently rather than a single click masking the second decision.
     const worktreeAction = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
+      name: "Trust this repository's build files",
     });
     await user.click(worktreeAction);
     await waitFor(() =>
@@ -5036,7 +5036,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: /Allow package scripts/u }),
+        screen.queryByRole("button", { name: /Trust this repository's build files/u }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -5052,7 +5052,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: /Allow package scripts/u }),
+      screen.queryByRole("button", { name: /Trust this repository's build files/u }),
     ).not.toBeInTheDocument();
   });
 
@@ -5061,7 +5061,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: /Allow package scripts/u }),
+      screen.queryByRole("button", { name: /Trust this repository's build files/u }),
     ).not.toBeInTheDocument();
   });
 });
@@ -5275,12 +5275,12 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     await startInAThenSwitchToB(actions(), vi.fn(), {
       beforeStart: async () => {
         expect(
-          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+          screen.queryByRole("button", { name: "Trust this repository's build files" }),
         ).not.toBeInTheDocument();
       },
       onPendingSwitch: async () => {
         expect(
-          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+          screen.queryByRole("button", { name: "Trust this repository's build files" }),
         ).not.toBeInTheDocument();
         expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
       },
@@ -5295,7 +5295,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith(WORKSPACE_A.repositoryRoot));
     await userEvent
       .setup()
-      .click(await screen.findByRole("button", { name: "Allow package scripts for verification" }));
+      .click(await screen.findByRole("button", { name: "Trust this repository's build files" }));
 
     expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
