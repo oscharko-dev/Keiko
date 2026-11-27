@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import config from "../../eslint.config.js";
 import {
   PEAK_RSS_BUDGET_BYTES,
+  SPLIT_PACKAGE_DIRECTORIES,
   forwardedArgs,
   globalIgnores,
   lintPartitions,
@@ -54,7 +55,9 @@ describe("lint partitions", () => {
     const partitions = lintPartitions(["keiko-ui", "keiko-server"], ["packages/keiko-ui/**"]);
 
     expect(partitions.map((partition) => partition.label)).toStrictEqual([
-      "packages/keiko-server",
+      "packages/keiko-server/src/coding-runtime",
+      "packages/keiko-server/src/atlassian",
+      "packages/keiko-server (remainder)",
       "repository root",
     ]);
     expect(partitions.at(-1)?.args).toStrictEqual([
@@ -62,6 +65,28 @@ describe("lint partitions", () => {
       "--ignore-pattern",
       "packages/keiko-server/**",
     ]);
+  });
+
+  it("splits a package into its carved directories and a remainder that ignores exactly those", () => {
+    const [runtime, atlassian, remainder] = lintPartitions(["keiko-server"], []);
+
+    expect(runtime).toStrictEqual({
+      label: "packages/keiko-server/src/coding-runtime",
+      args: ["packages/keiko-server/src/coding-runtime"],
+    });
+    expect(atlassian?.args).toStrictEqual(["packages/keiko-server/src/atlassian"]);
+    expect(remainder?.args).toStrictEqual([
+      "packages/keiko-server",
+      "--ignore-pattern",
+      "packages/keiko-server/src/coding-runtime/**",
+      "--ignore-pattern",
+      "packages/keiko-server/src/atlassian/**",
+    ]);
+  });
+
+  it("carves only directories that exist, so a rename cannot silently drop a split", () => {
+    for (const [dir, carved] of Object.entries(SPLIT_PACKAGE_DIRECTORIES))
+      for (const sub of carved) expect(existsSync(join(process.cwd(), dir, sub))).toBe(true);
   });
 
   it("reads only the config objects that are global ignores", () => {
@@ -79,9 +104,11 @@ describe("lint partitions", () => {
     const partitions = lintPartitions(names, globalIgnores(config));
     const labels = partitions.map((partition) => partition.label);
 
-    expect(labels).toContain("packages/keiko-server");
+    expect(labels).toContain("packages/keiko-server (remainder)");
+    expect(labels).not.toContain("packages/keiko-server");
     expect(labels).not.toContain("packages/keiko-ui");
-    expect(labels).toHaveLength(names.length);
+    const extraPartitions = Object.values(SPLIT_PACKAGE_DIRECTORIES).flat().length;
+    expect(labels).toHaveLength(names.length + extraPartitions);
     expect(new Set(labels).size).toBe(labels.length);
   });
 

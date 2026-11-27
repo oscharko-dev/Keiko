@@ -5,8 +5,9 @@
 // as one `eslint .`, the monorepo outgrew the 12 GiB heap that fits a 16 GiB ubuntu-latest runner
 // (#4182, 2026-11-02: Core quality died with "JavaScript heap out of memory" at 11.9 GiB; a local
 // run peaked at 13.0 GB resident). Each process here starts from an empty heap, so the peak is
-// bounded by the largest package (keiko-server: 8.7 GB resident) instead of growing with every
-// package added. The partitions run one after another so two heaps never share the runner.
+// bounded by the largest partition instead of growing with every package added. keiko-server
+// alone reached 11.6-12.0 GiB on macOS (2026-11-27, earlier 8.7 GB), so it is split by directory
+// (SPLIT_PACKAGE_DIRECTORIES). The partitions run one after another so two heaps never share the runner.
 //
 // Every partition receives this process's own Node flags (the heap ceiling the lint script sets) and
 // `--max-warnings=0`. The root partition lints `.` minus the partitioned package directories, so
@@ -87,13 +88,36 @@ export function globalIgnores(config) {
     .flatMap((entry) => entry.ignores ?? []);
 }
 
+/**
+ * Packages whose type-aware lint outgrew one partition's headroom: each listed directory is linted
+ * in a process of its own and the rest of the package in another. Measured 2026-11-27 on macOS, the
+ * whole of keiko-server peaked at 11.6-12.0 GiB, and one run failed the 12 GiB budget. The split
+ * never changes what is linted: the remainder ignores exactly the directories carved out of it, and
+ * the typed-lint program still resolves through each file's nearest tsconfig (`projectService`).
+ */
+export const SPLIT_PACKAGE_DIRECTORIES = Object.freeze({
+  "packages/keiko-server": ["src/coding-runtime", "src/atlassian"],
+});
+
+function packagePartitions(dir) {
+  const carved = (SPLIT_PACKAGE_DIRECTORIES[dir] ?? []).map((sub) => `${dir}/${sub}`);
+  if (carved.length === 0) return [{ label: dir, args: [dir] }];
+  return [
+    ...carved.map((path) => ({ label: path, args: [path] })),
+    {
+      label: `${dir} (remainder)`,
+      args: [dir, ...carved.flatMap((path) => ["--ignore-pattern", `${path}/**`])],
+    },
+  ];
+}
+
 export function lintPartitions(packageNames, ignores) {
   const packages = [...packageNames]
     .sort((left, right) => (left < right ? -1 : Number(left > right)))
     .map((name) => `packages/${name}`)
     .filter((dir) => !ignores.includes(`${dir}/**`));
   return [
-    ...packages.map((dir) => ({ label: dir, args: [dir] })),
+    ...packages.flatMap((dir) => packagePartitions(dir)),
     {
       label: "repository root",
       args: [".", ...packages.flatMap((dir) => ["--ignore-pattern", `${dir}/**`])],
