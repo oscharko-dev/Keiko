@@ -1,4 +1,5 @@
-import { createRef } from "react";
+import { createRef, useEffect, type ReactNode } from "react";
+import { registerWindowRender } from "./windows/WindowsRegistry";
 import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -2642,5 +2643,68 @@ describe("selection ring overlay stacking", () => {
       />,
     );
     expect(container.querySelector('[data-testid^="selection-ring-"]')).toBeNull();
+  });
+});
+
+// U-3: a window's body owns live state (a run, an open undo window, a window-scoped repository).
+// Raising a window, selecting it, replacing its configuration object and minimizing or restoring
+// it are all store updates of the same window: none of them may mount its body again.
+describe("Workspace window body identity (U-3)", () => {
+  interface MountCounts {
+    mounts: number;
+    unmounts: number;
+  }
+  function MountProbe({ counts }: { readonly counts: MountCounts }): ReactNode {
+    useEffect(() => {
+      counts.mounts += 1;
+      return (): void => {
+        counts.unmounts += 1;
+      };
+    }, [counts]);
+    return <div data-testid="mount-probe" />;
+  }
+
+  it("keeps the body mounted while its window is raised, selected, re-configured and restored", async () => {
+    const counts: MountCounts = { mounts: 0, unmounts: 0 };
+    registerWindowRender("promptEnhancer", () => <MountProbe counts={counts} />);
+    const wsRef = createRef<HTMLDivElement>();
+    const first = appWindow({ id: "workbench-1", type: "promptEnhancer", z: 1, w: 900, h: 700 });
+    const second = appWindow({ id: "git-1", type: "promptEnhancer", z: 2, w: 900, h: 700 });
+    const view = render(
+      <Workspace ws={workspace({ wins: [first, second] })} wsRef={wsRef} openPalette={vi.fn()} />,
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(counts).toEqual({ mounts: 2, unmounts: 0 });
+
+    const configured = { ...first, cfg: { repositoryPath: "/repos/a" } };
+    const steps: readonly Partial<UseWorkspaceResult>[] = [
+      // Raise the first window: it takes the top z and the selection moves to it.
+      {
+        wins: [{ ...first, z: 3 }, second],
+        selection: { focusedWindowId: "workbench-1", selectedWindowIds: ["workbench-1"] },
+      },
+      // The store replaces the window objects and their configuration identity.
+      {
+        wins: [
+          { ...configured, z: 4 },
+          { ...second, cfg: {} },
+        ],
+      },
+      // Another order of the same windows, as a store that sorts by z would produce.
+      { wins: [second, { ...configured, z: 4 }] },
+      // Minimize and restore keep the body mounted but hidden.
+      { wins: [second, { ...configured, z: 5, minimized: true }] },
+      { wins: [second, { ...configured, z: 6, minimized: false }] },
+    ];
+    for (const step of steps) {
+      view.rerender(<Workspace ws={workspace(step)} wsRef={wsRef} openPalette={vi.fn()} />);
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+    }
+
+    expect(counts).toEqual({ mounts: 2, unmounts: 0 });
   });
 });
