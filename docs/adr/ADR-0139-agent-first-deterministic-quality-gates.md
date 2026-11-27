@@ -177,6 +177,9 @@ npm's own fetch timeout so all three permitted attempts fit inside the job timeo
 coverage/Sonar job has a 50-minute timeout: each of its three permitted full scans has measured
 about 15 minutes, with 30- and 60-second backoff, so the job bound includes the designed worst case
 rather than terminating the final permitted attempt.
+The analysis report upload has its own bound: `sonar.ws.timeout=300` in `sonar-project.properties`,
+because the roughly 89 MB report outgrew the scanner's 60-second default on 2026-11-27 and turned
+three dev runs red on a clean analysis; a persistent outage still fails closed.
 
 ### D7 — Merge-queue readiness removes the up-to-date race
 
