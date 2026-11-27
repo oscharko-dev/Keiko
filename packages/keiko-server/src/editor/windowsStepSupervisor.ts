@@ -363,35 +363,18 @@ export function windowsMavenRepository(
   return isDirectory(repository) ? repository : undefined;
 }
 
-// A run resolves its supervisor more than once (the isolation probe, then the run itself); the
-// runtime discovery verifies a payload's digests, so it happens once per run and its result is
-// reused. Bounded, and never keyed by a missing correlation id.
-const RUN_RUNTIME_CACHE_LIMIT = 32;
-const runRuntimes = new Map<string, ResolvedPortableOpenCodeRuntime | undefined>();
-
 // The runtime found the way the Coding activation finds it: packaged release, dev checkout, then the
 // npm runtime package (#4491), so an installation whose Coding runs start has governed steps too.
+// Nothing is remembered between resolutions: a refused discovery, or a runtime package reinstalled
+// meanwhile, is seen by the next verification execution, which resolves its supervisor once.
 function discoveredRuntime(
   env: NodeJS.ProcessEnv,
   correlationId: string | undefined,
 ): ResolvedPortableOpenCodeRuntime | undefined {
-  if (correlationId !== undefined && runRuntimes.has(correlationId)) {
-    return runRuntimes.get(correlationId);
-  }
-  const runtime = discoverActivatedRuntime({ env, ...(correlationId ? { correlationId } : {}) });
-  if (correlationId !== undefined) {
-    if (runRuntimes.size >= RUN_RUNTIME_CACHE_LIMIT) {
-      const oldest = runRuntimes.keys().next();
-      if (!oldest.done) runRuntimes.delete(oldest.value);
-    }
-    runRuntimes.set(correlationId, runtime);
-  }
-  return runtime;
-}
-
-/** Forgets the runtimes resolved for earlier runs; a test seam. */
-export function resetRunRuntimesForTest(): void {
-  runRuntimes.clear();
+  return discoverActivatedRuntime({
+    env,
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 export interface WindowsStepSupervisorInput {

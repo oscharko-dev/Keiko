@@ -193,14 +193,34 @@ export function localDockerEngineAnswer(
 // The host's backends: the probed ones, and on Windows the verified supervisor, never a PATH entry.
 function isolationAvailability(
   platform: NodeJS.Platform,
-  correlationId: string | undefined,
+  windowsStep: ResolvedWindowsStep,
 ): BackendAvailability {
   return {
     ...probeBackends(),
-    windowsAppContainer:
-      platform === "win32" &&
-      resolveWindowsStepSupervisor({ activityLog: processServerLogSink(), correlationId }) !==
-        undefined,
+    windowsAppContainer: platform === "win32" && windowsStep.supervisor !== undefined,
+  };
+}
+
+/**
+ * The Windows step supervisor of ONE verification execution, resolved once and handed to the isolation
+ * probe and to the run, so the runtime behind it is discovered (and its payload verified) once and
+ * never remembered beyond that execution: a refusal that was transient, or a runtime package
+ * reinstalled meanwhile, is seen by the next execution (#4491).
+ */
+export interface ResolvedWindowsStep {
+  readonly supervisor: WindowsStepSupervisor | undefined;
+}
+
+function resolveWindowsStep(
+  platform: NodeJS.Platform,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): ResolvedWindowsStep {
+  return {
+    supervisor:
+      platform === "win32"
+        ? resolveWindowsStepSupervisor({ activityLog, correlationId })
+        : undefined,
   };
 }
 
@@ -240,7 +260,10 @@ export function probeNetworkIsolation(
   const platform = currentPlatform();
   return planIsolationProbe(
     cwd,
-    isolationAvailability(platform, correlationId),
+    isolationAvailability(
+      platform,
+      resolveWindowsStep(platform, processServerLogSink(), correlationId),
+    ),
     platform,
     () => localDockerHost(cwd, diagnostics, correlationId) !== undefined,
   );
@@ -257,9 +280,13 @@ export async function probeNetworkIsolationServed(
   cwd: string,
   diagnostics?: ServerDiagnosticSink,
   correlationId?: string,
+  windowsStep?: ResolvedWindowsStep,
 ): Promise<NetworkIsolationProbe> {
   const platform = currentPlatform();
-  const availability = isolationAvailability(platform, correlationId);
+  const availability = isolationAvailability(
+    platform,
+    windowsStep ?? resolveWindowsStep(platform, processServerLogSink(), correlationId),
+  );
   const served = (): boolean => localDockerHost(cwd, diagnostics, correlationId) !== undefined;
   const probe = planIsolationProbe(cwd, availability, platform, served);
   if (!probe.available || probe.backend !== "container-docker") return probe;
@@ -296,6 +323,8 @@ export function windowsStepRunDeps(
 export interface TimedNetworkIsolationProbe {
   readonly probe: NetworkIsolationProbe;
   readonly durationMs: number;
+  /** The supervisor the probe planned with; the run that executes under this probe reuses it. */
+  readonly windowsStep?: ResolvedWindowsStep | undefined;
 }
 
 export async function timedNetworkIsolationProbe(
@@ -304,8 +333,9 @@ export async function timedNetworkIsolationProbe(
   correlationId?: string,
 ): Promise<TimedNetworkIsolationProbe> {
   const startedAtMs = Date.now();
-  const probe = await probeNetworkIsolationServed(cwd, diagnostics, correlationId);
-  return { probe, durationMs: Math.max(0, Date.now() - startedAtMs) };
+  const windowsStep = resolveWindowsStep(currentPlatform(), processServerLogSink(), correlationId);
+  const probe = await probeNetworkIsolationServed(cwd, diagnostics, correlationId, windowsStep);
+  return { probe, durationMs: Math.max(0, Date.now() - startedAtMs), windowsStep };
 }
 
 export interface ExecuteVerificationArgs {
@@ -457,19 +487,24 @@ export async function executeVerificationEnforced(
 async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
-  const { probe, durationMs: probeDurationMs } =
-    args.isolation ??
-    (await timedNetworkIsolationProbe(
-      args.probeCwd ?? args.workspace.root,
-      args.diagnostics,
-      args.correlationId,
-    ));
+  const {
+    probe,
+    durationMs: probeDurationMs,
+    windowsStep,
+  } = args.isolation ??
+  (await timedNetworkIsolationProbe(
+    args.probeCwd ?? args.workspace.root,
+    args.diagnostics,
+    args.correlationId,
+  ));
   const activityLog = args.activityLog ?? processServerLogSink();
   // #4496: only a run the probe gave the Windows backend frames its steps to the supervisor, in a
-  // private copy of the workspace that the run removes when it ends.
+  // private copy of the workspace that the run removes when it ends. The supervisor is the one the
+  // probe planned with (#4491); a probe handed in without one has the run resolve it once.
   const windowsStepSupervisor =
     probe.available && probe.backend === "windows-appcontainer"
-      ? resolveWindowsStepSupervisor({ activityLog, correlationId: args.correlationId })
+      ? (windowsStep ?? resolveWindowsStep(currentPlatform(), activityLog, args.correlationId))
+          .supervisor
       : undefined;
   const stepCopy =
     windowsStepSupervisor === undefined

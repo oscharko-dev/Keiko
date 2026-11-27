@@ -17,7 +17,7 @@ vi.mock("../coding-runtime/runtimeLaneDiscovery.js", () => ({
   },
 }));
 
-import { resetRunRuntimesForTest, resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
+import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
 
 // #4491: an npm installation (`npm install @oscharko-dev/keiko` plus the optional Windows runtime
 // package) starts its Coding runs from the npm lane, but its verification steps resolved only the
@@ -28,7 +28,6 @@ const roots: string[] = [];
 afterEach(() => {
   discovered.runtime = undefined;
   discovered.hosts = [];
-  resetRunRuntimesForTest();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -79,32 +78,32 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
       events.find((event) => event.op === "editor.verification.windows-step-supervisor")?.extra,
     ).toMatchObject({ outcome: "no-runtime" });
   });
-  // The probe and the run both resolve the supervisor; the payload verification behind it happens
-  // once per run, and a failure it records carries that run's correlation id.
-  it("discovers once per verification run and hands the run's correlation id to the discovery", () => {
-    const log = { write: (): void => undefined };
-    const env = {};
-    for (let resolution = 0; resolution < 2; resolution += 1) {
+  // Nothing is remembered between executions: the Coding run reuses its run id for every
+  // verification attempt, so a refused discovery must not stick and a replaced package is seen.
+  it("discovers again for each execution that reuses a correlation id", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-npm-step-supervisor-")));
+    roots.push(root);
+    const helperPath = join(root, "keiko-runtime-supervisor.exe");
+    const bytes = Buffer.from("npm lane supervisor bytes");
+    writeFileSync(helperPath, bytes);
+    const resolveOnce = (): unknown =>
       resolveWindowsStepSupervisor({
         platform: "win32",
-        env,
-        activityLog: log,
-        correlationId: "run-a",
+        env: {},
+        activityLog: { write: (): void => undefined },
+        correlationId: "coding-run-7",
       });
-    }
-    resolveWindowsStepSupervisor({
-      platform: "win32",
-      env,
-      activityLog: log,
-      correlationId: "run-b",
-    });
-    resolveWindowsStepSupervisor({ platform: "win32", env, activityLog: log });
-    resolveWindowsStepSupervisor({ platform: "win32", env, activityLog: log });
+
+    discovered.runtime = undefined;
+    expect(resolveOnce()).toBeUndefined();
+    discovered.runtime = npmLaneRuntime(bytes, helperPath);
+    expect(resolveOnce()).toBeDefined();
+    discovered.runtime = undefined;
+    expect(resolveOnce()).toBeUndefined();
     expect(discovered.hosts).toEqual([
-      { env, correlationId: "run-a" },
-      { env, correlationId: "run-b" },
-      { env },
-      { env },
+      { env: {}, correlationId: "coding-run-7" },
+      { env: {}, correlationId: "coding-run-7" },
+      { env: {}, correlationId: "coding-run-7" },
     ]);
   });
 });

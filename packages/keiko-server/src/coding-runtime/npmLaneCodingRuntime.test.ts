@@ -593,6 +593,34 @@ describe("npm-lane OpenCode discovery on Windows", () => {
       );
     }
 
+    // The step's copy is verified against the pin each time one is written, so bytes replaced
+    // between two steps of one execution refuse the second step as isolation unavailable.
+    it("refuses the second step as isolation unavailable when the bytes change between steps", () => {
+      const discovery = discoverWindows(windowsInstall());
+      if (discovery.outcome !== "activated") throw new Error("expected activation");
+      const defined = new Set<string>();
+      const supervisor = resolveWindowsStepSupervisor({
+        platform: "win32",
+        env: { USERPROFILE: "C:\\Users\\dev" },
+        activityLog: { write: (): void => undefined },
+        runtime: () => discovery.runtime,
+        driveHost: {
+          define: (drive: string): "defined" => {
+            defined.add(drive);
+            return "defined";
+          },
+          remove: (drive: string): boolean => defined.delete(drive),
+        },
+      });
+      const first = supervisor?.acquire(["C:\\Users\\dev\\step-1"]);
+      expect(first).toBeDefined();
+      first?.release();
+      write(discovery.runtime.nativeHelperPath ?? "", "supervisor-bin4ry", 0o755);
+      expect(() => supervisor?.acquire(["C:\\Users\\dev\\step-2"])).toThrow(
+        /^isolation unavailable: /u,
+      );
+    });
+
     it("is available when the installed supervisor carries the discovered pin", () => {
       expect(supervisorLine(windowsInstall())).toMatchObject({ outcome: "available" });
     });

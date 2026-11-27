@@ -115,8 +115,9 @@ execution root is refused when its real path cannot be resolved, never granted b
 ordered discovery as the Coding activation (packaged release, dev checkout, then the npm runtime
 package), so an npm installation's steps are governed by the runtime package it starts its Coding
 runs from. Like the activation, it stops at a refused packaged or dev-checkout lane instead of falling
-through to the next one, and a run discovers once, reusing the result for its probe and its steps, with
-the discovery failure line carrying the run's correlation id. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
+through to the next one, and each verification execution resolves the supervisor once, sharing it between its isolation
+probe and its run and remembering nothing afterwards (a Coding run reuses one correlation id for every
+attempt), with the discovery failure line carrying the run's correlation id. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
 denies it as isolation unavailable instead of reporting a missing script.
 
 ## Context
