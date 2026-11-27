@@ -2,6 +2,7 @@ import { CatalogDispatchFault } from "./catalogToolErrors.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
+import { openCodeCatalogSettlementBudgetMs } from "./catalogToolFacadeBridge.js";
 import { chatTurnDeadlineSignal } from "../chat-tool-turn-deadline.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type {
@@ -53,11 +54,12 @@ function deferred<T>(): {
 function fixtureWith(
   input?: (fixture: ReturnType<typeof catalogToolFixture>) => CatalogToolBinderInput,
   context?: (fixture: ReturnType<typeof catalogToolFixture>) => CatalogTrustedContext,
+  maxDurationMs?: number,
 ): ReturnType<typeof catalogToolFixture> & {
   binder: ReturnType<typeof createCatalogToolBinder>;
   request: object;
 } {
-  const fixture = catalogToolFixture();
+  const fixture = catalogToolFixture(maxDurationMs);
   const binder = createCatalogToolBinder(input?.(fixture) ?? fixture.input, {
     ...fixture.options,
     context: () => context?.(fixture) ?? fixture.context,
@@ -170,6 +172,77 @@ describe("catalog invocation settlement races", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect((await pending).kind).toBe("settled");
     expect(fixture.primary.events.at(-1)?.extra?.status).toBe("timeout");
+  });
+  // Owner decision 2026-11-24 (work-ending limits): a redeemed git delivery proposal runs many
+  // subprocesses that carry their own timeouts, so a 30 s catalog budget ended healthy work on a
+  // loaded host. The call is given the budget the production catalog declares for it.
+  it("does not settle a governed git execute that runs past the 30 s sandbox default", async () => {
+    vi.useFakeTimers();
+    const budget =
+      openCodeCatalogSettlementBudgetMs({
+        ...ID,
+        action: "git",
+        operation: "stage",
+        phase: "execute",
+        proposalId: "stage-1",
+      }) ?? 0;
+    expect(budget).toBeGreaterThan(30_000);
+    const started = deferred<undefined>();
+    const finish = deferred<CatalogHandlerResult>();
+    const fixture = fixtureWith(
+      (f) => ({
+        ...f.input,
+        handlerBindings: [
+          {
+            ...f.handler,
+            execute: (_args, context): Promise<CatalogHandlerResult> => {
+              expect(context.beforeEffect()).toBe(true);
+              started.resolve(undefined);
+              return finish.promise;
+            },
+          },
+        ],
+      }),
+      (f) => ({ ...f.context, deadlineAt: new Date(1000 + budget).toISOString() }),
+      budget,
+    );
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    fixture.now.mockReturnValue(1000 + 45_000);
+    await vi.advanceTimersByTimeAsync(45_000);
+    finish.resolve(RESULT);
+    const settled = await pending;
+    expect(settled).toMatchObject({ kind: "settled", result: { status: "completed" } });
+    expect(fixture.primary.events.at(-1)?.extra).toMatchObject({
+      status: "completed",
+      budgetMs: budget,
+    });
+  });
+  it("names the budget that fired on a deadline-exceeded line", async () => {
+    vi.useFakeTimers();
+    const started = deferred<undefined>();
+    const fixture = fixtureWith((f) => ({
+      ...f.input,
+      handlerBindings: [
+        {
+          ...f.handler,
+          execute: (): Promise<CatalogHandlerResult> => {
+            started.resolve(undefined);
+            return new Promise(() => undefined);
+          },
+        },
+      ],
+    }));
+    const pending = fixture.binder.dispatch(fixture.request, ID);
+    await started.promise;
+    fixture.now.mockReturnValue(6000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await pending;
+    expect(fixture.primary.events.at(-1)?.extra).toMatchObject({
+      status: "timeout",
+      reason: "deadline-exceeded",
+      budgetMs: 5000,
+    });
   });
   it.each([false, true])(
     "settles timeout and late completion exactly once (effect started=%s)",

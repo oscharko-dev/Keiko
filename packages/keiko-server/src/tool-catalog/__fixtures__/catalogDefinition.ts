@@ -6,7 +6,7 @@ import {
   createToolCatalog,
   compileToolProjection,
 } from "@oscharko-dev/keiko-tool-catalog";
-export function declaration(version = 1, openInput = false): object {
+export function declaration(version = 1, openInput = false, maxDurationMs = 5000): object {
   return {
     toolRef: createToolRef("keiko.fixture.read", version),
     description: "Read bounded fixture data.",
@@ -30,7 +30,7 @@ export function declaration(version = 1, openInput = false): object {
       maxArgumentBytes: 1024,
       maxResultBytes: 2048,
       maxResultCount: 1,
-      maxDurationMs: 5000,
+      maxDurationMs,
     },
     idempotency: "read-only",
     cancellation: "cooperative",
@@ -58,13 +58,14 @@ export function profile(
 export function fixture(
   dialect = "gateway-json-schema",
   alias = "fixture_read",
+  maxDurationMs = 5000,
 ): {
   readonly descriptor: ToolDescriptor;
   readonly catalog: ReturnType<typeof createToolCatalog>;
   readonly projection: ReturnType<typeof compileToolProjection>;
 } {
   const descriptor = createToolDescriptor(
-    declaration(1, dialect === "managed-runtime-json-schema"),
+    declaration(1, dialect === "managed-runtime-json-schema", maxDurationMs),
   );
   const catalog = createToolCatalog(
     {

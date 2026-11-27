@@ -53304,6 +53304,12 @@
               "required": true
             },
             {
+              "name": "budgetMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "catalogRevision",
               "type": "string",
               "dataClass": "digest",

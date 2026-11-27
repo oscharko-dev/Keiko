@@ -56,6 +56,7 @@ const PHASE_FIELDS = {
   discarded: ["invocationId", "toolRef", "settlementId", "reason"],
 } as const;
 const TERMINAL_OPTIONAL = [
+  "budgetMs",
   "inputBytes",
   "outputBytes",
   "resultCount",
@@ -71,6 +72,7 @@ const ID_FIELDS = new Set(["invocationId", "reservationId", "settlementId"]);
 const METRIC_FIELDS = new Set([
   "durationMs",
   "deadlineMs",
+  "budgetMs",
   "inputBytes",
   "outputBytes",
   "resultCount",
@@ -305,6 +307,7 @@ const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
       values: INVOCATION_SETTLED_REASON_VALUES,
     },
     durationMs: { type: "integer", dataClass: "duration", required: true },
+    budgetMs: { type: "integer", dataClass: "duration", required: false },
     effectStarted: { type: "boolean", dataClass: "closed-enum", required: true },
     budgetDisposition: {
       type: "string",
@@ -427,6 +430,7 @@ function validDiagnostics(key: string, value: CatalogJsonValue | undefined): boo
 function metricMaximum(key: string): number {
   if (key === "resultCount") return TOOL_CATALOG_LIMITS.maxArrayItems;
   if (key === "durationMs" || key === "deadlineMs") return Number.MAX_SAFE_INTEGER;
+  if (key === "budgetMs") return TOOL_CATALOG_LIMITS.maxDurationMs;
   // The largest per-tool argument ceiling; `inputBytesWithinTool` holds each tool to its own.
   if (key === "inputBytes") return CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
   return TOOL_CATALOG_LIMITS.maxResultBytes;
@@ -688,9 +692,10 @@ function settledMeasurements(
   event: SettlementEvent,
 ): Pick<
   ActivityLogEventFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION>,
-  "inputBytes" | "outputBytes" | "resultCount" | "truncated"
+  "budgetMs" | "inputBytes" | "outputBytes" | "resultCount" | "truncated"
 > {
   return {
+    ...(event.budgetMs === undefined ? {} : { budgetMs: event.budgetMs }),
     ...(event.inputBytes === undefined ? {} : { inputBytes: event.inputBytes }),
     ...(event.outputBytes === undefined ? {} : { outputBytes: event.outputBytes }),
     ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),

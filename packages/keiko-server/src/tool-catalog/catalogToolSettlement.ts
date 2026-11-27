@@ -389,6 +389,7 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.invocation-settled",
       ...receipt,
+      budgetMs: this.settlementBudgetMs,
       toolRef: result.toolRef,
       reason: result.reason,
       ...result.metrics,

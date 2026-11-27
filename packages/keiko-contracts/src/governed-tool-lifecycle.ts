@@ -178,6 +178,8 @@ interface ToolLifecycleSettlement {
   readonly durationMs: number;
   readonly effectStarted: boolean;
   readonly budgetDisposition: ToolBudgetDisposition;
+  /** The settlement budget this call ran under; a `deadline-exceeded` line names the bound it hit. */
+  readonly budgetMs?: number;
   readonly inputBytes?: number;
   readonly outputBytes?: number;
   readonly resultCount?: number;

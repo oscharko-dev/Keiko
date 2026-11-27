@@ -215,6 +215,15 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS +
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
 
+// ─── Governed git delivery work ──────────────────────────────────────────────────────
+// The settlement budget of a redeemed delivery proposal (`keiko.git.execute`: stage, unstage, commit,
+// push, pull request). Such a call runs many git subprocesses, each already bounded by its own
+// command timeout and cancelled by Stop or authority revocation, so its catalog budget is only a
+// runaway backstop. The 30 s sandbox default ended healthy work on a loaded host and on Windows with
+// slow git or antivirus scanning in a large repository (work-ending limits, owner decision
+// 2026-11-24: a fixed bound that ends healthy work is a defect). It is not the global default.
+export const GOVERNED_GIT_EXECUTE_MAX_DURATION_MS = 10 * 60 * 1_000;
+
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //
 // The fully isolated default above is correct for every tool that runs ON the workspace. It is NOT

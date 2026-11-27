@@ -50433,6 +50433,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: true,
       },
+      budgetMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       effectStarted: {
         type: "boolean",
         dataClass: "closed-enum",
