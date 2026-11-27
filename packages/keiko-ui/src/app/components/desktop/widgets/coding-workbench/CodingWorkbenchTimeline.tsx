@@ -229,6 +229,8 @@ export interface CodingWorkbenchTimelineProps {
    * rows keep their feed state until their own ask is the one shown.
    */
   readonly awaitingApprovalCallId?: string | undefined;
+  /** The run is paused for the repository's build-file trust decision (`workspace-script-trust`). */
+  readonly pausedForTrust?: boolean | undefined;
 }
 
 // The action reaches the failure card through a context: the card sits several rows below the
@@ -238,6 +240,9 @@ const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 const AwaitingApprovalCallIdContext = createContext<string | undefined>(undefined);
 // Whether the run is over, so no row can still be waiting for a decision.
 const RunEndedContext = createContext(false);
+// Whether the run is paused for the package-script trust decision: nothing executes then, so a call
+// the feed still reports open reads as waiting for that decision, never as running.
+const HeldForTrustContext = createContext(false);
 
 // The complete answers read beside the bounded feed reach each message row the same way.
 // The complete model texts read beside the bounded feed reach each message row the same way, with
@@ -275,6 +280,14 @@ function useModelTextsView(activity: UseCodingWorkbenchSafeActivityResult): Mode
   );
 }
 
+// The heading the run's focus returns to: the window's own when it passes one, else this timeline's.
+function useTitleRef(
+  focusRef: RefObject<HTMLHeadingElement | null> | undefined,
+): RefObject<HTMLHeadingElement | null> {
+  const internalTitleRef = useRef<HTMLHeadingElement>(null);
+  return focusRef ?? internalTitleRef;
+}
+
 export function Timeline({
   active = false,
   generating = active,
@@ -284,23 +297,23 @@ export function Timeline({
   focusRef,
   onRunCheck,
   awaitingApprovalCallId,
+  pausedForTrust = false,
 }: CodingWorkbenchTimelineProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const internalTitleRef = useRef<HTMLHeadingElement>(null);
-  const titleRef = focusRef ?? internalTitleRef;
+  const titleRef = useTitleRef(focusRef);
   const [showEvents, setShowEvents] = useState(false);
   const allItems = useTimelineItems(events, activity, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
   const attention = useShownActivityAttention(activity);
   const modelTexts = useModelTextsView(activity);
-  if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
-    return null;
+  if (!active && allItems.length + questions.questions.length === 0 && !attention) return null;
   return (
     <TimelineContexts
       onRunCheck={onRunCheck}
       awaitingApprovalCallId={awaitingApprovalCallId}
       runEnded={!active}
+      heldForTrust={pausedForTrust}
       modelTexts={modelTexts}
     >
       <section className={styles.cmpConversation} aria-labelledby="timeline-title">
@@ -332,12 +345,14 @@ function TimelineContexts({
   onRunCheck,
   awaitingApprovalCallId,
   runEnded,
+  heldForTrust,
   modelTexts,
   children,
 }: {
   readonly onRunCheck: (() => void) | undefined;
   readonly awaitingApprovalCallId: string | undefined;
   readonly runEnded: boolean;
+  readonly heldForTrust: boolean;
   readonly modelTexts: ModelTextsView;
   readonly children: ReactNode;
 }): ReactNode {
@@ -345,7 +360,9 @@ function TimelineContexts({
     <RunCheckContext.Provider value={onRunCheck}>
       <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
         <RunEndedContext.Provider value={runEnded}>
-          <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
+          <HeldForTrustContext.Provider value={heldForTrust}>
+            <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
+          </HeldForTrustContext.Provider>
         </RunEndedContext.Provider>
       </AwaitingApprovalCallIdContext.Provider>
     </RunCheckContext.Provider>
@@ -1737,23 +1754,6 @@ function ToolSummaryEnd({
   );
 }
 
-/**
- * The instant a running call was first seen to start. Later updates of the same call (a progress
- * heartbeat, a part update) carry a newer `occurredAt`; taking it would restart the timer, so the
- * earliest instant seen for this row stands and the elapsed time never runs backwards.
- */
-function earliestStart(earlier: number | undefined, since: string): number | undefined {
-  const parsed = Date.parse(since);
-  if (Number.isNaN(parsed)) return earlier;
-  return earlier === undefined ? parsed : Math.min(earlier, parsed);
-}
-
-function useFirstStart(since: string): number | undefined {
-  const first = useRef<number | undefined>(undefined);
-  first.current = earliestStart(first.current, since);
-  return first.current;
-}
-
 // How long a call has been running, from one second on. It ticks silently: a timer is no live
 // region, so a screen reader is never interrupted once a second.
 function RunningFor({
@@ -1764,8 +1764,8 @@ function RunningFor({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const now = useSecondClock(true);
-  const started = useFirstStart(since);
-  const elapsed = started === undefined ? 0 : now - started;
+  const started = Date.parse(since);
+  const elapsed = Number.isNaN(started) ? 0 : now - started;
   if (elapsed < 1_000) return null;
   return (
     <span className={styles.cmpToolDuration} role="timer">
@@ -1850,6 +1850,10 @@ function succeededToolState(
   return runEnded ? "not-done" : git;
 }
 
+function isOpenTool(tool: CodingSafeActivityTool): boolean {
+  return tool.state === "running" || tool.state === "pending";
+}
+
 // A call that has not finished while the person's decision on it is pending is blocked on the
 // human, not executing: the ask names its call exactly (`awaitingCallId`), never a guess.
 function isHeldForApproval(
@@ -1863,19 +1867,11 @@ function isHeldForApproval(
   );
 }
 
-// A verification that has not finished and already reports the package-script trust decision as its
-// outcome is blocked on the person, not executing: it shows that closed state, never a running timer.
-function isOpenWaitingForTrust(tool: CodingSafeActivityTool): boolean {
-  return (
-    (tool.state === "running" || tool.state === "pending") &&
-    tool.presentation?.verificationOutcome === "waiting-for-trust"
-  );
-}
-
 function useShownToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
   const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
   const runEnded = useContext(RunEndedContext);
-  return shownToolState(tool, superseded, awaitingCallId, runEnded);
+  const heldForTrust = useContext(HeldForTrustContext);
+  return shownToolState(tool, superseded, awaitingCallId, runEnded, heldForTrust);
 }
 
 function shownToolState(
@@ -1883,9 +1879,10 @@ function shownToolState(
   superseded = false,
   awaitingCallId?: string,
   runEnded = false,
+  heldForTrust = false,
 ): ShownToolState {
   if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
-  if (isOpenWaitingForTrust(tool)) return "waiting-for-trust";
+  if (heldForTrust && isOpenTool(tool)) return "waiting-for-trust";
   if (tool.state === "succeeded") return succeededToolState(tool, superseded, runEnded);
   return tool.state === "failed" ? failedToolState(tool) : tool.state;
 }

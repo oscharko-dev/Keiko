@@ -1726,7 +1726,7 @@ function applyTool(
       callId: existing.callId,
       tool: existing.tool,
       state: signal.state,
-      occurredAt: signal.occurredAt,
+      occurredAt: toolOccurredAt(existing, signal),
       ...(presentation === undefined ? {} : { presentation }),
     };
     return "accepted";
@@ -1734,6 +1734,18 @@ function applyTool(
   if (signal.tool === undefined) return "tool-name-missing";
   if (opensAfterInterrupt(entry, signal)) return "tool-transition-refused";
   return insertTool(entry, located.turn, signal, signal.tool, limits);
+}
+
+/**
+ * A call keeps the instant it entered its state: a restatement or heartbeat in the same state
+ * (running again) neither restarts the row's elapsed time nor moves it after later rows. A change
+ * of state takes the instant of that change, which is when the call settled for a terminal one.
+ */
+function toolOccurredAt(
+  existing: { readonly state: CodingSafeActivityToolState; readonly occurredAt: string },
+  signal: { readonly state: CodingSafeActivityToolState; readonly occurredAt: string },
+): string {
+  return existing.state === signal.state ? existing.occurredAt : signal.occurredAt;
 }
 
 /** A failed call's presentation names how often its command has failed in this run. */

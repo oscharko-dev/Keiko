@@ -3037,3 +3037,81 @@ describe("failed tool rows", () => {
     expect(toolOf(projection, "call_bad").presentation?.command?.text).toContain("call_bad");
   });
 });
+
+describe("a running call's start in the live feed (U-18)", () => {
+  function openProjection(): ReturnType<typeof createCodingSafeActivityProjection> {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    return projection;
+  }
+
+  function toolSignal(
+    callId: string,
+    state: "running" | "succeeded",
+    occurredAt: string,
+    tool?: string,
+  ): CodingSafeActivitySignal {
+    return {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId,
+      state,
+      occurredAt,
+      ...(tool === undefined ? {} : { tool }),
+    };
+  }
+
+  function toolsOf(projection: ReturnType<typeof openProjection>): readonly {
+    readonly callId: string;
+    readonly state: string;
+    readonly occurredAt: string;
+  }[] {
+    const content = projection.currentContent();
+    if (content?.kind !== "safe-activity" || content.feed.availability !== "available") return [];
+    return content.feed.turns.flatMap((turn) => turn.tools);
+  }
+
+  function openedWithRunningCall(): ReturnType<typeof openProjection> {
+    const projection = openProjection();
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(
+      RUN_ID,
+      toolSignal("call_verify", "running", "2026-07-18T17:00:01.000Z", "keiko_verify"),
+    );
+    return projection;
+  }
+
+  it("keeps the first start across running heartbeats, so the row neither restarts nor reorders", () => {
+    const projection = openedWithRunningCall();
+    projection.ingest(
+      RUN_ID,
+      toolSignal("call_later", "running", "2026-07-18T17:00:02.000Z", "keiko_workspace_read"),
+    );
+    expect(
+      projection.ingest(RUN_ID, toolSignal("call_verify", "running", "2026-07-18T17:00:30.000Z")),
+    ).toBe(true);
+    const [verify, later] = toolsOf(projection);
+    expect(verify).toMatchObject({ callId: "call_verify", occurredAt: "2026-07-18T17:00:01.000Z" });
+    expect(later).toMatchObject({ callId: "call_later", occurredAt: "2026-07-18T17:00:02.000Z" });
+    expect(verify?.occurredAt.localeCompare(later?.occurredAt ?? "")).toBeLessThan(0);
+  });
+
+  it("takes the instant of the change when the call settles", () => {
+    const projection = openedWithRunningCall();
+    projection.ingest(RUN_ID, toolSignal("call_verify", "running", "2026-07-18T17:00:30.000Z"));
+    projection.ingest(RUN_ID, toolSignal("call_verify", "succeeded", "2026-07-18T17:00:45.000Z"));
+    expect(toolsOf(projection)[0]).toMatchObject({
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:45.000Z",
+    });
+  });
+});

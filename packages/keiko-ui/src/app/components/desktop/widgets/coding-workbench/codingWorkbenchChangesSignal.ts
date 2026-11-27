@@ -33,20 +33,23 @@ function latestEventCursor(events: readonly CodingWorkbenchRuntimeSseEvent[]): s
 const BRANCH_MOVE_TOOL = "keiko_git_branch";
 
 /**
- * How many branch create/switch calls of the live feed succeeded. The checkout stands on another
- * branch after each, so a change of this count is the moment the run's branch chip must be read
- * again; a failed, denied or still pending call moves nothing (#4491).
+ * The succeeded branch create/switch calls of the live feed, as one stable key of their call ids, or
+ * `null` while there is no feed. The checkout stands on another branch after each, so a call id the
+ * key has not named before is the moment the run's branch chip must be read again. Call ids, not a
+ * count: the feed's bound can evict a settled call in the same update that adds a new one, which
+ * leaves a count unchanged. A failed, denied or still pending call moves nothing (#4491).
  */
-export function succeededBranchMoveCount(
+export function succeededBranchMoveKey(
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
-): number {
-  let count = 0;
-  for (const turn of feed?.turns ?? []) {
+): string | null {
+  if (feed === null) return null;
+  const ids: string[] = [];
+  for (const turn of feed.turns) {
     for (const tool of turn.tools) {
-      if (tool.tool === BRANCH_MOVE_TOOL && tool.state === "succeeded") count += 1;
+      if (tool.tool === BRANCH_MOVE_TOOL && tool.state === "succeeded") ids.push(tool.callId);
     }
   }
-  return count;
+  return ids.sort().join("\u001F");
 }
 
 /** Tool calls that finished and may have changed the worktree, counted over the live feed. */

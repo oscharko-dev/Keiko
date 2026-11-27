@@ -5298,12 +5298,20 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
   describe("the branch chip while a run switches branch", () => {
     const MOVED = "fix/zins-sup";
 
-    function branchFeed(state: "succeeded" | "failed"): AvailableCodingSafeActivityFeed {
+    function branchFeed(
+      state: "succeeded" | "failed",
+      callIds: readonly string[] = ["call-branch"],
+    ): AvailableCodingSafeActivityFeed {
       const feed = activityFeed();
       const turn = feed.turns[0];
       if (turn === undefined) throw new Error("fixture turn missing");
-      const branch = { callId: "call-branch", tool: "keiko_git_branch", state, occurredAt: AT };
-      return { ...feed, turns: [{ ...turn, tools: [...turn.tools, branch] }] };
+      const branches = callIds.map((callId) => ({
+        callId,
+        tool: "keiko_git_branch",
+        state,
+        occurredAt: AT,
+      }));
+      return { ...feed, turns: [{ ...turn, tools: [...turn.tools, ...branches] }] };
     }
 
     function movedWorkspace(): ActiveWorkspaceApi {
@@ -5353,6 +5361,48 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       expect(document.body.textContent).toContain(WORKSPACE_A.branch);
     });
 
+    // F1: a restored or replayed feed brings its past moves at once; they are already known.
+    it("reads nothing for moves a restored feed already holds", () => {
+      startLive();
+      const workspace = movedWorkspace();
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "idle", feed: null });
+      const view = render(
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>,
+      );
+      view.rerender(renderLive(workspace, branchFeed("succeeded")));
+      view.rerender(renderLive(workspace, branchFeed("succeeded")));
+      expect(workspace.refresh).not.toHaveBeenCalled();
+    });
+
+    // F2: the feed's bound can evict a settled call in the update that adds the next one.
+    it("reads again when a new move replaces an evicted one under the same count", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), branchFeed("succeeded", ["old"])));
+      const after = movedWorkspace();
+      view.rerender(renderLive(after, branchFeed("succeeded", ["new"])));
+      expect(after.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    // F3: a read that reports no refresh is not repeated in a loop; the settle read follows.
+    it("does not loop on a refresh that reports false, and the settle read still follows", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      const failing = movedWorkspace();
+      vi.mocked(failing.refresh).mockResolvedValue(false);
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      expect(failing.refresh).toHaveBeenCalledTimes(1);
+
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "failed", runId: "run-1" }),
+        actions: actions(),
+      });
+      view.rerender(renderLive(failing, branchFeed("succeeded")));
+      expect(failing.refresh).toHaveBeenCalledTimes(2);
+    });
+
     it("keeps the run's own branch when the pointer names another workspace", () => {
       startLive();
       const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
@@ -5360,6 +5410,36 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       expect(document.body.textContent).toContain(WORKSPACE_A.branch);
       expect(document.body.textContent).not.toContain(WORKSPACE_B.branch);
     });
+  });
+
+  // F6: a run paused for the build-file trust decision executes nothing; the open call reads as
+  // waiting for that decision and shows no running timer.
+  it("shows an open step as waiting while the run is paused for the trust decision", () => {
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, {
+        state: "paused",
+        pauseReason: "workspace-script-trust",
+        runId: "run-1",
+      }),
+      actions: actions(),
+    });
+    const feed = activityFeed();
+    const turn = feed.turns[0];
+    if (turn === undefined) throw new Error("fixture turn missing");
+    const open = { callId: "call-verify", tool: "keiko_verify", state: "running", occurredAt: AT };
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: { ...feed, turns: [{ ...turn, tools: [...turn.tools, open] }] },
+    });
+    const { container } = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(container.querySelector('[data-state="waiting-for-trust"]')).not.toBeNull();
+    expect(container.querySelector('[data-state="running"]')).toBeNull();
+    expect(container.querySelector('[role="timer"]')).toBeNull();
   });
 
   // U-3: the repository a run works in becomes the window's own, so no later remount or workspace

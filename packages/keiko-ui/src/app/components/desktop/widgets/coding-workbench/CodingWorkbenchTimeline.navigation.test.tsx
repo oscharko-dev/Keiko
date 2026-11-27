@@ -396,32 +396,40 @@ describe("a running call", () => {
     expect(container.querySelector('[role="timer"]')).toBeNull();
   });
 
-  // U-18: a later update of the same call carries a newer occurredAt; the timer must stay anchored
-  // at the call's first start and never run backwards.
-  it("keeps the elapsed time anchored at the first start when a later update is newer", () => {
+  // U-18: the timer reads the call's own start, so a row that unmounts (scrolled out of the
+  // virtualized list, collapsed, regrouped) and mounts again keeps counting from that start.
+  it("keeps the elapsed time across an unmount and remount of the row", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(AT));
     const running = tool("call-run", "shell", "running");
-    const { container, rerender } = render(<TimelineOf feed={feedOf([running])} active />);
+    const first = render(<TimelineOf feed={feedOf([running])} active />);
     act(() => {
       vi.advanceTimersByTime(36_000);
     });
-    expect(container.querySelector('[role="timer"]')).toHaveTextContent(/^36 s$/u);
-    const heartbeat = { ...running, occurredAt: new Date(Date.parse(AT) + 30_000).toISOString() };
-    rerender(<TimelineOf feed={feedOf([heartbeat])} active />);
+    expect(first.container.querySelector('[role="timer"]')).toHaveTextContent(/^36 s$/u);
+    first.unmount();
+    const second = render(<TimelineOf feed={feedOf([running])} active />);
     act(() => {
       vi.advanceTimersByTime(3_000);
     });
-    expect(container.querySelector('[role="timer"]')).toHaveTextContent(/^39 s$/u);
+    expect(second.container.querySelector('[role="timer"]')).toHaveTextContent(/^39 s$/u);
   });
 
-  it("shows a running verification held for the trust decision as waiting, without a timer", () => {
+  it("shows an open call as waiting for the decision, without a timer, while the run is held", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(AT));
-    const held = tool("call-verify", "keiko_verify", "running", {
-      verificationOutcome: "waiting-for-trust",
-    });
-    const { container } = render(<TimelineOf feed={feedOf([held])} active />);
+    const open = tool("call-verify", "keiko_verify", "running");
+    const { container } = render(
+      <I18nProvider>
+        <Timeline
+          active
+          pausedForTrust
+          events={[]}
+          activity={{ status: "live", feed: feedOf([open]), errorCode: null, retry: vi.fn() }}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>,
+    );
     act(() => {
       vi.advanceTimersByTime(12_000);
     });

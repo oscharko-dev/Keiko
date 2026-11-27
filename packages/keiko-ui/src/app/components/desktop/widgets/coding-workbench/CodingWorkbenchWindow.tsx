@@ -180,7 +180,7 @@ import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import {
   changesRefreshSignal,
   changesSignalWithUndo,
-  succeededBranchMoveCount,
+  succeededBranchMoveKey,
 } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
@@ -738,16 +738,24 @@ function runDisplayedBranch(
   return live;
 }
 
-/** Reads the workspace again each time the run's feed reports one more successful branch move. */
+/**
+ * Reads the workspace again when the run's feed names a successful branch move it has not named
+ * before. The first feed only seeds what is already known, so a restored or replayed run, which
+ * brings its past moves at once, reads nothing. A read that reports no refresh is not repeated: the
+ * settle read of `useWorkspaceReadAfterRun` follows.
+ */
 function useWorkspaceReadAfterBranchMove(
-  moves: number,
+  moveKey: string | null,
   refreshWorkspace: () => Promise<boolean>,
 ): void {
-  const seen = useRef(moves);
+  const seen = useRef<ReadonlySet<string> | null>(null);
   useEffect(() => {
-    if (moves > seen.current) void refreshWorkspace();
-    seen.current = moves;
-  }, [moves, refreshWorkspace]);
+    if (moveKey === null) return;
+    const current = moveKey === "" ? [] : moveKey.split("\u001F");
+    const known = seen.current;
+    seen.current = new Set([...(known ?? []), ...current]);
+    if (known !== null && current.some((id) => !known.has(id))) void refreshWorkspace();
+  }, [moveKey, refreshWorkspace]);
 }
 
 function WorkbenchContextControls({
@@ -1961,7 +1969,7 @@ function WorkbenchColumns(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
   const changesSignal = changesRefreshSignal(state.events, activity.feed);
-  useWorkspaceReadAfterBranchMove(succeededBranchMoveCount(activity.feed), activeWorkspace.refresh);
+  useWorkspaceReadAfterBranchMove(succeededBranchMoveKey(activity.feed), activeWorkspace.refresh);
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
   // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.
@@ -2237,6 +2245,7 @@ function WorkbenchColumns(
                 questions={questions}
                 focusRef={focusRef}
                 awaitingApprovalCallId={runPendingPermission(state)?.callId}
+                pausedForTrust={state.run.value?.pauseReason === "workspace-script-trust"}
                 onRunCheck={
                   canStartAtLocation(state, locationState, taskBranchMove) &&
                   state.mutation.status !== "pending"
