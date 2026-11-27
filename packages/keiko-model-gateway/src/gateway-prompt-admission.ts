@@ -21,6 +21,11 @@ import {
   type GatewayPromptTokenInput,
 } from "./prompt-token-accounting.js";
 import { admitGatewayPrompt } from "./prompt-admission.js";
+import {
+  promptCalibrationMark,
+  type PromptCalibrationLedger,
+  type PromptCalibrationMark,
+} from "./prompt-calibration.js";
 import { countProviderPromptTokens, type ProviderTokenCount } from "./provider-token-counter.js";
 
 const COUNTER_COOLDOWN_MS = 60_000;
@@ -145,12 +150,15 @@ interface AdmissionOptions {
   readonly correlationId: string;
   readonly now: () => number;
   readonly counter: ProviderPromptCounter;
+  /** Provider-reported usage of earlier prompts of this gateway; absent keeps the local estimate. */
+  readonly calibration?: PromptCalibrationLedger | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
 }
 
 /** One logical call, including corrective retries. Retains the measured floor if counting degrades. */
 export class GatewayPromptAdmission {
   private previous: { estimated: number; measured: number } | undefined;
+  private pending: PromptCalibrationMark | undefined;
   private readonly log: ModelGatewayLogSink;
   constructor(private readonly options: AdmissionOptions) {
     this.log = withCorrelationId(options.log, options.correlationId);
@@ -175,14 +183,16 @@ export class GatewayPromptAdmission {
       this.options.fetchImpl,
     );
     this.remainingBudget(request, budgetMs, start, "counter");
+    const estimated = this.remotePayloadEstimate(projected);
     admitGatewayPrompt(
       projected,
       this.options.capability,
       this.log,
       this.options.correlationId,
       measured,
-      this.retainedTokenFloor(projected, measured),
+      this.retainedTokenFloor(estimated, measured),
       this.options.provider.reasoningHistoryField,
+      this.calibratedTokens(projected, estimated),
     );
     return this.remainingBudget(request, budgetMs, start, "validation");
   }
@@ -238,13 +248,17 @@ export class GatewayPromptAdmission {
     throw error;
   }
 
-  private retainedTokenFloor(
-    request: GatewayCallRequest & GatewayPromptTokenInput,
-    count: ProviderTokenCount,
-  ): number | undefined {
+  /** Records the provider's real prompt usage of the last admitted prompt for later calibration. */
+  recordUsage(providerPromptTokens: number): void {
+    const mark = this.pending;
+    this.pending = undefined;
+    if (mark !== undefined) this.options.calibration?.record(mark, providerPromptTokens);
+  }
+
+  private remotePayloadEstimate(request: GatewayCallRequest & GatewayPromptTokenInput): number {
     const profile = deriveContextProfileFromCapability(this.options.capability);
     // The remote payload omits responseFormat, so the retained floor must omit it too.
-    const estimated = countGatewayPromptTokens(
+    return countGatewayPromptTokens(
       { messages: request.messages, tools: request.tools },
       profile.tokenAccounting,
       {
@@ -252,6 +266,20 @@ export class GatewayPromptAdmission {
         reasoningHistoryField: this.options.provider.reasoningHistoryField,
       },
     );
+  }
+
+  private calibratedTokens(
+    request: GatewayCallRequest & GatewayPromptTokenInput,
+    estimated: number,
+  ): number | undefined {
+    const ledger = this.options.calibration;
+    if (ledger === undefined) return undefined;
+    const modelId = this.options.provider.modelId;
+    this.pending = promptCalibrationMark(modelId, request, estimated);
+    return ledger.calibrate(modelId, request, estimated);
+  }
+
+  private retainedTokenFloor(estimated: number, count: ProviderTokenCount): number | undefined {
     const retained =
       this.previous === undefined
         ? 0

@@ -42,7 +42,13 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["calibrated", "fallback-estimated", "gateway-reported", "retained-measurement"],
+      values: [
+        "calibrated",
+        "fallback-estimated",
+        "gateway-reported",
+        "retained-measurement",
+        "usage-calibrated",
+      ],
     },
     counterStatus: {
       type: "string",
@@ -73,6 +79,9 @@ const PROMPT_ADMISSION = defineActivityLogOperation({
     reportedPromptTokens: { type: "integer", dataClass: "count", required: false },
     providerPromptTokens: { type: "integer", dataClass: "count", required: false },
     retainedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    // The provider's reported usage of an earlier prompt this one extends, plus the estimated
+    // growth. It replaces the local estimate of the whole prompt when present.
+    calibratedPromptTokens: { type: "integer", dataClass: "count", required: false },
     inputBudget: { type: "integer", dataClass: "count", required: true },
     outputBudget: { type: "integer", dataClass: "count", required: true },
     contextWindow: { type: "integer", dataClass: "count", required: true },
@@ -97,6 +106,7 @@ export function admitGatewayPrompt(
   measured: ProviderTokenCount = DISABLED_COUNTER,
   retainedTokens?: number,
   reasoningField?: "reasoning_content" | "reasoning",
+  calibratedTokens?: number,
 ): GatewayCallRequest {
   const profile = deriveContextProfileFromCapability(capability);
   const outputBudget = outputAllocation(request.maxOutputTokens, profile.reservedOutputTokens);
@@ -104,12 +114,13 @@ export function admitGatewayPrompt(
     ...profile,
     reservedOutputTokens: outputBudget,
   }).effectiveInputBudget;
-  const evidence = promptTokenEvidence(request, profile, measured, retainedTokens, reasoningField);
-  const promptTokens = Math.max(
-    evidence.localPromptTokens,
-    evidence.providerPromptTokens ?? 0,
-    evidence.retainedPromptTokens ?? 0,
+  const evidence = promptTokenEvidence(
+    request,
+    profile,
+    { measured, retainedTokens, calibratedTokens },
+    reasoningField,
   );
+  const promptTokens = admittedPromptTokens(evidence);
   const refusal = promptRefusal(promptTokens, inputBudget, outputBudget, capability);
   log.write(
     activityLogEvent(
@@ -146,13 +157,28 @@ interface PromptTokenEvidence {
   readonly reportedPromptTokens?: number;
   readonly providerPromptTokens?: number;
   readonly retainedPromptTokens?: number;
+  readonly calibratedPromptTokens?: number;
+}
+
+interface PromptTokenMeasurements {
+  readonly measured: ProviderTokenCount;
+  readonly retainedTokens: number | undefined;
+  readonly calibratedTokens: number | undefined;
+}
+
+/** A calibrated estimate replaces the local one of the whole prompt; measured floors still bind. */
+function admittedPromptTokens(evidence: PromptTokenEvidence): number {
+  return Math.max(
+    evidence.calibratedPromptTokens ?? evidence.localPromptTokens,
+    evidence.providerPromptTokens ?? 0,
+    evidence.retainedPromptTokens ?? 0,
+  );
 }
 
 function promptTokenEvidence(
   request: GatewayPromptTokenInput,
   profile: ContextProfile,
-  measured: ProviderTokenCount,
-  retainedTokens: number | undefined,
+  { measured, retainedTokens, calibratedTokens }: PromptTokenMeasurements,
   reasoningHistoryField: "reasoning_content" | "reasoning" | undefined,
 ): PromptTokenEvidence {
   const imageCount = contentPartCount(request, "image_url");
@@ -180,6 +206,11 @@ function promptTokenEvidence(
     retainedTokens,
     profile.tokenAccounting,
   );
+  const calibratedPromptTokens = completeMeasuredTokens(
+    request,
+    calibratedTokens,
+    profile.tokenAccounting,
+  );
   return {
     imageCount,
     ...(documentCount === 0 ? {} : { documentCount }),
@@ -190,6 +221,7 @@ function promptTokenEvidence(
     ...(measured.tokens === undefined ? {} : { reportedPromptTokens: measured.tokens }),
     ...(providerPromptTokens === undefined ? {} : { providerPromptTokens }),
     ...(retainedPromptTokens === undefined ? {} : { retainedPromptTokens }),
+    ...(calibratedPromptTokens === undefined ? {} : { calibratedPromptTokens }),
   };
 }
 
@@ -247,14 +279,23 @@ function outputAllocation(requested: number | undefined, fallback: number): numb
   return Number.isSafeInteger(output) && output > 0 ? output : 0;
 }
 
+type CounterSource =
+  | "calibrated"
+  | "fallback-estimated"
+  | "gateway-reported"
+  | "retained-measurement"
+  | "usage-calibrated";
+
 function selectedCounterSource(
   evidence: PromptTokenEvidence,
   source: "calibrated" | "fallback-estimated" | undefined,
-): "calibrated" | "fallback-estimated" | "gateway-reported" | "retained-measurement" {
+): CounterSource {
   const measured = evidence.providerPromptTokens;
   const retained = evidence.retainedPromptTokens ?? 0;
-  if (retained > Math.max(evidence.localPromptTokens, measured ?? 0)) return "retained-measurement";
-  return measured !== undefined && measured >= evidence.localPromptTokens
-    ? "gateway-reported"
-    : (source ?? "fallback-estimated");
+  const base = evidence.calibratedPromptTokens ?? evidence.localPromptTokens;
+  if (retained > Math.max(base, measured ?? 0)) return "retained-measurement";
+  if (measured !== undefined && measured >= base) return "gateway-reported";
+  return evidence.calibratedPromptTokens === undefined
+    ? (source ?? "fallback-estimated")
+    : "usage-calibrated";
 }

@@ -33,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
+import { PromptCalibrationLedger } from "./prompt-calibration.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
 import { GatewayReasoningHistory } from "./reasoning-history.js";
@@ -1414,6 +1415,7 @@ async function* withoutReasoningChunks(
 export class Gateway {
   private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly promptCounter: ProviderPromptCounter;
+  private readonly promptCalibration = new PromptCalibrationLedger();
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
@@ -1569,6 +1571,7 @@ export class Gateway {
       log: this.log,
       now: () => this.clock.now(),
       counter: this.promptCounter,
+      calibration: this.promptCalibration,
       fetchImpl: this.fetchImpl,
     });
   }
@@ -1666,6 +1669,7 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.settleCompletedCall(attempt.state, request, route.provider, result);
+    attempt.promptAdmission.recordUsage(result.usage.promptTokens);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -2447,6 +2451,7 @@ export class Gateway {
       for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
+          state.promptAdmission.recordUsage(usage.promptTokens);
           received = true;
           terminal = chunk;
           break;
