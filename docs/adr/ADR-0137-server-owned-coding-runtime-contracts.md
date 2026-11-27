@@ -471,7 +471,12 @@ branch and keeps the old one as its base (`adoptTaskBranch`; a re-selection of t
 that base). `trustedBranchMatches` accepts the live instance only through that record, for that run,
 that workspace and that base, and from then on never again through the envelope's own branch;
 `resolveVerifiedCommitContext` reads both refs from the record, the one seam commit, push, pull
-request and CI share. If the run cannot adopt the branch, the checkout is switched back to the base
+request and CI share. Once all three moved, the run's Coding History task takes the branch too
+(`followTaskBranch`, logged as `coding-runtime.history` `updated` with `branchChanged`, never the
+name): a task's next message is admitted only on the branch its record names, so a record left on
+the base refused every follow-up of a run that made its own task branch (#4491). That step cannot
+refuse and needs no undo; the Workbench reads the workspace again when the run settles, so the
+branch control names the new branch. If the run cannot adopt the branch, the checkout is switched back to the base
 branch and the result is `rebind-failed`; when the kernel cannot switch it back, the result is
 `recovery-required` (`execution-uncertain`), never a restored checkout, whether the adoption was
 refused or threw and whether the switch back failed or threw; an adoption that threw stays the

@@ -2940,6 +2940,49 @@ describe("CodingWorkbenchWindow", () => {
     expect(scrollTop.value).toBe(1720);
   });
 
+  // Seen in the 1.5.9 release walk (#4491): a Full access run created its own task branch, but the
+  // branch control kept the branch the run began on, because the workspace was not read again.
+  it("reads the workspace again once a run settles, so the branch control shows its task branch", () => {
+    const workspace = activeWorkspaceWithBinding("/repo", "/repo");
+    const running = liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+      },
+      events: [event(1)],
+    });
+    runtimeHookMock.mockReturnValue({ state: running, actions: actions() });
+    const view = render(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(workspace.refresh).not.toHaveBeenCalled();
+
+    const settled = liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "succeeded",
+          runId: "run-1",
+          revision: 3,
+          updatedAt: "2026-07-13T12:09:00.000Z",
+        }),
+      },
+      events: [event(1)],
+    });
+    runtimeHookMock.mockReturnValue({ state: settled, actions: actions() });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(workspace.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("follows the newest activity again once the person decides a changeset review", async () => {
     const user = userEvent.setup();
     const deny = vi.fn();

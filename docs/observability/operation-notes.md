@@ -777,7 +777,10 @@ example twelve command failures and no Keiko refusal.
 `coding-runtime.history` also records a refused history request as `event=refused` under the
 request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
 `invalid-request` (400). A status or title update checks that the task exists without reading its
-messages, so completing a task records `updated` alone. Removing a project that still holds Coding
+messages, so completing a task records `updated` alone. A run that moved onto a task branch of its
+own (`keiko_git_branch`) moves its task with it, recorded as `updated` with `branchChanged` under the
+run's correlation id and never the branch name; a failure there records `failed` and leaves the
+branch move standing (#4491). Removing a project that still holds Coding
 tasks is refused with `PROJECT_HAS_CODING_TASKS` and deletes nothing, because a removed project
 would take its Coding tasks with it. A scheduled wake continues only a task that is still active;
 for a completed task it keeps waiting (#4491).

@@ -964,6 +964,22 @@ function useCheckoutRefresh(
 }
 
 /**
+ * A run can move its Local checkout onto a task branch of its own (`keiko_git_branch`); the server's
+ * workspace then names the new branch. Read it again once the run settles, so the branch control
+ * and the next start show the branch the checkout stands on, not the one the run began on (#4491).
+ */
+function useWorkspaceReadAfterRun(
+  runIsActive: boolean,
+  refreshWorkspace: () => Promise<boolean>,
+): void {
+  const wasActive = useRef(runIsActive);
+  useEffect(() => {
+    if (wasActive.current && !runIsActive) void refreshWorkspace();
+    wasActive.current = runIsActive;
+  }, [runIsActive, refreshWorkspace]);
+}
+
+/**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
  * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
  * a window identity the server keeps drafts for (an embedded or test render, or a window restored
@@ -1087,6 +1103,7 @@ export function CodingWorkbenchWindow({
     offeredExecutionLocations(state),
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
+  useWorkspaceReadAfterRun(runIsActive, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,

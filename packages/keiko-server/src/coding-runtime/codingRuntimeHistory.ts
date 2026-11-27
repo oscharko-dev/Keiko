@@ -95,6 +95,7 @@ const HISTORY_OPERATION = defineActivityLogOperation({
       values: ["active", "completed"],
     },
     titleChanged: { type: "boolean", dataClass: "closed-enum", required: false },
+    branchChanged: { type: "boolean", dataClass: "closed-enum", required: false },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: {
       type: "string-array",
@@ -152,6 +153,7 @@ interface HistoryLogInput {
   readonly previousStatus?: "active" | "completed";
   readonly status?: "active" | "completed";
   readonly titleChanged?: boolean;
+  readonly branchChanged?: boolean;
   readonly refusalKind?: CodingHistoryRefusalKind;
   readonly error?: unknown;
 }
@@ -346,6 +348,18 @@ export function createNativeHistoryCapture(
   return (runId, messages) => history.captureNative(runId, messages);
 }
 
+/** Moves a run's task record onto the governed task branch the run adopted (#4491). */
+export function createTaskBranchHistoryFollow(
+  store: UiStore,
+  log: ServerLogSink | undefined,
+): CodingRuntimeHistory["followTaskBranch"] {
+  // Resolves only an already-authorized run binding, like native capture above.
+  const history = new CodingRuntimeHistory(store, () => undefined, log);
+  return (runId, branch) => {
+    history.followTaskBranch(runId, branch);
+  };
+}
+
 /** Visible conversation content uses the local UI store, never the runtime ledger or activity log. */
 export class CodingRuntimeHistory {
   public constructor(
@@ -478,6 +492,29 @@ export class CodingRuntimeHistory {
       messageCount: 1,
       captureSource: "native-history",
     });
+  }
+
+  /**
+   * The task of a run that moved onto a governed task branch (`keiko_git_branch`) follows it there.
+   * Its next message is admitted only on the branch its record names (`taskIn`), and the workspace
+   * now stands on the new branch, so a record left on the old one refused every follow-up of a run
+   * that created its own task branch (#4491). Never throws: the branch move already happened.
+   */
+  public followTaskBranch(runId: string, branch: string): void {
+    try {
+      const history = this.store.codingHistory;
+      const task = history?.forRun(runId);
+      if (history === undefined || task === undefined || task.branch === branch) return;
+      history.update(task.id, { branch });
+      recordHistory(this.log, "updated", {
+        correlationId: runId,
+        runId,
+        conversationId: task.id,
+        branchChanged: true,
+      });
+    } catch (error) {
+      recordHistory(this.log, "failed", { correlationId: runId, runId, error });
+    }
   }
 
   /** A completed task is closed: a scheduled wake never reopens it. */

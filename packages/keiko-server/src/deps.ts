@@ -32,7 +32,10 @@ import {
   installJiraChatCatalogRuntime,
   type JiraChatCatalogRuntime,
 } from "./atlassian/jiraChatCatalogRuntime.js";
-import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import {
+  createNativeHistoryCapture,
+  createTaskBranchHistoryFollow,
+} from "./coding-runtime/codingRuntimeHistory.js";
 import type { CodingRuntimeConversation } from "./coding-runtime/codingRuntimeContextUsage.js";
 import { createCodingJiraPods, type CodingJiraPods } from "./coding-runtime/codingJiraPodMcp.js";
 import { jiraEmailTemplateInspection } from "./atlassian/jiraEmailTemplateComposition.js";
@@ -6936,7 +6939,7 @@ function qualifiedRuntimeResolver(
       governedSyncHead: records.governedSyncHeads.latest,
       governedTaskBranch: records.governedTaskBranches.latest,
     },
-    governedTaskBranches: records.governedTaskBranches,
+    ...taskBranchRecordInput(args, records),
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6971,6 +6974,24 @@ function qualifiedRuntimeResolver(
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
+}
+
+// The task branches `keiko_git_branch` moves runs onto, and the Coding History task that follows its
+// run there, so the task's next message is admitted on the new branch (#4491).
+function taskBranchRecordInput(
+  args: QualifiedRuntimeResolverInput["args"],
+  records: RuntimeGitRecords,
+): Pick<
+  Parameters<typeof createProductionCodingRuntimeResolver>[0],
+  "governedTaskBranches" | "followTaskBranchInHistory"
+> {
+  return {
+    governedTaskBranches: records.governedTaskBranches,
+    followTaskBranchInHistory: createTaskBranchHistoryFollow(
+      args.bundle.uiStore,
+      processServerLogSink(),
+    ),
+  };
 }
 
 // The server-owned per-run records the runtime Git service writes and the workspace authority and

@@ -157,7 +157,12 @@ export interface CodingHistoryStore {
   readonly bindRun: (id: string, runId: string) => void;
   readonly update: (
     id: string,
-    patch: { readonly title?: string; readonly status?: "active" | "completed" },
+    patch: {
+      readonly title?: string;
+      readonly status?: "active" | "completed";
+      /** The branch the task's next message is admitted on (a governed task branch moved it). */
+      readonly branch?: string;
+    },
   ) => CodingHistoryTask;
   readonly upsert: (
     id: string,
@@ -768,6 +773,7 @@ function updateTask(
   return withImmediateTransaction(db, () => {
     requireTask(db, store, id);
     if (patch.title !== undefined) store.updateChat(id, { title: patch.title });
+    if (patch.branch !== undefined) store.updateChat(id, { branchLabel: patch.branch });
     if (patch.status !== undefined)
       db.prepare("UPDATE coding_history_tasks SET status = ? WHERE chat_id = ?").run(
         patch.status,

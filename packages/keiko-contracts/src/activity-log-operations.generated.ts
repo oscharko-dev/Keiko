@@ -11689,6 +11689,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      branchChanged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       errorClass: {
         type: "string",
         dataClass: "error-kind",

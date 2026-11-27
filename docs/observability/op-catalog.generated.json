@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3e75c2587bcc57e190c318d9b8701b3f67b504385b74c1d627318a5530033d68",
+    "catalogDigest": "af9cfdef2073f8b33e74aea58b88c34b4b3c9147f766052f3dd46904ef4e96ae",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12157,6 +12157,11 @@
             "dataClass": "closed-enum",
             "required": false
           },
+          "branchChanged": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
           "errorClass": {
             "type": "string",
             "dataClass": "error-kind",
@@ -12185,7 +12190,7 @@
         "proofIds": ["coding-runtime.history.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:44",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:190"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:192"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -77283,6 +77288,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "branchChanged",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "captureSource",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -126616,7 +126627,7 @@
     {
       "op": "coding-runtime.backend-run",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts:1648",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts:1653",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126635,7 +126646,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6600",
+      "site": "packages/keiko-server/src/deps.ts:6603",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127019,7 +127030,7 @@
     {
       "op": "coding-runtime.operator-decision",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts:1929",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts:1934",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128129,7 +128140,7 @@
     {
       "op": "gateway.config.load",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1684",
+      "site": "packages/keiko-server/src/deps.ts:1687",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128204,7 +128215,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1755",
+      "site": "packages/keiko-server/src/deps.ts:1758",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129289,7 +129300,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2596",
+      "site": "packages/keiko-server/src/deps.ts:2599",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129911,7 +129922,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4958",
+      "site": "packages/keiko-server/src/deps.ts:4961",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -130077,7 +130088,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3499",
+      "site": "packages/keiko-server/src/deps.ts:3502",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

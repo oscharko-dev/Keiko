@@ -660,6 +660,57 @@ describe("paired coding conversation history", () => {
     expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_TITLE");
   });
 
+  // Seen in the 1.5.9 release walk (#4491): a Full access run created its own task branch, the
+  // workspace adopted it, and the task's next message was refused as `conversation-not-admitted`.
+  it("admits the next message on the task branch a run moved its task onto, logging no branch name", () => {
+    const { history, id, sink } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const moved = activeWorkspace();
+    const adopted: ActiveWorkspaceView = {
+      ...moved,
+      instance: { ...moved.instance, baseBranch: "keiko/task/one", taskBranch: "fix/sum-private" },
+    };
+    expect(history.admits(id, activeWorkspace())).toBe(true);
+    expect(history.admits(id, adopted)).toBe(false);
+
+    history.followTaskBranch(runId, "fix/sum-private");
+    history.followTaskBranch(runId, "fix/sum-private");
+    history.followTaskBranch("unknown-run", "fix/other");
+
+    expect(history.admits(id, adopted)).toBe(true);
+    expect(history.admits(id, activeWorkspace())).toBe(false);
+    const updates = sink.events.filter((event) => event.extra?.event === "updated");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: runId,
+      extra: { runId, conversationId: id, branchChanged: true },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("fix/sum-private");
+  });
+
+  it("logs a task branch that could not be followed and never throws", () => {
+    const { history, sink } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const codingHistory = store.codingHistory;
+    if (codingHistory === undefined) throw new Error("History unavailable");
+    vi.spyOn(codingHistory, "update").mockImplementation(() => {
+      throw new TypeError("store closed");
+    });
+
+    expect(() => {
+      history.followTaskBranch(runId, "fix/sum-private");
+    }).not.toThrow();
+
+    expect(sink.events.at(-1)).toMatchObject({
+      op: "coding-runtime.history",
+      level: "warn",
+      correlationId: runId,
+      errorKind: "internal",
+      extra: { event: "failed", runId, errorClass: "TypeError" },
+    });
+  });
+
   it("updates a task without reading its whole conversation, and logs a missing run capture", () => {
     const { history, id, sink } = fixture();
     history.update(id, { status: "completed" }, "update-no-read");
