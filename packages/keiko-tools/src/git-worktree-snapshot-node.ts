@@ -826,7 +826,29 @@ export async function readGitBaseState(
   head: GitHeadState,
 ): Promise<GitHeadState> {
   if (head.kind === "unborn" && baseRef === head.branch) return head;
+  if (head.kind === "unborn" && (await baseRefIsAbsent(deps, baseRef)))
+    return { kind: "unborn", branch: baseRef, objectIdLength: head.objectIdLength };
   return { kind: "born", sha: await readGitRevision(deps, baseRef) };
+}
+
+// A base that names no commit while HEAD is unborn is itself unborn: a task branch cut from an
+// unborn protected branch has nothing older to be based on (#4491). Only a local branch ref that is
+// absent and resolves to nothing counts; a ref that exists but does not read is damage and fails.
+async function baseRefIsAbsent(deps: NodeGitWorktreeReaderDeps, baseRef: string): Promise<boolean> {
+  if (!isSafeGitRefName(baseRef)) return false;
+  const ctx = machineReadContext(deps);
+  const resolved = await runReadResult(
+    ctx,
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", `${baseRef}^{commit}`],
+    [0, 1],
+  );
+  if (resolved.exitCode === 0) return false;
+  const local = await runReadResult(
+    ctx,
+    ["show-ref", "--verify", "--quiet", `refs/heads/${baseRef}`],
+    [0, 1],
+  );
+  return local.exitCode === 1;
 }
 
 export type GitReadConfigKey = "core.filemode";

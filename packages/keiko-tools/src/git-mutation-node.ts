@@ -25,8 +25,10 @@ import {
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
+  buildUnbornBranchArgv,
   buildUnstageArgv,
   GIT_MUTATION_COMMAND_RULES,
+  type GitBranchCreateExecRequest,
   type GitCommitExecRequest,
   type GitStageExecRequest,
   type GitUnstageExecRequest,
@@ -60,9 +62,15 @@ import {
   readGitTreeDigest,
   readGitHeadState,
   readGitBaseState,
+  readGitWorktreeSnapshot,
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
-import { gitZeroObjectId, sameGitHeadState, type GitHeadState } from "./git-head-state.js";
+import {
+  gitHeadStateObjectId,
+  gitZeroObjectId,
+  sameGitHeadState,
+  type GitHeadState,
+} from "./git-head-state.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
@@ -471,9 +479,10 @@ function validVerifiedOperands(
   return [
     validRevisionState(v.head),
     validRevisionState(v.base),
-    // An unborn head is the branch being committed to; an unborn base is that same branch.
+    // An unborn head is the branch being committed to. An unborn base is the base the run names:
+    // the same branch, or the protected branch a task branch was cut from before it had a commit.
     v.head.kind === "born" || v.head.branch === v.branchName,
-    v.base.kind === "born" || (v.head.kind === "unborn" && v.baseRef === v.branchName),
+    v.base.kind === "born" || (v.head.kind === "unborn" && v.base.branch === v.baseRef),
     /^[a-f0-9]{64}$/u.test(v.stagedTreeDigest),
     isSafeGitRefName(v.branchName),
     isSafeGitRefName(v.baseRef),
@@ -545,10 +554,10 @@ async function prepareVerifiedCommit(
   if (!(await verifiedFactsMatch(ctx, request))) return undefined;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   const deps = commitReadDeps(ctx);
-  // An unborn branch is its own base and has no ref to resolve yet; its full name is the branch's.
+  // An unborn base has no ref to resolve yet; its full name is the branch's own.
   const baseRef =
     request.verified.base.kind === "unborn"
-      ? `refs/heads/${request.verified.branchName}`
+      ? `refs/heads/${request.verified.base.branch}`
       : await readGitFullRef(deps, request.verified.baseRef);
   if ((await readGitTreeDigest(deps, tree)) !== request.verified.stagedTreeDigest) return undefined;
   // The first commit of an unborn branch is a root commit: no parent.
@@ -581,8 +590,8 @@ function verifiedCommitRefTransaction(
       ? `update ${branchRef} ${prepared.head} ${verified.head.sha}\n`
       : `update ${branchRef} ${prepared.head} ${gitZeroObjectId(verified.head.objectIdLength)}\n`;
   if (prepared.baseRef !== branchRef) {
-    if (verified.base.kind !== "born") return undefined;
-    return `start\nverify ${prepared.baseRef} ${verified.base.sha}\n${update}prepare\ncommit\n`;
+    // An unborn base (the protected branch a task branch was cut from, #4491) must still not exist.
+    return `start\nverify ${prepared.baseRef} ${gitHeadStateObjectId(verified.base)}\n${update}prepare\ncommit\n`;
   }
   return sameGitHeadState(verified.base, verified.head)
     ? `start\n${update}prepare\ncommit\n`
@@ -659,6 +668,32 @@ async function createdCommitMatches(
     actual.treeDigest === expected.stagedTreeDigest &&
     actual.messageDigest === gitCommitMessageDigest(request.message)
   );
+}
+
+// A branch from an unborn HEAD re-points HEAD instead of branching from a commit. The unborn state
+// and the absence of the new branch are proved again right before the write, so a branch or commit
+// that appeared since the review fails closed instead of being switched onto.
+async function execUnbornBranch(
+  ctx: RunContext,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  // A failed read throws: the orchestrator turns a thrown adapter call into a failed result, so
+  // nothing is written on a state that could not be proved.
+  const deps = commitReadDeps(ctx);
+  const head = await readGitHeadState(deps);
+  if (head.kind !== "unborn" || head.branch !== req.fromUnbornBranch) return failureFromExit(0, 0);
+  const snapshot = await readGitWorktreeSnapshot(deps);
+  if (snapshot.existingLocalBranchNames.includes(req.branchName)) return failureFromExit(0, 0);
+  return execPlan(ctx, () => buildUnbornBranchArgv(req));
+}
+
+function execBranchCreate(
+  ctx: RunContext,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  return req.fromUnbornBranch === undefined
+    ? execPlan(ctx, () => buildBranchCreateArgv(req))
+    : execUnbornBranch(ctx, req);
 }
 
 // Builds the argv plan, then runs it. A builder throw (invalid operand) is an internal error that
@@ -745,7 +780,7 @@ export function createNodeGitMutationAdapter(
 ): GitLocalMutationAdapter {
   const ctx = buildRunContext(deps);
   return {
-    createBranch: (req) => execPlan(ctx, () => buildBranchCreateArgv(req)),
+    createBranch: (req) => execBranchCreate(ctx, req),
     switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
     stage: (req) => execStage(ctx, req),
     unstage: (req) => execUnstage(ctx, req),

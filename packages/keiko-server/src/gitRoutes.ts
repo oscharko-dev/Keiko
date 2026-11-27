@@ -817,21 +817,25 @@ function branchListFailure(
 }
 
 // HEAD is symbolic on a branch that has no commit yet: `for-each-ref` lists nothing for it, so the
-// Workbench would show no branch for a fresh `git init` (#4491). A detached HEAD fails the read.
+// Workbench would show no branch for a fresh `git init` (#4491). Asked only when the list has no
+// current entry, and then only of a repository that is provably unborn (`rev-parse --verify
+// --quiet HEAD` exits 1): a truncated list or a detached HEAD is never read as an unborn branch.
 async function readUnbornBranch(
   repo: RepositoryContext,
   options: NormalizedGitRouteOptions,
 ): Promise<string | undefined> {
-  const result = await options.runner(
-    [...GIT_BASE_ARGS, "-C", repo.repositoryRoot, "symbolic-ref", "--quiet", "--short", "HEAD"],
-    {
+  const run = (args: readonly string[]): ReturnType<GitProcessRunner> =>
+    options.runner([...GIT_BASE_ARGS, "-C", repo.repositoryRoot, ...args], {
       cwd: repo.repositoryRoot,
       maxBytes: options.maxStatusBytes,
       timeoutMs: options.timeoutMs,
       ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
-    },
-  );
-  const name = result.exitCode === 0 ? result.stdout.trim() : "";
+    });
+  if ((await run(["rev-parse", "--verify", "--quiet", "HEAD"])).exitCode !== 1) return undefined;
+  const symbolic = await run(["symbolic-ref", "--quiet", "HEAD"]);
+  const reference = symbolic.exitCode === 0 ? symbolic.stdout.trim() : "";
+  if (!reference.startsWith("refs/heads/")) return undefined;
+  const name = reference.slice("refs/heads/".length);
   return name.length > 0 && isSafeGitRefName(name) ? name : undefined;
 }
 

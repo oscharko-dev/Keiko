@@ -982,35 +982,47 @@ describe("GET /api/git/branches", () => {
     );
   });
 
-  it("names the unborn branch of a repository with no commit, apart from the branch list", async () => {
-    const runner = vi
-      .fn<GitProcessRunner>()
-      .mockResolvedValueOnce(ok(`${root}\n`))
-      .mockResolvedValueOnce(ok(""))
-      .mockResolvedValueOnce(ok("main\n"));
-
+  async function branchesBody(
+    ...replies: readonly Awaited<ReturnType<GitProcessRunner>>[]
+  ): Promise<{
+    readonly body: unknown;
+    readonly runner: ReturnType<typeof vi.fn<GitProcessRunner>>;
+  }> {
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+    for (const reply of replies) runner.mockResolvedValueOnce(reply);
     const result = await handleGitBranches(
       ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
       deps(runner),
     );
+    return { body: result.body, runner };
+  }
+  const exit1 = { ...ok(""), exitCode: 1 };
 
-    expect(result.body).toMatchObject({ available: true, branches: [], unbornBranch: "main" });
-    expect(runner.mock.calls[2]?.[0]).toEqual(expect.arrayContaining(["symbolic-ref", "HEAD"]));
+  it("names the unborn branch of a repository with no commit, apart from the branch list", async () => {
+    const { body, runner } = await branchesBody(ok(""), exit1, ok("refs/heads/main\n"));
+    expect(body).toMatchObject({ available: true, branches: [], unbornBranch: "main" });
+    expect(runner.mock.calls[2]?.[0]).toEqual(
+      expect.arrayContaining(["rev-parse", "--verify", "--quiet", "HEAD"]),
+    );
+    expect(runner.mock.calls[3]?.[0]).toEqual(expect.arrayContaining(["symbolic-ref", "HEAD"]));
+  });
+
+  it("reports no unborn branch when HEAD resolves, as with a truncated list", async () => {
+    const { body } = await branchesBody(
+      { ...ok("other\0aaa111\0\0"), truncated: true },
+      ok("a1\n"),
+    );
+    expect(body).not.toHaveProperty("unbornBranch");
+  });
+
+  it("reports no unborn branch when HEAD is symbolic on something other than a local branch", async () => {
+    const { body } = await branchesBody(ok(""), exit1, ok("refs/remotes/origin/main\n"));
+    expect(body).not.toHaveProperty("unbornBranch");
   });
 
   it("reports no unborn branch for a detached HEAD", async () => {
-    const runner = vi
-      .fn<GitProcessRunner>()
-      .mockResolvedValueOnce(ok(`${root}\n`))
-      .mockResolvedValueOnce(ok(""))
-      .mockResolvedValueOnce({ ...ok(""), exitCode: 1 });
-
-    const result = await handleGitBranches(
-      ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
-      deps(runner),
-    );
-
-    expect(result.body).not.toHaveProperty("unbornBranch");
+    const { body } = await branchesBody(ok(""), exit1, exit1);
+    expect(body).not.toHaveProperty("unbornBranch");
   });
 });
 

@@ -34,6 +34,12 @@ import type { GitHeadState } from "./git-head-state.js";
 export interface GitBranchCreateExecRequest {
   readonly branchName: string;
   readonly startPointRefHash: string;
+  /**
+   * Set when HEAD is unborn (a fresh `git init`, #4491): the unborn branch HEAD must still name.
+   * There is no commit to start from, so the adapter re-points HEAD at the new unborn branch
+   * (`git switch -c` semantics, no object written) after proving that state again.
+   */
+  readonly fromUnbornBranch?: string;
 }
 
 export interface GitBranchSwitchExecRequest {
@@ -105,6 +111,7 @@ export interface GitLocalMutationAdapter {
 export const GIT_MUTATION_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze([
   "branch",
   "switch",
+  "symbolic-ref",
   "add",
   "restore",
   "commit",
@@ -236,6 +243,13 @@ export function buildBranchCreateArgv(req: GitBranchCreateExecRequest): GitMutat
       assertRef(req.startPointRefHash, "startPointRefHash"),
     ],
   ];
+}
+
+// Re-point HEAD, symbolically, at a branch that has no commit yet: the only way to "create" a branch
+// from an unborn HEAD. The operand is guarded like every ref; the node adapter proves the unborn
+// state immediately before it runs.
+export function buildUnbornBranchArgv(req: GitBranchCreateExecRequest): GitMutationArgvPlan {
+  return [["symbolic-ref", "HEAD", `refs/heads/${assertRef(req.branchName, "branchName")}`]];
 }
 
 // Switch HEAD to an EXISTING local branch. `git switch` (never `checkout`) is branch-only: it cannot

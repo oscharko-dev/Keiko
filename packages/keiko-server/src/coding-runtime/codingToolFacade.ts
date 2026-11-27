@@ -905,7 +905,7 @@ function projectVerifiedCommit(
 // too (a managed worktree, an existing name, ...), the operator report stays the fallback; the
 // other policy blocks keep their bare codes.
 const PROTECTED_BRANCH_COMMIT_GUIDANCE =
-  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
+  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over) (this also holds in a repository with no commit yet: the new branch takes the first commit and the protected branch stays unborn), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
 
 // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
 // not run on the host and named the shell instead, and the model, seeing only `verification-missing`
@@ -1245,8 +1245,6 @@ const BRANCH_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "Keiko creates a task branch only in a Local checkout that stands on its base branch. This run's workspace is not one, so keep working here and report the result to the operator.",
   "executable-filters":
     "This checkout has executable Git filters, so Keiko will not switch its branch. Report to the operator that a task branch must be created outside Keiko.",
-  "unborn-head":
-    "This repository has no commit yet, so there is no commit to branch from. Keiko makes no task branch here: keep working on the current branch, stage, verify and make the first commit there.",
   "authority-denied":
     "The run's authority no longer covers this step. Report this blocker; do not retry or route around it.",
   "policy-block":

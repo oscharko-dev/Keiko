@@ -23,7 +23,6 @@ import {
 import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
 import {
   readVerifiedCommitFacts,
-  requireBornHead,
   verifiedBaseObjectId,
   verifiedHeadObjectId,
 } from "./verifiedCommitFacts.js";
@@ -129,7 +128,6 @@ const RUNTIME_GIT_REASON_FIELD = {
     "not-on-base",
     "not-local-checkout",
     "executable-filters",
-    "unborn-head",
     "rebind-failed",
   ],
 } as const;
@@ -662,7 +660,9 @@ export class RuntimeGitService {
     const facts = await readVerifiedCommitFacts(context, execution);
     if (request.operation === "status") return runtimeGitStatus(context, execution);
     if (request.operation === "branch")
-      return this.branch(context, request.branchName, requireBornHead(facts.head));
+      // An unborn head passes its all-zero object id: the branch step re-points HEAD instead of
+      // branching from a commit (#4491).
+      return this.branch(context, request.branchName, verifiedHeadObjectId(facts));
     if (request.operation === "fetch" || request.operation === "pull")
       return this.sync(context, request.operation);
     if (request.operation === "diff")

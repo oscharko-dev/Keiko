@@ -388,6 +388,37 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     git(["checkout", "-q", "--orphan", "fresh"]);
   });
 
+  it("re-points HEAD at a new unborn branch, writing no object and keeping the index", async () => {
+    const before = git(["ls-files", "--stage"]);
+    const result = await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result.outcome).toBe("succeeded");
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/first");
+    expect(git(["ls-files", "--stage"])).toBe(before);
+    expect(await readGitHeadState({ workspace })).toEqual({
+      kind: "unborn",
+      branch: "feature/first",
+      objectIdLength: 40,
+    });
+  });
+  it("refuses the re-point when HEAD no longer names the unborn branch or the name exists", async () => {
+    const stale = await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "other",
+    });
+    expect(stale.outcome).not.toBe("succeeded");
+    const taken = await adapter().createBranch({
+      branchName: "dev",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(taken.outcome).not.toBe("succeeded");
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+  });
   it("reads the orphan branch as an explicit unborn state", async () => {
     const head: GitHeadState = await readGitHeadState({ workspace });
     expect(head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });

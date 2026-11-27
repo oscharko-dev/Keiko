@@ -3,6 +3,7 @@ import {
   buildAbortArgv,
   buildBranchCreateArgv,
   buildBranchSwitchArgv,
+  buildUnbornBranchArgv,
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
@@ -26,6 +27,9 @@ describe("argv builders — fixed, governed argument vectors", () => {
 
   it("branch-switch builds `git switch <name>` (branch-only, no path checkout)", () => {
     expect(buildBranchSwitchArgv({ branchName: "feature/x" })).toEqual([["switch", "feature/x"]]);
+    expect(
+      buildUnbornBranchArgv({ branchName: "feature/x", startPointRefHash: "0".repeat(40) }),
+    ).toEqual([["symbolic-ref", "HEAD", "refs/heads/feature/x"]]);
   });
 
   it("branch-switch rejects a flag-injecting branch name", () => {

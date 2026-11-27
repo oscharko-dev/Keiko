@@ -1485,7 +1485,6 @@ describe("CodingToolFacade", () => {
     ["not-on-base", "Continue on it"],
     ["not-local-checkout", "Local checkout"],
     ["executable-filters", "executable Git filters"],
-    ["unborn-head", "first commit there"],
     ["authority-denied", "Report this blocker"],
     ["policy-block", "Git policy"],
     ["preflight-block", "keiko_git_status"],

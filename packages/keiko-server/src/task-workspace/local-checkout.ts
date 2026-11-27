@@ -235,8 +235,18 @@ function localHead(root: string): string | undefined {
 // The unborn current branch of the checkout (a fresh `git init`, #4491): HEAD names `branch` and
 // that ref does not exist yet. The only branch an unborn repository can be opened on.
 function isUnbornCurrentBranch(root: string, branch: string): boolean {
-  const state = readProductionWorkspaceGitState(root, root);
-  return state?.headState === "unborn" && state.branch === branch;
+  try {
+    const state = readProductionWorkspaceGitState(root, root);
+    return state?.headState === "unborn" && state.branch === branch;
+  } catch (cause) {
+    // An unreadable HEAD proves nothing: fail closed with the cause kept for the log line.
+    throw new TaskWorkspaceError(
+      "REPOSITORY_UNREACHABLE",
+      "The local checkout could not be inspected; retry when Git is available.",
+      [],
+      { cause },
+    );
+  }
 }
 
 function localView(
@@ -501,9 +511,6 @@ function admitLocalTaskBranch(
   const instance = localCheckoutInstance(instances, workspaceId);
   if (instance === undefined) return "not-local-checkout";
   if (instance.taskBranch !== instance.baseBranch) return "not-on-base";
-  // A branch cannot be created from a commit that does not exist: the run works on the unborn
-  // branch itself and makes its first commit there (#4491).
-  if (isUnbornCurrentBranch(instance.repositoryRoot, instance.taskBranch)) return "unborn-head";
   return hasExecutableFilters(instance.repositoryRoot) ? "executable-filters" : "admitted";
 }
 

@@ -211,7 +211,7 @@ export interface WorkspaceLifecycleActionResult {
 
 /** Whether a task branch may be created in a workspace (#3907); see `admitTaskBranch`. */
 export type TaskBranchAdmission =
-  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters" | "unborn-head";
+  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters";
 
 export interface TaskBranchAdoption {
   readonly workspaceId: string;

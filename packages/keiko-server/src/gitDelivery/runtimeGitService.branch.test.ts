@@ -338,7 +338,7 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     expect(localBranches()).not.toContain("feature/x");
   });
 
-  it.each(["not-local-checkout", "not-on-base", "executable-filters", "unborn-head"] as const)(
+  it.each(["not-local-checkout", "not-on-base", "executable-filters"] as const)(
     "refuses when the workspace says %s",
     async (reason) => {
       admission = reason;
@@ -350,6 +350,41 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
       expect(adoptions).toEqual([]);
     },
   );
+
+  // #4491: from an unborn HEAD the branch is `git switch -c`: HEAD is re-pointed, no object is written.
+  it("creates a task branch from an unborn HEAD by re-pointing HEAD at it", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "succeeded",
+      reason: "none",
+      branch: "feature/x",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/x");
+    expect(localBranches()).toBe("main");
+    expect(adoptions).toEqual([
+      expect.objectContaining({
+        branch: "feature/x",
+        baseBranch: "fresh",
+        headSha: "0".repeat(40),
+      }),
+    ]);
+    const lines = branchLines();
+    expect(lines.at(-1)).toMatchObject({ extra: { state: "succeeded" } });
+  });
+
+  it("still refuses a name that already exists from an unborn HEAD", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    git(root, ["branch", "feature/taken", "main"]);
+    await expect(branch(service(), "feature/taken")).resolves.toMatchObject({
+      status: "blocked",
+      reason: "branch-exists",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+  });
 
   it("refuses every task branch when the run has no workspace port at all", async () => {
     await expect(branch(service("none"), "feature/x")).resolves.toMatchObject({

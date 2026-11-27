@@ -9,6 +9,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
+import { gitZeroObjectId } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+
 import { isWindowsLocalDriveFilePath } from "../windowsHostPath.js";
 
 const HEAD_BYTES = 4_096;
@@ -40,7 +42,13 @@ const NODE_FS: ProductionWorkspaceHeadFileSystem = {
   realpath: realpathSync,
 };
 
-/** Reads a live Git HEAD without a shell or ambient executable lookup. */
+/**
+ * Reads a live Git HEAD without a shell or ambient executable lookup. It is deliberately file-based
+ * and spawn-free: the authority re-reads HEAD on every request and every run step, where starting
+ * Git would add latency, depend on the ambient executable and open a console on Windows. Every read
+ * is bounded and handle-verified instead. The tools reader (`readGitHeadState`) asks Git itself; the
+ * two must agree, which the head reader's SHA-256 test proves for the unborn zero id.
+ */
 export function readProductionWorkspaceHead(
   workspaceRoot: string,
   repositoryRoot: string,
@@ -96,7 +104,7 @@ function referencedState(
   if (resolved !== undefined) return { head: resolved, headState: "born", branch, gitDir };
   if (branch === undefined || !referenceAbsent(gitDir, commonRoot, reference, fileSystem))
     return undefined;
-  const zero = "0".repeat(objectIdLength(commonRoot, fileSystem));
+  const zero = gitZeroObjectId(objectIdLength(commonRoot, fileSystem));
   return { head: zero, headState: "unborn", branch, gitDir };
 }
 

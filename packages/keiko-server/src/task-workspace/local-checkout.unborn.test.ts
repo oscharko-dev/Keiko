@@ -156,14 +156,26 @@ describe("an unborn repository", () => {
     expect(service.admitTaskBranch(selected.instance.workspaceId)).toBe("admitted");
   });
 
-  it("admits no task branch while there is no commit to branch from", () => {
+  it("admits a task branch from the unborn branch and adopts it with the head still unborn", () => {
     const service = unbornFixture();
     const { instance } = select(service);
-    expect(service.admitTaskBranch(instance.workspaceId)).toBe("unborn-head");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+    ugit("symbolic-ref", "HEAD", "refs/heads/feature/first");
+    const adopted = service.adoptTaskBranch({
+      workspaceId: instance.workspaceId,
+      branch: "feature/first",
+      baseBranch: "main",
+    });
+    expect(adopted.instance).toMatchObject({
+      taskBranch: "feature/first",
+      baseBranch: "main",
+      lastVerifiedHead: ZERO,
+    });
   });
 
   it("restores a persisted unborn workspace through the ordinary active-workspace action", async () => {
-    const service = unbornFixture();
+    const log = createBufferedServerLogSink();
+    const service = unbornFixture(log);
     const selected = select(service);
     service.clearActive();
     expect(service.getActive()).toBeUndefined();
@@ -173,6 +185,10 @@ describe("an unborn repository", () => {
       acquireLock: false,
     });
     expect(restored.instance).toMatchObject({ taskBranch: "main", lastVerifiedHead: ZERO });
+    const marked = log.events.filter(
+      (event) => event.extra?.outcome === "activated" && event.extra.headState === "unborn",
+    );
+    expect(marked).toHaveLength(2);
     expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
   });
 

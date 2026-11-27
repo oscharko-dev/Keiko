@@ -52,6 +52,7 @@ import { createVerifiedCommitService } from "./verifiedCommitService.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { executeGovernedMutation } from "./execution.js";
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
+import { runTaskBranch } from "./runtimeGitBranch.js";
 import type {
   VerifiedCommitRunContext,
   VerifiedCommitService,
@@ -2793,6 +2794,95 @@ describe("the first commit of an unborn branch through the verified flow", () =>
     const result = await service.execute(proposalId, approval);
     expect(result?.status).not.toBe("succeeded");
     expect(git(["rev-parse", "HEAD"])).toBe(git(["rev-parse", "dev"]));
+  });
+});
+
+// #4491: `main` is protected, so the first commit of a fresh `git init` on its unborn `main` is refused
+// and the model is told to make a task branch. From an unborn HEAD that is `git switch -c`: HEAD is
+// re-pointed at the new unborn branch, the root commit lands there and `main` stays unborn.
+describe("the first commit of a repository whose unborn branch is protected", () => {
+  const unbornMain = (): VerifiedCommitRunContext => ({
+    ...context(),
+    baseRef: "main",
+    headRef: "main",
+  });
+  const onTaskBranch = (): VerifiedCommitRunContext => ({
+    ...context(),
+    baseRef: "main",
+    headRef: "feature/first",
+  });
+
+  beforeEach(() => {
+    git(["checkout", "-q", "--orphan", "main"]);
+    service = createVerifiedCommitService({ ...options, context: unbornMain });
+  });
+
+  async function proposeOn(): Promise<{
+    readonly status?: string | undefined;
+    readonly id?: string | undefined;
+  }> {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    const proposal = await service.propose("feat: the first commit");
+    return { status: proposal?.status, id: proposal?.proposalId };
+  }
+
+  it("refuses the commit on the protected branch, then commits on a task branch cut from it", async () => {
+    const proposed = await proposeOn();
+    expect(proposed.status).toBe("approval-required");
+    const refused = await service.execute(proposed.id ?? "", await claim(proposed.id ?? ""));
+    expect(refused?.status).not.toBe("succeeded");
+    expect(JSON.stringify(events)).toContain("protected-branch");
+    expect(git(["branch", "--list"])).toBe("codex/task\n  dev");
+
+    const port = { admit: (): "admitted" => "admitted", adopt: (): boolean => true } as const;
+    const created = await runTaskBranch({
+      context: unbornMain(),
+      mutationDeps: options.mutationDeps,
+      execution: options.execution ?? {},
+      port,
+      headSha: gitZeroObjectId(40),
+      branchName: "feature/first",
+    });
+    expect(created).toMatchObject({ status: "succeeded", branch: "feature/first" });
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/feature/first");
+    expect(git(["branch", "--list", "main", "feature/first"])).toBe("");
+
+    service = createVerifiedCommitService({ ...options, context: onTaskBranch });
+    const proposalId = await verifiedProposal();
+    const result = await service.execute(proposalId, await claim(proposalId));
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    expect(git(["rev-parse", "feature/first"])).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["branch", "--list", "main"])).toBe("");
+  });
+
+  it("refuses to create the branch when the unborn branch moved since the review", async () => {
+    git(["update-ref", "refs/heads/main", git(["rev-parse", "dev"])]);
+    const created = await runTaskBranch({
+      context: unbornMain(),
+      mutationDeps: options.mutationDeps,
+      execution: options.execution ?? {},
+      port: { admit: () => "admitted", adopt: () => true },
+      headSha: gitZeroObjectId(40),
+      branchName: "feature/first",
+    });
+    expect(created.status).not.toBe("succeeded");
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+  });
+
+  it("puts HEAD back on the unborn branch when the run cannot adopt the new one", async () => {
+    const created = await runTaskBranch({
+      context: unbornMain(),
+      mutationDeps: options.mutationDeps,
+      execution: options.execution ?? {},
+      port: { admit: () => "admitted", adopt: () => false },
+      headSha: gitZeroObjectId(40),
+      branchName: "feature/first",
+    });
+    expect(created).toMatchObject({ status: "failed", reason: "rebind-failed" });
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
   });
 });
 

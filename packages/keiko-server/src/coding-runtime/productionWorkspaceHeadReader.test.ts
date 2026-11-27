@@ -10,12 +10,14 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { gitZeroObjectId, readGitHeadState } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import {
   readProductionWorkspaceGitState,
@@ -310,13 +312,28 @@ describe("production workspace HEAD reader worktree layouts", () => {
       expect(readProductionWorkspaceHead(root, root)).toBe("0".repeat(40));
     });
 
-    it("takes the zero id of a SHA-256 repository", () => {
+    it("takes the zero id the tools reader reports for a SHA-256 repository", async () => {
       const root = unbornRepo();
-      writeFileSync(
-        join(root, ".git", "config"),
-        "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectformat = sha256\n",
-      );
-      expect(readProductionWorkspaceHead(root, root)).toBe("0".repeat(64));
+      rmSync(join(root, ".git"), { recursive: true, force: true });
+      try {
+        git(root, ["init", "-q", "-b", "main", "--object-format=sha256"]);
+      } catch {
+        return; // This Git cannot create SHA-256 repositories; the SHA-1 case above still holds.
+      }
+      const workspace = {
+        root,
+        selectedRoot: root,
+        name: "test",
+        version: undefined,
+        testFramework: "vitest",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      } as const;
+      const tools = await readGitHeadState({ workspace });
+      expect(tools).toEqual({ kind: "unborn", branch: "main", objectIdLength: 64 });
+      expect(readProductionWorkspaceHead(root, root)).toBe(gitZeroObjectId(64));
     });
 
     it("stays born once the first commit exists, and reads a packed branch as born", () => {
@@ -334,9 +351,22 @@ describe("production workspace HEAD reader worktree layouts", () => {
       });
     });
 
-    it("is not unborn when the branch ref is a directory or a dangling link", () => {
+    it("is not unborn when the branch ref is a directory", () => {
       const root = unbornRepo();
       mkdirSync(join(root, ".git", "refs", "heads", "main"));
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn when a component of the ref path is a file (ENOTDIR)", () => {
+      const root = unbornRepo();
+      writeFileSync(join(root, ".git", "refs", "heads", "a"), "x\n");
+      writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/a/b\n");
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn when the branch ref is a dangling symbolic link", () => {
+      const root = unbornRepo();
+      symlinkSync(join(root, "missing-target"), join(root, ".git", "refs", "heads", "main"));
       expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
     });
 

@@ -7,6 +7,7 @@ import type {
   GitMutationOutcome,
 } from "@oscharko-dev/keiko-tools";
 import {
+  isGitZeroObjectId,
   readGitRevision,
   readGitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -30,7 +31,7 @@ import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 
 /** What the run's workspace says about a task branch being created in it. */
 export type RuntimeGitTaskBranchAdmission =
-  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters" | "unborn-head";
+  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters";
 
 export interface RuntimeGitTaskBranchAdoption {
   readonly runId: string;
@@ -207,6 +208,9 @@ async function createAndSwitch(
       name,
     );
     if (!created.done) return created;
+    // From an unborn HEAD the creation already re-pointed HEAD at the new branch (there is no commit
+    // to switch away from or to), so there is no second step (#4491).
+    if (isGitZeroObjectId(input.headSha)) return created;
   }
   return stepOf(await mutate(input, { kind: "branch-switch", branchName: name }), name);
 }
@@ -216,7 +220,19 @@ async function createAndSwitch(
 // switch back: the checkout then stays off its base and no longer matches the run's record, which
 // leaves the run unauthorized (fail closed) and is reported as such, never as a restored checkout.
 async function switchBack(input: RuntimeGitBranchInput): Promise<boolean> {
-  const back = await mutate(input, { kind: "branch-switch", branchName: input.context.baseRef });
+  // An unborn base is not a branch `switch` can name: HEAD is re-pointed at it the way it was
+  // re-pointed away from it, under the same policy.
+  const back = await mutate(
+    input,
+    isGitZeroObjectId(input.headSha)
+      ? {
+          kind: "branch-create",
+          branchName: input.context.baseRef,
+          baseBranchName: input.branchName,
+          startPointRefHash: input.headSha,
+        }
+      : { kind: "branch-switch", branchName: input.context.baseRef },
+  );
   return back.outcome.status === "succeeded";
 }
 
