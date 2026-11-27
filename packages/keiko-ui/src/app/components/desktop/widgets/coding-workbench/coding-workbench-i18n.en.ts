@@ -528,6 +528,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.unavailable": "unavailable",
   "codingWorkbench.repository.unavailableHelp":
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
+  "codingWorkbench.repository.reconnect": "Reconnect repository",
+  "codingWorkbench.repository.reconnectFailed":
+    "Keiko could not reconnect this repository. Open Git and reconnect it there, then choose it again.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
   "codingWorkbench.repository.folderModeHint":

@@ -411,6 +411,7 @@ function fixtureFrom({
   noActiveWorkspace,
 }: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
+  const activeLookups: (string | undefined)[] = [];
   const listPrunableSettled = vi.fn((): readonly string[] => []);
   const deletePruned = vi.fn();
   const fixtureStore: CodingRuntimeSnapshotStore = {
@@ -617,7 +618,10 @@ function fixtureFrom({
       snapshots: store,
       evidence,
       workspaceLifecycle: {
-        getActive: () => fixtureActiveWorkspace(noActiveWorkspace, activeRoot()),
+        getActive: (correlationId?: string) => {
+          activeLookups.push(correlationId);
+          return fixtureActiveWorkspace(noActiveWorkspace, activeRoot());
+        },
         listAll: () => workspaceInventory ?? [],
       } as never,
       launchResolver,
@@ -664,6 +668,7 @@ function fixtureFrom({
     pendingResearchApprovals,
     listPrunableSettled,
     deletePruned,
+    activeLookups,
   };
 }
 
@@ -3238,6 +3243,8 @@ describe("CodingRuntimeOrchestrator", () => {
       failureCode: "workspace-selection-mismatch",
     });
     expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    // The pointer read carries the start's correlation id, so its refusal line is not anonymous.
+    expect(f.activeLookups).toContain("3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13");
     expect(captured.records).toContainEqual(
       expect.objectContaining({
         correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",

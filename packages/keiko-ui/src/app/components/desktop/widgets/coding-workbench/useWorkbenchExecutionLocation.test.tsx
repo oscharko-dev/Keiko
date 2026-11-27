@@ -675,6 +675,27 @@ describe("a selection whose folder lost its workspace behind a still-held bindin
     });
   });
 
+  it("reads the folder's availability again on retry, so a reconnect makes it ready at once", async () => {
+    // The person reconnected the folder: no focus event follows, only the retry the action calls.
+    mocks.fetchProjects.mockResolvedValueOnce(project(false)).mockResolvedValue(project(true));
+    mocks.selectLocalCheckout.mockReturnValue(new Promise(() => undefined));
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(true);
+    });
+    mocks.fetchProjects.mockClear();
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => {
+      expect(mocks.fetchProjects).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(false);
+      expect(result.current.ready).toBe(true);
+    });
+  });
+
   it("keeps the server's own named cause over the lost workspace", async () => {
     mocks.fetchProjects.mockResolvedValue(project(false));
     mocks.selectLocalCheckout.mockRejectedValue(

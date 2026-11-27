@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
+import { reconnectProject } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -313,6 +314,15 @@ function LocationChip({
   );
 }
 
+// A registered folder that still exists but whose workspace connection no longer matches the
+// directory behind it (a repository deleted and cloned again at the same path): the person can
+// reconnect it in one step, so the notice offers that instead of only naming the problem.
+function repositoryReconnectable(root: string | null, catalog: CatalogState): boolean {
+  if (root === null || catalog.loading || catalog.error) return false;
+  const selected = catalog.repositories.find((project) => project.path === root);
+  return selected !== undefined && selected.available && selected.workspaceAvailable === false;
+}
+
 function repositoryUnavailable(root: string | null, catalog: CatalogState): boolean {
   if (root === null || catalog.loading || catalog.error) return false;
   const selected = catalog.repositories.find((project) => project.path === root);
@@ -551,6 +561,7 @@ interface RepositorySelectorState {
   readonly folderMode: boolean;
   // #4068: ...unless the runtime confines no work in place.
   readonly folderUnsupported: boolean;
+  readonly reconnectable: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
@@ -581,6 +592,7 @@ function useRepositorySelectorState(
     branchDenied,
     folderMode,
     folderUnsupported,
+    reconnectable: repositoryReconnectable(root, catalog),
   };
 }
 
@@ -598,6 +610,8 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly placement?: SelectorPlacement;
   /** A change reloads the repository catalog (the folder's workspace availability moved). */
   readonly catalogRefreshKey?: string | undefined;
+  /** The person reconnected the selected repository: the window binds it again. */
+  readonly onReconnected?: (() => void) | undefined;
 }
 
 function LocationSelectorField({
@@ -661,7 +675,104 @@ function BranchSelectorField({
   );
 }
 
+function reportReconnectFailure(error: unknown): void {
+  const correlationId = correlationIdOf(error);
+  reportClientDiagnostic("[keiko] coding workbench repository reconnect failed", {
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
+}
+
+// One click re-connects the registered folder through the same route the Git window uses; the
+// connection is proven afresh by the server, never assumed. A refusal says so in plain words.
+function ReconnectAction({
+  root,
+  reload,
+  onReconnected,
+  t,
+}: {
+  readonly root: string;
+  readonly reload: () => void;
+  readonly onReconnected: (() => void) | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const reconnect = (): void => {
+    setBusy(true);
+    setFailed(false);
+    void reconnectProject(root)
+      .then(() => {
+        reload();
+        onReconnected?.();
+      })
+      .catch((error: unknown) => {
+        setFailed(true);
+        reportReconnectFailure(error);
+      })
+      .finally(() => {
+        setBusy(false);
+      });
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.cmpRepositorySelectorGit}
+        disabled={busy}
+        onClick={reconnect}
+        data-testid="coding-workbench-reconnect"
+      >
+        {t("codingWorkbench.repository.reconnect")}
+      </button>
+      {failed ? (
+        <p className={styles.cmpRepositorySelectorNotice} role="alert">
+          {t("codingWorkbench.repository.reconnectFailed")}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function SelectorRecoveryForState({
+  root,
+  state,
+  placement,
+  onOpenGit,
+  onReconnected,
+  t,
+}: {
+  readonly root: string | null;
+  readonly state: RepositorySelectorState;
+  readonly placement: SelectorPlacement;
+  readonly onOpenGit: () => void;
+  readonly onReconnected: (() => void) | undefined;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <SelectorRecoveryNotice
+        root={root}
+        state={state}
+        placement={placement}
+        onOpenGit={onOpenGit}
+        t={t}
+      />
+      {root !== null && state.reconnectable ? (
+        <ReconnectAction
+          root={root}
+          reload={state.catalog.reload}
+          onReconnected={onReconnected}
+          t={t}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function SelectorRecoveryNotice({
   root,
   state,
   placement,
@@ -764,6 +875,7 @@ export function CodingWorkbenchRepositorySelector({
         root={root}
         state={state}
         onOpenGit={onOpenGit}
+        onReconnected={work.onReconnected}
         t={t}
       />
     </div>

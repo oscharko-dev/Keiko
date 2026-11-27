@@ -28551,6 +28551,12 @@
               "required": false
             },
             {
+              "name": "driftCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "driftMarker",
               "type": "string",
               "dataClass": "closed-enum",
@@ -52445,6 +52451,12 @@
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "driftCause",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {

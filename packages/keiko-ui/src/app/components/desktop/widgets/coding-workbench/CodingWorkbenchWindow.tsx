@@ -723,7 +723,7 @@ function WorkbenchContextControls({
   offeredLocations,
   onSelectLocation,
   placement = "composer",
-  catalogRefreshKey,
+  catalogRefresh,
 }: {
   readonly repositoryRoot: string | null;
   readonly selectedBranch: string | undefined;
@@ -738,7 +738,7 @@ function WorkbenchContextControls({
   readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly placement?: "composer" | "setup";
-  readonly catalogRefreshKey: string;
+  readonly catalogRefresh: CatalogRefreshProps;
 }): ReactNode {
   const branch = runIsActive
     ? (runWorkspace.bound?.taskBranch ?? null)
@@ -757,7 +757,7 @@ function WorkbenchContextControls({
       onSelectLocation={onSelectLocation}
       onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
-      catalogRefreshKey={catalogRefreshKey}
+      {...catalogRefresh}
     />
   );
 }
@@ -1739,6 +1739,19 @@ function catalogRefreshKeyOf(locationState: WorkbenchExecutionLocationState): st
   return locationState.unbound ? "unbound" : "bound";
 }
 
+/** What the repository selector reads again, and tells the window, when the folder's workspace moves. */
+interface CatalogRefreshProps {
+  readonly catalogRefreshKey: string;
+  readonly onReconnected: () => void;
+}
+
+function catalogRefreshOf(locationState: WorkbenchExecutionLocationState): CatalogRefreshProps {
+  return {
+    catalogRefreshKey: catalogRefreshKeyOf(locationState),
+    onReconnected: locationState.retry,
+  };
+}
+
 function locationMutationPending(
   state: CodingWorkbenchRuntimeState,
   locationState: WorkbenchExecutionLocationState,
@@ -1752,7 +1765,7 @@ function canStartAtLocation(
   locationState: WorkbenchExecutionLocationState,
   taskBranchMove: TaskBranchMove | null,
 ): boolean {
-  return state.canStart && locationState.ready && taskBranchMove === null;
+  return state.canStart && locationState.ready && !locationState.unbound && taskBranchMove === null;
 }
 
 function WorkbenchColumns({
@@ -1975,7 +1988,7 @@ function WorkbenchColumns({
       offeredLocations={offeredExecutionLocations(state)}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
-      catalogRefreshKey={catalogRefreshKeyOf(locationState)}
+      catalogRefresh={catalogRefreshOf(locationState)}
     />
   );
   // #3873: a run restored after a reload keeps its settlement and its captured conversation.
@@ -2000,7 +2013,7 @@ function WorkbenchColumns({
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"
-              catalogRefreshKey={catalogRefreshKeyOf(locationState)}
+              catalogRefresh={catalogRefreshOf(locationState)}
             />
           )}
           selectedRoot={repositoryRoot ?? undefined}

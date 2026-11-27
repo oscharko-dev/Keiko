@@ -49635,6 +49635,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "identity-unsupported",
         ],
       },
+      driftCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "instance-record-missing",
+          "root-unregistered",
+          "root-not-canonical",
+          "git-state-unreadable",
+          "branch-changed",
+          "git-dir-identity-changed",
+          "folder-identity-changed",
+          "inspection-failed",
+        ],
+      },
       evidencePersistence: {
         type: "string",
         dataClass: "closed-enum",

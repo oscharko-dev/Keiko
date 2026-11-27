@@ -35,7 +35,9 @@ import {
   requireUnchangedWorkspaceIdentity,
   selectFolderWorkspace,
   type FolderSelectionRequest,
+  type InPlaceViewResult,
 } from "./folder-workspace.js";
+import type { WorkspaceDriftCause } from "./evidence.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 import type {
@@ -253,22 +255,24 @@ function localView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
-): ActiveWorkspaceView | undefined {
+): InPlaceViewResult {
   const persisted = instances.getById(pointer.workspaceId);
-  if (persisted?.executionLocation !== "local") return undefined;
+  if (persisted?.executionLocation !== "local") return { cause: "instance-record-missing" };
   const root = persisted.repositoryRoot;
-  if (!isRegisteredLocalRoot(store, root)) return undefined;
-  if (!isCanonicalLocalRoot(root)) return undefined;
+  if (!isRegisteredLocalRoot(store, root)) return { cause: "root-unregistered" };
+  if (!isCanonicalLocalRoot(root)) return { cause: "root-not-canonical" };
   const state = readProductionWorkspaceGitState(root, root);
-  if (state?.branch !== persisted.taskBranch) return undefined;
+  if (state === undefined) return { cause: "git-state-unreadable" };
+  if (state.branch !== persisted.taskBranch) return { cause: "branch-changed" };
   const identity = gitDirectoryIdentity(root, state.gitDir);
-  if (`${LOCAL_PREFIX}${identity}` !== pointer.workspaceId) return undefined;
+  if (`${LOCAL_PREFIX}${identity}` !== pointer.workspaceId)
+    return { cause: "git-dir-identity-changed" };
   const instance: WorkspaceInstance = {
     ...persisted,
     lastVerifiedAt: new Date().toISOString(),
     lastVerifiedHead: state.head,
   };
-  return { instance, binding: buildBinding(instance), pointer };
+  return { view: { instance, binding: buildBinding(instance), pointer } };
 }
 
 export interface LocalCheckoutLifecycle extends WorkspaceLifecycleService {
@@ -437,7 +441,7 @@ function activateLocalCheckout(
   identity: string,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
 ): ActiveWorkspaceView {
   // An unborn branch has no tree to hydrate and nothing to switch to: the checkout already stands
   // on it and its first commit is made through the verified-commit lane (#4491).
@@ -450,7 +454,7 @@ function activateLocalCheckout(
   const workspaceId = `${LOCAL_PREFIX}${identity}`;
   instances.upsert(localInstance(request, identity, head, atIso, instances.getById(workspaceId)));
   pointerStore.set({ workspaceId, setBy: request.requestedBy, atIso });
-  const active = getActive();
+  const active = getActive(request.correlationId);
   if (active === undefined)
     throw new TaskWorkspaceError("POINTER_DRIFT", "The local checkout could not be verified.");
   return active;
@@ -461,7 +465,7 @@ function selectLocalCheckout(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
   deps: LocalCheckoutEvidenceDeps,
 ): ActiveWorkspaceView {
   const startedAt = deps.now();
@@ -517,7 +521,7 @@ function admitLocalTaskBranch(
 function adoptLocalTaskBranch(
   request: TaskBranchAdoption,
   instances: WorkspaceInstanceStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
 ): ActiveWorkspaceView {
   const instance = localCheckoutInstance(instances, request.workspaceId);
   if (
@@ -564,6 +568,7 @@ function logInvalidatedLocalPointer(
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
   correlationId: string | undefined,
   startedAt: number,
+  driftCause: WorkspaceDriftCause,
   cause?: unknown,
 ): void {
   const error =
@@ -582,6 +587,7 @@ function logInvalidatedLocalPointer(
     durationMs: Math.max(0, Date.now() - startedAt),
     worktreeCount: 0,
     errorCode: error.code,
+    driftCause,
     error,
   });
 }
@@ -592,7 +598,7 @@ function setActiveWithLocal(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointerStore: ActiveWorkspacePointerStore,
-  getActive: () => ActiveWorkspaceView | undefined,
+  getActive: (correlationId?: string) => ActiveWorkspaceView | undefined,
   activityLog: LocalCheckoutEvidenceDeps,
 ): Promise<ActiveWorkspaceView> {
   const instance = instances.getById(request.workspaceId);
@@ -642,6 +648,7 @@ interface LocalInvalidationLogger {
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
+    driftCause: WorkspaceDriftCause,
     cause?: unknown,
   ) => void;
   readonly clear: () => void;
@@ -656,6 +663,7 @@ function createLocalInvalidationLogger(
     pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
     correlationId: string | undefined,
     startedAt: number,
+    driftCause: WorkspaceDriftCause,
     cause?: unknown,
   ): void => {
     const key = `${pointer.workspaceId}\0${pointer.updatedAt}`;
@@ -663,7 +671,7 @@ function createLocalInvalidationLogger(
     if (lastInvalidatedPointer === key && (!correlated || lastInvalidationCorrelated)) return;
     lastInvalidatedPointer = key;
     lastInvalidationCorrelated = correlated;
-    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, cause);
+    logInvalidatedLocalPointer(activityLog, pointer, correlationId, startedAt, driftCause, cause);
   };
   return {
     record,
@@ -681,7 +689,7 @@ function inPlaceView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
   pointer: NonNullable<ReturnType<ActiveWorkspacePointerStore["get"]>>,
-): ActiveWorkspaceView | undefined {
+): InPlaceViewResult {
   return pointer.workspaceId.startsWith(FOLDER_PREFIX)
     ? folderView(store, instances, pointer)
     : localView(store, instances, pointer);
@@ -699,16 +707,19 @@ export function withLocalCheckout(
     const pointer = pointerStore.get();
     if (pointer !== undefined && isInPlacePointer(pointer.workspaceId)) {
       const startedAt = Date.now();
-      let active: ActiveWorkspaceView | undefined;
+      let result: InPlaceViewResult;
       try {
-        active = inPlaceView(store, instances, pointer);
+        result = inPlaceView(store, instances, pointer);
       } catch (cause) {
-        invalidationLogger.record(pointer, correlationId, startedAt, cause);
+        invalidationLogger.record(pointer, correlationId, startedAt, "inspection-failed", cause);
         return undefined;
       }
-      if (active === undefined) invalidationLogger.record(pointer, correlationId, startedAt);
-      else invalidationLogger.clear();
-      return active;
+      if ("cause" in result) {
+        invalidationLogger.record(pointer, correlationId, startedAt, result.cause);
+        return undefined;
+      }
+      invalidationLogger.clear();
+      return result.view;
     }
     invalidationLogger.clear();
     return managed.getActive(correlationId);

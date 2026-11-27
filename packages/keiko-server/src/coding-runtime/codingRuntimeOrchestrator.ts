@@ -4337,9 +4337,9 @@ export class CodingRuntimeOrchestrator {
 
   // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
   // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-  private activeWorkspaceOrUndefined(): ActiveWorkspaceView | undefined {
+  private activeWorkspaceOrUndefined(correlationId?: string): ActiveWorkspaceView | undefined {
     try {
-      return this.deps.workspaceLifecycle.getActive();
+      return this.deps.workspaceLifecycle.getActive(correlationId);
     } catch (error) {
       if (isIdentityProofFailure(error)) return undefined;
       throw error;
@@ -4467,7 +4467,7 @@ export class CodingRuntimeOrchestrator {
     if (this.forkRefused(parsed.value)) return this.fail("invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-    const scope = this.historyStartScope(parsed.value);
+    const scope = this.historyStartScope(parsed.value, correlationId);
     if ("gap" in scope) return this.refuseStartScope(scope, correlationId);
     const { active, principal } = scope;
     let { request } = scope;
@@ -4675,7 +4675,10 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
+  private historyStartScope(
+    request: CodingWorkbenchRuntimeStartRequest,
+    correlationId?: string,
+  ):
     | {
         readonly active: ActiveWorkspaceView;
         readonly principal: string;
@@ -4683,7 +4686,7 @@ export class CodingRuntimeOrchestrator {
         readonly unverifiedPredecessor?: boolean;
       }
     | { readonly gap: StartScopeGap; readonly detail?: string } {
-    const active = this.activeWorkspaceOrUndefined();
+    const active = this.activeWorkspaceOrUndefined(correlationId);
     if (!active) return { gap: "no-active-workspace" };
     // The run starts in the repository the person sees or not at all: the request states the root
     // the Workbench shows, and the server's global pointer is not allowed to differ from it.

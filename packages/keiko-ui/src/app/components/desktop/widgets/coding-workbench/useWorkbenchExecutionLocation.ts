@@ -522,6 +522,9 @@ export function useWorkbenchExecutionLocation(
     denied: bindingDenied(error, input),
     ...failureReason(attempt, key, error, unbound),
     unbound,
-    retry: attempt.retry,
+    retry: (): void => {
+      void recheck();
+      attempt.retry();
+    },
   };
 }

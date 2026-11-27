@@ -557,6 +557,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.unavailable": "nicht verfügbar",
   "codingWorkbench.repository.unavailableHelp":
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
+  "codingWorkbench.repository.reconnect": "Repository erneut verbinden",
+  "codingWorkbench.repository.reconnectFailed":
+    "Keiko konnte dieses Repository nicht erneut verbinden. Öffne Git, verbinde es dort erneut und wähle es dann noch einmal.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.folderModeHint":
