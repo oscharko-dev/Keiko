@@ -425,25 +425,25 @@ function launchEnvironment(
 }
 
 /**
+ * npm's own update check and the implicit post-install audit contact the registry outside the task,
+ * and the notice and funding lines only spend the model's context, so they stay off in every
+ * profile, mode and OS (ADR-0184 D6).
+ */
+const NPM_QUIET_ENVIRONMENT: Readonly<Record<string, string>> = {
+  npm_config_update_notifier: "false",
+  npm_config_fund: "false",
+  npm_config_audit: "false",
+};
+
+/**
  * The pinned runtime checks plugin dependencies before loading even dependency-free custom tools.
  * Registry retries cannot succeed inside the gateway-only network boundary, so its package manager
  * stays offline and absent optional packages fail promptly, without registry egress. A native Full
  * access run keeps internet egress: its package manager resolves the package formatters (prettier,
  * biome, oxfmt) from the registry as standalone does (#3900 AC4), with bounded retries, so an
  * unreachable registry fails promptly too.
+ * Every profile also carries {@link NPM_QUIET_ENVIRONMENT}.
  */
-/**
- * npm's own update check and registry audit contact the registry outside the task, and the notice
- * and funding lines they print only spend the model's context, so they stay off in every profile,
- * mode and OS, as the relay's user config does for a bound run (ADR-0184 D6). The registry audit
- * is a POST the relay refuses and a direct one would go around it.
- */
-export const NPM_QUIET_ENVIRONMENT: Readonly<Record<string, string>> = {
-  npm_config_update_notifier: "false",
-  npm_config_fund: "false",
-  npm_config_audit: "false",
-};
-
 function packageManagerEnvironment(
   input: OpenCodeLaunchProfileInput,
   formatter: OpenCodeNativeFormatterDisposition,

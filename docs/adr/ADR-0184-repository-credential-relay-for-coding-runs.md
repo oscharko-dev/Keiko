@@ -189,9 +189,13 @@ to a file of the run.
   npm's update check made its own registry request outside the task and its text only spent the
   model's context. The runtime's environment therefore carries `npm_config_update_notifier=false`,
   `npm_config_audit=false` and `npm_config_fund=false` in every mode and on every OS, Windows
-  included, so a shell the run starts inherits them. `audit` contacts the registry with a POST: the
-  relay refuses it and, unbound, it would reach the registry around the relay, so it is off rather
-  than relayed. `fund` makes no request (it reads package metadata); it is off only for the context
+  included, so a shell the run starts inherits them. `audit=false` stops the audit npm runs on its
+  own after an install, which is a POST: the relay refuses it and, unbound, it would reach the
+  registry around the relay. It does not block an explicit `npm audit`, which npm still runs
+  (checked against npm 11): that command's POST is refused by the relay when the registry is bound
+  and goes to the registry directly at Full access otherwise, the same as any other command the
+  person or model chooses to run there. `fund` makes no request (it reads package metadata); it is
+  off only for the context
   it costs. The three are static flags, so the Activity Log gains no field.
   **Tarballs (#4491).** npm records in a lockfile the tarball URL it fetched. A packument the
   relay rewrote therefore made a lockfile the run wrote pin Keiko's relay, whose address and

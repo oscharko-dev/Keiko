@@ -11,7 +11,6 @@ import {
   OPENCODE_CHANGESET_SIZE_LIMIT_TEXT,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
-  NPM_QUIET_ENVIRONMENT,
   openCodeConfigDirectory,
   openCodeRepositoryInstructionsPath,
   resolveOpenCodeContextGeometry,
@@ -238,10 +237,11 @@ describe("OpenCode launch profile", () => {
     // The one definition of the directory: the kernel boundary protects exactly what OpenCode loads.
     expect(openCodeConfigDirectory("/private/run")).toBe(profile.env.OPENCODE_CONFIG_DIR);
     expect(profile.env.npm_config_offline).toBe("true");
-    expect(profile.env).toMatchObject(NPM_QUIET_ENVIRONMENT);
-    expect(Object.keys(NPM_QUIET_ENVIRONMENT)).toEqual(
-      expect.arrayContaining(["npm_config_update_notifier", "npm_config_audit"]),
-    );
+    expect(profile.env).toMatchObject({
+      npm_config_update_notifier: "false",
+      npm_config_audit: "false",
+      npm_config_fund: "false",
+    });
     const mapped = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
@@ -458,7 +458,11 @@ describe("OpenCode launch profile", () => {
         );
         expect(profile.env.npm_config_offline).toBe(full ? undefined : "true");
         // #4491 O-4: no update check, audit or funding line in any mode, Full access included.
-        expect(profile.env).toMatchObject(NPM_QUIET_ENVIRONMENT);
+        expect(profile.env).toMatchObject({
+          npm_config_update_notifier: "false",
+          npm_config_audit: "false",
+          npm_config_fund: "false",
+        });
         expect(profile.formatterEntries).toEqual({ admitted: full ? 1 : 0, refused: 0 });
       }
     });
