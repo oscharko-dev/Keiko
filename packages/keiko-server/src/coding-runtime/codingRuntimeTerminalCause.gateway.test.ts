@@ -38,6 +38,7 @@ import {
   type UiHandlerDeps,
 } from "../deps.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { _resetRoutePromptCalibrationForTests } from "../coding-sidecar-prompt-estimate.js";
 import { resetGatewayInstanceCacheForTests } from "../gateway-instance-cache.js";
 import { resetCodingWorkbenchContextWindowProbesForTests } from "../gateway-readiness.js";
 import type { RouteContext } from "../routes.js";
@@ -73,6 +74,7 @@ const DIGEST = "a".repeat(64);
 const ledgers: DatabaseSync[] = [];
 
 afterEach(() => {
+  _resetRoutePromptCalibrationForTests();
   resetGatewayInstanceCacheForTests();
   resetCodingWorkbenchContextWindowProbesForTests();
   for (const ledger of ledgers.splice(0)) ledger.close();
@@ -442,7 +444,7 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
       if (remaining === 0) return;
       await expect(
         handleCodingSidecarGatewayChatCompletions(
-          chatRequest(minted.capability, "synthetic"),
+          chatRequest(minted.capability, `synthetic call ${String(remaining)}`),
           gatewayDeps(minted, hub, [heavy], { settled }),
         ),
       ).resolves.toMatchObject({ status: 200 });
