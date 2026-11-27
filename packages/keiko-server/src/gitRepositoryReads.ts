@@ -32,7 +32,11 @@ import {
 import { containsPath, GIT_BASE_ARGS } from "@oscharko-dev/keiko-git";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { isCapTerminatedTruncation, stderrHoldsOnlyGitWarnings } from "./gitProcessActivity.js";
-import { settleCapCutStatus, type BoundedStatusLog } from "./gitStatusBounded.js";
+import {
+  logBoundedHistory,
+  settleCapCutStatus,
+  type BoundedStatusLog,
+} from "./gitStatusBounded.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -572,6 +576,8 @@ function parseHistoryEntry(
 interface HistoryPage {
   readonly entries: readonly GitHistoryEntry[];
   readonly complete: boolean;
+  /** Records left unread from the first unreadable one on; 0 when `complete`. */
+  readonly unreadableRecordCount: number;
 }
 
 // Entries stop at the FIRST record that cannot be read. Skipping it and returning the later ones
@@ -585,10 +591,12 @@ function toPage(
   const entries: GitHistoryEntry[] = [];
   for (const record of records) {
     const entry = parseHistoryEntry(record.fields, countOf(record));
-    if (entry === undefined) return { entries, complete: false };
+    if (entry === undefined) {
+      return { entries, complete: false, unreadableRecordCount: records.length - entries.length };
+    }
     entries.push(entry);
   }
-  return { entries, complete: true };
+  return { entries, complete: true, unreadableRecordCount: 0 };
 }
 
 function parseHistoryPage(stdout: string, truncated: boolean): HistoryPage {
@@ -687,6 +695,10 @@ function historyArgs(
   countArgs: readonly string[] = HISTORY_NAME_ONLY_ARGS,
 ): readonly string[] {
   return [
+    // A repo-local `i18n.logOutputEncoding` (UTF-16 would put NUL bytes inside every field) must not
+    // change the bytes the parser reads.
+    "-c",
+    "i18n.logOutputEncoding=UTF-8",
     "log",
     "--no-color",
     // A repo-local `log.showSignature` would print verification lines ahead of each signed commit.
@@ -714,11 +726,27 @@ function isBoundedHistoryCut(result: GitProcessResult): boolean {
   );
 }
 
+function noteEarlyHistoryEnd(
+  log: BoundedStatusLog,
+  page: HistoryPage,
+  cut: boolean,
+  maxBytes: number,
+): void {
+  if (!cut && page.complete) return;
+  logBoundedHistory(log, {
+    shownRecordCount: page.entries.length,
+    partialRecordDropped: cut,
+    unreadableRecordCount: page.unreadableRecordCount,
+    maxBytes,
+  });
+}
+
 async function readHistoryPage(
   repo: RepositoryContext,
   routeOptions: NormalizedGitRouteOptions,
   limit: number,
   skip: number,
+  log: BoundedStatusLog,
 ): Promise<HistoryRead> {
   const options = {
     ...routeOptions,
@@ -728,6 +756,7 @@ async function readHistoryPage(
   const cut = isBoundedHistoryCut(result);
   if (result.exitCode !== 0 && !cut) return { kind: "failed", result };
   const page = parseHistoryPage(result.stdout, cut);
+  noteEarlyHistoryEnd(log, page, cut, options.maxStatusBytes);
   // An unreadable record ends the page early: it is reported truncated, never skipped.
   if (page.entries.length > 0)
     return { kind: "page", entries: page.entries, cut: cut || !page.complete };
@@ -761,7 +790,11 @@ export async function handleGitHistory(
       const body = unavailableHistory(repo.root, repo.repositoryRoot, repo.reason, limit, skip);
       return { status: 200, body: redacted(deps, body) };
     }
-    const read = await readHistoryPage(repo, options, limit, skip);
+    const log = {
+      sink: (rawOptions ?? deps.gitRouteOptions)?.activityLog ?? processServerLogSink(),
+      correlationId: ctx.correlationId,
+    };
+    const read = await readHistoryPage(repo, options, limit, skip, log);
     if (read.kind === "failed") {
       if (isEmptyRepository(read.result)) {
         return {

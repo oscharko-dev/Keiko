@@ -1746,6 +1746,21 @@ describe("GET /api/git/history — changed-file count without diffing contents",
     expect(page.map((entry) => entry.subject)).toEqual(["good"]);
   });
 
+  it("reads complete counts when the repository asks for UTF-16 log output", async () => {
+    await initShapedHistory();
+    // The oracle is read first: UTF-16 would garble the test's own plain log read too.
+    const expected = await shortstatCounts([]);
+    await git(["config", "i18n.logOutputEncoding", "UTF-16"]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries.length).toBeGreaterThanOrEqual(8);
+    expect(new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]))).toEqual(
+      expected,
+    );
+    expect(history.entries.some((entry) => entry.subject === "rename one file")).toBe(true);
+  });
+
   it("agrees with --shortstat inside a selected subfolder", async () => {
     await initShapedHistory();
     const expected = await shortstatCounts(["--", "sub"]);
@@ -1819,5 +1834,73 @@ describe("GET /api/git/history — changed-file count without diffing contents",
     const head = syntheticHead("subject");
 
     expect(parseHistory(`${head}\nwe\nird.txt\0plain.txt\0`)[0]?.changedFileCount).toBe(2);
+  });
+});
+
+// A page that ends early (the byte cap cut its last record, or a record could not be read) leaves a
+// body-free line on the existing bounded-read operation: counts and a closed surface, never a
+// subject, author or path.
+describe("GET /api/git/history — bounded page evidence", () => {
+  async function historyActivity(
+    historyStdout: string,
+    truncated: boolean,
+  ): Promise<ReturnType<typeof captureActivityLog>> {
+    const activity = captureActivityLog();
+    const runner: GitProcessRunner = (args) =>
+      Promise.resolve(
+        args.includes("rev-parse")
+          ? ok(`${root}\n`)
+          : { ...ok(historyStdout), exitCode: truncated ? null : 0, truncated },
+      );
+    const base = deps(runner, (value) => value);
+    await handleGitHistory(ctx(`/api/git/history?root=${encodeURIComponent(root)}`), {
+      ...base,
+      gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog: activity.sink },
+    });
+    return activity;
+  }
+
+  it("records a record the byte cap cut as dropped", async () => {
+    const stdout = `${syntheticHead("one")}\nf\0\0${syntheticHead("two")}\ng`;
+
+    const activity = await historyActivity(stdout, true);
+
+    expect(activity.withOp("git.status.bounded")).toHaveLength(1);
+    expect(activity.withOp("git.status.bounded")[0]).toMatchObject({
+      extra: {
+        surface: "history",
+        shownRecordCount: 1,
+        partialRecordDropped: true,
+        unreadableRecordCount: 0,
+        maxBytes: 4096 * 16,
+      },
+    });
+  });
+
+  it("records the unreadable records that ended a page, without any record text", async () => {
+    const bad = ["not-an-object-id", "x", "", "SECRET-AUTHOR", "d", "", "SECRET-SUBJECT"].join(
+      "\0",
+    );
+    const stdout = `${syntheticHead("one")}\nf\0\0${bad}\0${syntheticHead("three")}\0`;
+
+    const activity = await historyActivity(stdout, false);
+
+    const lines = activity.withOp("git.status.bounded");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      extra: {
+        surface: "history",
+        shownRecordCount: 1,
+        partialRecordDropped: false,
+        unreadableRecordCount: 2,
+      },
+    });
+    expect(JSON.stringify(lines[0])).not.toContain("SECRET");
+  });
+
+  it("writes no bounded line for a whole, readable page", async () => {
+    const activity = await historyActivity(`${syntheticHead("one")}\nf\0`, false);
+
+    expect(activity.withOp("git.status.bounded")).toHaveLength(0);
   });
 });

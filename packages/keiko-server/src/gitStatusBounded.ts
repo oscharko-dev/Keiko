@@ -30,7 +30,8 @@ import { isCapTerminatedTruncation, stderrHoldsOnlyGitWarnings } from "./gitProc
 import type { ServerLogSink } from "./observability/index.js";
 
 export type PorcelainFormat = "v1" | "v2";
-export type BoundedStatusSurface = "status" | "summary" | "sync-preview" | "sync-post-state";
+export type BoundedStatusSurface =
+  "status" | "summary" | "sync-preview" | "sync-post-state" | "history";
 
 export interface BoundedStatusLog {
   readonly sink: ServerLogSink;
@@ -56,11 +57,13 @@ const GIT_STATUS_BOUNDED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["status", "summary", "sync-preview", "sync-post-state"],
+      values: ["status", "summary", "sync-preview", "sync-post-state", "history"],
     },
     shownRecordCount: { type: "integer", dataClass: "count", required: true },
     partialRecordDropped: { type: "boolean", dataClass: "closed-enum", required: true },
     maxBytes: { type: "integer", dataClass: "count", required: true },
+    // History only: records left unread from the first unreadable one on (never a record body).
+    unreadableRecordCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -156,4 +159,25 @@ export function settleCapCutStatus(
     ),
   );
   return read.result;
+}
+
+export interface BoundedHistoryRead {
+  readonly shownRecordCount: number;
+  readonly partialRecordDropped: boolean;
+  readonly unreadableRecordCount: number;
+  readonly maxBytes: number;
+}
+
+/**
+ * Records that a History page ended early: the byte cap cut its last record (dropped, never counted
+ * short) or a record could not be read (the page stops there so the continuation stays exact).
+ */
+export function logBoundedHistory(log: BoundedStatusLog, read: BoundedHistoryRead): void {
+  log.sink.write(
+    activityLogEvent(
+      GIT_STATUS_BOUNDED_OPERATION,
+      { correlationId: correlationIdOrUnknown(log.correlationId) },
+      { surface: "history", ...read },
+    ),
+  );
 }
