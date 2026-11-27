@@ -24,6 +24,7 @@ import {
   removePidFileIfMatches,
   removeStaleShutdownRequest,
   resolveStateDir,
+  assertStateDirOutsideStartFolder,
   resolveContainedStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
@@ -799,5 +800,37 @@ describe("isInsidePath", () => {
 
   it("rejects a sibling with a shared prefix", () => {
     expect(isInsidePath(ancestor, `${ancestor}c`)).toBe(false);
+  });
+});
+
+describe("assertStateDirOutsideStartFolder (#4491)", () => {
+  it("refuses a state directory inside the start folder outside its .keiko", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "state"), {});
+    }).toThrow(/inside the folder Keiko starts from/u);
+  });
+
+  it("admits the start folder's .keiko and folders below it, and folders outside it", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-state-elsewhere-"));
+    for (const stateDir of [
+      join(cwd, DEFAULT_STATE_DIR_NAME),
+      join(cwd, ".keiko", "dev"),
+      outside,
+    ]) {
+      expect(() => {
+        assertStateDirOutsideStartFolder(cwd, stateDir, {});
+      }).not.toThrow();
+    }
+  });
+
+  it("leaves the decision to the UI data folder when KEIKO_UI_DATA_DIR names one", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "state"), {
+        KEIKO_UI_DATA_DIR: "/elsewhere",
+      });
+    }).not.toThrow();
   });
 });

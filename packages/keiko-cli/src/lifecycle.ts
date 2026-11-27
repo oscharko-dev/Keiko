@@ -84,6 +84,7 @@ import {
   removePendingUiLaunch,
   removeStaleShutdownRequest,
   removePidFileIfMatches,
+  assertStateDirOutsideStartFolder,
   resolveContainedStateDir,
   writeExclusivePidFile,
   writeBrowserOpenRequest,
@@ -1971,13 +1972,19 @@ type ParseOutcome =
   | { readonly kind: "refuse"; readonly message: string };
 
 function parseWithStateDirGuard(
+  command: LifecycleCommand,
   args: readonly string[],
   cwd: string,
   env: EnvSource,
   home: string,
 ): ParseOutcome {
   try {
-    return parseLifecycleArgs(args, cwd, env, home);
+    const parsed = parseLifecycleArgs(args, cwd, env, home);
+    // #4491: only a start would hand the UI process a state directory it refuses.
+    if (parsed.kind === "options" && (command === "start" || command === "restart")) {
+      assertStateDirOutsideStartFolder(cwd, parsed.value.stateDir, env);
+    }
+    return parsed;
   } catch (e) {
     if (e instanceof LauncherError) return { kind: "refuse", message: `${e.message}\n` };
     throw e;
@@ -1997,7 +2004,7 @@ export async function runLifecycleCli(
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const home = (deps.homedir ?? defaultHomedir)();
-  const outcome = parseWithStateDirGuard(args, cwd, env, home);
+  const outcome = parseWithStateDirGuard(command, args, cwd, env, home);
   if (outcome.kind === "help") {
     io.out(USAGE);
     return 0;

@@ -497,13 +497,13 @@ describe("runLifecycleCli", () => {
 
     const code = await runLifecycle(
       "start",
-      ["--port", "4321", "--state-dir", ".keiko-test"],
+      ["--port", "4321", "--state-dir", ".keiko/test"],
       c.io,
       {},
       {
         cwd: root,
         // #KEIKO-0330: --state-dir is now home-contained; treat the test root as home so the
-        // ".keiko-test" fixture resolves inside the approved boundary.
+        // ".keiko/test" fixture resolves inside the approved boundary.
         homedir: () => root,
         spawnFn: (command, args, opts) => {
           spawned.push({ command, args, opts });
@@ -512,7 +512,7 @@ describe("runLifecycleCli", () => {
         fetchImpl: () =>
           Promise.resolve(
             Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko-test") },
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko/test") },
               { status: 200 },
             ),
           ),
@@ -533,18 +533,18 @@ describe("runLifecycleCli", () => {
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
     expect(spawn.opts.argv0).toBe("Keiko");
-    const pidFileText = readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8");
+    const pidFileText = readFileSync(join(root, ".keiko/test", "ui.pid"), "utf8");
     expect(pidFileText).toMatch(/^12345\n[0-9a-f]{32}\nbrowser-open-v1\n$/);
     const launchId = pidFileText.split("\n")[1];
     expect(spawn.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
     expect(spawn.opts.env).toMatchObject({
-      KEIKO_STATE_DIR: join(root, ".keiko-test"),
+      KEIKO_STATE_DIR: join(root, ".keiko/test"),
       KEIKO_UI_LAUNCH_ID: pidFileText.split("\n")[1],
     });
     expectNoPersistedChildOutput(spawn.opts);
-    expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(false);
+    expect(existsSync(join(root, ".keiko/test", "ui.log"))).toBe(false);
     expect(c.out()).toContain("Keiko UI running");
-    expect(c.out()).toContain(`Activity Log: ${join(root, ".keiko-test", "logs")}`);
+    expect(c.out()).toContain(`Activity Log: ${join(root, ".keiko/test", "logs")}`);
   });
 
   it("uses the plan-bound launch id for a recovered portable start", async () => {
@@ -556,7 +556,7 @@ describe("runLifecycleCli", () => {
     const descriptor = Buffer.from(JSON.stringify({ launchId }), "utf8").toString("base64url");
     const code = await runLifecycle(
       "start",
-      ["--state-dir", ".keiko-test"],
+      ["--state-dir", ".keiko/test"],
       c.io,
       { KEIKO_PORTABLE_RECOVERED_LAUNCH: descriptor },
       {
@@ -569,7 +569,7 @@ describe("runLifecycleCli", () => {
         fetchImpl: () =>
           Promise.resolve(
             Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko-test") },
+              { version: SDK_VERSION, launchId: readCurrentLaunchId(root, ".keiko/test") },
               { status: 200 },
             ),
           ),
@@ -583,7 +583,7 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(spawned[0]?.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
     expect(spawned[0]?.opts.env).toMatchObject({ KEIKO_UI_LAUNCH_ID: launchId });
-    expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe(
+    expect(readFileSync(join(root, ".keiko/test", "ui.pid"), "utf8")).toBe(
       `12345\n${launchId}\nbrowser-open-v1\n`,
     );
   });
@@ -706,6 +706,36 @@ describe("runLifecycleCli", () => {
     expect(c.err()).toContain("--state-dir");
     expect(c.err()).toContain("outside the user's home directory");
     expect(existsSync(escapeDir)).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  // #4491: the UI process refuses a data folder inside its start folder (outside `.keiko`), so a state
+  // directory there made every `keiko start` end in "Keiko stopped while it was starting".
+  it("refuses a state directory inside the start folder before spawning, with its reason", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, "lab-state");
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycle(
+      "start",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn,
+        isProcessAlive: () => false,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("inside the folder Keiko starts from");
+    expect(existsSync(stateDir)).toBe(false);
     expect(spawnFn).not.toHaveBeenCalled();
   });
 

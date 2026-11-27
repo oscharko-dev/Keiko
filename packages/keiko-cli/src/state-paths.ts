@@ -50,7 +50,7 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { isSafeArtifactStageFileName } from "@oscharko-dev/keiko-security/fs-hardening";
-import { assertRealpathContained } from "./launcher-paths.js";
+import { assertRealpathContained, isRealpathContained } from "./launcher-paths.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   isSegmentManifestFileName,
@@ -157,6 +157,29 @@ export function resolveContainedStateDir(
     throw e;
   }
   return resolved;
+}
+
+/**
+ * The UI process keeps its data out of the folder it starts in, apart from that folder's `.keiko`
+ * ("KEIKO_UI_DATA_DIR must not be inside the current workspace"), and its data lives in the state
+ * directory unless `KEIKO_UI_DATA_DIR` names another one. A state directory inside the start folder
+ * was refused by the UI process only after `keiko start` had spawned it, so the launcher could report
+ * nothing but "Keiko stopped while it was starting", and every retry failed the same way (#4491).
+ * It is refused here, with its reason, before anything starts.
+ */
+export function assertStateDirOutsideStartFolder(
+  cwd: string,
+  stateDir: string,
+  env: EnvSource,
+): void {
+  const uiDataDir = env.KEIKO_UI_DATA_DIR;
+  if (typeof uiDataDir === "string" && uiDataDir.length > 0) return;
+  if (isRealpathContained(resolve(cwd, DEFAULT_STATE_DIR_NAME), stateDir)) return;
+  if (!isRealpathContained(cwd, stateDir)) return;
+  throw new LauncherError(
+    "STATE_DIR_IN_START_FOLDER",
+    `keiko: the state directory lies inside the folder Keiko starts from, where Keiko keeps no data. Choose a folder outside it, or its ${DEFAULT_STATE_DIR_NAME} folder; refusing to proceed.`,
+  );
 }
 
 function explicitStateDirSource(
