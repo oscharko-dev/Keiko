@@ -714,7 +714,7 @@ function WorkbenchContextControls({
   readonly activeWorkspace: WorkbenchWorkspaceApi;
   readonly mutationPending: boolean;
   readonly onSelectRepository: (root: string) => void;
-  readonly onSelectBranch: (branch: string) => void;
+  readonly onSelectBranch: (branch: string, repositoryRoot: string | null) => void;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly location: WorkbenchExecutionLocation;
   readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
@@ -731,7 +731,9 @@ function WorkbenchContextControls({
       branch={branch}
       locked={runIsActive || mutationPending || activeWorkspace.switching}
       onSelect={onSelectRepository}
-      onSelectBranch={onSelectBranch}
+      // The branch is chosen for the repository this window shows, which may be the active
+      // binding's rather than one the window selected itself (#4491).
+      onSelectBranch={(chosen) => onSelectBranch(chosen, repositoryRoot)}
       location={location}
       offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
@@ -1005,7 +1007,7 @@ export function CodingWorkbenchWindow({
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
-  readonly onSelectBranch?: ((branch: string) => void) | undefined;
+  readonly onSelectBranch?: ((branch: string, repositoryRoot: string | null) => void) | undefined;
   readonly onSelectLocation?: ((location: WorkbenchExecutionLocation) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
@@ -1427,7 +1429,7 @@ interface WorkbenchContentProps {
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository: (root: string) => void;
-  readonly onSelectBranch: (branch: string) => void;
+  readonly onSelectBranch: (branch: string, repositoryRoot: string | null) => void;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;

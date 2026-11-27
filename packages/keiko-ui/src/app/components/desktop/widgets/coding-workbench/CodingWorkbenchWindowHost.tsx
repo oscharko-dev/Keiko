@@ -69,6 +69,20 @@ function resolvedTargetBranch(
   return targetBranch;
 }
 
+// A branch is stored with the repository it was chosen for (#E). A window that shows the active
+// binding's repository has no root of its own; without one the pick was stored for no repository
+// and `resolvedTargetBranch` dropped it, so the branch control did nothing (#4491). The pick now
+// pins the repository the window shows.
+function branchSelectionPatch(
+  branch: string,
+  root: string | null | undefined,
+  shownRoot: string | null,
+): WindowCfgRecord {
+  if (root !== null && root !== undefined) return { targetBranch: branch, targetBranchRoot: root };
+  if (shownRoot === null) return { targetBranch: branch, targetBranchRoot: undefined };
+  return { repositoryPath: shownRoot, targetBranch: branch, targetBranchRoot: shownRoot };
+}
+
 function isHistoryRestore(selection: string | undefined): boolean {
   return selection !== undefined && !selection.startsWith("new:");
 }
@@ -193,8 +207,8 @@ export function CodingWorkbenchWindowHost({
             executionLocation: undefined,
           });
         }}
-        onSelectBranch={(branch) => {
-          context.updateCfg({ targetBranch: branch, targetBranchRoot: root ?? undefined });
+        onSelectBranch={(branch, shownRoot) => {
+          context.updateCfg(branchSelectionPatch(branch, root, shownRoot));
         }}
         onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
         onOpenGit={(target) => openGit(context, target)}

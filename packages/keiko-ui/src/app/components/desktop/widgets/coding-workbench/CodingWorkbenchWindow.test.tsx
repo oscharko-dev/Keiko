@@ -125,9 +125,12 @@ vi.mock("../../useMcpServerChoices", () => {
   const choices = { servers: [], loading: false, failed: false, reload: (): void => undefined };
   return { useMcpServerChoices: (): typeof choices => choices };
 });
+const selectableRepositoriesMock = vi.hoisted(() =>
+  vi.fn((): Promise<readonly ProjectWithAvailability[]> => Promise.resolve([])),
+);
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
-  selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
+  selectableRepositories: selectableRepositoriesMock,
 }));
 // #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
 // journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
@@ -601,6 +604,7 @@ beforeEach(() => {
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
+  selectableRepositoriesMock.mockReset().mockResolvedValue([]);
   repositoryBranchHookMock.mockReset().mockImplementation((root) => ({
     root,
     response: null,
@@ -1570,6 +1574,53 @@ describe("CodingWorkbenchWindow", () => {
     );
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
+  });
+
+  // #4491: a window that shows the active binding's repository selected none itself; the branch it
+  // chose was stored for no repository and dropped, so the branch control did nothing.
+  it("hands a chosen branch over with the repository the window shows", async () => {
+    const user = userEvent.setup();
+    const onSelectBranch = vi.fn();
+    repositoryBranchHookMock.mockImplementation((root) => ({
+      root,
+      response: null,
+      loading: false,
+      error: null,
+      denied: false,
+      branches: [
+        { name: "task-1", headRefHash: "a".repeat(40), current: false },
+        { name: "fix/elsewhere", headRefHash: "b".repeat(40), current: true },
+      ],
+      currentBranch: root === null ? null : "fix/elsewhere",
+      ordinaryFolder: false,
+      refresh: vi.fn(() => Promise.resolve()),
+    }));
+    selectableRepositoriesMock.mockResolvedValue([
+      {
+        path: "/repos/keiko",
+        name: "keiko",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+        workspaceAvailable: true,
+      },
+    ]);
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    render(
+      <ActiveWorkspaceProvider
+        value={activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task")}
+      >
+        <CodingWorkbenchWindow onSelectBranch={onSelectBranch} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    const branch = screen.getByRole("combobox", { name: "Choose coding branch" });
+    await waitFor(() => expect(branch).toBeEnabled());
+    await user.click(branch);
+    await user.click(await screen.findByRole("option", { name: "fix/elsewhere" }));
+
+    expect(onSelectBranch).toHaveBeenCalledExactlyOnceWith("fix/elsewhere", "/repos/keiko");
   });
 
   it("uses the bound repository for the composer context", () => {
