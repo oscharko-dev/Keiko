@@ -1130,6 +1130,7 @@ describe("verified Code-task commit service", () => {
     async function endedRead(
       executionBudget: { nowMs: () => number; deadlineAtMs: number } | undefined,
       lapse: boolean,
+      abort = true,
     ): Promise<{ outcome: unknown; reason: unknown }> {
       const controller = new AbortController();
       // Like the catalog's own settlement: the guard answers false once the invocation has ended.
@@ -1137,7 +1138,7 @@ describe("verified Code-task commit service", () => {
       vi.mocked(readGitRawChangesAtHead).mockImplementationOnce(() => {
         ended = true;
         if (lapse) live = false;
-        controller.abort();
+        if (abort) controller.abort();
         return Promise.reject(new Error("read cancelled"));
       });
       events.length = 0;
@@ -1165,6 +1166,18 @@ describe("verified Code-task commit service", () => {
       const ended = await endedRead(budget, lapse);
       expect(ended.outcome).toEqual({ kind: "refused", reason: "authority-revoked" });
       expect(ended.reason).toBe(reason);
+    });
+
+    // A passed deadline is tested before the signal: the guard turns false at settlement even when
+    // no signal was aborted under the read.
+    it("logs a passed deadline as deadline-exceeded although no signal was aborted", async () => {
+      const ended = await endedRead(
+        { nowMs: (): number => 2_000, deadlineAtMs: 2_000 },
+        false,
+        false,
+      );
+      expect(ended.outcome).toEqual({ kind: "refused", reason: "authority-revoked" });
+      expect(ended.reason).toBe("deadline-exceeded");
     });
   });
   it("names the paths that keep an unclean candidate from commit proof and logs only their counts", async () => {

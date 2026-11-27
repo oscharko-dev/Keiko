@@ -635,9 +635,11 @@ export class RuntimeGitService {
     context: VerifiedCommitRunContext,
     guard: CodingToolMutationGuard,
   ): "deadline-exceeded" | "signal-aborted" | "authority-revoked" {
-    if (context.signal?.aborted !== true) return "authority-revoked";
+    // Deadline first, then the signal, then authority: the guard turns false at settlement even when
+    // no signal was aborted under the read.
     const budget = guard.executionBudget;
     if (budget !== undefined && budget.nowMs() >= budget.deadlineAtMs) return "deadline-exceeded";
+    if (context.signal?.aborted !== true) return "authority-revoked";
     return this.options.context()?.stillAuthorized() === true
       ? "signal-aborted"
       : "authority-revoked";

@@ -751,6 +751,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         attributeSplitCount: 0,
         hashBudgetExhaustedCount: 0,
         outcome: "answered",
+        timing: { listingMs: anyNumber, scanMs: anyNumber, settleMs: anyNumber, gitSpawnCount: 0 },
       },
     ]);
     expect(argvs.filter((argv) => argv.includes("hash-object"))).toHaveLength(2);
@@ -813,6 +814,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         attributeSplitCount: 0,
         hashBudgetExhaustedCount: 0,
         outcome: "answered",
+        timing: { listingMs: anyNumber, scanMs: anyNumber, settleMs: anyNumber, gitSpawnCount: 0 },
       },
     ]);
     // The failed run was halved, not repeated per file.
@@ -927,6 +929,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         hashBudgetExhaustedCount: 0,
         outcome: "undecidable",
         reason: "attributes-truncated",
+        timing: { listingMs: anyNumber, scanMs: anyNumber, settleMs: anyNumber, gitSpawnCount: 0 },
       },
     ]);
   });
@@ -977,6 +980,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         attributeSplitCount: 0,
         hashBudgetExhaustedCount: 0,
         outcome: "answered",
+        timing: { listingMs: anyNumber, scanMs: anyNumber, settleMs: anyNumber, gitSpawnCount: 0 },
       },
     ]);
   });
