@@ -60,6 +60,8 @@ export interface CodingTaskSession {
   readonly error: boolean;
   readonly newTask: () => Promise<void>;
   readonly finish: () => Promise<void>;
+  /** Repeats the read or update that failed and raised `error`. */
+  readonly retry: () => void;
   /**
    * The fork the person asked for (S03): the next start begins a new task from it instead of
    * continuing the loaded one. It ends with that start, a new task, another selection or a run.
@@ -130,6 +132,8 @@ interface TaskLoader {
   readonly setError: (value: boolean) => void;
   readonly sequence: { current: number };
   readonly load: LoadTask;
+  /** What `retry` repeats: the last foreground operation that failed. */
+  readonly retryOperation: { current: (() => void) | undefined };
 }
 
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
@@ -144,25 +148,13 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const latest = useRef(input);
   latest.current = input;
   const controller = useTaskLoader(latest);
-  const { detail, pending, setPending, error, setError, load } = controller;
+  const { detail, pending, error, load } = controller;
   const scopeTasks = useScopeTasks(detail);
   useTaskUpdates(controller.setDetail);
   const newTask = useNewTask(latest, ignoredRun, awaitingRun, controller, scopeTasks);
   useSessionSelection(input, load, newTask, ignoredRun, awaitingRun, scopeTasks);
   useScopeRestore(latest, scopeTasks, load);
-  const finish = async (): Promise<void> => {
-    if (input.active || detail === null) return;
-    setPending(true);
-    try {
-      await updateCodingTask(detail.task.id, { status: "completed" });
-      await newTask();
-    } catch (cause) {
-      reportFailure(cause);
-      setError(true);
-    } finally {
-      setPending(false);
-    }
-  };
+  const { finish, retry } = useFinishAndRetry(input.active, controller, newTask);
   const scoped = detail !== null && taskScopeMatches(detail, input, false) ? detail : null;
   const fork = useTaskFork(input, scoped, setForkTarget);
   return {
@@ -171,11 +163,42 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     error,
     newTask,
     finish,
+    retry,
     visibleRun: sessionRunVisible(input, scoped, ignoredRun.current),
     forkTargets: forkTargetsOf(input, scoped),
     ...fork,
     ...startPoint(scoped, input.active, fork.fork),
   };
+}
+
+/** Completes the displayed task and leaves it; `retry` repeats whichever foreground step failed. */
+function useFinishAndRetry(
+  active: boolean,
+  controller: TaskLoader,
+  newTask: () => Promise<void>,
+): Pick<CodingTaskSession, "finish" | "retry"> {
+  const { detail, setPending, setError, retryOperation } = controller;
+  const finish = async (): Promise<void> => {
+    if (active || detail === null) return;
+    setPending(true);
+    try {
+      await updateCodingTask(detail.task.id, { status: "completed" });
+      await newTask();
+    } catch (cause) {
+      reportFailure(cause);
+      retryOperation.current = (): void => void finish();
+      setError(true);
+    } finally {
+      setPending(false);
+    }
+  };
+  const retry = (): void => {
+    const operation = retryOperation.current;
+    retryOperation.current = undefined;
+    setError(false);
+    operation?.();
+  };
+  return { finish, retry };
 }
 
 /**
@@ -343,6 +366,7 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
   const sequence = useRef(0);
+  const retryOperation = useRef<(() => void) | undefined>(undefined);
   const shown = useRef(detail);
   shown.current = detail;
   const scopeRevision = useHistoryScope(latest, detail, setDetail, sequence);
@@ -351,27 +375,23 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
       const seq = ++sequence.current;
       const operation = historyLoad(id, scopeRevision.current.scope);
       const background = followed === "refresh";
-      const openedCompleted =
-        shown.current?.task.id === id && shown.current.task.status === "completed";
       // A failed read for another task must never leave the previous task's conversation id
       // attached to the composer. A refresh of the same task may retain its visible history.
       setDetail((current) => (current?.task.id === id ? current : null));
       if (!background) {
+        retryOperation.current = (): void => void load(id, activate, followed);
         setPending(true);
         setError(false);
       }
       try {
-        const result = await fetchCodingTask(id, operation.correlationId);
-        const accepted = await acceptTaskRead(result, activate, operation, {
+        await readTask(id, activate, operation, {
           latest,
           scopeRevision,
           setDetail,
           isCurrent: () => seq === sequence.current,
           followed,
-          openedCompleted,
+          openedCompleted: isCompletedTask(shown.current, id),
         });
-        if (accepted && followed !== undefined)
-          window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
       } catch (cause) {
         if (seq === sequence.current)
           reportLoadFailure(cause, operation, scopeRevision.current.scope, background, setError);
@@ -381,7 +401,17 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
     },
     [latest, scopeRevision],
   );
-  return { detail, setDetail, pending, setPending, error, setError, load, sequence };
+  return {
+    detail,
+    setDetail,
+    pending,
+    setPending,
+    error,
+    setError,
+    load,
+    sequence,
+    retryOperation,
+  };
 }
 
 interface TaskReadContext {
@@ -392,6 +422,22 @@ interface TaskReadContext {
   readonly followed: "initial" | "refresh" | undefined;
   /** The read task is a completed one already on display, opened from Coding History. */
   readonly openedCompleted: boolean;
+}
+
+function isCompletedTask(task: CodingHistoryDetail | null, id: string): boolean {
+  return task?.task.id === id && task.task.status === "completed";
+}
+
+async function readTask(
+  id: string,
+  activate: boolean,
+  operation: HistoryLoad,
+  context: TaskReadContext,
+): Promise<void> {
+  const result = await fetchCodingTask(id, operation.correlationId);
+  const accepted = await acceptTaskRead(result, activate, operation, context);
+  if (accepted && context.followed !== undefined)
+    window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
 }
 
 /** Shows a read task when it is still the current read of the current scope; says whether it did. */

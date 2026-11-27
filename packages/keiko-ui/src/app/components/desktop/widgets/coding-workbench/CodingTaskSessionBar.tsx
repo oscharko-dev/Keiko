@@ -60,39 +60,70 @@ function finishActions(
     {
       label: t("codingWorkbench.history.finish"),
       icon: Icons.check,
-      run: (): void => void session.finish(),
+      run: thenFocusComposer(() => session.finish()),
       disabled: locked || session.detail === null,
     },
   ];
 }
 
-function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
-  const t = useCodingWorkbenchTranslate();
+// #4491: Complete task and New task disable or unmount the button that was just activated, which
+// dropped the keyboard focus to the page. The composer is where the person types next.
+const COMPOSER_ID = "coding-workbench-task-intent";
+
+function focusComposer(): void {
+  window.requestAnimationFrame(() => {
+    const composer = document.getElementById(COMPOSER_ID);
+    if (composer instanceof HTMLElement && !composer.hasAttribute("disabled")) composer.focus();
+  });
+}
+
+function thenFocusComposer(action: () => Promise<void>): () => void {
+  return (): void => {
+    void action().finally(focusComposer);
+  };
+}
+
+function sessionActions(
+  session: CodingTaskSession,
+  active: boolean,
+  onHistory: () => void,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
   const locked = active || session.pending;
-  const actions = [
-    {
-      label: t("codingWorkbench.history.title"),
-      icon: Icons.codingHistory,
-      run: onHistory,
-      disabled: false,
-    },
+  const history = {
+    label: t("codingWorkbench.history.title"),
+    icon: Icons.codingHistory,
+    run: onHistory,
+    disabled: false,
+  };
+  const created = {
+    label: t("codingWorkbench.history.new"),
+    icon: Icons.plus,
+    run: thenFocusComposer(() => session.newTask()),
+    disabled: locked,
+  };
+  // A task that could not be read has nothing to fork, continue or complete: the way out is Coding
+  // History or a new task.
+  if (session.detail === null) return [history, created];
+  return [
+    history,
     {
       label: t("codingWorkbench.history.fork"),
       icon: Icons.branch,
       run: (): void => {
         session.beginFork();
       },
-      disabled: locked || session.detail === null || session.fork !== null,
+      disabled: locked || session.fork !== null,
     },
     ...continueActions(session, locked, t),
     ...finishActions(session, locked, t),
-    {
-      label: t("codingWorkbench.history.new"),
-      icon: Icons.plus,
-      run: (): void => void session.newTask(),
-      disabled: locked,
-    },
+    created,
   ];
+}
+
+function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const actions = sessionActions(session, active, onHistory, t);
   return (
     <div className={styles.cmpSessionActions}>
       {actions.map(({ label, icon: Icon, run, disabled }) => (
@@ -122,14 +153,19 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   return (
     <div className={styles.cmpSessionBar}>
       {session.detail !== null ? (
+        <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
+          {session.detail.task.title}
+        </span>
+      ) : null}
+      {session.detail !== null || error ? <TaskSessionActions {...props} /> : null}
+      {error ? (
         <>
-          <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
-            {session.detail.task.title}
-          </span>
-          <TaskSessionActions {...props} />
+          <p role="alert">{t("codingWorkbench.history.error")}</p>
+          <button type="button" className={styles.cmpMessageFork} onClick={session.retry}>
+            {t("codingWorkbench.history.retry")}
+          </button>
         </>
       ) : null}
-      {error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}
     </div>
   );

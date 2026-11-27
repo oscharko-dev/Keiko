@@ -474,6 +474,25 @@ describe("coding task selection", () => {
     expect(result.current.conversationId).toBeUndefined();
   });
 
+  // #4491: the session bar's Try again repeats the read that failed instead of leaving only an alert.
+  it("repeats the failed read on retry and clears the error first", async () => {
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: null,
+        active: false,
+        root: "/repo",
+        workspace: null,
+        selection: "chat-one",
+      }),
+    );
+    await waitFor(() => expect(result.current.error).toBe(true));
+    const reads = read.mock.calls.length;
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
+  });
+
   // #3631: the host clears a consumed selection; selecting the same task again retries it.
   it("retries a failed activation when the same task is selected again", async () => {
     const { result, rerender } = renderHook(

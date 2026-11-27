@@ -542,7 +542,7 @@ function timelineItems(
         id: `tool:${tool.callId}`,
         occurredAt: tool.occurredAt,
         order,
-        tool: activeRunId === undefined ? settledTool(tool) : tool,
+        tool: shownTool(tool, activeRunId),
         count: 1,
       });
       order += 1;
@@ -559,8 +559,12 @@ function timelineItems(
 // #4491: a call still open on a run that is no longer active never reported its end. The server
 // settles it as cancelled; a feed read before that settlement (or restored from an older run) is
 // shown the same way, so no row keeps "Running" and a ticking clock for a run that is over.
-function settledTool(tool: CodingSafeActivityTool): CodingSafeActivityTool {
-  if (tool.state !== "pending" && tool.state !== "running") return tool;
+function shownTool(
+  tool: CodingSafeActivityTool,
+  activeRunId: string | undefined,
+): CodingSafeActivityTool {
+  if (activeRunId !== undefined || (tool.state !== "pending" && tool.state !== "running"))
+    return tool;
   return { ...tool, state: "cancelled" };
 }
 

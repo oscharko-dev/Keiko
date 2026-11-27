@@ -233,6 +233,7 @@ function defaultTaskSession(): CodingTaskSession {
     error: false,
     newTask: vi.fn(),
     finish: vi.fn(),
+    retry: vi.fn(),
     fork: null,
     beginFork: vi.fn(),
     cancelFork: vi.fn(),

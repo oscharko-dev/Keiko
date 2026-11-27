@@ -40,6 +40,7 @@ function session(): CodingTaskSession {
     error: false,
     newTask: vi.fn(async () => undefined),
     finish: vi.fn(async () => undefined),
+    retry: vi.fn(),
     fork: null,
     beginFork: vi.fn(),
     cancelFork: vi.fn(),
@@ -750,5 +751,46 @@ describe("quiet coding task chrome", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Review now" })).toBeVisible();
+  });
+});
+
+// #4491: the activated button is disabled or unmounted by the action, so the keyboard focus fell to
+// the page. It moves to the composer, where the person types next.
+describe("keyboard focus after Complete task and New task", () => {
+  function Harness({ current }: { readonly current: CodingTaskSession }): ReactNode {
+    return (
+      <>
+        <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
+        <textarea id="coding-workbench-task-intent" aria-label="Task" />
+      </>
+    );
+  }
+
+  it.each(["Complete task", "New task"])("moves focus to the composer after %s", async (name) => {
+    render(<Harness current={sessionWith([])} />);
+    const button = screen.getByRole("button", { name });
+    button.focus();
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText("Task"));
+    });
+  });
+});
+
+describe("a failed task read", () => {
+  it("still offers History and New task and retries the read", () => {
+    const onHistory = vi.fn();
+    const failed = { ...session(), error: true };
+    render(<CodingTaskSessionBar session={failed} active={false} onHistory={onHistory} />);
+
+    expect(screen.getByRole("alert")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Coding History" }));
+    expect(onHistory).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(failed.newTask).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(failed.retry).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Fork task" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Complete task" })).toBeNull();
   });
 });

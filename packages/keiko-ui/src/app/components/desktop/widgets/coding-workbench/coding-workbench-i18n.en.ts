@@ -24,6 +24,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.scheduled": "Scheduled continuation",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "New task",
+  "codingWorkbench.history.retry": "Try again",
   "codingWorkbench.history.noBranch": "Folder",
   "codingWorkbench.history.search": "Search coding tasks",
   "codingWorkbench.history.filter": "Task status",
