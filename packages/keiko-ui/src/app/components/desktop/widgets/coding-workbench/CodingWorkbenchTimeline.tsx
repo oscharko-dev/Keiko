@@ -1464,11 +1464,7 @@ function AssistantAnswer({
         }
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
-      {message.outputLimitReached === true ? (
-        <p className={styles.cmpOutputLimitNote} data-testid="coding-answer-output-limit">
-          {t("codingWorkbench.activity.outputLimitReached")}
-        </p>
-      ) : null}
+      <OutputLimitNote message={message} t={t} />
       {live || shown.source.trim().length === 0 ? null : (
         <div className={styles.cmpMessageActions}>
           <WorkbenchAnswerCopyButton
@@ -1480,6 +1476,22 @@ function AssistantAnswer({
         </div>
       )}
     </>
+  );
+}
+
+// The runtime reported the turn's finish as the model's output limit: the answer ends there.
+function OutputLimitNote({
+  message,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (message.outputLimitReached !== true) return null;
+  return (
+    <p className={styles.cmpOutputLimitNote} data-testid="coding-answer-output-limit">
+      {t("codingWorkbench.activity.outputLimitReached")}
+    </p>
   );
 }
 

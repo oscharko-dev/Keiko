@@ -2403,9 +2403,7 @@ function validMessageOrigin(
 function validOutputLimit(
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
 ): boolean {
-  return (
-    signal.outputLimit === undefined || (signal.outputLimit === true && signal.role === "assistant")
-  );
+  return signal.outputLimit === undefined || signal.role === "assistant";
 }
 
 function validMessageSignal(

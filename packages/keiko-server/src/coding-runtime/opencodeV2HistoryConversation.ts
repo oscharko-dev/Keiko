@@ -10,6 +10,15 @@ export interface ConversationCandidate {
   readonly capturedText?: string;
 }
 
+// A message signal that starts a stored message. Native retry state and the output-limit finish
+// restate a message already started, so they never reset its content.
+function opensMessage(
+  signal: CodingSafeActivitySignal | undefined,
+  nativeRetryState: true | undefined,
+): signal is Extract<CodingSafeActivitySignal, { readonly kind: "message" }> {
+  return signal?.kind === "message" && !nativeRetryState && signal.outputLimit !== true;
+}
+
 // Coding History records what the runtime persisted: a text part's own text, never the live text the
 // timeline shows while the part streams, so a turn cut short does not leave a partial answer behind
 // and a streaming turn does not rewrite the stored message on every delta.
@@ -18,7 +27,7 @@ export function conversationMessages(
 ): readonly CodingHistoryMessage[] {
   const messages = new Map<string, CodingHistoryMessage>();
   for (const { signal, capturedText, nativeRetryState } of candidates) {
-    if (signal?.kind === "message" && !nativeRetryState && signal.outputLimit !== true)
+    if (opensMessage(signal, nativeRetryState))
       messages.set(signal.messageId, {
         messageId: signal.messageId,
         role: signal.role,
