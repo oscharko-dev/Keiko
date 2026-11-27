@@ -644,6 +644,103 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(argvs.filter((argv) => argv.includes("hash-object"))).toHaveLength(2);
   });
 
+  it("settles a batch of long paths whose attribute answer exceeds the process output cap", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    mkdirSync(join(repo, "src/main/java/com/example/service/impl"), { recursive: true });
+    const names = Array.from(
+      { length: 1000 },
+      (_, at) =>
+        `src/main/java/com/example/service/impl/Component${String(at).padStart(4, "0")}.java`,
+    );
+    for (const name of names) writeFileSync(join(repo, name), "class A {}\r\n");
+    git(repo, ["add", ...names]);
+    for (const name of names) touchLater(repo, name);
+    const evidence: unknown[] = [];
+    const argvs: string[][] = [];
+    const flags = await rawFlags(repo, {
+      ...factoryPort(repo, { spawn: countingSpawn(argvs) }),
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    // Every file is clean in the working tree: the attribute answer and the stdin were read in bounded parts.
+    expect(flags).toEqual(names.map((name) => [name, true, false]));
+    expect(evidence).toMatchObject([
+      { convertible: 1001, settledClean: 1001, outcome: "answered" },
+    ]);
+    expect(argvs.filter((argv) => argv.includes("check-attr")).length).toBeGreaterThan(1);
+  });
+
+  it("settles the other files of a batch when one path vanished before the hash", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    const names = ["b.txt", "c.txt", "d.txt", "e.txt"];
+    for (const name of names) writeFileSync(join(repo, name), "p\r\n");
+    git(repo, ["add", ...names]);
+    for (const name of ["a.txt", ...names]) touchLater(repo, name);
+    const argvs: string[][] = [];
+    const real = factoryPort(repo, { spawn: countingSpawn(argvs) }).stagedObjectIds;
+    const evidence: unknown[] = [];
+    const flags = await rawFlags(repo, {
+      stagedObjectIds: (files) => {
+        rmSync(join(repo, "c.txt"));
+        return real?.(files) ?? Promise.resolve(undefined);
+      },
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    expect(flags).toEqual([
+      ["b.txt", true, false],
+      ["c.txt", true, true],
+      ["d.txt", true, false],
+      ["e.txt", true, false],
+    ]);
+    expect(evidence).toEqual([
+      { convertible: 5, batches: 1, settledClean: 4, outcome: "answered" },
+    ]);
+    // The failed run was halved, not repeated per file.
+    expect(argvs.filter((argv) => argv.includes("hash-object")).length).toBeLessThan(8);
+  });
+
+  it("names why a port could not answer in the settlement evidence", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    git(repo, ["add", "a.txt"]);
+    touchLater(repo);
+    const evidence: unknown[] = [];
+    await rawFlags(repo, {
+      stagedObjectIds: () => Promise.resolve("attributes-truncated"),
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    expect(evidence).toEqual([
+      {
+        convertible: 1,
+        batches: 1,
+        settledClean: 0,
+        outcome: "undecidable",
+        reason: "attributes-truncated",
+      },
+    ]);
+  });
+
+  it("ends the read when it was cancelled before a batch", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    git(repo, ["add", "a.txt"]);
+    touchLater(repo);
+    const controller = new AbortController();
+    const real = factoryPort(repo).stagedObjectIds;
+    await expect(
+      rawFlags(repo, {
+        signal: controller.signal,
+        // Cancelled after the hash, so only the re-read guard can notice it.
+        stagedObjectIds: async (files) => {
+          const ids = await real?.(files);
+          controller.abort();
+          return ids;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "git-raw-read-cancelled" });
+  });
+
   it("keeps a file modified when it was replaced between the read and the hash", async () => {
     const repo = plainRepository("v1\r\nv2\r\n");
     git(repo, ["config", "core.autocrlf", "true"]);

@@ -79,6 +79,9 @@ function objectId(result: CommandResult): string {
  * that holds no other CR. Git for Windows sets `autocrlf=true` for the whole system, so before this
  * every commit in an ordinary Windows checkout was refused.
  */
+/** Why the staged-object port could not answer for a batch (a closed vocabulary for the log). */
+export type GitStagedUndecidableReason =
+  "config-unreadable" | "attributes-unreadable" | "attributes-truncated" | "hash-failed";
 export type GitStageLineEndings = "exact" | "autocrlf-true" | "autocrlf-input";
 const CR = 0x0d;
 const LF = 0x0a;
@@ -256,26 +259,99 @@ interface FileStage {
 // in the order asked. A failed, cut-short or misordered answer proves nothing: `undefined`. Git on
 // macOS prints a decomposed (NFD) path precomposed (`core.precomposeunicode`), so paths are compared
 // in NFC.
+// One run is bounded on both sides: its output is capped (`DEFAULT_SANDBOX_POLICY.maxOutputBytes`,
+// 256 KiB; a longer answer is cut short and proves nothing) and so is its stdin (a string input at
+// 16 KiB, bytes at 64 KiB). `check-attr -z` answers `path NUL attribute NUL value NUL` for every path
+// and attribute, so the paths are read in parts whose estimated answer and whose stdin both stay well
+// below the caps, and the input travels as bytes.
+const ATTRIBUTE_ANSWER_BUDGET_BYTES = 128 * 1024;
+const STDIN_BUDGET_BYTES = 48 * 1024;
+const ATTRIBUTE_VALUE_ESTIMATE_BYTES = 16;
+const utf8 = new TextEncoder();
+// Splits `paths` so that no part's estimated answer or stdin (one `separator` byte per path) exceeds
+// its budget; a path that alone exceeds a budget still forms its own part.
+function boundedChunks(
+  paths: readonly string[],
+  answerBytes: (path: string) => number,
+  maxPaths: number,
+): readonly (readonly string[])[] {
+  const chunks: string[][] = [];
+  let answer = Infinity;
+  let stdin = Infinity;
+  for (const path of paths) {
+    const pathBytes = Buffer.byteLength(path) + 1;
+    answer += answerBytes(path);
+    stdin += pathBytes;
+    const full =
+      answer > ATTRIBUTE_ANSWER_BUDGET_BYTES ||
+      stdin > STDIN_BUDGET_BYTES ||
+      (chunks.at(-1)?.length ?? 0) >= maxPaths;
+    if (full) {
+      chunks.push([]);
+      answer = answerBytes(path);
+      stdin = pathBytes;
+    }
+    chunks.at(-1)?.push(path);
+  }
+  return chunks;
+}
+function attributeChunks(
+  attributes: readonly string[],
+  paths: readonly string[],
+): readonly (readonly string[])[] {
+  const perPathFixed = attributes.reduce(
+    (sum, attribute) => sum + Buffer.byteLength(attribute) + ATTRIBUTE_VALUE_ESTIMATE_BYTES + 3,
+    0,
+  );
+  return boundedChunks(
+    paths,
+    (path) => attributes.length * Buffer.byteLength(path) + perPathFixed,
+    Infinity,
+  );
+}
+type AttributeReadFailure = "attributes-unreadable" | "attributes-truncated";
+async function readAttributeValuesOrReason(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
+  const rows: (readonly string[])[] = [];
+  for (const chunk of attributeChunks(attributes, paths)) {
+    const part = await readAttributeChunk(ctx, attributes, chunk); // NOSONAR typescript:S9382 -- sequential parts keep each answer under the output cap
+    if (typeof part === "string") return part;
+    rows.push(...part);
+  }
+  return rows;
+}
 async function readAttributeValues(
   ctx: GitStageEffectContext,
   attributes: readonly string[],
   paths: readonly string[],
 ): Promise<readonly (readonly string[])[] | undefined> {
+  const rows = await readAttributeValuesOrReason(ctx, attributes, paths);
+  return typeof rows === "string" ? undefined : rows;
+}
+async function readAttributeChunk(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
   // The paths travel on stdin (NUL separated), so a selection never meets the command-line limit.
   const result = await ctx.run(
     ["check-attr", "-z", ...attributes, "--stdin"],
-    paths.map((path) => `${path}\0`).join(""),
+    utf8.encode(paths.map((path) => `${path}\0`).join("")),
   );
-  if (result.exitCode !== 0 || result.truncated || !result.stdout.endsWith("\0")) return undefined;
+  if (result.truncated) return "attributes-truncated";
+  if (result.exitCode !== 0 || !result.stdout.endsWith("\0")) return "attributes-unreadable";
   const fields = result.stdout.slice(0, -1).split("\0");
-  if (fields.length !== paths.length * attributes.length * 3) return undefined;
+  if (fields.length !== paths.length * attributes.length * 3) return "attributes-unreadable";
   const rows: string[][] = [];
   for (const [pathIndex, path] of paths.entries()) {
     const row: string[] = [];
     for (const [attributeIndex, attribute] of attributes.entries()) {
       const at = (pathIndex * attributes.length + attributeIndex) * 3;
       const value = recordValue(fields.slice(at, at + 3), path, attribute);
-      if (value === undefined) return undefined;
+      if (value === undefined) return "attributes-unreadable";
       row.push(value);
     }
     rows.push(row);
@@ -414,7 +490,9 @@ export function gitStagedObjectPortArgvAllowed(argv: readonly string[]): boolean
 function stdinPathSafe(path: string): boolean {
   return !/[\n\r]/u.test(path) && !path.startsWith('"');
 }
-async function hashPathsUnderConversion(
+const HASH_RUN_BUDGET = 32;
+const HASH_BATCH_PATHS = 1000;
+async function hashPathRun(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
   paths: readonly string[],
@@ -429,7 +507,7 @@ async function hashPathsUnderConversion(
       "hash-object",
       "--stdin-paths",
     ],
-    `${paths.join("\n")}\n`,
+    utf8.encode(`${paths.join("\n")}\n`),
   );
   if (result.exitCode !== 0 || result.truncated) return undefined;
   const ids = result.stdout.split("\n").filter((line) => line !== "");
@@ -437,6 +515,51 @@ async function hashPathsUnderConversion(
     ids.every((id) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(id))
     ? ids
     : undefined;
+}
+interface HashRuns {
+  remaining: number;
+}
+// One unreadable path (deleted, replaced by a directory, denied) fails the whole `hash-object` run.
+// The failed run is halved until the offending path stands alone, within a bounded number of runs;
+// that path, and anything the budget leaves unresolved, gets no answer and stays modified.
+async function hashPathsBisecting(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+  runs: HashRuns,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const answers = new Map<string, string | undefined>();
+  if (paths.length === 0 || runs.remaining <= 0) {
+    for (const path of paths) answers.set(path, undefined);
+    return answers;
+  }
+  runs.remaining -= 1;
+  const ids = await hashPathRun(ctx, lineEndings, paths);
+  if (ids !== undefined) {
+    for (const [at, path] of paths.entries()) answers.set(path, ids[at]);
+    return answers;
+  }
+  if (paths.length === 1) return new Map(paths.map((path) => [path, undefined]));
+  const middle = Math.ceil(paths.length / 2);
+  for (const half of [paths.slice(0, middle), paths.slice(middle)])
+    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, half, runs))
+      // NOSONAR typescript:S9382 -- halves run one after the other inside the run budget
+      answers.set(path, id);
+  return answers;
+}
+async function hashPathsUnderConversion(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const answers = new Map<string, string | undefined>();
+  const runs: HashRuns = { remaining: HASH_RUN_BUDGET };
+  // The answer is one short line per path, so the stdin bound decides the part size.
+  for (const part of boundedChunks(paths, () => 0, HASH_BATCH_PATHS))
+    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs))
+      // NOSONAR typescript:S9382 -- sequential parts keep each run under the stdin and output caps
+      answers.set(path, id);
+  return answers;
 }
 // Whether Git's conversion of this file's bytes can equal an index object it did not already match
 // raw: a regular file whose attributes staging admits, converted under `text`/`eol` or an `auto`
@@ -470,13 +593,13 @@ export async function gitStagedObjectIdOf(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
   files: readonly GitStageFile[],
-): Promise<ReadonlyMap<string, string | undefined> | undefined> {
+): Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason> {
   if (files.length === 0) return new Map();
   const names = await ctx.filterDriverNames();
-  if (names === undefined || !filterDriversOverridable(names)) return undefined;
+  if (names === undefined || !filterDriversOverridable(names)) return "config-unreadable";
   const paths = files.map((file) => file.path);
-  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
-  if (values === undefined) return undefined;
+  const values = await readAttributeValuesOrReason(ctx, STAGE_ATTRIBUTES, paths);
+  if (typeof values === "string") return values;
   const stages = await stagesOfValues(
     ctx,
     paths,
@@ -486,17 +609,15 @@ export async function gitStagedObjectIdOf(
   const settle = files.filter((file, at) =>
     conversionCanSettle(file, values[at], stages.get(file.path)),
   );
-  const ids =
-    settle.length === 0
-      ? []
-      : await hashPathsUnderConversion(
-          ctx,
-          lineEndings,
-          settle.map((file) => file.path),
-        );
-  if (ids === undefined) return undefined;
-  const byPath = new Map(settle.map((file, at) => [file.path, ids[at]]));
-  return new Map(paths.map((path) => [path, byPath.get(path)]));
+  const answers = await hashPathsUnderConversion(
+    ctx,
+    lineEndings,
+    settle.map((file) => file.path),
+  );
+  // Nothing could be hashed at all: the reason is the hash, not the files.
+  if (settle.length > 0 && [...answers.values()].every((id) => id === undefined))
+    return "hash-failed";
+  return new Map(paths.map((path) => [path, answers.get(path)]));
 }
 /**
  * Objects are created from the verified bytes without any filter driver; the only conversion is

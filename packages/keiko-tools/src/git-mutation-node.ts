@@ -790,7 +790,7 @@ export function createGitStagedObjectIdPort(
   const ctx = buildRunContext({ ...deps, policy: deps.policy });
   return async (files) => {
     const config = await readStageConfig(ctx);
-    if (config === undefined) return undefined;
+    if (config === undefined) return "config-unreadable";
     const effect: GitStageEffectContext = {
       workspaceRoot: deps.workspace.root,
       fs: workspaceFsOf(ctx.runDeps),

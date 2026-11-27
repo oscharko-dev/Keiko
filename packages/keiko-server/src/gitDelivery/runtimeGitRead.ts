@@ -86,6 +86,12 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["answered", "undecidable"],
     },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["config-unreadable", "attributes-unreadable", "attributes-truncated", "hash-failed"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -257,6 +263,7 @@ export function logStagedConversion(
     activityLogEvent(STAGED_CONVERSION_OPERATION, correlation, {
       ...counts,
       outcome: evidence.outcome,
+      ...(evidence.reason === undefined ? {} : { reason: evidence.reason }),
     }),
   );
 }

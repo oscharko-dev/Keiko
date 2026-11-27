@@ -38,6 +38,7 @@ import {
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { workspaceFsOf } from "./exec.js";
 import { CommandCancelledError } from "./errors.js";
+import type { GitStagedUndecidableReason } from "./git-stage-node.js";
 import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
@@ -280,7 +281,7 @@ function collectConvertible(
 }
 type PortAnswer =
   | { readonly outcome: "answered"; readonly ids: ReadonlyMap<string, string | undefined> }
-  | { readonly outcome: "undecidable" }
+  | { readonly outcome: "undecidable"; readonly reason?: GitStagedUndecidableReason }
   | { readonly outcome: "error"; readonly error: unknown };
 // The port's answer, or why there is none: a cancellation ends the read, any other failure leaves
 // every file of the batch modified and is reported to the observer (never silent, never a rejected
@@ -292,7 +293,10 @@ async function askStagedObjectPort(
 ): Promise<PortAnswer> {
   try {
     const ids = await port(files);
-    return ids === undefined ? { outcome: "undecidable" } : { outcome: "answered", ids };
+    if (ids === undefined) return { outcome: "undecidable" };
+    return typeof ids === "string"
+      ? { outcome: "undecidable", reason: ids }
+      : { outcome: "answered", ids };
   } catch (error) {
     if (scan.deps.signal?.aborted === true || error instanceof CommandCancelledError)
       throw new GitRawWorktreeReadError("git-raw-read-cancelled");
@@ -318,6 +322,10 @@ async function unchangedSinceRead(scan: ScanInputs, file: GitStageFile): Promise
     return { error };
   }
 }
+function throwIfCancelled(scan: ScanInputs): void {
+  if (scan.deps.signal?.aborted === true)
+    throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+}
 async function settledCleanPaths(
   scan: ScanInputs,
   answer: PortAnswer,
@@ -327,6 +335,7 @@ async function settledCleanPaths(
   const clean: string[] = [];
   let error: unknown;
   for (const file of batch) {
+    throwIfCancelled(scan);
     const stagedAs = answer.ids.get(file.path);
     if (stagedAs === undefined || stagedAs !== scan.index.get(file.path)?.objectId) continue;
     const recheck = await unchangedSinceRead(scan, file); // NOSONAR typescript:S9382 -- sequential re-reads stay inside the scan's content budget
@@ -343,6 +352,7 @@ interface SettlementTally {
   readonly clean: Set<string>;
   outcome: PortAnswer["outcome"];
   error: unknown;
+  reason: GitStagedUndecidableReason | undefined;
 }
 async function settleBatch(
   scan: ScanInputs,
@@ -355,6 +365,7 @@ async function settleBatch(
   for (const path of settled.clean) tally.clean.add(path);
   tally.outcome = settled.error === undefined ? worseOutcome(tally.outcome, answer) : "error";
   tally.error ??= answer.outcome === "error" ? answer.error : settled.error;
+  if (answer.outcome === "undecidable") tally.reason ??= answer.reason;
 }
 // A stat-dirty file whose bytes Git's conversion maps to exactly the index object is clean in the
 // working tree, as `git status` says; the judgement hashes them under Git's own conversion with every
@@ -368,9 +379,15 @@ async function settleConvertedFiles(
   const port = scan.deps.stagedObjectIds;
   if (port === undefined || pending.size === 0) return changes;
   const files = [...pending.values()];
-  const tally: SettlementTally = { clean: new Set(), outcome: "answered", error: undefined };
+  const tally: SettlementTally = {
+    clean: new Set(),
+    outcome: "answered",
+    error: undefined,
+    reason: undefined,
+  };
   let batches = 0;
   for (let at = 0; at < files.length; at += CONVERTIBLE_BATCH_SIZE) {
+    throwIfCancelled(scan);
     await settleBatch(scan, port, files.slice(at, at + CONVERTIBLE_BATCH_SIZE), tally); // NOSONAR typescript:S9382 -- sequential batches keep the process count and memory bounded
     batches += 1;
   }
@@ -379,6 +396,9 @@ async function settleConvertedFiles(
     batches,
     settledClean: tally.clean.size,
     outcome: tally.outcome,
+    ...(tally.outcome === "undecidable" && tally.reason !== undefined
+      ? { reason: tally.reason }
+      : {}),
     ...(tally.outcome === "error" ? { error: tally.error } : {}),
   });
   return changes.flatMap((change) => {

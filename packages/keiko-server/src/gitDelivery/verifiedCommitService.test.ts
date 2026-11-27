@@ -2753,6 +2753,29 @@ describe("deny-listed paths in the run's repository", () => {
 });
 
 describe("a converted file staged without stat data", () => {
+  it("names why an undecidable port could not answer", () => {
+    const execution = options.execution ?? {};
+    events.length = 0;
+
+    logStagedConversion(execution, "verified-commit-test", {
+      convertible: 1000,
+      batches: 1,
+      settledClean: 0,
+      outcome: "undecidable",
+      reason: "attributes-truncated",
+    });
+
+    const settled = events.filter((event) => event.op === "git.raw-status.conversion-settled");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({
+      extra: { convertible: 1000, outcome: "undecidable", reason: "attributes-truncated" },
+    });
+    expectActivityLogProof(
+      "git.raw-status.conversion-settled.emitted-line",
+      formatActivityLogProofLine(settled[0] ?? {}),
+    );
+  });
+
   it("records a failing staged-object port as a classified failure line", () => {
     const execution = options.execution ?? {};
     events.length = 0;
