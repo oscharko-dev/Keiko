@@ -9,7 +9,7 @@ import {
   parseClientTurnId,
   parseMemoryRequest,
   logChatRejection,
-  rememberMeetsMemoryOff,
+  memoryOffRememberNoticeFor,
   rememberRequestRefusedIn,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
@@ -273,7 +273,6 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import {
-  CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
   CONVERSATION_REMEMBER_REFUSED_NOTICE,
   renderConversationMemoryContextBlock,
   renderStandingProfileBlock,
@@ -3431,9 +3430,10 @@ function memoryOffRememberNotice(
   deps: UiHandlerDeps,
 ): string | undefined {
   const content = groundedSpokenContent(prepared);
-  if (!rememberMeetsMemoryOff(deps, { content, memory: prepared.input.memory })) return undefined;
+  const notice = memoryOffRememberNoticeFor(deps, { content, memory: prepared.input.memory });
+  if (notice === undefined) return undefined;
   logExplicitMemoryRemember("memory-off", correlationIdOrUnknown(prepared.correlationId));
-  return CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE;
+  return notice;
 }
 
 function withMemoryOffRememberNotice(

@@ -24,6 +24,7 @@ import { createRunRegistry } from "./runs.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import {
   CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE,
   CONVERSATION_REMEMBER_REFUSED_NOTICE,
 } from "./conversation-prompt.js";
 import type { RouteContext } from "./routes.js";
@@ -311,6 +312,22 @@ it("tells a grounded answer that a remember request was not stored while memory 
   expect(await sentFor("Which package manager should I use for installs?", "absent")).not.toContain(
     CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
   );
+});
+
+// PR #4568 review: memory switched on without a vault stores nothing either, and switching it on
+// would not help, so the answer learns that without being told to ask for the switch.
+it("tells a grounded answer with memory on but no vault that nothing was stored, without the switch", async () => {
+  const calls: GatewayCallRequest[] = [];
+  const { deps, root, chatId } = fixture(calls);
+  const remember = "Merke dir: Ich bevorzuge kurze Antworten.";
+  const result = await handleGroundedAsk(memoryRoute(root, chatId, remember, "on"), {
+    ...deps,
+    memoryVault: undefined,
+  });
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const sent = calls.flatMap((request) => request.messages.map((message) => message.content));
+  expect(sent.join("\n")).toContain(CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE);
+  expect(sent.join("\n")).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
 });
 
 it("tells a grounded answer that a refused remember request was not stored (#4213)", async () => {

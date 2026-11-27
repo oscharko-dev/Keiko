@@ -33,6 +33,7 @@ import {
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
 import {
   CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE,
   CONVERSATION_REMEMBER_REFUSED_NOTICE,
   conversationSystemPrompt,
   renderStandingProfileBlock,
@@ -1944,12 +1945,25 @@ export function rememberMeetsMemoryOff(
   return memoryOff && isRememberRequest(request.content);
 }
 
+// Which notice such a request needs: memory switched on without a vault cannot be fixed by the
+// switch, so its notice never asks for it (PR #4568 review).
+export function memoryOffRememberNoticeFor(
+  deps: UiHandlerDeps,
+  request: Pick<SendDesktopChatRequest, "content" | "memory">,
+): string | undefined {
+  if (!rememberMeetsMemoryOff(deps, request)) return undefined;
+  return request.memory?.enabled === true
+    ? CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE
+    : CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE;
+}
+
 // What the answer must know about this turn's own remember request before it is written.
 function rememberNoticeForTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
 ): string | undefined {
-  if (rememberMeetsMemoryOff(deps, request)) return CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE;
+  const memoryOff = memoryOffRememberNoticeFor(deps, request);
+  if (memoryOff !== undefined) return memoryOff;
   return rememberRequestRefused(deps, request) ? CONVERSATION_REMEMBER_REFUSED_NOTICE : undefined;
 }
 

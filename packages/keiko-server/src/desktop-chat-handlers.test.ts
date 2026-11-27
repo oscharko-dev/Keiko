@@ -12,6 +12,7 @@ import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import {
   CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE,
   CONVERSATION_REMEMBER_REFUSED_NOTICE,
 } from "./conversation-prompt.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
@@ -2680,6 +2681,37 @@ describe("desktop chat routes", () => {
     expect(on).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toHaveLength(1);
     memoryVault.close();
+  });
+
+  // PR #4568 review: memory switched on in a Keiko without a vault stores nothing either; the notice
+  // says so without telling the person to switch memory on.
+  it("tells the answer that memory is unavailable when it is on but Keiko has no vault", async () => {
+    await restartWithDeps(deps(fakeModel("memory response")));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const before = seenRequests.length;
+    const res = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that I prefer tables for numbers",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const sent = seenRequests
+      .slice(before)
+      .flatMap((request) => request.messages.map((message) => message.content))
+      .join("\n");
+    expect(sent).toContain(CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE);
+    expect(sent).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
   });
 
   it("threads deployment redaction literals into chat-intent memory rejection", async () => {
