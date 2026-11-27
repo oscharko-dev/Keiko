@@ -1756,7 +1756,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.trust.driftNotice":
     "Du vertraust diesem Repository bereits, aber diese Aufgabe hat dessen Build-Dateien geändert (zum Beispiel pom.xml oder package.json). Erlaube das, sobald du die Änderung angesehen hast; nur du kannst das entscheiden.",
   "codingWorkbench.trust.allow": "Build-Dateien dieses Repositorys vertrauen",
-  "codingWorkbench.trust.allowing": "Wird zugelassen…",
+  "codingWorkbench.trust.allowing": "Wird freigegeben…",
   "codingWorkbench.revert.region": "Letzter Durchgang",
   "codingWorkbench.revert.summary":
     "Der letzte Durchgang hat {count} Dateien geändert (+{additions} / -{deletions}).",

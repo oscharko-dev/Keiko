@@ -145,9 +145,15 @@ describe("CodingWorkbenchTrustAffordance", () => {
     );
 
     const action = await screen.findByRole("button", { name: ALLOW });
+    const alert = screen.getByRole("alert");
+    const announced = alert.textContent;
     await user.click(action);
 
     expect(await screen.findByRole("button", { name: "Allowing…" })).toBeDisabled();
+    // The busy label belongs to the button: the announced notice is the same node with the same text.
+    expect(screen.getByRole("alert")).toBe(alert);
+    expect(alert.textContent).toBe(announced);
+    expect(alert).not.toContainElement(screen.getByRole("button"));
     resolveMutate(status("/repo-a", "trusted"));
   });
 
