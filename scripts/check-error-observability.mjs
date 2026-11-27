@@ -175,8 +175,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The caught resolution failure is carried unchanged in HelperResolution; runAction rethrows it inside its own catch, which persists the registered helper-unavailable failure line with the error's closed kind.",
     "packages/keiko-cli/src/node-support.ts:declaredNodeRange":
       "An absent, unreadable or invalid own manifest declares no Node.js range; the verdict becomes the closed unknown value that process.started records as nodeSupport. Start is never refused on it.",
-    "packages/keiko-server/src/launch-directory.ts:systemName":
-      "A path the operating system cannot resolve (absent or unreadable) keeps its lexical spelling, which insideProgramFolder still compares. The predicate only adds refusals to the read surface and grants nothing.",
+    "packages/keiko-server/src/launch-directory.ts:resolveSystemName":
+      "The resolution failure becomes a closed outcome: an absent path (ENOENT/ENOTDIR) keeps its lexical spelling, which insideProgramFolder still compares, and every other failure is `failed`, which the denying checks read as cannot-be-shown-outside and refuse. Callers record that refusal on the registered body-free workspace-root denial line. The predicate only adds refusals to the read surface and grants nothing.",
     "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent":
       "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
     "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent":
