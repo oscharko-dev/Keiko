@@ -2604,11 +2604,13 @@ export type ClientCodingWorkbenchRepositorySource =
 
 /**
  * Where the repository of an automatic workspace activation came from: the window's own saved
- * selection (the composer picker or the Git window's return), the folder the shell held when the
- * window was seeded, or the active workspace the window follows.
+ * selection (the composer picker or the Git window's return), the repository a run pinned into the
+ * window (`window-pinned`), the folder the shell held when the window was seeded, or the active
+ * workspace the window follows.
  */
 export const CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS = [
   "window-selection",
+  "window-pinned",
   "shell-seed",
   "active-follow",
 ] as const;

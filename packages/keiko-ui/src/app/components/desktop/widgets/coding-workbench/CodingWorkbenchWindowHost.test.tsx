@@ -29,6 +29,7 @@ interface WindowProps {
   readonly onSelectRepository?: (root: string) => void;
   readonly onSelectBranch?: (branch: string, repositoryRoot: string | null) => void;
   readonly onPinRepository?: (root: string) => void;
+  readonly activationTrigger?: string | undefined;
   readonly leftRun?: string | undefined;
   readonly onLeftRun?: (runId: string | undefined) => void;
 }
@@ -333,7 +334,10 @@ describe("CodingWorkbenchWindowHost", () => {
     expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
 
     windowRendered.mock.calls.at(-1)?.[0]?.onPinRepository?.("/repos/bound");
-    expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith({ repositoryPath: "/repos/bound" });
+    expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith({
+      repositoryPath: "/repos/bound",
+      repositoryPinned: true,
+    });
     first.unmount();
 
     // The remount finds no readable binding and the shell on the Git window's repository.
@@ -344,6 +348,53 @@ describe("CodingWorkbenchWindowHost", () => {
     );
 
     expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/bound");
+  });
+
+  // U-3: the shell's seed only ever binds a folder when nothing is active; once a workspace is
+  // active the window follows it, so the seed can never trigger an activation of another repository.
+  it("follows an active workspace instead of a seed the shell decided earlier", () => {
+    windowRendered.mockClear();
+    const context = contextFixture({ selectedRoot: "/repos/git-window", activeBinding: null });
+    const active = { ...workspaceState({}), activeInstance: { repositoryRoot: "/repos/bound" } };
+    const view = render(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]).toMatchObject({
+      selectedRoot: "/repos/git-window",
+      activationTrigger: "shell-seed",
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={active as unknown as ActiveWorkspaceApi}>
+        <CodingWorkbenchWindowHost cfg={{}} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+  });
+
+  it("names a pinned repository apart from the person's own pick", () => {
+    windowRendered.mockClear();
+    const context = contextFixture();
+    const view = render(
+      <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/a" }} context={context} />,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.activationTrigger).toBe("window-selection");
+
+    view.rerender(
+      <CodingWorkbenchWindowHost
+        cfg={{ repositoryPath: "/repos/a", repositoryPinned: true }}
+        context={context}
+      />,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.activationTrigger).toBe("window-pinned");
+
+    windowRendered.mock.calls.at(-1)?.[0]?.onSelectRepository?.("/repos/b");
+    expect(context.updateCfg).toHaveBeenLastCalledWith(
+      expect.objectContaining({ repositoryPath: "/repos/b", repositoryPinned: undefined }),
+    );
   });
 
   it("persists the bound repository through onSelectRepository without a client diagnostic (#A)", () => {

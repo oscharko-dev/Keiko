@@ -205,20 +205,30 @@ vi.mock("./useCodingTaskSession", () => ({
 // Binding and restoration are covered by the execution-location hook's focused suite. Keep this
 // presentation suite on an already verified checkout so a network-free fixture stays startable.
 const locationInputs = vi.hoisted(
-  () => [] as { readonly folderMode: boolean; readonly location: string }[],
+  () =>
+    [] as {
+      readonly folderMode: boolean;
+      readonly location: string;
+      readonly locationsPending: boolean | undefined;
+    }[],
 );
 vi.mock("./useWorkbenchExecutionLocation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./useWorkbenchExecutionLocation")>()),
   useWorkbenchExecutionLocation: (input: {
     readonly folderMode: boolean;
     readonly location: string;
+    readonly locationsPending?: boolean | undefined;
   }): {
     ready: boolean;
     pending: boolean;
     error: boolean;
     retry: () => void;
   } => {
-    locationInputs.push({ folderMode: input.folderMode, location: input.location });
+    locationInputs.push({
+      folderMode: input.folderMode,
+      location: input.location,
+      locationsPending: input.locationsPending,
+    });
     return { ready: true, pending: false, error: false, retry: vi.fn() };
   },
 }));
@@ -7714,8 +7724,27 @@ describe("CodingWorkbenchWindow in an ordinary folder", () => {
     renderWorkbench();
     await screen.findByRole("button", { name: "Start coding run" });
     const last = locationInputs.at(-1);
-    expect(last).toEqual({ folderMode: true, location: "local" });
+    expect(last).toEqual({ folderMode: true, location: "local", locationsPending: false });
     expect(screen.queryByRole("button", { name: "Open Git" })).not.toBeInTheDocument();
+  });
+
+  // U-3: a remounted window reads as idle until its run is read, and an automatic activation then
+  // acts on a run it cannot see. Nothing is bound while the run state is unread.
+  it.each([
+    ["idle", true],
+    ["loading", true],
+    ["ready", false],
+  ] as const)("holds every activation while the run state is %s", async (status, pending) => {
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: { status, value: status === "ready" ? snapshot() : null, error: null },
+      }),
+      actions: actions(),
+    });
+    locationInputs.length = 0;
+    render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await screen.findByRole("button", { name: "Start coding run" });
+    expect(locationInputs.at(-1)?.locationsPending).toBe(pending);
   });
 
   it("keeps a repository out of folder mode", async () => {

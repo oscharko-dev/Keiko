@@ -283,12 +283,13 @@ describe("workbench execution location restoration", () => {
   // U-3: an activation the Workbench requests on its own names, in the Activity Log, where the
   // repository it binds came from, under the correlation of the request itself.
   it.each([
-    ["window", "window-selection"],
-    ["shell", "shell-seed"],
+    ["window-selection", "window-selection"],
+    ["window-pinned", "window-pinned"],
+    ["shell-seed", "shell-seed"],
     [undefined, "active-follow"],
   ] as const)(
     "reports the trigger of an automatic activation (%s)",
-    async (repositorySource, activationTrigger) => {
+    async (trigger, activationTrigger) => {
       mocks.fetchGitStatus.mockResolvedValue({ available: true, branch: "main", detached: false });
       mocks.selectLocalCheckout.mockResolvedValue({});
       renderHook(useWorkbenchExecutionLocation, {
@@ -304,7 +305,7 @@ describe("workbench execution location restoration", () => {
           workspaceError: false,
           runIsActive: false,
           folderMode: false,
-          repositorySource,
+          activationTrigger: trigger,
           refresh,
         },
       });

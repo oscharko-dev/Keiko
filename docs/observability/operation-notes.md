@@ -860,7 +860,7 @@ a new task instead of following a settled run of another task (`history-run-held
 #4271), a run that needed recovery left with New task (`recovery-left`, once per departure; F30), the starting repository of a window without a stored one, decided only after the
 task-workspace state answered (`repository-seeded` from the shell's project or
 `repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371), a workspace activation the Workbench requests on its own
-(`workspace-activation-requested` with the closed `activationTrigger` `window-selection`, `shell-seed` or `active-follow`, under the request's correlation; U-3) and a refused editor
+(`workspace-activation-requested` with the closed `activationTrigger` `window-selection`, `window-pinned`, `shell-seed` or `active-follow`, under the request's correlation; U-3. A Workbench window that only followed the active workspace pins the repository its run works in (`repositoryPinned` in its configuration), so after the run it stays on that repository instead of following the active workspace again until an explicit selection replaces it; a window never binds anything while its run state is unread, and the shell's seed never overrides an active workspace. A server selection of the workspace that is already active logs `task-workspace.lifecycle` `activate` with the outcome `unchanged` and ends no undo window) and a refused editor
 bridge registration
 (`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
 refused request's correlation and the run as parent; #4117) and a diff that switched to the

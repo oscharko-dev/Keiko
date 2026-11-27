@@ -3,7 +3,7 @@
 import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
-  ClientCodingWorkbenchRepositorySource,
+  ClientCodingWorkbenchActivationTrigger,
   ClientModelCatalogEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
@@ -630,12 +630,19 @@ function offeredExecutionLocations(
   return state.runtime.value?.executionLocations;
 }
 
-/** Readiness has not answered yet, so which locations the runtime confines is unknown (#4068). */
-function executionLocationsPending(state: Pick<CodingWorkbenchRuntimeState, "runtime">): boolean {
-  return (
-    state.runtime.value === null &&
-    (state.runtime.status === "idle" || state.runtime.status === "loading")
-  );
+function resourceUnread(resource: { readonly value: unknown; readonly status: string }): boolean {
+  return resource.value === null && (resource.status === "idle" || resource.status === "loading");
+}
+
+/**
+ * Nothing is bound yet: readiness has not answered, so which locations the runtime confines is
+ * unknown (#4068), or the window's run has not been read, which a remounted window shows as idle.
+ * An automatic activation then would act on a run it cannot see (U-3).
+ */
+function executionLocationsPending(
+  state: Pick<CodingWorkbenchRuntimeState, "runtime" | "run">,
+): boolean {
+  return resourceUnread(state.runtime) || resourceUnread(state.run);
 }
 
 // A folder is always Local: there is no repository to put a worktree in. A repository takes the
@@ -1029,7 +1036,7 @@ export function CodingWorkbenchWindow({
   onSelectBranch = noopSelectRepository,
   onSelectLocation = (): void => undefined,
   onPinRepository,
-  repositorySource,
+  activationTrigger,
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
@@ -1055,7 +1062,7 @@ export function CodingWorkbenchWindow({
   /** Keeps the repository a run works in as this window's own, without any other selection reset. */
   readonly onPinRepository?: ((root: string) => void) | undefined;
   /** Where the window took its repository from: names an automatic activation's trigger. */
-  readonly repositorySource?: ClientCodingWorkbenchRepositorySource | undefined;
+  readonly activationTrigger?: ClientCodingWorkbenchActivationTrigger | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -1148,7 +1155,7 @@ export function CodingWorkbenchWindow({
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
     locationsPending: executionLocationsPending(state),
-    repositorySource,
+    activationTrigger,
     refresh: refreshCheckout,
   });
   const alert = visibleAlert(

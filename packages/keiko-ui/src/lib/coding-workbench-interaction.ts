@@ -63,16 +63,18 @@ export function reportCodingWorkbenchRepositoryResolved(
 
 /**
  * The Workbench asked the server to activate a workspace on its own (U-3). The trigger is derived
- * from where the window took its repository: its own selection, the shell's seed, or the active
- * workspace it follows. Never the path.
+ * from where the window took its repository: its own selection, the repository a run pinned into
+ * it, the shell's seed, or the active workspace it follows. Never the path.
  */
 export function reportCodingWorkbenchActivationRequested(
-  source: ClientCodingWorkbenchRepositorySource | undefined,
+  activationTrigger: ClientCodingWorkbenchActivationTrigger | undefined,
   correlationId: string,
 ): void {
-  const activationTrigger = ACTIVATION_TRIGGER_OF_SOURCE[source ?? "none"];
   reportCodingWorkbenchInteraction(
-    { interaction: "workspace-activation-requested", activationTrigger },
+    {
+      interaction: "workspace-activation-requested",
+      activationTrigger: activationTrigger ?? "active-follow",
+    },
     correlationId,
   );
 }
@@ -80,6 +82,15 @@ export function reportCodingWorkbenchActivationRequested(
 const ACTIVATION_TRIGGER_OF_SOURCE: Readonly<
   Record<ClientCodingWorkbenchRepositorySource, ClientCodingWorkbenchActivationTrigger>
 > = { window: "window-selection", shell: "shell-seed", none: "active-follow" };
+
+/** A window's own repository is `window-pinned` when a run pinned it, else the person's pick. */
+export function activationTriggerOf(
+  source: ClientCodingWorkbenchRepositorySource | undefined,
+  pinned: boolean,
+): ClientCodingWorkbenchActivationTrigger | undefined {
+  if (source === undefined) return undefined;
+  return source === "window" && pinned ? "window-pinned" : ACTIVATION_TRIGGER_OF_SOURCE[source];
+}
 
 /** The size of a diff that switched to the windowed view: counts only, never a path or text. */
 export interface CodingWorkbenchWindowedDiffSize {

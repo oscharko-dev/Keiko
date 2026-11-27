@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientCodingWorkbenchActivationTrigger,
+  ClientCodingWorkbenchRepositorySource,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
+  activationTriggerOf,
   reportCodingWorkbenchInteraction,
   reportCodingWorkbenchRepositoryResolved,
 } from "@/lib/coding-workbench-interaction";
@@ -80,7 +84,12 @@ function branchSelectionPatch(
 ): WindowCfgRecord {
   if (root !== null && root !== undefined) return { targetBranch: branch, targetBranchRoot: root };
   if (shownRoot === null) return { targetBranch: branch, targetBranchRoot: undefined };
-  return { repositoryPath: shownRoot, targetBranch: branch, targetBranchRoot: shownRoot };
+  return {
+    repositoryPath: shownRoot,
+    targetBranch: branch,
+    targetBranchRoot: shownRoot,
+    repositoryPinned: undefined,
+  };
 }
 
 function isHistoryRestore(selection: string | undefined): boolean {
@@ -162,6 +171,31 @@ function useRepositorySourceReport(
   }, [source]);
 }
 
+/**
+ * The repository the window shows and where it came from. A window without a repository of its own
+ * follows the active workspace: once a workspace is active the shell's seed never overrides it, so
+ * the seed can only bind a folder when nothing is active (U-3). `repositoryPinned` marks a
+ * repository a run pinned into the window, which an explicit selection clears.
+ */
+function useWindowRepository(
+  cfg: WindowCfgRecord,
+  context: WindowRenderContext,
+): {
+  readonly root: string | undefined;
+  readonly activationTrigger: ClientCodingWorkbenchActivationTrigger | undefined;
+} {
+  const workspace = useOptionalActiveWorkspace();
+  const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
+  const decidedSeed = useShellSeedRoot(context, cfgRoot);
+  const seedRoot = (workspace?.activeInstance ?? null) === null ? decidedSeed : null;
+  useRepositorySourceReport(repositorySourceOf(cfgRoot, decidedSeed));
+  const source = repositorySourceOf(cfgRoot, seedRoot);
+  return {
+    root: cfgRoot ?? seedRoot ?? undefined,
+    activationTrigger: activationTriggerOf(source, cfg.repositoryPinned === true),
+  };
+}
+
 function selectedLocationOf(
   cfg: WindowCfgRecord,
   restoringHistory: boolean,
@@ -180,10 +214,7 @@ export function CodingWorkbenchWindowHost({
   readonly cfg: WindowCfgRecord;
   readonly context: WindowRenderContext;
 }): ReactNode {
-  const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
-  const seedRoot = useShellSeedRoot(context, cfgRoot);
-  const root = cfgRoot ?? seedRoot;
-  useRepositorySourceReport(repositorySourceOf(cfgRoot, seedRoot));
+  const { root, activationTrigger } = useWindowRepository(cfg, context);
   const historySelection =
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);
@@ -199,7 +230,7 @@ export function CodingWorkbenchWindowHost({
         onOpenHistory={() => context.openWindow("codingHistory")}
         leftRun={typeof cfg.leftRunId === "string" ? cfg.leftRunId : undefined}
         onLeftRun={(leftRunId) => context.updateCfg({ leftRunId })}
-        repositorySource={repositorySourceOf(cfgRoot, seedRoot)}
+        activationTrigger={activationTrigger}
         selectedRoot={root ?? undefined}
         selectedBranch={targetBranch}
         selectedLocation={selectedLocation}
@@ -213,12 +244,15 @@ export function CodingWorkbenchWindowHost({
             targetBranch: undefined,
             targetBranchRoot: undefined,
             executionLocation: undefined,
+            repositoryPinned: undefined,
           });
         }}
         onSelectBranch={(branch, shownRoot) => {
           context.updateCfg(branchSelectionPatch(branch, root, shownRoot));
         }}
-        onPinRepository={(repositoryPath) => context.updateCfg({ repositoryPath })}
+        onPinRepository={(repositoryPath) =>
+          context.updateCfg({ repositoryPath, repositoryPinned: true })
+        }
         onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
         onOpenGit={(target) => openGit(context, target)}
       />
