@@ -40,6 +40,23 @@ describe("redactCommandLineCredentials", () => {
     ["docker run --env=DB_PASSWORD=hunter2 img", "hunter2"],
     ["docker run --env DB_PASSWORD=hunter2 img", "hunter2"],
     ["docker run --env API_TOKEN=hunter2 --env X=1 img", "hunter2"],
+    // camelCase names are split before segmenting.
+    ["tool --accessToken=hunter2", "hunter2"],
+    ["tool --tokenValue=hunter2", "hunter2"],
+    ["mvn test -DsecretKey=hunter2", "hunter2"],
+    ["tool --apiKey hunter2", "hunter2"],
+    // A strong secret word anywhere in the name, unless a non-secret suffix ends it.
+    ["tool --token-value=hunter2", "hunter2"],
+    ["tool --secret-text hunter2", "hunter2"],
+    ["tool --password-value=hunter2", "hunter2"],
+    // PowerShell assignments with spaces around the equals sign.
+    ['$env:TOKEN = "hunter2 x"', "hunter2"],
+    ['$env:TOKEN ="hunter2"', "hunter2"],
+    ['$env:TOKEN= "hunter2"', "hunter2"],
+    ["$env:TOKEN =hunter2", "hunter2"],
+    // Authorization scheme values.
+    ['tool --auth-header "Bearer hunter2"', "hunter2"],
+    ["tool --header Authorization: Bearer hunter2", "hunter2"],
   ])("masks the credential in %s", (line, secret) => {
     const out = mask(line);
     expect(out).not.toContain(secret.trim());
@@ -66,6 +83,11 @@ describe("redactCommandLineCredentials", () => {
     "tool --key-file=a.pem",
     "tool --monkey-patch=on",
     "tool --password-file=secrets.txt",
+    "tool --api-key-id=42",
+    "tool --token-path=/tmp/t",
+    "tool --token-count=3",
+    "tool --secret-dir=/tmp",
+    "tool --apiKeyId=42",
     "tool --author=me",
     "FOO=bar npm test",
     "docker run --env=PATH=/bin img",
@@ -79,6 +101,16 @@ describe("redactCommandLineCredentials", () => {
     "git clone https://example.test/repo.git",
   ])("keeps %s byte for byte", (line) => {
     expect(mask(line)).toBe(line);
+  });
+
+  it("keeps a statement separator visible after a masked value", () => {
+    expect(mask('$env:TOKEN="abc"; cmd')).toBe("$env:TOKEN=[REDACTED]; cmd");
+    expect(mask("tool --password abc && next")).toBe("tool --password [REDACTED] && next");
+    expect(mask("tool --password=abc||next")).toBe("tool --password=[REDACTED]||next");
+    expect(mask("tool --token=abc|cat")).toBe("tool --token=[REDACTED]|cat");
+    expect(mask("$env:TOKEN = 'a b'; $env:X = 1; npm test")).toBe(
+      "$env:TOKEN = [REDACTED]; $env:X = 1; npm test",
+    );
   });
 
   it("keeps the quotes around a masked whole argument balanced and clean", () => {

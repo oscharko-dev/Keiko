@@ -25,6 +25,13 @@ const NAMES = [
   "db.password",
   "my-auth-token",
   "PASSWORD",
+  "accessToken",
+  "secretKey",
+  "apiKey",
+  "tokenValue",
+  "token-value",
+  "secret-text",
+  "password-value",
 ] as const;
 const SAFE_NAMES = ["verbose", "offline", "batch-mode", "Dtest", "reporter", "threads"] as const;
 const VALUES = ["hunter2", "s3cr3t-value", "a.b/c:d", "x".repeat(40), "tok_9F8e7D6c5B4a"] as const;
@@ -44,6 +51,9 @@ const SHAPES = [
   "powershell",
   "envFlag",
   "envFlagSpaced",
+  "powershellSpaced",
+  "powershellSeparator",
+  "camelDefine",
 ] as const;
 type Shape = (typeof SHAPES)[number];
 // Names whose substring is a credential word but whose LAST segment is not: never masked.
@@ -54,6 +64,11 @@ const SUBSTRING_NAMES = [
   "monkey-patch",
   "password-file",
   "author",
+  "password-file",
+  "api-key-id",
+  "token-path",
+  "token-count",
+  "apiKeyId",
 ] as const;
 
 interface Case {
@@ -90,6 +105,9 @@ function render(item: Case): string {
     powershell: `$env:${envName(item.name)}="${item.value} w"`,
     envFlag: `--env=${envName(item.name)}=${item.value}`,
     envFlagSpaced: `--env ${envName(item.name)}=${item.value}`,
+    powershellSpaced: `$env:${envName(item.name)} = "${item.value} w"`,
+    powershellSeparator: `$env:${envName(item.name)}="${item.value}"; next`,
+    camelDefine: `-D${item.name}=${item.value};next`,
   }[item.shape];
   return ["mvn", ...item.before, option, ...item.after].join(item.space);
 }
@@ -112,6 +130,10 @@ describe("redactCommandLineCredentials (properties)", () => {
         const out = redactCommandLineCredentials(render(item));
         expect(out).not.toContain(item.value);
         expect(out).toContain("[REDACTED]");
+        // A statement separator after a masked value stays visible, with the command behind it.
+        if (item.shape === "powershellSeparator" || item.shape === "camelDefine") {
+          expect(out).toMatch(/;\s*next/u);
+        }
       },
     });
     const { runs } = propertySettings(MASKING);

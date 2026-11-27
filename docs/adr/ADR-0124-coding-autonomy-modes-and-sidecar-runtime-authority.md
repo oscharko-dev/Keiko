@@ -303,7 +303,10 @@ preview never enters a runtime event, snapshot, evidence or the Activity Log. Kn
 does not mask a Maven `-Dpassword=` system property; the preview therefore also masks
 credential-named options itself (`--name=v`, `--name v`, `-Dname=v`, `NAME=v` prefixes, quoted
 whole arguments, `-u user:pass`, URL userinfo) in `commandLineRedaction.ts`, a linear scan local to
-this one line.
+this one line. Names are split on camelCase and non-alphanumeric runs: a credential word as the last
+segment, or a strong secret word anywhere unless a non-secret suffix such as `file` or `id` ends
+the name, marks the value for masking; `Bearer`/`Basic` scheme values and statement separators are
+handled so a separator after a masked value stays visible.
 
 The shown plan is bound to the approval, not to the child's claim. The ask carries the digest of
 the shown command lines (command, arguments, folder, script body) and marks that it showed any;

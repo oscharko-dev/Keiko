@@ -127,6 +127,25 @@ describe("verification approval preview", () => {
     expect(text).toContain("--password=[REDACTED]");
   });
 
+  it("masks what the card actually renders: first pass plus the shared floor, end to end", () => {
+    const npm = "npm_abcdef1234567890";
+    const header = "opaque-header-value-77";
+    const bearer = "xyz-bearer-token-99";
+    const secrets = [npm, header, bearer];
+    const preview = previewFromSteps([
+      { command: "npm", args: ["publish", `--//registry.npmjs.org/:_authToken=${npm}`] },
+      { command: "tool", args: ["--auth-header", `Bearer ${header}`] },
+      { command: "curl", args: ["-H", `Authorization: Bearer ${bearer}`, "https://e.test"] },
+      { command: "pwsh", args: ["-c", '$env:API_TOKEN="npm_zzz-9; npm test'] },
+    ]);
+    if (preview.status !== "commands") throw new TypeError("expected commands");
+    const text = preview.commands.join("\n");
+    for (const secret of secrets) expect(text).not.toContain(secret);
+    expect(text).toContain("[REDACTED]");
+    expect(text).toContain("registry.npmjs.org");
+    expect(text).toContain("https://e.test");
+  });
+
   it("cuts a very long command visibly, within the contract bound", () => {
     const preview = previewFromSteps([{ command: "npm", args: ["run", "x".repeat(5_000)] }]);
     if (preview.status !== "commands") throw new TypeError("expected commands");
