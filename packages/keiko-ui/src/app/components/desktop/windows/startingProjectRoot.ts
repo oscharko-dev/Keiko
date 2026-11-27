@@ -25,7 +25,7 @@ export function startingProjectPaths(
 }
 
 /** Why a remembered Git repository was not reopened; a closed vocabulary, never a path. */
-export type GitReopenFallbackReason =
+type GitReopenFallbackReason =
   "remembered-unavailable" | "remembered-unreadable" | "remembered-managed-worktree";
 
 export interface GitReopenDecision {

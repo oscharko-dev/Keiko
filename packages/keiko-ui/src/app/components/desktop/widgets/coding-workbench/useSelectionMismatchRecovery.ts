@@ -6,8 +6,6 @@ import type { CodingWorkbenchMutationState } from "@/lib/coding-workbench-live-s
 
 import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
 
-export { SELECTION_MISMATCH_ERROR_CODE };
-
 /**
  * A start or retry the server refused because its active workspace is another repository than the
  * one the window shows. The window's cached workspace state was stale, so it is read again and the

@@ -657,7 +657,7 @@ function nextWorkspaceZ(list: readonly AppWindow[], zc: MutateArgs["zc"]): numbe
 }
 
 /** A visible window is frontmost when no other visible window sits above it (a z tie is not frontmost). */
-export function isFrontmostWindow(list: readonly AppWindow[], target: AppWindow): boolean {
+function isFrontmostWindow(list: readonly AppWindow[], target: AppWindow): boolean {
   if (target.minimized === true) return false;
   return list.every((w) => w.minimized === true || w.id === target.id || w.z < target.z);
 }
