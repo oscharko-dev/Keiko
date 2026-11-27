@@ -1,4 +1,5 @@
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   readGitRawWorktreeSnapshotAtHead,
   sameGitHeadState,
@@ -842,7 +843,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       binding,
       review,
       context,
-      expiresAtMs: this.now() + TTL_MS,
+      expiresAtMs: this.now() + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
       ...(verificationFailed ? { verificationFailed: true as const } : {}),
       command: {
         kind: "commit",

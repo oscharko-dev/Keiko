@@ -819,7 +819,8 @@ function researchScope(
   };
 }
 
-function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01:00.000Z") {
+// The child-sent instant only has to be a valid future one: the server owns the lifetime.
+function verificationPermission(requestId: string, expiresAt = "2099-01-01T00:00:00.000Z") {
   return {
     schemaVersion: "1" as const,
     eventId: `event-${requestId}`,
@@ -2035,6 +2036,55 @@ describe("CodingRuntimeOrchestrator", () => {
       } else {
         expect(unevidenced).toBeUndefined();
       }
+    },
+  );
+
+  // W-6: a run without an issue binding is not bound to deliver, but one whose own commit proposal
+  // was blocked, failed or never approved has reached for a commit and has none. It must not settle
+  // as a success; a run that never proposed a commit, or that holds a commit, keeps succeeding.
+  it.each([
+    ["no commit attempt", "none", "succeeded", undefined],
+    ["a verified commit receipt", "verified-commit", "succeeded", undefined],
+    ["a refused commit proposal", "verification-failed-commit", "failed", "delivery-not-evidenced"],
+  ] as const)(
+    "settles a run without an issue that reported success with %s",
+    async (_label, evidenceKind, expectedState, expectedFailureCode) => {
+      const captured = captureActivityLog();
+      const verifiedCommits = new Map<string, VerifiedCommitResult>();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        captured.activityLog,
+        undefined,
+        undefined,
+        verifiedCommits,
+      );
+      let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+      const completion = new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+      await f.orchestrator.start(start);
+      const row = f.rows.get("run-1");
+      if (row === undefined) throw new Error("expected the started run row");
+      seedDeliveryEvidence(f.rows, verifiedCommits, row, evidenceKind);
+      // Without an issue the receipt carries no issue binding.
+      const seeded = f.rows.get("run-1");
+      const receipt = seeded?.verifiedCommitResult;
+      if (seeded !== undefined && receipt !== undefined) {
+        const { issueBindingDigest: _issue, ...unbound } = receipt;
+        f.rows.set("run-1", { ...seeded, verifiedCommitResult: unbound });
+        if (verifiedCommits.has("run-1")) verifiedCommits.set("run-1", unbound);
+      }
+
+      resolveCompletion?.("succeeded");
+
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe(expectedState);
+      });
+      expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe(expectedFailureCode);
     },
   );
 
@@ -4164,7 +4214,7 @@ describe("CodingRuntimeOrchestrator", () => {
         commandTemplateId: "verify.typecheck",
         safeArgumentClasses: ["frozen-argv"],
         approvedByUserId: "server",
-        ttlMs: 60_000,
+        ttlMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
       }),
     );
     expect(f.permissionPort.resolve).toHaveBeenCalledWith({
@@ -4222,6 +4272,7 @@ describe("CodingRuntimeOrchestrator", () => {
       runId: "run-1",
       revision: 5,
       requestId: "permission-7",
+      expiresInMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
       permissionKind: "command-execution",
       actionClass: "command-execution",
       actionKind: "ci-observe",
@@ -4626,50 +4677,54 @@ describe("CodingRuntimeOrchestrator", () => {
   // approval, but it no longer ends the run. Its governed ask already ended as expired on its own, so
   // it is retired like an expired active ask (ADR-0124 D6) and the next live ask takes the card.
   it("retires an expired queued challenge instead of exposing an undecidable approval", async () => {
-    let nowMs = FIXTURE_NOW_MS;
-    const captured = captureActivityLog();
-    const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
-    await f.orchestrator.start(start);
-    const first = await f.orchestrator.ingest(
-      verificationPermission("permission-1", "2026-01-01T00:04:00.000Z"),
-    );
-    await f.orchestrator.ingest(verificationPermission("permission-2", "2026-01-01T00:01:00.000Z"));
-    await f.orchestrator.ingest(verificationPermission("permission-3", "2026-01-01T00:05:00.000Z"));
-    nowMs += 2 * 60 * 1_000;
+    vi.useFakeTimers();
+    try {
+      let nowMs = FIXTURE_NOW_MS;
+      const captured = captureActivityLog();
+      const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest(verificationPermission("permission-1"));
+      nowMs += 60_000;
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
+      nowMs += 120_000;
+      await f.orchestrator.ingest(verificationPermission("permission-3"));
+      // The server owns every lifetime, so a later ask always outlives an earlier one: at the
+      // instant the first wait runs out, the second has run out too while the third still lives.
+      nowMs = FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS + 90_000;
+      await vi.advanceTimersByTimeAsync(MAX_APPROVAL_CHALLENGE_TTL_MS);
 
-    expect(
-      await f.orchestrator.decideApproval("run-1", {
-        requestId: "permission-1",
-        decision: "approved",
-        expectedRevision: successfulSnapshot(first).revision,
-      }),
-    ).toMatchObject({ ok: true, snapshot: { state: "awaiting-approval" } });
-    expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-3");
-    expect(f.manager.stop).not.toHaveBeenCalled();
-    expect(
-      captured.records.find((event) => event.op === "coding-runtime.approval.retired")?.extra,
-    ).toMatchObject({ requestId: "permission-2", reason: "expired", replaced: false });
+      expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-3");
+      expect(f.manager.stop).not.toHaveBeenCalled();
+      expect(
+        captured.records.find(
+          (event) =>
+            event.op === "coding-runtime.approval.retired" &&
+            event.extra?.requestId === "permission-2",
+        )?.extra,
+      ).toMatchObject({ reason: "expired", replaced: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns the run to running when every queued challenge has expired", async () => {
-    let nowMs = FIXTURE_NOW_MS;
-    const f = fixture(undefined, () => new Date(nowMs));
-    await f.orchestrator.start(start);
-    const first = await f.orchestrator.ingest(
-      verificationPermission("permission-1", "2026-01-01T00:04:00.000Z"),
-    );
-    await f.orchestrator.ingest(verificationPermission("permission-2", "2026-01-01T00:01:00.000Z"));
-    nowMs += 2 * 60 * 1_000;
+    vi.useFakeTimers();
+    try {
+      let nowMs = FIXTURE_NOW_MS;
+      const f = fixture(undefined, () => new Date(nowMs));
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest(verificationPermission("permission-1"));
+      nowMs += 60_000;
+      await f.orchestrator.ingest(verificationPermission("permission-2"));
+      nowMs = FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS + 120_000;
+      await vi.advanceTimersByTimeAsync(MAX_APPROVAL_CHALLENGE_TTL_MS);
 
-    expect(
-      await f.orchestrator.decideApproval("run-1", {
-        requestId: "permission-1",
-        decision: "approved",
-        expectedRevision: successfulSnapshot(first).revision,
-      }),
-    ).toMatchObject({ ok: true, snapshot: { state: "running" } });
-    expect(f.orchestrator.status().pendingPermission).toBeUndefined();
-    expect(f.manager.stop).not.toHaveBeenCalled();
+      expect(f.orchestrator.status()).toMatchObject({ state: "running" });
+      expect(f.orchestrator.status().pendingPermission).toBeUndefined();
+      expect(f.manager.stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // 1.1.9 lab: the active approval's wait ran out while nobody decided it. Its governed ask ended as
@@ -4691,8 +4746,8 @@ describe("CodingRuntimeOrchestrator", () => {
       );
       expect(waiting.state).toBe("awaiting-approval");
 
-      nowMs += 60_000;
-      await vi.advanceTimersByTimeAsync(60_000);
+      nowMs += MAX_APPROVAL_CHALLENGE_TTL_MS;
+      await vi.advanceTimersByTimeAsync(MAX_APPROVAL_CHALLENGE_TTL_MS);
 
       const status = f.orchestrator.status();
       expect(status).toMatchObject({ state: "running" });
@@ -4748,12 +4803,10 @@ describe("CodingRuntimeOrchestrator", () => {
       const first = successfulSnapshot(
         await f.orchestrator.ingest(verificationPermission("permission-1")),
       );
-      nowMs += 60_000;
+      nowMs += MAX_APPROVAL_CHALLENGE_TTL_MS;
 
       const next = successfulSnapshot(
-        await f.orchestrator.ingest(
-          verificationPermission("permission-2", "2026-01-01T00:06:00.000Z"),
-        ),
+        await f.orchestrator.ingest(verificationPermission("permission-2")),
       );
 
       expect(next.state).toBe("awaiting-approval");
@@ -4786,23 +4839,22 @@ describe("CodingRuntimeOrchestrator", () => {
     // ask queues behind it and did not take the expired one's place; only an ask that finds no live
     // queued ask does. The retired line says which happened.
     it.each([
-      ["a live queued ask is promoted first", "2026-01-01T00:06:00.000Z", false, "permission-2"],
-      ["every queued ask has expired too", "2026-01-01T00:00:30.000Z", true, "permission-3"],
+      ["a live queued ask is promoted first", 60_000, false, "permission-2"],
+      ["every queued ask has expired too", 0, true, "permission-3"],
     ] as const)(
       "records the late ask as the replacement only when no live queued ask waits: %s",
-      async (_label, queuedExpiresAt, replaced, shown) => {
+      async (_label, queuedAfterMs, replaced, shown) => {
         vi.useFakeTimers();
         let nowMs = FIXTURE_NOW_MS;
         const captured = captureActivityLog();
         const f = fixture(undefined, () => new Date(nowMs), [], undefined, captured.activityLog);
         await f.orchestrator.start(start);
         await f.orchestrator.ingest(verificationPermission("permission-1"));
-        await f.orchestrator.ingest(verificationPermission("permission-2", queuedExpiresAt));
-        nowMs += 60_000;
+        nowMs += queuedAfterMs;
+        await f.orchestrator.ingest(verificationPermission("permission-2"));
+        nowMs = FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS;
 
-        await f.orchestrator.ingest(
-          verificationPermission("permission-3", "2026-01-01T00:06:00.000Z"),
-        );
+        await f.orchestrator.ingest(verificationPermission("permission-3"));
 
         expect(f.orchestrator.status().pendingPermission?.requestId).toBe(shown);
         expect(
@@ -5892,7 +5944,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
           expiresAt: "2026-01-01T00:01:00.000Z",
         },
       });
-      nowMs += elapsedMs;
+      nowMs += MAX_APPROVAL_CHALLENGE_TTL_MS + elapsedMs - 60_000;
 
       const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
 
@@ -5953,7 +6005,7 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
         expiresAt: "2026-01-01T00:01:00.000Z",
       },
     });
-    nowMs += 60_001;
+    nowMs += MAX_APPROVAL_CHALLENGE_TTL_MS + 1;
     f.manager.stop.mockRejectedValueOnce(new RangeError(PRIVATE_FAILURE_TEXT));
 
     const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
@@ -6385,11 +6437,12 @@ describe("approval challenge lifetime ceiling", () => {
     expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
   });
 
-  it("leaves a child lifetime below the ceiling exactly as asked", async () => {
-    const { f, ingested } = await awaitingApproval(undefined, "2026-01-01T00:01:00.000Z");
+  it("extends a shorter child lifetime to the server-owned decision wait (W-6)", async () => {
+    const { f, ingested } = await awaitingApproval(undefined, "2026-01-01T00:05:00.000Z");
+    const ceiling = new Date(FIXTURE_NOW_MS + MAX_APPROVAL_CHALLENGE_TTL_MS).toISOString();
 
     expect(successfulSnapshot(ingested)).toMatchObject({
-      pendingPermission: { expiresAt: "2026-01-01T00:01:00.000Z" },
+      pendingPermission: { expiresAt: ceiling },
     });
     await f.orchestrator.decideApproval("run-1", {
       requestId: "permission-1",
@@ -6397,8 +6450,34 @@ describe("approval challenge lifetime ceiling", () => {
       expectedRevision: 5,
     });
     expect(f.approvalAuthority.issue).toHaveBeenCalledWith(
-      expect.objectContaining({ ttlMs: 60_000 }),
+      expect.objectContaining({ ttlMs: MAX_APPROVAL_CHALLENGE_TTL_MS }),
     );
+  });
+
+  it("records the effective lifetime on the approval-waiting line (W-6)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "permission",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-1",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "git-stage",
+        expiresAt: "2026-01-01T00:05:00.000Z",
+      },
+    });
+
+    const lines = captured.records.filter((r) => r.op === "coding-runtime.approval.waiting");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.extra).toMatchObject({ expiresInMs: MAX_APPROVAL_CHALLENGE_TTL_MS });
   });
 
   it.each([

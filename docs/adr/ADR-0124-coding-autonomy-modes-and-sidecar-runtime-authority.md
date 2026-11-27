@@ -338,6 +338,15 @@ reason `denied` at info level. Before this, nothing answered a denied proposal: 
 denial had released the wait by its abort, and with the run going on the call held until the
 approval ceiling (1.1.10 e2e: a denied commit left its call pending and the run silent).
 
+The lifetime of an ask is server-owned: the child's `permissionRequest.expiresAt` must be a valid
+future instant but never sets the lifetime, in either direction. A shorter value is extended to the
+human-decision wait and a longer one is not honored, so the card deadline, the challenge expiry and
+the minted approval TTL are one instant. The same wait is the lifetime of every governed Git
+proposal (stage, commit, draft delivery) and the default of both approval stores (W-6: a 5-minute
+ask lost a run's commit after the person stepped away). `coding-runtime.approval.waiting` records
+`expiresInMs`. A verification's freshness for a commit proposal remains 5 minutes, since it is a
+proof age and not a human wait.
+
 The run's own wait on an approval ends at the same instant as the ask's
 (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in
 time is retired, the run returns to `running`, or to the next queued ask, under a new revision, so

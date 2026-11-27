@@ -463,6 +463,7 @@ const CODING_RUNTIME_APPROVAL_WAITING_OPERATION = defineActivityLogOperation({
         "system-mutation",
       ],
     },
+    expiresInMs: { type: "integer", dataClass: "duration", required: false },
     queuePosition: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
@@ -940,7 +941,7 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
   emitter: "coding-runtime.codingRuntimeOrchestrator.deliveryTruthfulOutcome",
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    issueNumber: { type: "integer", dataClass: "count", required: true },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
     hasVerifiedCommit: { type: "boolean", dataClass: "closed-enum", required: true },
     hasDraftDelivery: { type: "boolean", dataClass: "closed-enum", required: true },
     reportedOutcome: {
@@ -1632,8 +1633,10 @@ function recordRuntimeApprovalWaiting(
   runId: string,
   revision: number,
   permission: CodingWorkbenchRuntimePendingPermission,
+  nowMs: number,
   queuePosition?: number,
 ): void {
+  const expiresInMs = Date.parse(permission.expiresAt) - nowMs;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_APPROVAL_WAITING_OPERATION,
@@ -1645,6 +1648,7 @@ function recordRuntimeApprovalWaiting(
         permissionKind: permission.kind,
         actionClass: permission.actionClass,
         ...(permission.actionKind === undefined ? {} : { actionKind: permission.actionKind }),
+        ...(Number.isFinite(expiresInMs) ? { expiresInMs: Math.max(0, expiresInMs) } : {}),
         ...(queuePosition === undefined ? {} : { queuePosition }),
       },
     ),
@@ -2110,16 +2114,13 @@ function isTerminalRuntimeState(
 }
 
 /**
- * Server-side ceiling on how long one approval challenge may live.
+ * Server-owned lifetime of one approval challenge.
  *
- * The lifetime arrives on the runtime child's `permission-requested` event as
- * `permissionRequest.expiresAt`. The child is on the untrusted side of the boundary — it is the
- * process the approval is being asked ABOUT — so it must not choose its own security lifetime. This
- * ceiling is the trusted counterpart of the 5-minute value the generated child-side tool source
- * happens to send today: a child that asks for longer (or a tampered one that asks for a year) is
- * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
- * the approval card, and the TTL of the minted approval authority. All three derive from this one
- * clamped instant, so the card can never display a deadline the server does not enforce.
+ * The runtime child's `permissionRequest.expiresAt` is NOT trusted in either direction: the child is
+ * the process the approval is being asked ABOUT, so a shorter value must not end a person's
+ * decision early (W-6: a 5-minute ask lost a run's commit) and a longer one must not extend it. The
+ * server derives the instant from this value, and the challenge expiry, the operator-visible
+ * deadline on the approval card and the TTL of the minted approval authority all share it.
  *
  * It is the contract's one human-decision wait, so the catalog budget, the tool bridge deadline and
  * the plugin client timeout of every tool that waits for an approval derive from the same value
@@ -2700,6 +2701,7 @@ export class CodingRuntimeOrchestrator {
         runId,
         transitioned.snapshot.revision,
         approval.permission,
+        this.now().getTime(),
       );
       this.scheduleApprovalExpiry(runId, approval);
     }
@@ -3410,6 +3412,7 @@ export class CodingRuntimeOrchestrator {
         live.runId,
         next.snapshot.revision,
         challenge.permission,
+        this.now().getTime(),
       );
       this.scheduleApprovalExpiry(live.runId, challenge);
     }
@@ -3501,13 +3504,15 @@ export class CodingRuntimeOrchestrator {
     const permission = event.permissionRequest;
     if (permission === undefined) return undefined;
     if (!permission.actionKind && !isNativeActionPermissionRequest(permission)) return undefined;
-    const requested = Date.parse(permission.expiresAt);
     const nowMs = this.now().getTime();
+    const requested = Date.parse(permission.expiresAt);
+    // A malformed or already elapsed instant is a malformed ask, refused as before; a valid one is
+    // not used for the lifetime at all.
     if (!Number.isFinite(requested) || requested <= nowMs) return undefined;
-    // Clamp the child-declared lifetime to the server ceiling and re-publish the clamped instant on
-    // the permission itself, so the challenge expiry, the operator-visible deadline, and the minted
-    // approval TTL are one value the server owns (MAX_APPROVAL_CHALLENGE_TTL_MS).
-    const expiresAt = Math.min(requested, nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS);
+    // The runtime child sits on the untrusted side of the boundary, so it chooses no security
+    // lifetime in either direction: the server-owned human-decision wait is the one lifetime, and
+    // the challenge expiry, the card deadline and the minted authority TTL all derive from it.
+    const expiresAt = nowMs + MAX_APPROVAL_CHALLENGE_TTL_MS;
     return {
       revision: current.revision + 1,
       expiresAt,
@@ -3541,6 +3546,7 @@ export class CodingRuntimeOrchestrator {
       current.runId,
       current.revision,
       challenge.permission,
+      this.now().getTime(),
       queued.length,
     );
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
@@ -3594,6 +3600,7 @@ export class CodingRuntimeOrchestrator {
       current.runId,
       waiting.snapshot.revision,
       promoted.permission,
+      this.now().getTime(),
     );
     this.scheduleApprovalExpiry(current.runId, promoted);
     return waiting;
@@ -4192,7 +4199,11 @@ export class CodingRuntimeOrchestrator {
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
-    if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
+    if (target.state !== "succeeded") return target;
+    // A run that reached for a commit and has none is not a success, issue-bound or not: the model
+    // proposed it (the proposal outcome is persisted, blocked, failed or never approved) and no
+    // commit exists. No free text is read; the run's own recorded attempt is the evidence (W-6).
+    if (live.issueBinding === undefined) return this.unfinishedCommitOutcome(live, target);
     // Presence is not delivery. A `verifiedCommitResult` is persisted for every proposal outcome,
     // `verification-failed` and `blocked` included, and a `draftDelivery` record exists as soon as a
     // push is PROPOSED. Reading either as evidence would re-admit the false success this method
@@ -4220,6 +4231,41 @@ export class CodingRuntimeOrchestrator {
           issueNumber: live.issueBinding.issueNumber,
           hasVerifiedCommit,
           hasDraftDelivery,
+          reportedOutcome: "succeeded",
+          continuations: this.deliveryContinuations.get(live.runId) ?? 0,
+        },
+      ),
+    );
+    return { state: "failed", failureCode: "delivery-not-evidenced" };
+  }
+
+  private unfinishedCommitOutcome(
+    live: CodingRuntimeSnapshot,
+    target: TaskOutcomeTarget,
+  ): {
+    readonly state: "cancelled" | "failed" | "succeeded";
+    readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  } {
+    const attempt = live.verifiedCommitResult;
+    if (attempt === undefined || attempt.status === "succeeded") return target;
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryEvidenceUnreadable(live, evidence.error);
+      return target;
+    }
+    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return target;
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION,
+        {
+          level: "warn",
+          correlationId: runtimeDiagnosticCorrelationId(live.runId),
+          errorKind: "validation-failed",
+        },
+        {
+          runId: live.runId,
+          hasVerifiedCommit: false,
+          hasDraftDelivery: false,
           reportedOutcome: "succeeded",
           continuations: this.deliveryContinuations.get(live.runId) ?? 0,
         },

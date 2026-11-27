@@ -1,3 +1,4 @@
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import {
   admitStageSelection,
@@ -1239,10 +1240,16 @@ describe("verified Code-task commit service", () => {
     expect((await service.execute(id, approval))?.status).toBe("drift");
     expect(git(["rev-list", "--count", "dev..HEAD"])).toBe("0");
   });
+  it("keeps a commit proposal approvable for the whole human decision wait (W-6)", async () => {
+    const id = await verifiedProposal();
+    now += GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS - 1;
+    const approval = await claim(id);
+    expect((await service.execute(id, approval))?.status).toBe("succeeded");
+  });
   it("rejects expiry, revocation, and restart replay without resurrecting a claim", async () => {
     const id = await verifiedProposal();
     const approval = await claim(id);
-    now += 5 * 60 * 1000;
+    now += GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
     expect(await service.execute(id, approval)).toBeUndefined();
     service = createVerifiedCommitService(options);
     expect(await service.execute(id, approval)).toBeUndefined();
@@ -2478,7 +2485,7 @@ describe("productive runtime status/diff/stage lane", () => {
       ),
     ).toMatchObject({ status: "drift" });
     expect(git(["write-tree"])).toBe(index);
-    now += 300_001;
+    now += GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + 1;
     expect(gitService.issueApproval(proposal.proposalId)).toBeUndefined();
     expect(
       await gitService.execute(

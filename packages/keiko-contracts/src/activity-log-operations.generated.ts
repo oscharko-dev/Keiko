@@ -10268,6 +10268,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "system-mutation",
         ],
       },
+      expiresInMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       queuePosition: {
         type: "integer",
         dataClass: "count",
@@ -16213,7 +16218,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       issueNumber: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       hasVerifiedCommit: {
         type: "boolean",

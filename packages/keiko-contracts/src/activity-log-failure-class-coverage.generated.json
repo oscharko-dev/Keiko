@@ -12016,6 +12016,12 @@
               "required": false
             },
             {
+              "name": "expiresInMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "permissionKind",
               "type": "string",
               "dataClass": "closed-enum",
@@ -12050,6 +12056,7 @@
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "loss-state",
             "opaque-id"
           ],
@@ -12770,7 +12777,7 @@
               "name": "issueNumber",
               "type": "integer",
               "dataClass": "count",
-              "required": true
+              "required": false
             },
             {
               "name": "reportedOutcome",

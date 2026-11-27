@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -399,7 +400,7 @@ function assembleProposal(
     context,
     command,
     binding,
-    expiresAtMs: nowMs + 300_000,
+    expiresAtMs: nowMs + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
     review: {
       requestId: proposalId,
       paths: [...paths],

@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
   CodeTaskGrantScope,
   CodingWorkbenchConnectorScope,
@@ -120,7 +121,7 @@ interface StoredApprovalRecord {
   lastActivityMs: number;
 }
 
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TTL_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
 // Strictly below the absolute TTL so the sliding idle window can actually invalidate an unused
 // task grant before its hard expiry; equal values would make the inactivity trigger dead.
 const DEFAULT_INACTIVITY_MS = 2 * 60 * 1000;
