@@ -316,8 +316,34 @@ async function readAttributeValuesOrReason(
   paths: readonly string[],
 ): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
   const rows: (readonly string[])[] = [];
+  const splits: AttributeSplits = { remaining: ATTRIBUTE_SPLIT_BUDGET };
   for (const chunk of attributeChunks(attributes, paths)) {
-    const part = await readAttributeChunk(ctx, attributes, chunk); // NOSONAR typescript:S9382 -- sequential parts keep each answer under the output cap
+    const part = await readAttributeChunkHalving(ctx, attributes, chunk, splits); // NOSONAR typescript:S9382 -- sequential parts keep each answer under the output cap
+    if (typeof part === "string") return part;
+    rows.push(...part);
+  }
+  return rows;
+}
+// A value is estimated at a few bytes, but a `.gitattributes` may give a `filter` or an encoding a
+// value of kilobytes: an answer cut short at the output cap is read again in halves, within a bounded
+// number of splits per read, before the chunk is given up.
+const ATTRIBUTE_SPLIT_BUDGET = 64;
+interface AttributeSplits {
+  remaining: number;
+}
+async function readAttributeChunkHalving(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+  splits: AttributeSplits,
+): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
+  const answer = await readAttributeChunk(ctx, attributes, paths);
+  if (answer !== "attributes-truncated" || paths.length < 2 || splits.remaining <= 0) return answer;
+  splits.remaining -= 1;
+  const middle = Math.ceil(paths.length / 2);
+  const rows: (readonly string[])[] = [];
+  for (const half of [paths.slice(0, middle), paths.slice(middle)]) {
+    const part = await readAttributeChunkHalving(ctx, attributes, half, splits); // NOSONAR typescript:S9382 -- halves are read one after the other inside the split budget
     if (typeof part === "string") return part;
     rows.push(...part);
   }
@@ -521,25 +547,31 @@ interface HashRuns {
 }
 // One unreadable path (deleted, replaced by a directory, denied) fails the whole `hash-object` run.
 // The failed run is halved until the offending path stands alone, within a bounded number of runs;
-// that path, and anything the budget leaves unresolved, gets no answer and stays modified.
+// that path, and anything the budget leaves unresolved, gets no answer and stays modified. The
+// budget is shared by one call (one batch of the reader's scan); each part keeps its first run.
+function unanswered(paths: readonly string[]): ReadonlyMap<string, string | undefined> {
+  return new Map(paths.map((path) => [path, undefined]));
+}
+// The first run of every part is reserved: unreadable files in earlier parts cannot starve a later,
+// healthy part. Only the halving that follows a failure draws from the shared budget.
+function takeHashRun(runs: HashRuns, reserved: boolean): boolean {
+  if (reserved) return true;
+  if (runs.remaining <= 0) return false;
+  runs.remaining -= 1;
+  return true;
+}
 async function hashPathsBisecting(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
   paths: readonly string[],
   runs: HashRuns,
+  reserved = false,
 ): Promise<ReadonlyMap<string, string | undefined>> {
-  const answers = new Map<string, string | undefined>();
-  if (paths.length === 0 || runs.remaining <= 0) {
-    for (const path of paths) answers.set(path, undefined);
-    return answers;
-  }
-  runs.remaining -= 1;
+  if (paths.length === 0 || !takeHashRun(runs, reserved)) return unanswered(paths);
   const ids = await hashPathRun(ctx, lineEndings, paths);
-  if (ids !== undefined) {
-    for (const [at, path] of paths.entries()) answers.set(path, ids[at]);
-    return answers;
-  }
-  if (paths.length === 1) return new Map(paths.map((path) => [path, undefined]));
+  if (ids !== undefined) return new Map(paths.map((path, at) => [path, ids[at]]));
+  if (paths.length === 1) return unanswered(paths);
+  const answers = new Map<string, string | undefined>();
   const middle = Math.ceil(paths.length / 2);
   for (const half of [paths.slice(0, middle), paths.slice(middle)])
     for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, half, runs))
@@ -556,7 +588,7 @@ async function hashPathsUnderConversion(
   const runs: HashRuns = { remaining: HASH_RUN_BUDGET };
   // The answer is one short line per path, so the stdin bound decides the part size.
   for (const part of boundedChunks(paths, () => 0, HASH_BATCH_PATHS))
-    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs))
+    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs, true))
       // NOSONAR typescript:S9382 -- sequential parts keep each run under the stdin and output caps
       answers.set(path, id);
   return answers;

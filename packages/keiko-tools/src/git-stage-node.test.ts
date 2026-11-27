@@ -700,6 +700,56 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(argvs.filter((argv) => argv.includes("hash-object")).length).toBeLessThan(8);
   });
 
+  it("keeps a healthy last part settling when unreadable files drained the bisection budget", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    const dir = Array.from({ length: 4 }, () => "x".repeat(50)).join("/");
+    mkdirSync(join(repo, dir), { recursive: true });
+    const names = Array.from(
+      { length: 800 },
+      (_, at) => `${dir}/f${String(at).padStart(4, "0")}.txt`,
+    );
+    for (const name of names) writeFileSync(join(repo, name), "p\r\n");
+    git(repo, ["add", ...names]);
+    for (const name of names) touchLater(repo, name);
+    // 20 files, spread over the first parts of the batch, are gone when Git reads them.
+    const gone = new Set(Array.from({ length: 20 }, (_, at) => names[at * 30]));
+    const real = factoryPort(repo).stagedObjectIds;
+    const evidence: unknown[] = [];
+    const flags = await rawFlags(repo, {
+      stagedObjectIds: (files) => {
+        for (const name of gone) if (name !== undefined) rmSync(join(repo, name));
+        return real?.(files) ?? Promise.resolve(undefined);
+      },
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    // Parts that held unreadable files may run out of bisection runs for their healthy files (those
+    // stay modified, fail closed), but the last part kept its reserved run and settles in full.
+    const byName = new Map(flags.map(([name, , unstaged]) => [name, unstaged]));
+    for (const name of gone) expect(byName.get(name)).toBe(true);
+    for (const name of names.slice(700)) expect(byName.get(name) ?? false).toBe(false);
+    expect(evidence).toMatchObject([{ convertible: 801, batches: 1, outcome: "answered" }]);
+  });
+
+  it("reads an attribute answer that a hostile value pushed over the output cap in halves", async () => {
+    const repo = plainRepository("v1\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    mkdirSync(join(repo, "big"));
+    mkdirSync(join(repo, "ok"));
+    const big = Array.from({ length: 200 }, (_, at) => `big/g${String(at).padStart(3, "0")}.txt`);
+    const ok = Array.from({ length: 300 }, (_, at) => `ok/f${String(at).padStart(3, "0")}.txt`);
+    for (const name of [...big, ...ok]) writeFileSync(join(repo, name), "p\r\n");
+    git(repo, ["add", ...big, ...ok]);
+    writeFileSync(
+      join(repo, ".git", "info", "attributes"),
+      `big/*.txt filter=${"d".repeat(1500)}\n`,
+    );
+    for (const name of [...big, ...ok]) touchLater(repo, name);
+    const flags = await rawFlags(repo, factoryPort(repo));
+    // The filtered files stay modified (staging refuses a filter); the others settle clean.
+    expect(flags).toEqual([...big, ...ok].map((name) => [name, true, name.startsWith("big/")]));
+  });
+
   it("names why a port could not answer in the settlement evidence", async () => {
     const repo = plainRepository("v1\r\n");
     git(repo, ["config", "core.autocrlf", "true"]);
