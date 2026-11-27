@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "65acd25b216e31c8eaafc27779e4e403cd500bd9ee0a823c590acc48489b2064",
+    "catalogDigest": "22b8685b6fafb868cd6495a90b71df9ab6c92f9fc68509eb0a9da264047dc349",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22442,7 +22442,7 @@
         "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/windowsStepDrives.ts:22",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepDrives.ts:164"]
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepDrives.ts:160"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -125224,7 +125224,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2034",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2048",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125349,7 +125349,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:182",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:178",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125411,7 +125411,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitRoutes.ts:1559",
+      "site": "packages/keiko-server/src/gitRoutes.ts:1567",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125438,7 +125438,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:340",
+      "site": "packages/keiko-server/src/grounded-qa.ts:339",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125949,7 +125949,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2435",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2449",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126047,7 +126047,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1446",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1447",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127955,7 +127955,7 @@
     {
       "op": "editor.verification.windows-step-drives.release-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:227",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:225",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
