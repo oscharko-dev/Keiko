@@ -59,9 +59,10 @@ function extended(
 function admissionFor(
   ledger: PromptCalibrationLedger,
   events: ModelGatewayLogEvent[],
+  target: ModelProviderConfig = provider,
 ): GatewayPromptAdmission {
   return new GatewayPromptAdmission({
-    provider,
+    provider: target,
     capability,
     now: (): number => 1,
     counter: new ProviderPromptCounter(() => 1),
@@ -80,8 +81,9 @@ async function turn(
   messages: GatewayCallRequest["messages"],
   providerUsage: number | undefined,
   events: ModelGatewayLogEvent[] = [],
+  target: ModelProviderConfig = provider,
 ): Promise<void> {
-  const admission = admissionFor(ledger, events);
+  const admission = admissionFor(ledger, events, target);
   try {
     await admission.admit({ modelId: provider.modelId, messages }, 10_000);
   } finally {
@@ -197,6 +199,23 @@ function reportingGateway(events: ModelGatewayLogEvent[]): Gateway {
     },
   );
 }
+
+describe("calibration key", () => {
+  it.each([
+    ["a different deployment behind the alias", { deploymentIdentitySha256: "d".repeat(64) }],
+    ["a different endpoint behind the alias", { baseUrl: "https://other.example/v1" }],
+  ])("does not reuse a ratio measured for %s", async (_name, change) => {
+    const ledger = new PromptCalibrationLedger();
+    const first = conversation(30_000);
+    await turn(ledger, first, 10_000);
+    const events: ModelGatewayLogEvent[] = [];
+    await turn(ledger, first, undefined, events, { ...provider, ...change });
+    expect(lastAdmission(events)).not.toHaveProperty("calibratedPromptTokens");
+    const same: ModelGatewayLogEvent[] = [];
+    await turn(ledger, first, undefined, same);
+    expect(lastAdmission(same)).toHaveProperty("calibratedPromptTokens");
+  });
+});
 
 describe("gateway wiring of provider usage", () => {
   it.each([false, true])(

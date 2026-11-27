@@ -22,6 +22,7 @@ import {
 } from "./prompt-token-accounting.js";
 import { admitGatewayPrompt } from "./prompt-admission.js";
 import {
+  promptCalibrationKey,
   promptCalibrationMark,
   type PromptCalibrationLedger,
   type PromptCalibrationMark,
@@ -274,9 +275,9 @@ export class GatewayPromptAdmission {
   ): number | undefined {
     const ledger = this.options.calibration;
     if (ledger === undefined) return undefined;
-    const modelId = this.options.provider.modelId;
-    this.pending = promptCalibrationMark(modelId, request, estimated);
-    return ledger.calibrate(modelId, request, estimated);
+    const key = promptCalibrationKey(this.options.provider);
+    this.pending = promptCalibrationMark(key, request, estimated);
+    return ledger.calibrate(key, request, estimated);
   }
 
   private retainedTokenFloor(estimated: number, count: ProviderTokenCount): number | undefined {

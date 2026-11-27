@@ -49,7 +49,10 @@ import {
   recordRoutePromptUsage,
   routePromptEstimateOf,
 } from "./coding-sidecar-prompt-estimate.js";
-import type { PromptCalibrationMark } from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
+import {
+  promptCalibrationKey,
+  type PromptCalibrationMark,
+} from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
 import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { renderMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
@@ -2348,7 +2351,15 @@ function promptTokenEstimate(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   profile: AvailableGatewayProfile,
 ): number {
-  return estimateRoutePrompt(parsed, promptTokenAccounting(profile), profile.result.modelAlias);
+  return estimateRoutePrompt(parsed, promptTokenAccounting(profile), routeCalibrationKey(profile));
+}
+
+// Keyed by the provider behind the alias, so an alias pointed at another deployment or endpoint
+// never reuses the previous one's measured ratio.
+function routeCalibrationKey(profile: AvailableGatewayProfile): string {
+  const alias = profile.result.modelAlias;
+  const provider = profile.config.providers.find((entry) => entry.modelId === alias);
+  return provider === undefined ? alias : promptCalibrationKey(provider);
 }
 
 function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAccounting | undefined {

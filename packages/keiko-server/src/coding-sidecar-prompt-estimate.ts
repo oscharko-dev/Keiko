@@ -37,15 +37,15 @@ const estimates = new WeakMap<object, RoutePromptEstimate>();
 export function estimateRoutePrompt(
   parsed: GatewayPromptTokenInput,
   accounting: ModelTokenAccounting | undefined,
-  modelAlias: string,
+  calibrationKey: string,
 ): number {
   const localTokens = countGatewayPromptTokens(parsed, accounting);
-  const calibrated = ledger.calibrate(modelAlias, parsed, localTokens);
+  const calibrated = ledger.calibrate(calibrationKey, parsed, localTokens);
   const estimate: RoutePromptEstimate = {
     tokens: calibrated ?? localTokens,
     localTokens,
     source: calibrated === undefined ? "local" : "usage-calibrated",
-    mark: promptCalibrationMark(modelAlias, parsed, localTokens),
+    mark: promptCalibrationMark(calibrationKey, parsed, localTokens),
   };
   estimates.set(parsed, estimate);
   return estimate.tokens;

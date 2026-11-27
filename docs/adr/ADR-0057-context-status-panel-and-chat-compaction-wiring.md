@@ -256,6 +256,11 @@ When the current prompt itself exceeds 90% of the effective input budget, foregr
 compaction processes every source character in ordered, individually budgeted model requests.
 The execution projection uses explicit user-task framing and the semantic summary, with bounded, redacted original opening/closing fragments preserving boundary instructions. The complete projection is counted before admission; the saved user message retains the original.
 This preserves the non-evictable user-task lane; it does not silently truncate that lane.
+The 90% trigger reads the conservative local token estimate, not the provider's reported usage
+(the model gateway and the Coding sidecar route calibrate their admission from it, #4491):
+the assembled Chat prompt starts with a per-turn context message, so it rarely provably extends
+the previous request, and a ratio guess could delay compaction until the gateway refuses the
+prompt. An early compaction is visible and safe, so Chat keeps the uncalibrated trigger.
 
 Foreground and background summaries share one cancellation and timeout helper. Foreground work
 has a maximum of 32 calls, three reduction rounds, 60 seconds per call, and 90 seconds overall.

@@ -1,5 +1,6 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { GatewayPromptTokenInput } from "./prompt-token-accounting.js";
+import type { ModelProviderConfig } from "./types.js";
 
 /**
  * The share of a new prompt's locally estimated growth that is added on top of the provider's
@@ -22,6 +23,23 @@ export interface PromptCalibrationMark {
   readonly messageCount: number;
   readonly digest: string;
   readonly localTokens: number;
+}
+
+/**
+ * The key a calibration is valid for: the alias, the provider endpoint and the digest of the
+ * deployment observed behind the alias. An alias the gateway points at another deployment or
+ * endpoint therefore starts without the previous one's measured ratio. Digested, never logged.
+ */
+export function promptCalibrationKey(
+  provider: Pick<ModelProviderConfig, "modelId" | "baseUrl" | "deploymentIdentitySha256">,
+): string {
+  return sha256Hex(
+    canonicalise({
+      modelId: provider.modelId,
+      baseUrl: provider.baseUrl,
+      deployment: provider.deploymentIdentitySha256 ?? null,
+    }),
+  );
 }
 
 export type PromptCalibrationInput = Pick<GatewayPromptTokenInput, "messages" | "tools">;
