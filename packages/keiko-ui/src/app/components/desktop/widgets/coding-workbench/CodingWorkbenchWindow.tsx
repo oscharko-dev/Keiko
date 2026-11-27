@@ -1333,24 +1333,29 @@ function selectedConversationReadiness(
   const selected = configuredCatalogModels(catalog).find(
     (model) => model.id === state.selectedModelId,
   );
-  if (isUsableSelectedCodingModel(selected)) return state;
+  if (isActivatedUsableCodingModel(selected)) return state;
   return {
     ...state,
     canStart: false,
-    source: pendingSelectedSource(state.source, selected?.conversationReady),
+    source: pendingSelectedSource(state.source, selected),
   };
 }
 
-// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model that
-// nobody checked yet is usable: the pick itself asks the server to check that one model (the
-// profile read with `check=1`), and a run's start joins that check instead of starting another.
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. This says
+// nothing about activation; the catalog evidence and the election use it as it is.
 function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
   return selected !== undefined && isCodingWorkbenchModel(selected);
 }
 
+// What Start needs on top: the model is activated in this process. A model nobody activated is not
+// startable (ADR-0171 D2: activation is manual after every start), whatever the source still says.
+function isActivatedUsableCodingModel(selected: ModelCapability | undefined): boolean {
+  return isUsableSelectedCodingModel(selected) && selected?.conversationReady === true;
+}
+
 function pendingSelectedSource(
   source: CodingWorkbenchRuntimeState["source"],
-  conversationReady: boolean | undefined,
+  selected: ModelCapability | undefined,
 ): CodingWorkbenchRuntimeState["source"] {
   if (source.value?.available !== true) return source;
   return {
@@ -1359,7 +1364,9 @@ function pendingSelectedSource(
       ...source.value,
       available: false,
       unavailableReason:
-        conversationReady === false ? "conversation-not-ready" : "model-verification-pending",
+        selected !== undefined && selected.conversationReady !== true
+          ? "conversation-not-ready"
+          : "model-verification-pending",
     },
   };
 }

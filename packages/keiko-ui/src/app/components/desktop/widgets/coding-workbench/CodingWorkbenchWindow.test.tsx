@@ -6045,35 +6045,46 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     },
     toolCallingRenewalPending: true,
   };
+  // The chat session publishes only activated models in `models`; every configured model stays in
+  // the unfiltered read. The catalog is derived from that producer, never restated.
+  const publishCatalog = (capabilities: readonly ModelCapability[]): void => {
+    const published = sessionCatalogState(capabilities, "bootstrap", "corr-catalog");
+    chatCatalogMock.models = [...published.models];
+    chatCatalogMock.configuredModelIds = published.configuredModelIds;
+    chatCatalogMock.modelCatalogRead = {
+      capabilities: published.catalogCapabilities,
+      source: published.catalogSource,
+      correlationId: "corr-catalog",
+    };
+  };
 
   it("elects the first freshly ready default while retaining unknown models as pending options", () => {
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: undefined },
       { ...MODEL_B, conversationReady: true },
-    ];
+    ]);
     const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
     expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
   });
 
-  it("preserves a saved unknown choice ahead of a freshly healthy fallback", () => {
+  it("does not adopt a saved model nobody activated; it elects the activated fallback", () => {
     window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
-    chatCatalogMock.models = [MODEL_A, { ...MODEL_B, conversationReady: undefined }];
+    publishCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }]);
     try {
       const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
-      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
-      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-b");
     } finally {
       window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     }
   });
 
   it("removes a refuted configured model from the picker and restores it after recovery", async () => {
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: false },
-    ];
-    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    ]);
     const liveActions = actions();
     const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
@@ -6084,10 +6095,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(screen.queryByRole("option", { name: "model-b" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     vi.mocked(liveActions.adoptModel).mockClear();
-    chatCatalogMock.models = [
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: true },
-    ];
+    ]);
     view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
     await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
     expect(screen.getByRole("option", { name: "model-b" })).toBeInTheDocument();
@@ -6096,8 +6107,9 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
   it("restores the saved choice after all refuted coding models recover", () => {
     window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
-    chatCatalogMock.models = [{ ...MODEL_B, conversationReady: false }];
-    chatCatalogMock.configuredModelIds = [MODEL_B.id];
+    publishCatalog([{ ...MODEL_B, conversationReady: false }]);
+    // The producer publishes no model here (the refuted one is filtered out); the refresh settled.
+    catalogRefreshMock.settled = true;
     const liveActions = actions();
     runtimeHookMock.mockReturnValue({
       state: liveState({ selectedModelId: "model-b" }),
@@ -6111,7 +6123,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         state: liveState({ selectedModelId: null }),
         actions: liveActions,
       });
-      chatCatalogMock.models = [{ ...MODEL_B, conversationReady: true }];
+      publishCatalog([{ ...MODEL_B, conversationReady: true }]);
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
     } finally {
@@ -6119,21 +6131,23 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     }
   });
 
-  // #3642 selection stability: a remembered choice whose chat answer is unknown is never replaced by
-  // a healthy default. Customer 1.3.4: it is usable as it is in Chat; its start checks the model on
-  // the server before admission, so Start no longer waits for a check nobody runs.
-  it("keeps a remembered unknown selection despite a healthy default and lets its start check it", async () => {
-    chatCatalogMock.models = [
+  // #3642 selection stability, ADR-0171 D2: a held choice that nobody activated in this process is
+  // never replaced by a healthy default, and it is never startable: the source may still say
+  // available (the person activated model-a and picked model-b), so the window itself keeps Start off
+  // until the person activates the model.
+  it("keeps a selected model nobody activated held and not startable while the source reads available", async () => {
+    publishCatalog([
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: undefined },
-    ];
-    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    ]);
     taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
     const liveActions = actions();
     const state = liveState({
+      canStart: true,
       selectedModelId: "model-b",
       run: { status: "ready", value: null, error: null },
     });
+    expect(state.source.value?.available).toBe(true);
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
     const workspace = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1");
     render(
@@ -6143,9 +6157,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     );
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
-    expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledOnce();
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    await user.click(start);
+    expect(liveActions.start).not.toHaveBeenCalled();
     expect(liveActions.adoptModel).not.toHaveBeenCalled();
   });
 
@@ -6240,18 +6255,6 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       }),
       error: null,
     });
-    // The chat session publishes only activated models in `models`; every configured model stays in
-    // the unfiltered read. The catalog is derived from that producer, never restated.
-    const publishCatalog = (capabilities: readonly ModelCapability[]): void => {
-      const published = sessionCatalogState(capabilities, "bootstrap", "corr-catalog");
-      chatCatalogMock.models = [...published.models];
-      chatCatalogMock.configuredModelIds = published.configuredModelIds;
-      chatCatalogMock.modelCatalogRead = {
-        capabilities: published.catalogCapabilities,
-        source: published.catalogSource,
-        correlationId: "corr-catalog",
-      };
-    };
     const report = (chat: "passed" | "failed" | "skipped"): GatewayReadinessReport => ({
       modelId: "model-a",
       checkedAt: "2026-11-27T08:00:00.000Z",
