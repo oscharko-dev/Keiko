@@ -117,6 +117,8 @@ export interface CodingToolRequestIdentity {
  * The model's tool call id inside a request's `actionId` (`<sessionID>:<callID>`), the id of that
  * call's row in the safe activity feed; undefined when the action id names no well-formed call.
  */
+// A tool without a call id carries its message id there instead, which matches no feed row: the id
+// never names a wrong row, it names none.
 export function codingToolCallIdFromActionId(actionId: string): string | undefined {
   const separator = actionId.indexOf(":");
   const callId = separator >= 0 ? actionId.slice(separator + 1) : "";

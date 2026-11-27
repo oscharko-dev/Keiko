@@ -668,7 +668,30 @@ describe("CodingWorkbenchTimeline", () => {
     expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).not.toBeNull();
     rerender(view(false));
     expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
-    expect(container.querySelector('[data-tool-state="not-done"]')).not.toBeNull();
+    const ended = container.querySelector('[data-tool-state="not-done"]');
+    expect(ended).not.toBeNull();
+    // The sentence follows the badge: a finished run's step is not done, never "waiting".
+    expect(ended).toHaveTextContent("Not done: the step failed or its result is uncertain.");
+    expect(container).not.toHaveTextContent("Waiting for a decision");
+  });
+
+  // The relocation of the waiting pins to a live run must not lose the finished-run coverage of every
+  // other Git word: each reads as not done with its own reason, and the one that waited does too.
+  it("shows every unfinished Git word as not done in a run that is over", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithGitOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const notDone = container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="not-done"]');
+    expect(notDone).toHaveLength(8);
+    for (const card of notDone) expect(card).not.toHaveTextContent("Succeeded");
+    expect(container).toHaveTextContent("policy or authority checks refused");
+    expect(container).toHaveTextContent("changed after this step was proposed");
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 
   // Audit of 72be7da6f: only a completed execute takes a proposal up. A proposal still waiting while

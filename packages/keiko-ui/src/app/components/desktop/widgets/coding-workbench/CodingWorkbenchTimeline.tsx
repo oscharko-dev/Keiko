@@ -1577,7 +1577,7 @@ function ToolRow({
           ) : null}
           <ToolSummaryEnd tool={tool} state={shownState} origin={origin} t={t} />
         </summary>
-        <ToolRowBody tool={tool} origin={origin} prepared={shownState === "prepared"} t={t} />
+        <ToolRowBody tool={tool} origin={origin} state={shownState} t={t} />
       </details>
     </li>
   );
@@ -1605,18 +1605,18 @@ function ToolRowTitle({
 function ToolRowBody({
   tool,
   origin,
-  prepared,
+  state,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
   readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
-  readonly prepared: boolean;
+  readonly state: ShownToolState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <>
       {origin === undefined ? (
-        <ToolOutcome tool={tool} prepared={prepared} t={t} />
+        <ToolOutcome tool={tool} state={state} t={t} />
       ) : (
         <>
           <ToolFailureExplanation tool={tool} origin={origin} t={t} />
@@ -1844,11 +1844,11 @@ function ToolStateBadge({
 // name (#3897).
 function ToolOutcome({
   tool,
-  prepared,
+  state,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
-  readonly prepared: boolean;
+  readonly state: ShownToolState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const verificationOutcome = tool.presentation?.verificationOutcome;
@@ -1859,22 +1859,25 @@ function ToolOutcome({
       </p>
     );
   }
-  const sentence = prepared
-    ? t("codingWorkbench.activity.git.prepared")
-    : toolOutcomeSentence(tool, t);
+  const sentence = toolOutcomeSentence(tool, state, t);
   return sentence === undefined ? null : <p className={styles.cmpToolOutcome}>{sentence}</p>;
 }
 
+// The sentence follows the badge the row shows, never the raw outcome: a proposal taken up by a later
+// step reads prepared, and one still "waiting" in a run that is over reads not done.
 function toolOutcomeSentence(
   tool: CodingSafeActivityTool,
+  state: ShownToolState,
   t: CodingWorkbenchTranslate,
 ): string | undefined {
+  if (state === "prepared") return t("codingWorkbench.activity.git.prepared");
   // A carried-out Git step needs no sentence beyond its "Succeeded" badge.
   const gitOutcome = tool.presentation?.gitOutcome;
-  if (gitOutcome !== undefined && gitOutcome !== "completed") {
-    return t(`codingWorkbench.activity.git.${gitOutcome}`);
+  if (gitOutcome === undefined || gitOutcome === "completed") return undefined;
+  if (gitOutcome === "waiting-for-approval" && state !== "waiting-for-approval") {
+    return t("codingWorkbench.activity.git.not-done");
   }
-  return undefined;
+  return t(`codingWorkbench.activity.git.${gitOutcome}`);
 }
 
 function ToolPresentationDetails({
