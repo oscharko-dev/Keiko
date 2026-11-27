@@ -16,8 +16,15 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../../tests/support/property-testing.js";
 import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import {
+  appendWindow,
+  newStreamWindow,
   createWindowsTerminationCapacity,
   createWindowsTaskkillBudget,
   nodeSpawnFn,
@@ -1701,6 +1708,55 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
     expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(
       `${firstLine}\nlast line\n`.length,
     );
+  });
+
+  // The retained window IS maxOutputBytes: stdout and stderr share it, so two flooded streams of
+  // whole lines keep exactly that many bytes (the value the old flood guard cut at stays asserted).
+  it("retains exactly maxOutputBytes across both streams when whole lines flood them", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    for (let line = 0; line < 200; line += 1) {
+      spawn.child.stdout.emit("data", Buffer.from("a\n"));
+      spawn.child.stderr.emit("data", Buffer.from("b\n"));
+    }
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.retainedByteCount).toBe(64);
+    expect(result.stdout).toContain("bytes of output omitted");
+    expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(800);
+  });
+
+  it(
+    "drops the oldest tail chunk in constant time: one-byte writes scale linearly",
+    {
+      timeout: 60_000,
+    },
+    () => {
+      const chunk = Buffer.from("x");
+      const scaling = measureScaling({
+        build: (size) => size,
+        run: (size) => {
+          const stream = newStreamWindow(4_096);
+          for (let write = 0; write < size; write += 1) appendWindow(stream, chunk);
+          return stream.tailBytes;
+        },
+        size: 25_000,
+        maximumSize: 300_000,
+      });
+      expect(scaling.measurable, JSON.stringify(scaling)).toBe(true);
+      expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
+    },
+  );
+
+  it("keeps the retained tail correct across compaction of 300k one-byte writes", () => {
+    const stream = newStreamWindow(4_096);
+    for (let write = 0; write < 300_000; write += 1) {
+      appendWindow(stream, Buffer.from(String.fromCharCode(97 + (write % 26))));
+    }
+    expect(stream.headBytes + stream.tailBytes + stream.dropped).toBe(300_000);
+    expect(stream.tailBytes).toBe(4_096);
+    expect(stream.tail.length - stream.tailFirst).toBeGreaterThan(0);
+    expect(stream.tail.length).toBeLessThan(2 * 4_096 + 2_048);
   });
 
   it("reports no retention counts when the output fits", async () => {

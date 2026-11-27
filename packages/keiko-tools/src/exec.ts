@@ -821,17 +821,31 @@ interface Buffers {
 
 // One stream's retained output under "retain-head-tail": its first `budget` bytes, its last
 // `budget` bytes, and a count of what lay between. Memory is bounded by 2 * budget per stream.
-interface StreamWindow {
+export interface StreamWindow {
   readonly budget: number;
   readonly head: Buffer[];
   headBytes: number;
   readonly tail: Buffer[];
+  // Index of the first live chunk of `tail`: chunks before it were dropped and are compacted away in
+  // bulk, so dropping the oldest chunk is O(1) instead of an O(n) Array.shift per chunk.
+  tailFirst: number;
   tailBytes: number;
   dropped: number;
+  // The last byte dropped from the tail's front: a newline there means the tail starts on a line.
+  lastDropped: number | undefined;
 }
 
-function newStreamWindow(budget: number): StreamWindow {
-  return { budget, head: [], headBytes: 0, tail: [], tailBytes: 0, dropped: 0 };
+export function newStreamWindow(budget: number): StreamWindow {
+  return {
+    budget,
+    head: [],
+    headBytes: 0,
+    tail: [],
+    tailFirst: 0,
+    tailBytes: 0,
+    dropped: 0,
+    lastDropped: undefined,
+  };
 }
 
 // Each stream keeps a quarter of `maxOutputBytes` as head and a quarter as tail, so the two
@@ -841,7 +855,7 @@ function newWindows(maxOutputBytes: number): { out: StreamWindow; err: StreamWin
   return { out: newStreamWindow(budget), err: newStreamWindow(budget) };
 }
 
-function appendWindow(window: StreamWindow, chunk: Buffer): void {
+export function appendWindow(window: StreamWindow, chunk: Buffer): void {
   let rest = chunk;
   if (window.headBytes < window.budget) {
     const take = Math.min(window.budget - window.headBytes, rest.length);
@@ -854,15 +868,28 @@ function appendWindow(window: StreamWindow, chunk: Buffer): void {
   window.tailBytes += rest.length;
   let excess = window.tailBytes - window.budget;
   while (excess > 0) {
-    const first = window.tail[0];
+    const first = window.tail[window.tailFirst];
     if (first === undefined) break;
     const cut = Math.min(excess, first.length);
-    if (cut === first.length) window.tail.shift();
-    else window.tail[0] = first.subarray(cut);
+    if (cut === first.length) window.tailFirst += 1;
+    else window.tail[window.tailFirst] = first.subarray(cut);
+    window.lastDropped = first[cut - 1];
     window.tailBytes -= cut;
     window.dropped += cut;
     excess -= cut;
   }
+  compactTail(window);
+}
+
+// Drops the consumed prefix of `tail` once it is both large and at least half the array, so the
+// amortized cost of a dropped chunk stays constant and the array never holds more than twice the
+// live chunks (plus the compaction threshold).
+const TAIL_COMPACT_MIN = 1_024;
+
+function compactTail(window: StreamWindow): void {
+  if (window.tailFirst < TAIL_COMPACT_MIN || window.tailFirst * 2 < window.tail.length) return;
+  window.tail.splice(0, window.tailFirst);
+  window.tailFirst = 0;
 }
 
 // A window that dropped its middle is cut on LINE boundaries: the head ends after its last newline and
@@ -872,13 +899,15 @@ function appendWindow(window: StreamWindow, chunk: Buffer): void {
 // (fail closed).
 function windowParts(window: StreamWindow): { readonly head: Buffer; readonly tail: Buffer } {
   const head = Buffer.concat(window.head);
-  const tail = Buffer.concat(window.tail);
+  const tail = Buffer.concat(window.tail.slice(window.tailFirst));
   if (window.dropped === 0) return { head, tail };
   const headEnd = head.lastIndexOf(0x0a) + 1;
-  const tailStart = tail.indexOf(0x0a) + 1;
+  // A tail whose preceding dropped byte is a newline already starts on a line.
+  const tailStart = window.lastDropped === 0x0a ? 0 : tail.indexOf(0x0a) + 1;
+  const keepsTail = window.lastDropped === 0x0a || tailStart > 0;
   return {
     head: head.subarray(0, headEnd),
-    tail: tailStart === 0 ? Buffer.alloc(0) : tail.subarray(tailStart),
+    tail: keepsTail ? tail.subarray(tailStart) : Buffer.alloc(0),
   };
 }
 
