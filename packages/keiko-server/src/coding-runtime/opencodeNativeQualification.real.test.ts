@@ -4955,10 +4955,12 @@ describe("pinned native OpenCode scheduled wakes on automations (C09, #4546)", (
     await expect
       .poll(() => leaseOwner(run), { timeout: 30_000, interval: 250 })
       .toBe(SCHEDULER_HOLD_OWNER);
-    const delivered = run.gateway.requests.filter((request) =>
-      lastUserText(request.body)?.includes(PROMPT.prompt),
-    ).length;
-    expect(delivered).toBe(1);
+    // The fire counts on the row before its prompt reaches the model, so the delivery is awaited,
+    // and it must still be exactly one.
+    const delivered = (): number =>
+      run.gateway.requests.filter((request) => lastUserText(request.body)?.includes(PROMPT.prompt))
+        .length;
+    await expect.poll(delivered, { timeout: 30_000, interval: 100 }).toBe(1);
     expect(seen.cancelled).toBe(0);
     const leaseOutcomes = sink.events
       .filter((event) => event.op === "coding-runtime.schedule.lease")
