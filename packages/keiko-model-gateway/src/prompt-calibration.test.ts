@@ -183,7 +183,11 @@ function reportingGateway(events: ModelGatewayLogEvent[]): Gateway {
       },
     });
   return new Gateway(
-    { providers: [provider], capabilities: [capability] },
+    {
+      providers: [provider],
+      capabilities: [capability],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+    },
     {
       log: {
         write: (event): void => {

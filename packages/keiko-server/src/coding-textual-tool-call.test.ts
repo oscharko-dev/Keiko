@@ -208,7 +208,13 @@ describe("withTextualToolCallHint", () => {
 });
 
 describe("withDiscardedAttempts", () => {
-  const usage = { promptTokens: 10, completionTokens: 4, totalTokens: 14 };
+  const usage = {
+    requestId: "fixture",
+    promptTokens: 10,
+    completionTokens: 4,
+    latencyMs: 1,
+    costClass: "low" as const,
+  };
   const response = {
     modelId: "m",
     content: "ok",
