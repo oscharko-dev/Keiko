@@ -111,6 +111,12 @@ Windows credential and DPAPI folders under `AppData`, compared named and resolve
 such as `.netrc` through a file link as well as a folder through a junction); and the step's
 execution root is refused when its real path cannot be resolved, never granted by its spelling.
 
+1.19 — #4496 records the owner's approval of 2026-11-27 in D21: the five rules in which a Windows
+step differs from the macOS and Linux container step (the person's host toolchain, toolchain folders
+one level below a drive, the shipped patched step Node.js, `mvn -B -o test` offline in the tree, and
+`subst` drive letters in place of the capabilities Windows refuses) are accepted for Milestone 1 of
+#4491, as are the ARM64 guest results; the x64 repeat and the live container path stay in #4561.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1337,6 +1343,14 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
   per-run profile (`Keiko.Step.<owner>-<16 hex>`) without a network capability, so the step reaches neither
   the internet nor the host's loopback nor another process's pipe, and runs it as the root of a
   kill-on-close Job Object; a cancelled step is ended by KRC1, never by a separate tree kill.
+  - **Approved differences (owner, 2026-11-27).** A Windows step differs from the container step
+    of macOS and Linux in five rules, each described below: the toolchain is the person's own on
+    the host, a toolchain folder one level below a drive is grantable, the step runs the shipped
+    patched Node.js, a Maven project runs `mvn -B -o test` offline in the tree, and grant roots are
+    named through `subst` drive letters. The owner approved all five for Milestone 1 of #4491 and
+    accepted the ARM64 guest results; the x64 repeat and the live container path on Windows stay
+    mandatory in #4561. The rule-by-rule comparison is in
+    `docs/qa/opencode-windows-qualification.md` ("Rules that differ from macOS and Linux").
   - **The step ends with its root.** Once the root process has exited, the supervisor terminates
     whatever is left in the job (a detached child, a watcher) and reports the root's own exit code
     once the job holds no process, as macOS stops the whole scope when its root is reaped. Before
