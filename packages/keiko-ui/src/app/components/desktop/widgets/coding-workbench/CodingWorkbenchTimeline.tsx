@@ -19,6 +19,7 @@ import {
   type UIEvent,
 } from "react";
 import type {
+  AvailableCodingSafeActivityFeed,
   CodingSafeActivityMessage,
   CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
@@ -287,7 +288,7 @@ export function Timeline({
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
   const titleRef = focusRef ?? internalTitleRef;
   const [showEvents, setShowEvents] = useState(false);
-  const allItems = useTimelineItems(events, activity.feed, generating, active);
+  const allItems = useTimelineItems(events, activity, generating, active);
   const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items, questions.questions);
   const attention = useShownActivityAttention(activity);
@@ -464,19 +465,21 @@ function RunDetailsToggle({
 // Only the open message of a generating run is live: its answer may still be streaming.
 function useTimelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
-  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  activity: UseCodingWorkbenchSafeActivityResult,
   generating: boolean,
   active: boolean,
 ): readonly TimelineItem[] {
+  const { feed, earlierFeeds } = activity;
   return useMemo(
     () =>
       timelineItems(
         events,
         feed,
+        earlierFeeds ?? [],
         openMessageId(feed, generating),
         active ? (feed?.runId ?? events.at(-1)?.runId) : undefined,
       ),
-    [events, feed, generating, active],
+    [events, feed, earlierFeeds, generating, active],
   );
 }
 
@@ -556,40 +559,77 @@ function openMessageId(
     : message.messageId;
 }
 
+// The rows of one feed, numbered on from `order`; the numbering keeps rows of one instant in feed
+// order. A row whose id is already `taken` by the shown feed or one listed before is left to that.
+function feedItems(
+  feed: AvailableCodingSafeActivityFeed,
+  liveMessageId: string | undefined,
+  first: number,
+  taken: ReadonlySet<string>,
+  activeRunId: string | undefined,
+): readonly TimelineItem[] {
+  const items: TimelineItem[] = [];
+  for (const turn of feed.turns) {
+    for (const message of turn.messages) {
+      const id = `message:${message.messageId}`;
+      if (taken.has(id) || !hasVisibleMessageContent(message)) continue;
+      items.push({
+        kind: "message",
+        id,
+        occurredAt: message.occurredAt,
+        order: first + items.length,
+        message,
+        runId: feed.runId,
+        live: message.messageId === liveMessageId,
+      });
+    }
+    for (const tool of turn.tools) {
+      const id = `tool:${tool.callId}`;
+      if (taken.has(id)) continue;
+      items.push({
+        kind: "tool",
+        id,
+        occurredAt: tool.occurredAt,
+        order: first + items.length,
+        tool: shownTool(tool, activeRunId),
+        count: 1,
+      });
+    }
+  }
+  return items;
+}
+
+function feedRowIds(feed: AvailableCodingSafeActivityFeed | null): ReadonlySet<string> {
+  return new Set(
+    (feed?.turns ?? []).flatMap((turn) => [
+      ...turn.messages.map((message) => `message:${message.messageId}`),
+      ...turn.tools.map((tool) => `tool:${tool.callId}`),
+    ]),
+  );
+}
+
+// The earlier runs of the task come first and the shown run's feed last: their rows sort into
+// place by time, so a continuation's prompt follows the rows of the turn before it (U-11).
 function timelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  earlierFeeds: readonly AvailableCodingSafeActivityFeed[],
   liveMessageId: string | undefined,
   activeRunId: string | undefined,
 ): readonly TimelineItem[] {
   const items: TimelineItem[] = timelineEventItems(events, activeRunId);
   let order = events.length;
-  for (const turn of feed?.turns ?? []) {
-    if (feed === null) break;
-    for (const message of turn.messages) {
-      if (!hasVisibleMessageContent(message)) continue;
-      items.push({
-        kind: "message",
-        id: `message:${message.messageId}`,
-        occurredAt: message.occurredAt,
-        order,
-        message,
-        runId: feed.runId,
-        live: message.messageId === liveMessageId,
-      });
-      order += 1;
-    }
-    for (const tool of turn.tools) {
-      items.push({
-        kind: "tool",
-        id: `tool:${tool.callId}`,
-        occurredAt: tool.occurredAt,
-        order,
-        tool: shownTool(tool, activeRunId),
-        count: 1,
-      });
-      order += 1;
-    }
+  const taken = new Set(feedRowIds(feed));
+  for (const earlier of earlierFeeds) {
+    const rows = feedItems(earlier, undefined, order, taken, activeRunId);
+    for (const row of rows) taken.add(row.id);
+    items.push(...rows);
+    order += rows.length;
+  }
+  if (feed !== null) {
+    const rows = feedItems(feed, liveMessageId, order, new Set(), activeRunId);
+    items.push(...rows);
+    order += rows.length;
   }
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);

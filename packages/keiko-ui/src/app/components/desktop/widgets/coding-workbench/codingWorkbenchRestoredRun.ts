@@ -412,6 +412,11 @@ export interface ShownRun {
   readonly runId: string;
   /** Coding History message ids of the run that the transcript shows because the feed has none. */
   readonly overflowMessageIds: ReadonlySet<string>;
+  /**
+   * Earlier runs of the task whose conversation the timeline carries in the feeds it keeps of them
+   * (U-11); the transcript leaves their messages out so each is shown once. Absent: none.
+   */
+  readonly earlierRunIds?: ReadonlySet<string>;
 }
 
 const NO_MESSAGE_IDS: ReadonlySet<string> = new Set();
@@ -424,8 +429,8 @@ const NO_MESSAGE_IDS: ReadonlySet<string> = new Set();
 export function transcriptShows(shownRun: ShownRun | undefined, message: ChatMessage): boolean {
   return (
     shownRun === undefined ||
-    message.runId !== shownRun.runId ||
-    shownRun.overflowMessageIds.has(message.id)
+    ((message.runId === undefined || shownRun.earlierRunIds?.has(message.runId) !== true) &&
+      (message.runId !== shownRun.runId || shownRun.overflowMessageIds.has(message.id)))
   );
 }
 
@@ -435,13 +440,26 @@ function shownRunOf(
   restoration: RestoredConversation | null,
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
   runId: string | undefined,
+  earlierRunIds: ReadonlySet<string>,
 ): ShownRun | undefined {
+  const earlier = earlierRunIds.size === 0 ? {} : { earlierRunIds };
   if (restoration !== null) {
-    return { runId: restoration.feed.runId, overflowMessageIds: restoration.overflowMessageIds };
+    return {
+      runId: restoration.feed.runId,
+      overflowMessageIds: restoration.overflowMessageIds,
+      ...earlier,
+    };
   }
   return feed !== null && runId !== undefined
-    ? { runId, overflowMessageIds: NO_MESSAGE_IDS }
+    ? { runId, overflowMessageIds: NO_MESSAGE_IDS, ...earlier }
     : undefined;
+}
+
+// The runs whose conversation the timeline carries from the feeds of earlier runs.
+function carriedEarlierRunIds(
+  feeds: UseCodingWorkbenchSafeActivityResult["earlierFeeds"],
+): ReadonlySet<string> {
+  return new Set((feeds ?? []).map((feed) => feed.runId));
 }
 
 // One body-free line per distinct restoration: where the run's messages went and what the page said.
@@ -491,9 +509,13 @@ export function useRestoredRunTimeline(
   );
   useReportedRestoration(restoration);
   const runId = snapshot?.runId;
+  const earlierRunIds = useMemo(
+    () => carriedEarlierRunIds(activity.earlierFeeds),
+    [activity.earlierFeeds],
+  );
   const shownRun = useMemo(
-    () => shownRunOf(restoration, activity.feed, runId),
-    [restoration, activity.feed, runId],
+    () => shownRunOf(restoration, activity.feed, runId, earlierRunIds),
+    [restoration, activity.feed, runId, earlierRunIds],
   );
   const feed = restoration?.feed ?? activity.feed;
   return {

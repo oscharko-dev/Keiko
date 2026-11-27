@@ -401,6 +401,110 @@ describe("useCodingWorkbenchSafeActivity", () => {
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
   });
 
+  // U-11: a continuation is a new run in the same task, and the server's projection holds one run
+  // at a time. The tool rows of the run before it stay, as standalone OpenCode keeps an earlier
+  // turn's tool parts, whether that run was stopped or completed.
+  function activitySnapshot(
+    runId: string,
+    toolState: "running" | "succeeded",
+  ): CodingAppSessionChannelSnapshot {
+    const base = snapshot(0, runId);
+    const content = base.content;
+    if (content?.kind !== "safe-activity" || !("feed" in content)) throw new TypeError("fixture");
+    if (content.feed.availability !== "available") throw new TypeError("fixture");
+    return {
+      ...base,
+      content: {
+        ...content,
+        feed: {
+          ...content.feed,
+          turns: [
+            {
+              turnId: `turn-${runId}`,
+              messages: [],
+              tools: [{ callId: `call-${runId}`, tool: "read", state: toolState, occurredAt: AT }],
+              truncated: false,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  it.each([
+    ["stopped", "cancelled", "running", "cancelled"],
+    ["completed", "succeeded", "succeeded", "succeeded"],
+  ] as const)(
+    "keeps the tool rows of a %s run when a continuation starts in the same task",
+    async (_name, endState, toolState, shownState) => {
+      getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+        activitySnapshot("run-1", toolState),
+      );
+      const view = renderHook(
+        (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+        {
+          initialProps: {
+            runId: "run-1",
+            runState: "running",
+            runtimeEventSignal: 0,
+            conversationId: "task-1",
+          } as UseCodingWorkbenchSafeActivityInput,
+        },
+      );
+      await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-1"));
+      expect(view.result.current.earlierFeeds).toEqual([]);
+      view.rerender({
+        runId: "run-1",
+        runState: endState,
+        runtimeEventSignal: 1,
+        conversationId: "task-1",
+      });
+
+      getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+        activitySnapshot("run-2", "running"),
+      );
+      view.rerender({
+        runId: "run-2",
+        runState: "running",
+        runtimeEventSignal: 0,
+        conversationId: "task-1",
+      });
+      await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+      const earlier = view.result.current.earlierFeeds ?? [];
+      expect(earlier.map((feed) => feed.runId)).toEqual(["run-1"]);
+      expect(earlier[0]?.turns[0]?.tools.map((tool) => tool.state)).toEqual([shownState]);
+    },
+  );
+
+  it("never offers the earlier feed of another task", async () => {
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot("run-1", "succeeded"),
+    );
+    const view = renderHook(
+      (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+      {
+        initialProps: {
+          runId: "run-1",
+          runState: "succeeded",
+          runtimeEventSignal: 0,
+          conversationId: "task-1",
+        } as UseCodingWorkbenchSafeActivityInput,
+      },
+    );
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-1"));
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot("run-2", "running"),
+    );
+    view.rerender({
+      runId: "run-2",
+      runState: "running",
+      runtimeEventSignal: 0,
+      conversationId: "task-2",
+    });
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
   // Stability audit item 5: every reconnect used to blank the conversation until the snapshot read
   // answered, and a failed read then left it blank. The feed already held is kept, captioned by the
   // non-live status, until a new snapshot replaces it.

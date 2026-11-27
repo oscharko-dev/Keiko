@@ -27,6 +27,7 @@ import {
 } from "./coding-app-session-channel-api";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import { useCodingWorkbenchEarlierRunFeeds } from "./useCodingWorkbenchEarlierRunFeeds";
 import {
   useCodingWorkbenchModelTexts,
   type CodingWorkbenchAnswers,
@@ -67,10 +68,18 @@ export interface UseCodingWorkbenchSafeActivityInput {
   readonly runId: string | undefined;
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly runtimeEventSignal: number;
+  /** The task the run belongs to; the feeds of its earlier runs are kept for the timeline. */
+  readonly conversationId?: string | undefined;
 }
 
 export interface UseCodingWorkbenchSafeActivityResult extends CodingWorkbenchSafeActivityState {
   readonly retry: () => void;
+  /**
+   * The last feed of each earlier run of the same task, oldest first (U-11): its tool rows and
+   * messages stay in the timeline when a continuation starts, as in standalone OpenCode. Empty for
+   * the task's first run; `feed` is always the shown run's own.
+   */
+  readonly earlierFeeds?: readonly AvailableCodingSafeActivityFeed[];
   /**
    * The complete text of every answer the feed names as longer than it carries, by message id.
    * Absent or without an entry: the feed's segments are the whole answer.
@@ -91,7 +100,7 @@ const IDLE_STATE: CodingWorkbenchSafeActivityState = {
 export function useCodingWorkbenchSafeActivity(
   input: UseCodingWorkbenchSafeActivityInput,
 ): UseCodingWorkbenchSafeActivityResult {
-  const { runId, runState, runtimeEventSignal } = input;
+  const { runId, runState, runtimeEventSignal, conversationId } = input;
   const [state, setState] = useState<CodingWorkbenchSafeActivityState>(IDLE_STATE);
   const [epoch, setEpoch] = useState(0);
   const runStateRef = useRef(runState);
@@ -102,6 +111,11 @@ export function useCodingWorkbenchSafeActivity(
     runStateRef.current = runState;
     setState((current) => stateForLifecycle(current, runState));
   }, [runState]);
+  const earlierFeeds = useCodingWorkbenchEarlierRunFeeds({
+    runId,
+    conversationId,
+    feed: state.feed,
+  });
   const texts = useCodingWorkbenchModelTexts(runId, state.feed);
   const { ingestDeltas } = texts;
   useActivityConnection({ runId, epoch, batch, runStateRef, setState, ingestDeltas });
@@ -109,6 +123,7 @@ export function useCodingWorkbenchSafeActivity(
   useActivityAutoReconnect({ runId, status: state.status, retry });
   return {
     ...state,
+    earlierFeeds,
     answers: texts.answers,
     reasoning: texts.reasoning,
     readReasoning: texts.readReasoning,

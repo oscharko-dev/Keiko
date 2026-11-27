@@ -1834,6 +1834,7 @@ function WorkbenchColumns({
     runId: state.run.value?.runId,
     runState: state.run.value?.state,
     runtimeEventSignal,
+    conversationId: state.run.value?.conversationId,
   });
   // The active workspace's live root, and whether that binding is still resolving — shared by the
   // headless editor bridge and the Changes hook below so a workspace switch mid-run is
