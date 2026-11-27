@@ -1759,8 +1759,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der letzte Durchgang hat {count} Dateien geändert (+{additions} / -{deletions}).",
   "codingWorkbench.revert.summary.one":
     "Der letzte Durchgang hat 1 Datei geändert (+{additions} / -{deletions}).",
-  "codingWorkbench.revert.none":
-    "Der letzte Durchgang hat keine Datei geändert, es gibt also nichts rückgängig zu machen.",
   "codingWorkbench.revert.undo": "Letzten Durchgang rückgängig machen",
   "codingWorkbench.revert.undo.confirm":
     "Den letzten Durchgang rückgängig machen? Das hält den Durchgang an, falls er noch läuft, und setzt die geänderten Dateien auf ihren früheren Inhalt zurück. Solange der Run offen bleibt, kannst du die Änderungen wiederherstellen.",

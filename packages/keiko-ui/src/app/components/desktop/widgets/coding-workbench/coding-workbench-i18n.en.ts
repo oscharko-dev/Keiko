@@ -1695,8 +1695,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The last turn changed {count} files (+{additions} / -{deletions}).",
   "codingWorkbench.revert.summary.one":
     "The last turn changed 1 file (+{additions} / -{deletions}).",
-  "codingWorkbench.revert.none":
-    "The last turn has not changed any file, so there is nothing to undo.",
   "codingWorkbench.revert.undo": "Undo last turn",
   "codingWorkbench.revert.undo.confirm":
     "Undo the last turn? This stops the turn if it is still running and puts the files it changed back to their earlier content. While the run stays open you can restore the changes.",

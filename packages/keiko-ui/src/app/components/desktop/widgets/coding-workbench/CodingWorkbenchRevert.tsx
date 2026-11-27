@@ -47,13 +47,22 @@ function summaryText(
       values,
     );
   }
-  if (revert.fileCount === 0) return t("codingWorkbench.revert.none");
   return t(
     revert.fileCount === 1
       ? "codingWorkbench.revert.summary.one"
       : "codingWorkbench.revert.summary",
     values,
   );
+}
+
+// Nothing to undo or restore is noise, not a control: the row appears once there is something to
+// act on. The bar still stays while a mutation is in flight or a confirmation is open.
+function hasRevertTarget(revert: CodingWorkbenchRuntimeRevertState): boolean {
+  return revert.staged || revert.fileCount > 0;
+}
+
+function isRevertRowShown(revert: CodingWorkbenchRuntimeRevertState, engaged: boolean): boolean {
+  return engaged || hasRevertTarget(revert);
 }
 
 interface RevertConfirmationState {
@@ -106,8 +115,8 @@ export function CodingWorkbenchRevertBar({
   const t = useCodingWorkbenchTranslate();
   const action: CodingWorkbenchRuntimeRevertAction = revert?.staged === true ? "restore" : "undo";
   const confirmation = useRevertConfirmation(action, busy);
-  if (revert === null) return null;
   const { open } = confirmation;
+  if (revert === null || !isRevertRowShown(revert, busy || open !== null)) return null;
   return (
     <section className={styles.cmpRevert} aria-label={t("codingWorkbench.revert.region")}>
       <output className={styles.cmpRevertSummary}>
@@ -118,7 +127,7 @@ export function CodingWorkbenchRevertBar({
           ref={confirmation.triggerRef}
           className={windowStyles.button}
           type="button"
-          disabled={busy || !(revert.staged || revert.fileCount > 0)}
+          disabled={busy || !hasRevertTarget(revert)}
           onClick={confirmation.ask}
         >
           {t(action === "undo" ? "codingWorkbench.revert.undo" : "codingWorkbench.revert.restore")}

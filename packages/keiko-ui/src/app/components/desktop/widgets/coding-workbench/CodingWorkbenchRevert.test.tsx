@@ -118,11 +118,29 @@ describe("CodingWorkbenchRevertBar", () => {
     );
   });
 
-  it("disables Undo and says why when the last turn changed no file", () => {
+  it("renders no region when the newest turn changed no file and nothing is staged", () => {
     renderBar({ ...NEWEST, fileCount: 0, additions: 0, deletions: 0 });
 
-    expect(screen.getByRole("status")).toHaveTextContent("nothing to undo");
-    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "Last turn" })).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the bar while a mutation is in flight, even without changed files", () => {
+    renderBar({ ...NEWEST, fileCount: 0 }, { busy: true });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Applying…");
+  });
+
+  it("offers an enabled Undo whenever the newest turn changed a file", () => {
+    renderBar({ ...NEWEST, fileCount: 1 });
+
+    expect(screen.getByRole("button", { name: "Undo last turn" })).toBeEnabled();
+  });
+
+  it("still offers Restore for a staged undo without file counts", () => {
+    renderBar({ ...STAGED, fileCount: 0 });
+
+    expect(screen.getByRole("button", { name: "Restore changes" })).toBeEnabled();
   });
 
   it("waits while a runtime mutation is in flight", async () => {
@@ -179,7 +197,6 @@ describe("CodingWorkbenchRevertBar", () => {
   it.each([
     ["an undo that can be made", NEWEST],
     ["a staged undo", STAGED],
-    ["a turn without changes", { ...NEWEST, fileCount: 0 }],
   ])("has no accessibility violations for %s", async (_name, revert) => {
     const { view } = renderBar(revert);
     expect(await axe(view.container)).toHaveNoViolations();
