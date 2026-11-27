@@ -509,6 +509,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected checkout could not be opened. Choose a branch in Git, then try again.",
   "codingWorkbench.repository.locationUnregistered":
     "Keiko no longer finds this folder among the added folders. Add it again, then try again.",
+  "codingWorkbench.repository.locationUnbound":
+    "Reconnect this repository in Git, then choose Retry.",
   "codingWorkbench.repository.locationGitUnreadable":
     "Git could not open this checkout. Check that Git is installed and that you chose the repository's top folder, then try again.",
   "codingWorkbench.repository.search": "Search repositories",

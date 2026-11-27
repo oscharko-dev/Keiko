@@ -572,6 +572,30 @@ describe("a selection whose folder lost its workspace behind a still-held bindin
     expect(mocks.selectLocalCheckout).not.toHaveBeenCalled();
   });
 
+  it("names the lost workspace, not a branch, when a bind leaves the folder unbound", async () => {
+    // A repository cloned again at the same path: the bind succeeds, the folder stays unconnected.
+    mocks.fetchProjects.mockResolvedValue(project(false));
+    mocks.selectLocalCheckout.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.reason).toBe("unbound");
+    expect(result.current.ready).toBe(false);
+  });
+
+  it("keeps the server's own named cause over the lost workspace", async () => {
+    mocks.fetchProjects.mockResolvedValue(project(false));
+    mocks.selectLocalCheckout.mockRejectedValue(
+      new ApiError("MISSING_REPOSITORY", "Select a registered repository.", 404),
+    );
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.reason).toBe("unregistered");
+  });
+
   it("stays not ready with an error when the folder cannot be bound", async () => {
     mocks.fetchProjects.mockResolvedValue(project(false));
     mocks.selectLocalCheckout.mockRejectedValue(new Error("refused"));

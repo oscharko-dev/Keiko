@@ -16,6 +16,7 @@ import type {
 const LOCATION_FAILURE_KEYS = {
   unregistered: "codingWorkbench.repository.locationUnregistered",
   "git-unreadable": "codingWorkbench.repository.locationGitUnreadable",
+  unbound: "codingWorkbench.repository.locationUnbound",
 } as const satisfies Record<LocationFailureReason, Parameters<CodingWorkbenchTranslate>[0]>;
 
 // The checkout notice beside the repository selector. A failed binding shows its error and Retry

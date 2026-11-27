@@ -705,6 +705,7 @@ function WorkbenchContextControls({
   offeredLocations,
   onSelectLocation,
   placement = "composer",
+  catalogRefreshKey,
 }: {
   readonly repositoryRoot: string | null;
   readonly selectedBranch: string | undefined;
@@ -719,6 +720,7 @@ function WorkbenchContextControls({
   readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly placement?: "composer" | "setup";
+  readonly catalogRefreshKey: string;
 }): ReactNode {
   const branch = runIsActive
     ? (runWorkspace.bound?.taskBranch ?? null)
@@ -735,6 +737,7 @@ function WorkbenchContextControls({
       onSelectLocation={onSelectLocation}
       onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
+      catalogRefreshKey={catalogRefreshKey}
     />
   );
 }
@@ -1625,6 +1628,11 @@ function workbenchStartBlocker(
   return t(locationBlockerKey(locationState));
 }
 
+// The repository catalog reloads when the selected folder's workspace is found lost or back (#4491).
+function catalogRefreshKeyOf(locationState: WorkbenchExecutionLocationState): string {
+  return locationState.reason === "unbound" ? "unbound" : "bound";
+}
+
 function locationMutationPending(
   state: CodingWorkbenchRuntimeState,
   locationState: WorkbenchExecutionLocationState,
@@ -1854,6 +1862,7 @@ function WorkbenchColumns({
       offeredLocations={offeredExecutionLocations(state)}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
+      catalogRefreshKey={catalogRefreshKeyOf(locationState)}
     />
   );
   // #3873: a run restored after a reload keeps its settlement and its captured conversation.
@@ -1878,6 +1887,7 @@ function WorkbenchColumns({
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"
+              catalogRefreshKey={catalogRefreshKeyOf(locationState)}
             />
           )}
           selectedRoot={repositoryRoot ?? undefined}
