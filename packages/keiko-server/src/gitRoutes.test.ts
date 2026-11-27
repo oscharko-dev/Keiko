@@ -134,7 +134,7 @@ afterEach(async () => {
 describe("GET /api/git/status", () => {
   it("returns a clean branch status", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 
@@ -156,7 +156,7 @@ describe("GET /api/git/status", () => {
 
   it("strips an ahead/behind tracking-info suffix from the branch name", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main...origin/main [ahead 2, behind 1]\0"));
 
@@ -177,7 +177,7 @@ describe("GET /api/git/status", () => {
   it("parses a branch header with a long whitespace run and no tracking bracket in bounded time", async () => {
     const adversarialBranch = `x${" ".repeat(20_000)}`;
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok(`## ${adversarialBranch}\0`));
 
@@ -427,6 +427,24 @@ describe("GET /api/git/status", () => {
     expect(JSON.stringify(second)).not.toContain("second");
   });
 
+  // PR #4568 audit: a folder-scoped status shows no staged change outside its folder, yet a commit
+  // takes the whole index, so the digest still names what is staged there.
+  it("names the staged digest of the whole index in a status scoped to a folder", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "inside.md"), "inside");
+    await writeFile(join(root, "outside.md"), "outside");
+    await runRealGit(["add", "outside.md"]);
+    const scoped = (
+      await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(join(root, "sub"))}`),
+        deps(defaultGitProcessRunner),
+      )
+    ).body as Record<string, unknown>;
+    expect(scoped.stagedCount).toBe(0);
+    expect(scoped.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   it("reports selected ignored roots and derives untracked folders from real Git records", async () => {
     await runRealGit(["init", "--quiet"]);
     await mkdir(join(root, "new"));
@@ -470,7 +488,7 @@ describe("GET /api/git/status", () => {
 
   it("opts into ignored entries without counting ignored-only paths as dirty", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0!! build/cache.bin\0"));
 
@@ -492,7 +510,7 @@ describe("GET /api/git/status", () => {
 
   it("preserves the default status invocation and rejects invalid ignored options", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 
@@ -506,7 +524,7 @@ describe("GET /api/git/status", () => {
 
     const invalid = await handleGitStatus(
       ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=yes`),
-      deps(vi.fn<GitProcessRunner>()),
+      deps(vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")))),
     );
     expect(invalid).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
@@ -517,7 +535,7 @@ describe("GET /api/git/status", () => {
     store.createProject(selectedRoot, "nested fixture");
     const path = "src/:(top)*.ts";
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
@@ -555,7 +573,7 @@ describe("GET /api/git/status", () => {
   it.each(["../secret.ts", "/absolute.ts", "src/../../secret.ts"])(
     "rejects invalid file-scoped status path %s before invoking Git",
     async (path) => {
-      const runner = vi.fn<GitProcessRunner>();
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
 
       const result = await handleGitStatus(
         ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
@@ -2406,7 +2424,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
   it("writes nothing when every git run succeeds", async () => {
     const activity = captureActivityLog();
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 

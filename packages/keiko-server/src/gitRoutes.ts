@@ -1333,12 +1333,19 @@ export async function handleGitStatus(
 // The identity of what is staged: Git's raw listing of the staged changes names each path with its
 // modes and object ids, never its content, so the same path staged again with other content gets
 // another digest (PR #4568 review). A listing Git cannot give, or one cut at its cap, yields none.
-async function withStagedDigest<Body extends { readonly stagedCount: number }>(
+// The digest names the whole index, which is what a commit takes. The shown `stagedCount` counts
+// only the capped, possibly folder-scoped change list, so a cut or folder-scoped status reads the
+// digest even when it shows nothing staged (PR #4568 audit); a complete repository-wide status with
+// nothing staged needs none.
+async function withStagedDigest<
+  Body extends { readonly stagedCount: number; readonly truncated: boolean },
+>(
   repo: RepositoryContext,
   options: NormalizedGitRouteOptions,
   body: Body,
 ): Promise<Body & { readonly stagedDigest?: string }> {
-  if (body.stagedCount === 0) return body;
+  const partialView = body.truncated || repo.selectedRootPrefix !== "";
+  if (body.stagedCount === 0 && !partialView) return body;
   const stagedDigest = await stagedChangesDigest(repo, options);
   return stagedDigest === undefined ? body : { ...body, stagedDigest };
 }
@@ -1362,7 +1369,8 @@ async function stagedChangesDigest(
     ],
     gitProcessOptions(repo, options, options.maxStatusBytes),
   );
-  if (listing.exitCode !== 0 || listing.truncated) return undefined;
+  // An empty listing: nothing is staged anywhere in the repository.
+  if (listing.exitCode !== 0 || listing.truncated || listing.stdout.length === 0) return undefined;
   return createHash("sha256").update(listing.stdout).digest("hex");
 }
 
