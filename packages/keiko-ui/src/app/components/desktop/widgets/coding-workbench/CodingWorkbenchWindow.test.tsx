@@ -5426,7 +5426,12 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     const feed = activityFeed();
     const turn = feed.turns[0];
     if (turn === undefined) throw new Error("fixture turn missing");
-    const open = { callId: "call-verify", tool: "keiko_verify", state: "running", occurredAt: AT };
+    const open = {
+      callId: "call-verify",
+      tool: "keiko_verification",
+      state: "running",
+      occurredAt: AT,
+    };
     activityHookMock.mockReturnValue({
       ...IDLE_ACTIVITY,
       status: "live",

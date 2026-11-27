@@ -418,7 +418,7 @@ describe("a running call", () => {
   it("shows an open call as waiting for the decision, without a timer, while the run is held", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(AT));
-    const open = tool("call-verify", "keiko_verify", "running");
+    const open = tool("call-verify", "keiko_verification", "running");
     const { container } = render(
       <I18nProvider>
         <Timeline
@@ -436,6 +436,34 @@ describe("a running call", () => {
     expect(container.querySelector('[role="timer"]')).toBeNull();
     expect(container.querySelector('[data-state="waiting-for-trust"]')).not.toBeNull();
     expect(container.querySelector('[data-state="running"]')).toBeNull();
+  });
+
+  // Parallel calls: only the call the trust decision gates is held; a shell step open beside it keeps
+  // its own running state and timer.
+  it("keeps the running timer of an open call that the trust decision does not gate", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const feed = feedOf([
+      tool("call-verify", "keiko_verification", "running"),
+      tool("call-shell", "shell", "running", { command: { text: "npm test", truncated: false } }),
+    ]);
+    const { container } = render(
+      <I18nProvider>
+        <Timeline
+          active
+          pausedForTrust
+          events={[]}
+          activity={{ status: "live", feed, errorCode: null, retry: vi.fn() }}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>,
+    );
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(container.querySelectorAll('[data-state="waiting-for-trust"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-state="running"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[role="timer"]')).toHaveLength(1);
   });
 
   // #4491: a call that never reported its end must not keep "Running" and a ticking clock once the

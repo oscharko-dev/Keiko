@@ -745,17 +745,24 @@ function runDisplayedBranch(
  * settle read of `useWorkspaceReadAfterRun` follows.
  */
 function useWorkspaceReadAfterBranchMove(
+  runId: string | undefined,
   moveKey: string | null,
   refreshWorkspace: () => Promise<boolean>,
 ): void {
   const seen = useRef<ReadonlySet<string> | null>(null);
+  const seenFor = useRef(runId);
   useEffect(() => {
+    // Another run brings its own feed: what the last one named is not known to it.
+    if (seenFor.current !== runId) {
+      seenFor.current = runId;
+      seen.current = null;
+    }
     if (moveKey === null) return;
     const current = moveKey === "" ? [] : moveKey.split("\u001F");
     const known = seen.current;
     seen.current = new Set([...(known ?? []), ...current]);
     if (known !== null && current.some((id) => !known.has(id))) void refreshWorkspace();
-  }, [moveKey, refreshWorkspace]);
+  }, [runId, moveKey, refreshWorkspace]);
 }
 
 function WorkbenchContextControls({
@@ -1969,7 +1976,11 @@ function WorkbenchColumns(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
   const changesSignal = changesRefreshSignal(state.events, activity.feed);
-  useWorkspaceReadAfterBranchMove(succeededBranchMoveKey(activity.feed), activeWorkspace.refresh);
+  useWorkspaceReadAfterBranchMove(
+    state.run.value?.runId,
+    succeededBranchMoveKey(activity.feed),
+    activeWorkspace.refresh,
+  );
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
   // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.

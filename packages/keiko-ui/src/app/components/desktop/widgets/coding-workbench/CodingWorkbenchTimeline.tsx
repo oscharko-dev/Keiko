@@ -1850,6 +1850,10 @@ function succeededToolState(
   return runEnded ? "not-done" : git;
 }
 
+// The one tool the package-script trust decision gates: its call is the open row the pause holds.
+// Any other call open beside it (parallel tool calls) keeps its own running state and timer.
+const TRUST_GATED_TOOL = "keiko_verification";
+
 function isOpenTool(tool: CodingSafeActivityTool): boolean {
   return tool.state === "running" || tool.state === "pending";
 }
@@ -1882,7 +1886,9 @@ function shownToolState(
   heldForTrust = false,
 ): ShownToolState {
   if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
-  if (heldForTrust && isOpenTool(tool)) return "waiting-for-trust";
+  if (heldForTrust && isOpenTool(tool) && tool.tool === TRUST_GATED_TOOL) {
+    return "waiting-for-trust";
+  }
   if (tool.state === "succeeded") return succeededToolState(tool, superseded, runEnded);
   return tool.state === "failed" ? failedToolState(tool) : tool.state;
 }
