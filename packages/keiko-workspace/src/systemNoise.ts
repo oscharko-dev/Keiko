@@ -13,10 +13,8 @@
 
 /** Names the operating system creates in any folder or at the root of every volume. */
 const ANY_DEPTH_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set([
-  // Recycle bins (Vista and later, then XP/2000 on NTFS and FAT volumes).
+  // The recycle bin of Vista and later; no person names a folder this way.
   "$recycle.bin",
-  "recycler",
-  "recycled",
   // Volume shadow copies, restore points and indexer state; never readable by the person.
   "system volume information",
   // Explorer view state and thumbnail caches.
@@ -27,13 +25,21 @@ const ANY_DEPTH_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Registry hive files of a user profile (`NTUSER.DAT`, `ntuser.dat.LOG1`, `ntuser.ini`, the
- * `NTUSER.DAT{guid}.TM.blf` transaction logs). Always locked while the person is signed in.
+ * Registry hive files of a user profile (`NTUSER.DAT`, `ntuser.dat.LOG1`, the
+ * `NTUSER.DAT{guid}.TM.blf` transaction logs). Always locked while the person is signed in. The
+ * prefix ends in `dat`, so a person's own `ntuser.notes.md` stays searchable.
  */
-const ANY_DEPTH_SYSTEM_NOISE_PREFIX = "ntuser.";
+const ANY_DEPTH_SYSTEM_NOISE_PREFIX = "ntuser.dat";
+
+/** The other profile files beside the hives: logon-script settings and the policy cache. */
+const PROFILE_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set(["ntuser.ini", "ntuser.pol"]);
 
 /** Names that are system noise only directly below a connected drive root (`C:\`). */
 const DRIVE_ROOT_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set([
+  // The recycle bins of XP/2000 (NTFS) and of FAT volumes sit only at a volume's root; deeper
+  // down a folder with these ordinary English names belongs to the person.
+  "recycler",
+  "recycled",
   "windows",
   "windows.old",
   "$windows.~bt",
@@ -71,7 +77,11 @@ export interface SystemNoiseEntryContext {
  */
 export function isSystemNoiseEntry(name: string, context: SystemNoiseEntryContext): boolean {
   const lower = name.toLowerCase();
-  if (ANY_DEPTH_SYSTEM_NOISE_NAMES.has(lower) || lower.startsWith(ANY_DEPTH_SYSTEM_NOISE_PREFIX)) {
+  if (
+    ANY_DEPTH_SYSTEM_NOISE_NAMES.has(lower) ||
+    PROFILE_SYSTEM_NOISE_NAMES.has(lower) ||
+    lower.startsWith(ANY_DEPTH_SYSTEM_NOISE_PREFIX)
+  ) {
     return true;
   }
   return context.atDriveRoot && DRIVE_ROOT_SYSTEM_NOISE_NAMES.has(lower);
