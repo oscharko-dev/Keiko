@@ -996,19 +996,31 @@ function useWorkspaceReadAfterRun(
  * only looked at elsewhere (the Git window). Once a run works in a repository the window keeps it:
  * the run's repository is pinned into the window's configuration, so settlement, a remount or an
  * unreadable workspace read can never move the Workbench onto a different one. Only an explicit
- * selection changes it afterwards.
+ * selection changes it afterwards. The runtime follows one run for every window, so only a window
+ * that started or continued the run itself pins it: a following window never pins the run of
+ * another window.
  */
 function useRunRepositoryPin(
   runIsActive: boolean,
   selectedRoot: string | undefined,
   repositoryRoot: string | null,
+  mutation: Pick<CodingWorkbenchRuntimeState["mutation"], "status" | "kind">,
   onPinRepository: ((root: string) => void) | undefined,
 ): void {
+  const startedHere = useRef(false);
+  if (mutation.status === "pending" && RUN_STARTING_MUTATIONS.has(mutation.kind))
+    startedHere.current = true;
   useEffect(() => {
-    if (runIsActive && selectedRoot === undefined && repositoryRoot !== null)
+    if (startedHere.current && runIsActive && selectedRoot === undefined && repositoryRoot !== null)
       onPinRepository?.(repositoryRoot);
   }, [runIsActive, selectedRoot, repositoryRoot, onPinRepository]);
 }
+
+const RUN_STARTING_MUTATIONS: ReadonlySet<CodingWorkbenchMutationKind | null> = new Set([
+  "start",
+  "follow-up",
+  "retry",
+]);
 
 /**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
@@ -1141,7 +1153,7 @@ export function CodingWorkbenchWindow({
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   useWorkspaceReadAfterRun(runIsActive, activeWorkspace.refresh);
-  useRunRepositoryPin(runIsActive, selectedRoot, repositoryRoot, onPinRepository);
+  useRunRepositoryPin(runIsActive, selectedRoot, repositoryRoot, state.mutation, onPinRepository);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,

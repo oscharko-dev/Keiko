@@ -187,11 +187,19 @@ function useWindowRepository(
   const workspace = useOptionalActiveWorkspace();
   const cfgRoot = typeof cfg.repositoryPath === "string" ? cfg.repositoryPath : undefined;
   const decidedSeed = useShellSeedRoot(context, cfgRoot);
-  const seedRoot = (workspace?.activeInstance ?? null) === null ? decidedSeed : null;
+  const active = workspace?.activeInstance ?? null;
+  // A pinned repository keeps the window's identity while the workspace is gone or unreadable. It
+  // is not a selection: once another window moved the active workspace elsewhere, this window
+  // follows it instead of binding its own pin back, which two such windows would do forever.
+  const ownRoot =
+    cfg.repositoryPinned === true && active !== null && active.repositoryRoot !== cfgRoot
+      ? undefined
+      : cfgRoot;
+  const seedRoot = active === null ? decidedSeed : null;
   useRepositorySourceReport(repositorySourceOf(cfgRoot, decidedSeed));
-  const source = repositorySourceOf(cfgRoot, seedRoot);
+  const source = repositorySourceOf(ownRoot, seedRoot);
   return {
-    root: cfgRoot ?? seedRoot ?? undefined,
+    root: ownRoot ?? seedRoot ?? undefined,
     activationTrigger: activationTriggerOf(source, cfg.repositoryPinned === true),
   };
 }

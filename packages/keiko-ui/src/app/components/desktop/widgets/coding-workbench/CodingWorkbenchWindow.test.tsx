@@ -5180,10 +5180,38 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
   // U-3: the repository a run works in becomes the window's own, so no later remount or workspace
   // read can hand the window another repository (the Git window's) unasked.
-  it("pins the repository of a live run that the window only followed", () => {
+  it("pins the repository of a live run that this window started", () => {
     const onPinRepository = vi.fn();
+    const window = (): ReactElement => (
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>
+    );
+    runtimeHookMock.mockReturnValue({
+      state: {
+        ...stateIn(WORKSPACE_A),
+        mutation: { status: "pending", kind: "start", requestId: "req-pin", error: null },
+      },
+      actions: actions(),
+    });
+    const view = render(window());
+    expect(onPinRepository).not.toHaveBeenCalled();
+
     runtimeHookMock.mockReturnValue({
       state: stateIn(WORKSPACE_A, { state: "running", runId: "run-pin" }),
+      actions: actions(),
+    });
+    view.rerender(window());
+
+    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
+  // The runtime follows one run for every window: a window that never started it must not take the
+  // repository of another window's run as its own.
+  it("does not pin the run of another window", () => {
+    const onPinRepository = vi.fn();
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-elsewhere" }),
       actions: actions(),
     });
     render(
@@ -5192,7 +5220,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
       </ActiveWorkspaceProvider>,
     );
 
-    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+    expect(onPinRepository).not.toHaveBeenCalled();
   });
 
   it("does not pin while idle or when the window already has its own repository", () => {

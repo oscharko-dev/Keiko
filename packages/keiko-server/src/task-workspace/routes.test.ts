@@ -664,6 +664,42 @@ describe("POST /api/task-workspaces/local", () => {
     expect(JSON.stringify(await response.json())).not.toContain(created.instance.workspaceId);
   });
 
+  it("records the unchanged selection on the route's injected sink", async () => {
+    const fixture = await localRouteFixture();
+    await postLocal();
+    const injected = createBufferedServerLogSink();
+    await rebuild({
+      store: deps.store,
+      workspaceLifecycle: deps.workspaceLifecycle,
+      codingRuntimeOrchestrator: deps.codingRuntimeOrchestrator,
+      activityLog: injected,
+    });
+    fixture.sink.events.length = 0;
+
+    await postLocal();
+
+    expect(injected.events.map((event) => event.op)).toContain("task-workspace.lifecycle");
+    expect(fixture.sink.events.map((event) => event.op)).not.toContain("task-workspace.lifecycle");
+  });
+
+  // A managed worktree has its own activation: re-selecting it is never answered as a no-op.
+  it("still activates an already active managed worktree through its own admission", async () => {
+    const fixture = await localRouteFixture();
+    const created = (await (await provision("t1")).json()) as ProvisionBody;
+    const activate = (): Promise<Response> =>
+      fetch(`${baseUrl()}/api/task-workspaces/active`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ workspaceId: created.instance.workspaceId, requestedBy: "u" }),
+      });
+    await activate();
+    fixture.admitWorkspaceSelection.mockClear();
+
+    expect((await activate()).status).toBe(200);
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+  });
+
   it("still admits a selection of another branch of the active checkout", async () => {
     const fixture = await localRouteFixture();
     await postLocal();

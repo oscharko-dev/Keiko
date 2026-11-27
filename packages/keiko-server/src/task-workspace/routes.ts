@@ -444,13 +444,8 @@ export async function handleSetActiveTaskWorkspace(
       if (!selectableWorkspace(guard, workspaceId)) {
         throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
       }
-      const current = alreadyActiveWorkspace(guard, ctx, workspaceId, body.acquireLock === true);
-      if (current !== undefined) {
-        return {
-          status: 200,
-          body: redacted(deps, { instance: current.instance, binding: current.binding }),
-        };
-      }
+      const unchanged = alreadyActiveWorkspace(deps, guard, ctx, workspaceId, body.acquireLock);
+      if (unchanged !== undefined) return unchanged;
       await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,
@@ -509,11 +504,12 @@ function alreadyActiveSelection(
 
 /** The timeline shows the repeat as an `activate` line with the closed outcome `unchanged`. */
 function recordUnchangedSelection(
+  deps: UiHandlerDeps,
   active: ActiveWorkspaceView,
   correlationId: string | undefined,
 ): void {
   logWorkspaceLifecycle(
-    {},
+    { activityLog: deps.activityLog },
     {
       operation: "activate",
       outcome: "unchanged",
@@ -529,22 +525,31 @@ function recordUnchangedSelection(
 }
 
 /**
- * The active view when a switch names the workspace that already is the active, running one:
+ * The active view when a switch names the in-place (Local or folder) workspace that already is the
+ * active, running one; a managed worktree always goes through its own activation:
  * nothing changes, so no undo window ends and no activity is purged (U-3). A request that takes
  * the workspace lock is never a repeat.
  */
 function alreadyActiveWorkspace(
+  deps: UiHandlerDeps,
   guard: WorkspaceLifecycleService,
   ctx: RouteContext,
   workspaceId: string,
-  acquireLock: boolean,
-): ActiveWorkspaceView | undefined {
-  if (acquireLock) return undefined;
+  acquireLock: unknown,
+): RouteResult | undefined {
+  if (acquireLock === true) return undefined;
   const current = guard.getActive(ctx.correlationId);
-  if (current?.instance.workspaceId !== workspaceId || current.instance.lifecycleState !== "active")
+  if (
+    current?.instance.workspaceId !== workspaceId ||
+    current.instance.executionLocation !== "local" ||
+    current.instance.lifecycleState !== "active"
+  )
     return undefined;
-  recordUnchangedSelection(current, ctx.correlationId);
-  return current;
+  recordUnchangedSelection(deps, current, ctx.correlationId);
+  return {
+    status: 200,
+    body: redacted(deps, { instance: current.instance, binding: current.binding }),
+  };
 }
 
 // Reads an in-place selection (Local checkout, folder) and admits it against the coding runtime.
@@ -567,7 +572,7 @@ async function readInPlaceSelection(
     branch,
   );
   if (current !== undefined) {
-    recordUnchangedSelection(current, ctx.correlationId);
+    recordUnchangedSelection(deps, current, ctx.correlationId);
     return { body, realRoot: resolved.realRoot, requestedBy, current };
   }
   await admitWorkspaceSelection(deps);

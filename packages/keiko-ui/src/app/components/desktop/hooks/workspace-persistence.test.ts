@@ -319,6 +319,29 @@ describe("workspace-persistence", () => {
     }
   });
 
+  // U-3: the marker of a repository a run pinned survives a reload; a layout saved before it existed
+  // still loads, and only `true` is kept.
+  it("retains the pinned-repository marker and still loads layouts without it", () => {
+    const [pinned] = sanitizePersistedWindows([
+      win({
+        id: "coding-1",
+        type: "coding",
+        cfg: { repositoryPath: "/repos/a", repositoryPinned: true },
+      }),
+    ]);
+    expect(pinned?.cfg).toEqual({ repositoryPath: "/repos/a", repositoryPinned: true });
+    const [legacy] = sanitizePersistedWindows([
+      win({ id: "coding-1", type: "coding", cfg: { repositoryPath: "/repos/a" } }),
+    ]);
+    expect(legacy?.cfg).toEqual({ repositoryPath: "/repos/a" });
+    for (const value of [false, "true", 1]) {
+      const [dropped] = sanitizePersistedWindows([
+        win({ id: "coding-1", type: "coding", cfg: { repositoryPinned: value } }),
+      ]);
+      expect(dropped?.cfg).toEqual({});
+    }
+  });
+
   it("retains the Coding Workbench's repository, branch and location selection", () => {
     const selection = {
       repositoryPath: "/repos/selected",

@@ -130,7 +130,16 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // the window to whichever of the shell's project and the active task binding loaded first. A
   // Coding History pick (`historySelection`) is consumed once and stays out.
   // `leftRunId` is the run the person left with New task, so a reload does not follow it back.
-  coding: ["repositoryPath", "targetBranch", "targetBranchRoot", "executionLocation", "leftRunId"],
+  // `repositoryPinned` marks a repository a run pinned into the window (U-3); without it a reload
+  // would report the pin as the person's own pick.
+  coding: [
+    "repositoryPath",
+    "repositoryPinned",
+    "targetBranch",
+    "targetBranchRoot",
+    "executionLocation",
+    "leftRunId",
+  ],
   // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
   // server-held retained description proposal it must review. Each key has a closed value shape
   // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
@@ -242,6 +251,7 @@ function sanitizeChatCreationRequestId(value: unknown): AppWindow["cfg"][string]
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "coding:repositoryPath": sanitizeCodingRoot,
+  "coding:repositoryPinned": sanitizeSetMarker,
   "coding:targetBranch": sanitizeCodingBranch,
   "coding:targetBranchRoot": sanitizeCodingRoot,
   "coding:executionLocation": sanitizeCodingExecutionLocation,

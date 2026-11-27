@@ -375,6 +375,48 @@ describe("CodingWorkbenchWindowHost", () => {
     expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
   });
 
+  // Two windows pinned to different repositories would bind their own pin back every time the
+  // other one moved the active workspace. A pin is not a selection: it holds only while it is the
+  // active repository or none is active.
+  it("follows the active workspace instead of binding a pin back after another window moved it", () => {
+    windowRendered.mockClear();
+    const context = contextFixture();
+    const cfg = { repositoryPath: "/repos/a", repositoryPinned: true };
+    const withActive = (root: string | null): ActiveWorkspaceApi =>
+      ({
+        ...workspaceState({}),
+        activeInstance: root === null ? null : { repositoryRoot: root },
+      }) as unknown as ActiveWorkspaceApi;
+    const view = render(
+      <ActiveWorkspaceProvider value={withActive("/repos/a")}>
+        <CodingWorkbenchWindowHost cfg={cfg} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/a");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={withActive("/repos/b")}>
+        <CodingWorkbenchWindowHost cfg={cfg} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={withActive(null)}>
+        <CodingWorkbenchWindowHost cfg={cfg} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/a");
+
+    // The person's own pick is never overridden by another window's active workspace.
+    view.rerender(
+      <ActiveWorkspaceProvider value={withActive("/repos/b")}>
+        <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/a" }} context={context} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/a");
+  });
+
   it("names a pinned repository apart from the person's own pick", () => {
     windowRendered.mockClear();
     const context = contextFixture();
