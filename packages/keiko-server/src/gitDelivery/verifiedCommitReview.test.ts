@@ -114,13 +114,23 @@ describe("readVerifiedCommitReview with quoted Git paths", () => {
     expect(reviewOf(review).addedLines).toBe(1);
   });
 
-  it("reviews a rename between two quoted names under its new name", async () => {
+  it("reviews a rename between two quoted names under both names", async () => {
     const root = stagedRepo("rename repo", "dir/größe.js");
     runGit(root, ["reset", "-q"]);
     renameSync(join(root, "dir/größe.js"), join(root, "dir/größer name.js"));
     runGit(root, ["add", "-A"]);
     const review = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
-    expect(review).toMatchObject({ review: { paths: ["dir/größer name.js"], fileCount: 1 } });
+    expect(review).toMatchObject({
+      review: { paths: ["dir/größe.js \u2192 dir/größer name.js"], fileCount: 1 },
+    });
+  });
+
+  it("says counts are unavailable when a count passes the contract bound", async () => {
+    const root = stagedRepo("huge count", "dir/many.txt");
+    writeFileSync(join(root, "dir/many.txt"), "x\n".repeat(1_000_001));
+    runGit(root, ["add", "-A"]);
+    const read = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
+    expect(reviewOf(read)).toMatchObject({ addedLines: 1_000_000, countsUnavailable: true });
   });
 });
 

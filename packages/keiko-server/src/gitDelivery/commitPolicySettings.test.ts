@@ -1,7 +1,10 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateGitCommitMessage } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
+import {
+  gitCommitMessagePolicyForMode,
+  validateGitCommitMessage,
+} from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -72,6 +75,21 @@ describe("the commit message policy follows the repository (G-4)", () => {
       root,
     );
     expect(decision).toMatchObject({ mode: "keiko-conventional", source: "setting" });
+  });
+
+  it("treats an oversize package.json as the strict fallback, never as no convention", async () => {
+    writeFileSync(join(root, "package.json"), " ".repeat(1_048_577));
+    const decision = await resolveGovernedCommitMessagePolicyDecision(
+      { editorSettingsControl: controlWith("keiko-conventional", "builtInDefault") },
+      root,
+    );
+    expect(decision).toMatchObject({ mode: "keiko-conventional", source: "fallback" });
+  });
+
+  it("logs the real mode of a configured policy", async () => {
+    const native = gitCommitMessagePolicyForMode("repository-native");
+    const decision = await resolveGovernedCommitMessagePolicyDecision({}, root, native);
+    expect(decision).toMatchObject({ mode: "repository-native", source: "setting" });
   });
 
   it("fails closed to the Conventional check when the settings cannot be read", async () => {

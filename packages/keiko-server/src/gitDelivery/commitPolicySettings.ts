@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { GitCommitMessagePolicy } from "@oscharko-dev/keiko-contracts";
@@ -44,6 +44,9 @@ const PACKAGE_JSON_MAX_BYTES = 1_048_576;
 
 async function readOptionalText(path: string): Promise<string | undefined> {
   try {
+    // The size is asked first: an oversize manifest is never loaded, and is never read as "none".
+    if ((await stat(path)).size > PACKAGE_JSON_MAX_BYTES)
+      throw new Error("commit-policy-manifest-too-large");
     return await readFile(path, "utf8");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -53,7 +56,6 @@ async function readOptionalText(path: string): Promise<string | undefined> {
 }
 
 function packageDeclaresCommitlint(text: string): boolean {
-  if (text.length > PACKAGE_JSON_MAX_BYTES) return false;
   const parsed: unknown = JSON.parse(text);
   if (typeof parsed !== "object" || parsed === null) return false;
   const record = parsed as Record<string, unknown>;
@@ -101,7 +103,13 @@ export async function resolveGovernedCommitMessagePolicyDecision(
   configuredPolicy?: GitCommitMessagePolicy,
 ): Promise<GovernedCommitMessagePolicyDecision> {
   if (configuredPolicy !== undefined) {
-    return { policy: configuredPolicy, mode: "keiko-conventional", source: "setting" };
+    return {
+      policy: configuredPolicy,
+      mode: configuredPolicy.conventionalCommit.enabled
+        ? "keiko-conventional"
+        : "repository-native",
+      source: "setting",
+    };
   }
   try {
     const snapshot = await deps.editorSettingsControl?.read(workspaceRoot);

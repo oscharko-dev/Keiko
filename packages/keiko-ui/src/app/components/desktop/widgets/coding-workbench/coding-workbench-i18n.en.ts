@@ -1171,7 +1171,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.truncated":
     "Only the first {shown} of {total} files are listed.",
   "codingWorkbench.approval.changes.countsUnavailable":
-    "Line counts are unavailable because a file is too large to count; the file list is complete.",
+    "Line counts are unavailable because a file is too large to count.",
   "codingWorkbench.approval.changes.loading": "Loading the changed files…",
   "codingWorkbench.approval.changes.unavailable":
     "Changed files unavailable. Re-pair this window to see them before deciding.",

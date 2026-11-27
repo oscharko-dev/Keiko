@@ -38,8 +38,9 @@ function placeable(entry: GitStagedChangeEntry): boolean {
   );
 }
 
-function clampCount(value: number): number {
-  return Math.min(value, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT);
+// A rename lists both names, so the person sees what is removed as well as what appears.
+function reviewLabel(entry: GitStagedChangeEntry): string {
+  return entry.oldPath === undefined ? entry.path : `${entry.oldPath} \u2192 ${entry.path}`;
 }
 
 /**
@@ -62,16 +63,21 @@ export async function readVerifiedCommitReview(
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   });
   if (!entries.every(placeable)) return { incomplete: "diff-truncated" };
-  const paths = entries
-    .map((entry) => entry.path)
-    .slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const paths = entries.map(reviewLabel).slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+  const added = entries.reduce((count, entry) => count + entry.addedLines, 0);
+  const deleted = entries.reduce((count, entry) => count + entry.deletedLines, 0);
+  const capped =
+    added > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT ||
+    deleted > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT;
   const review: CodingWorkbenchRuntimePendingApprovalReview = {
     requestId: result.proposalId,
     paths,
     pathsTruncated: paths.length < entries.length,
     fileCount: entries.length,
-    addedLines: clampCount(entries.reduce((count, entry) => count + entry.addedLines, 0)),
-    deletedLines: clampCount(entries.reduce((count, entry) => count + entry.deletedLines, 0)),
+    addedLines: Math.min(added, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT),
+    deletedLines: Math.min(deleted, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT),
+    // A count past the contract's bound is shown as the bound and said to be unavailable.
+    ...(capped ? { countsUnavailable: true } : {}),
     verifiedCommit: { result, message },
   };
   return validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
