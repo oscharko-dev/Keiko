@@ -346,6 +346,41 @@ describe("useAutonomyModePolicy", (): void => {
     );
   });
 
+  it("runs the save, its re-read and its retry against one deadline", async (): Promise<void> => {
+    const signals: { persist: AbortSignal[]; reload: (AbortSignal | undefined)[] } = {
+      persist: [],
+      reload: [],
+    };
+    let loads = 0;
+    const load = vi.fn((signal?: AbortSignal): Promise<MemoryAutonomyPolicyWire> => {
+      if (++loads === 1) return Promise.resolve(policy("governed-assist", 3));
+      signals.reload.push(signal);
+      return new Promise<MemoryAutonomyPolicyWire>(() => undefined);
+    });
+    const persist = vi.fn(
+      (
+        _mode: CodingWorkbenchMode,
+        _expectedRevision: number,
+        signal?: AbortSignal,
+      ): Promise<MemoryAutonomyPolicyWire> => {
+        if (signal !== undefined) signals.persist.push(signal);
+        return Promise.reject(conflict());
+      },
+    );
+    const view = renderHook((): AutonomyModePolicy =>
+      useAutonomyModePolicy({ load, persist, persistTimeoutMs: 10 }),
+    );
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+
+    await waitFor((): void => expect(view.result.current.error).toBe("persist"));
+    const [persistSignal] = signals.persist;
+    expect(persistSignal).toBeDefined();
+    expect(signals.reload).toEqual([persistSignal]);
+    expect(persistSignal?.aborted).toBe(true);
+  });
+
   it("does not save again after a failure that is not a revision conflict", async (): Promise<void> => {
     const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
       Promise.resolve(policy("governed-assist", 3)),

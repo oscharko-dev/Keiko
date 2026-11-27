@@ -20,7 +20,7 @@ type PersistAutonomyMode = (
   expectedRevision: number,
   signal?: AbortSignal,
 ) => Promise<MemoryAutonomyPolicyWire>;
-type LoadAutonomyMode = () => Promise<MemoryAutonomyPolicyWire>;
+type LoadAutonomyMode = (signal?: AbortSignal) => Promise<MemoryAutonomyPolicyWire>;
 type PersistenceOutcome =
   | { readonly kind: "success"; readonly policy: MemoryAutonomyPolicyWire }
   | { readonly kind: "failure" };
@@ -55,8 +55,8 @@ function reportPersistFailure(
   return { kind: "failure" };
 }
 
-// Every request of a save runs against the same deadline, so a stalled request cannot hold the
-// queue: later intents would otherwise wait behind it with no error shown.
+// One deadline covers the complete save, re-read and retry included, so a stalled request cannot
+// hold the queue: later intents would otherwise wait behind it with no error shown.
 async function beforeDeadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
@@ -77,13 +77,25 @@ async function beforeDeadline<T>(
   }
 }
 
-function persistBeforeDeadline(
+// One re-read and one more save: the re-read revision is the server's own, so it replaces the
+// remembered one even when it is lower. A second conflict is surfaced, never retried again.
+async function persistOrRereadOnce(
   persist: PersistAutonomyMode,
+  reload: LoadAutonomyMode,
   mode: CodingWorkbenchMode,
-  expectedRevision: number,
-  timeoutMs: number,
+  signal: AbortSignal,
+  progress: { attempt: "first" | "after-reread" },
 ): Promise<MemoryAutonomyPolicyWire> {
-  return beforeDeadline((signal) => persist(mode, expectedRevision, signal), timeoutMs);
+  try {
+    return await persist(mode, latestServerRevision, signal);
+  } catch (error) {
+    if (!isRevisionConflict(error)) throw error;
+    progress.attempt = "after-reread";
+    const current = await reload(signal);
+    signal.throwIfAborted();
+    if (Number.isSafeInteger(current.revision)) latestServerRevision = current.revision;
+    return await persist(mode, latestServerRevision, signal);
+  }
 }
 
 async function settlePersistence(
@@ -92,34 +104,17 @@ async function settlePersistence(
   mode: CodingWorkbenchMode,
   timeoutMs: number,
 ): Promise<PersistenceOutcome> {
+  const progress: { attempt: "first" | "after-reread" } = { attempt: "first" };
   try {
-    const policy = await persistBeforeDeadline(persist, mode, latestServerRevision, timeoutMs);
+    const policy = await beforeDeadline(
+      (signal) => persistOrRereadOnce(persist, reload, mode, signal, progress),
+      timeoutMs,
+    );
     observeServerRevision(policy);
     return { kind: "success", policy };
   } catch (error) {
     // Convert the rejection to an explicit queue outcome; change() surfaces it to the user.
-    return isRevisionConflict(error)
-      ? persistAgainstCurrentRevision(persist, reload, mode, timeoutMs)
-      : reportPersistFailure(error, "first");
-  }
-}
-
-// One re-read and one more save: the re-read revision is the server's own, so it replaces the
-// remembered one even when it is lower. A second conflict is surfaced, never retried again.
-async function persistAgainstCurrentRevision(
-  persist: PersistAutonomyMode,
-  reload: LoadAutonomyMode,
-  mode: CodingWorkbenchMode,
-  timeoutMs: number,
-): Promise<PersistenceOutcome> {
-  try {
-    const current = await beforeDeadline(() => reload(), timeoutMs);
-    if (Number.isSafeInteger(current.revision)) latestServerRevision = current.revision;
-    const policy = await persistBeforeDeadline(persist, mode, latestServerRevision, timeoutMs);
-    observeServerRevision(policy);
-    return { kind: "success", policy };
-  } catch (error) {
-    return reportPersistFailure(error, "after-reread");
+    return reportPersistFailure(error, progress.attempt);
   }
 }
 
