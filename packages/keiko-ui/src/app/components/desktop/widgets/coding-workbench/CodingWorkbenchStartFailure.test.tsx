@@ -489,6 +489,14 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     expect(draftCalls("PUT")).toBe(1);
   });
 
+  it("raises the refresh error when the same read fails as an ordinary, non-quiet read (U-14)", async (): Promise<void> => {
+    otherWindowRun.active = true;
+    otherWindowRun.statusFails = true;
+    render(<CodingWorkbenchWindow />);
+
+    expect(await screen.findByText("Run could not be refreshed.")).toBeInTheDocument();
+  });
+
   it("does not flash a refresh error when the read on return fails while a run is followed (U-14)", async (): Promise<void> => {
     otherWindowRun.active = true;
     otherWindowRun.started = true;

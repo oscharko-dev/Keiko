@@ -151,4 +151,20 @@ describe("useActiveRunConflictNotice (U-14)", () => {
     hook.rerender({ mutation: pending("stop"), runState: "running", draft: TASK });
     expect(hook.result.current.visible).toBe(true);
   });
+
+  it("asks before the tab closes while a task is held, and not otherwise", () => {
+    const { hook } = mount({ mutation: IDLE, runState: null, draft: TASK });
+    const closing = (): boolean => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(closing()).toBe(false);
+
+    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "running", draft: TASK });
+    expect(closing()).toBe(true);
+
+    act(() => hook.result.current.onDraftReset());
+    expect(closing()).toBe(false);
+  });
 });

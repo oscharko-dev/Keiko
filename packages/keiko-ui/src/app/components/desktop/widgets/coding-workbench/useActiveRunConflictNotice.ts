@@ -100,21 +100,24 @@ export function useActiveRunConflictNotice({
     }
   }, [runIsActive]);
 
-  const edits = useHeldTaskEdits({ setKept, setVisible, setTaskIntent });
+  const edits = useHeldTaskEdits({ held: kept !== null, setKept, setVisible, setTaskIntent });
   return { visible, taskIntent: kept ?? taskIntent, ...edits };
 }
 
 // The person's own ways to end the held task: an edit replaces it, a deliberate reset drops it and
 // the notice with it. Neither writes the held text anywhere.
 function useHeldTaskEdits({
+  held,
   setKept,
   setVisible,
   setTaskIntent,
 }: {
+  readonly held: boolean;
   readonly setKept: (kept: string | null) => void;
   readonly setVisible: (visible: boolean) => void;
   readonly setTaskIntent: (taskIntent: string) => void;
 }): Pick<ActiveRunConflictNotice, "onTaskIntentChange" | "onDraftReset"> {
+  useHeldTaskUnloadWarning(held);
   const onTaskIntentChange = useCallback(
     (value: string): void => {
       setKept(null);
@@ -128,4 +131,17 @@ function useHeldTaskEdits({
     setTaskIntent("");
   }, [setKept, setVisible, setTaskIntent]);
   return { onTaskIntentChange, onDraftReset };
+}
+
+// The draft's own unload guard sees only the draft, and a held task is not in it: while one is held,
+// closing or reloading the tab asks first, as it does for an unsaved draft.
+function useHeldTaskUnloadWarning(held: boolean): void {
+  useEffect(() => {
+    if (!held) return;
+    const warn = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return (): void => window.removeEventListener("beforeunload", warn);
+  }, [held]);
 }
