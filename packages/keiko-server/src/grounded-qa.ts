@@ -3424,13 +3424,14 @@ function withPreparedGroundedMemory(
 }
 
 // A clear "Merke dir" asked of a grounded answer while Chat memory is off stores nothing: the answer
-// learns that before it is written, like a refused statement (#4213), and the turn records it.
+// learns that before it is written, like a refused statement (#4213), and the turn records it. It
+// reads the person's own words: after compaction the prompt is the model's summary (PR #4568 review).
 function memoryOffRememberNotice(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
 ): string | undefined {
-  const { content, memory } = prepared.input;
-  if (!rememberMeetsMemoryOff(deps, { content, memory })) return undefined;
+  const content = groundedSpokenContent(prepared);
+  if (!rememberMeetsMemoryOff(deps, { content, memory: prepared.input.memory })) return undefined;
   logExplicitMemoryRemember("memory-off", correlationIdOrUnknown(prepared.correlationId));
   return CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE;
 }
