@@ -421,6 +421,29 @@ describe("desktop chat production gateway reuse", () => {
     },
   );
 
+  // The UI resolves a Chat's project in the project list, so the payload folder that keeps a
+  // folderless Chat stays listed (unreadable), whatever the launcher declared.
+  it("keeps a first Chat under a standalone payload folder listed and unreadable", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const payloadApp = join(fixture.root, "Keiko", "system", "Keiko", "app");
+    mkdirSync(payloadApp, { recursive: true });
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(payloadApp);
+    try {
+      fixture.deps.store.deleteProject(fixture.projectPath);
+      const result = await handleCreateDesktopChat(requestContext({}), fixture.deps);
+      expect(result).toMatchObject({
+        status: 201,
+        body: {
+          project: { path: payloadApp, available: true, readable: false },
+          projects: [{ path: payloadApp, readable: false }],
+        },
+      });
+    } finally {
+      cwd.mockRestore();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("still requires a configured chat model to open a Chat", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {

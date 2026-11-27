@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5f9dec6631176a5b62d3a0f1fd9972ae287c36ef94593c91fe8a5796f9421486",
+    "catalogDigest": "4affe05a0f1a005b5d2bfce3fe588897fc276ce988b4772d643ece4d751e19d8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -43169,8 +43169,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:123",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:578"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:122",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:575"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -125546,7 +125546,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1397",
+      "site": "packages/keiko-server/src/store-handlers.ts:1394",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -129707,20 +129707,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:451",
+      "site": "packages/keiko-server/src/store-handlers.ts:448",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:126",
+      "site": "packages/keiko-server/src/store-handlers.ts:125",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:594",
+      "site": "packages/keiko-server/src/store-handlers.ts:591",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

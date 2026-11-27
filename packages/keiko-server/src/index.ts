@@ -507,3 +507,4 @@ export { processServerLogSink, type ProcessServerLogSink } from "./process-log-s
 // (not the full update-session machinery: locks, run history, command execution) skip
 // constructing an `UpdateSessionManager` entirely.
 export { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";
+export { insideInstallationPayload } from "./launch-directory.js";

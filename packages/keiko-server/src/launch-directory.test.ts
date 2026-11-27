@@ -167,3 +167,33 @@ describe("insideInstallationPayload", () => {
     }
   });
 });
+
+describe("insideInstallationPayload on a POSIX host", () => {
+  it("keeps the case of a POSIX path, so a person's lower-case folder is not a payload", () => {
+    if (process.platform === "win32") return;
+    for (const path of [
+      "/home/u/code/system/keiko/app",
+      "/home/u/code/system/Keiko/APP",
+      "/home/u/code/Node_Modules/@oscharko-dev/keiko",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(false);
+    }
+    expect(insideInstallationPayload("/home/u/Keiko/system/Keiko/app")).toBe(true);
+  });
+
+  it("reads a UNC share and a trailing separator as a Windows path", () => {
+    expect(insideInstallationPayload("\\\\server\\share\\SYSTEM\\keiko\\App\\")).toBe(true);
+    expect(insideInstallationPayload("C:\\Keiko\\system\\Keiko\\runtime\\")).toBe(true);
+    expect(insideInstallationPayload("/Users/me/Keiko/system/Keiko/app/")).toBe(true);
+  });
+
+  it("judges an existing path by the name the operating system gives it", () => {
+    const { root } = folders();
+    const payload = join(root, "system", "Keiko", "app");
+    mkdirSync(payload, { recursive: true });
+    const alias = join(root, "alias");
+    symlinkSync(payload, alias, "dir");
+    expect(insideInstallationPayload(alias)).toBe(true);
+    expect(insideInstallationPayload(join(root, "Keiko-projects"))).toBe(false);
+  });
+});

@@ -1225,9 +1225,12 @@ program folder as a project before this rule existed, and a folder outside the p
 the launcher names explicitly is seeded as before. The program files of a previous installation
 are refused the same way: the gate also recognises an installation's payload by its layout
 (`system/Keiko/{app,runtime,.portable,Keiko.app}` and the npm folder's
-`node_modules/@oscharko-dev/keiko`), so a row an older version left in the shared state folder is
-neither listed nor registrable, and the CLI never registers its launch folder itself: only the
-server's seed does, through this same predicate. A Chat needs no folder: a person who has chosen
+`node_modules/@oscharko-dev/keiko`; case is ignored only for Windows-shaped paths, and a path that
+exists is also judged by its resolved name), so a row an older version left in the shared state
+folder is listed `readable: false` like the running installation's own row (the UI resolves a
+Chat's project in that list, so a folderless Chat keeps working), is not registrable, and the Git
+window does not offer it as a repository. The CLI never registers its launch folder itself: only
+the server's seed does, through this same predicate. A Chat needs no folder: a person who has chosen
 none still gets one, kept under the launch directory, which only holds it; refusing that Chat would
 leave New chat dead on every fresh installation. The Coding Workbench, Files and Git start empty
 until the person chooses a folder. This is the refused-launch-directory behaviour of #4371 applied

@@ -1542,7 +1542,8 @@ export function GitClientWindow({
     void client.listRepositories().then(
       (res) => {
         if (reposRequestSequenceRef.current !== requestSequence) return;
-        setRepositories(res.projects);
+        // A root the read surface refuses (Keiko's own program files, ADR-0121 D9) has no Git view.
+        setRepositories(res.projects.filter((project) => project.readable !== false));
         setReposLoading(false);
       },
       (err: unknown) => {

@@ -669,6 +669,18 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
+  // ADR-0121 D9: a root the read surface refuses (Keiko's own program files) has no Git view, so
+  // it is not offered as a repository.
+  it("does not offer a root the read surface refuses", async () => {
+    const program = { ...makeRepo("/Keiko/system/Keiko/app", "app"), readable: false };
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [REPO_A, program] })),
+    });
+    render(<GitClientWindow client={client} />);
+    expect(await screen.findByRole("button", { name: /alpha/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /app/ })).not.toBeInTheDocument();
+  });
+
   // #3652: a transient repository-list failure left Recent repositories empty with an error and no
   // way to retry — the list was requested again only after an unrelated re-pair or a successful
   // add-repository flow, stranding the normal selection path.
