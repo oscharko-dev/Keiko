@@ -7082,12 +7082,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useAutonomyModePolicy.ts",
-      "owner": "settlePersistence",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
       "owner": "attemptRunSummaryFetch",
       "kind": "unregistered-catch",
