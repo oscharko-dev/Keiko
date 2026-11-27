@@ -1554,6 +1554,10 @@ describe("the saved full output of a shortened tool result (PERF-2)", () => {
           `sed -i s/a/b/ ${file}`,
           `cat ${file} | tee ${file}`,
           `echo $(rm ${file})`,
+          `cat ${file}\nrm ${file}`,
+          `cat ${file}\r\nrm ${file}`,
+          `cat ${file} | sh -c 'rm ${file}'`,
+          `echo x | dd of=${file}`,
         ])
           expect(effect(paths, mode, "shell", [command]), `${mode}: ${command}`).toBe(
             "deny:workspace-escape",

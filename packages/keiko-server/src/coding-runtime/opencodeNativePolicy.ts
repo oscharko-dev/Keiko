@@ -1529,6 +1529,10 @@ function toolOutputRead(paths: readonly string[], roots: AdmittedRoots): Classif
  * state, which a shell may write. It is admitted only while no component between the run's private
  * root and the directory is a link: a replaced directory would otherwise name any place its target
  * does (the physical check resolves the root itself). A missing directory has nothing to read.
+ *
+ * Defense in depth, not a security boundary: the lstat walk is check-then-use. That is acceptable
+ * because the private state belongs to the same user and the kernel's read boundary still applies
+ * to whatever the directory is replaced with after the check.
  */
 function toolOutputRootLinkFree(root: string): boolean {
   const target = resolve(root);
@@ -1757,8 +1761,8 @@ const SAVED_OUTPUT_VIEWERS: ReadonlySet<string> = new Set([
   "nl",
   "less",
 ]);
-// Redirections, command chaining and substitution turn a viewer into something that can write.
-const SHELL_WRITE_SYNTAX = /[<>;&`]|\$\(|\btee\b/u;
+// Redirections, pipes, newlines, command chaining and substitution turn a viewer into something that can write.
+const SHELL_WRITE_SYNTAX = /[<>;&|\n\r`]|\$\(|\btee\b/u;
 
 /**
  * A shell command that names the saved-output directory by its absolute path may only read there:
@@ -1767,6 +1771,9 @@ const SHELL_WRITE_SYNTAX = /[<>;&`]|\$\(|\btee\b/u;
  * naming the directory is refused in every mode. A command that only changes into the directory and
  * writes a relative path names no absolute path and stays with the ordinary shell rules and the
  * kernel boundary (the run's private state is writable by design).
+ *
+ * This is defense in depth, not a security boundary: Full access may write its private state by
+ * design, and the kernel's read boundary, not this guard, is what keeps the run inside its grants.
  */
 function savedOutputWrite(
   resources: readonly string[],
