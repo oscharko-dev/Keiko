@@ -386,37 +386,48 @@ function useRunRefresh(
   runSequence: RefObject<number>,
   runRefresh: RefObject<Promise<void> | null>,
   dispatch: RuntimeDispatch,
-): () => Promise<void> {
+): (quiet?: boolean) => Promise<void> {
   const followUp = useRef(false);
-  return useCallback((): Promise<void> => {
-    if (runRefresh.current !== null) {
-      followUp.current = true;
-      return runRefresh.current;
-    }
-    dispatch({ kind: "resource-loading", resource: "run" });
-    const pending = (async (): Promise<void> => {
-      do {
-        followUp.current = false;
-        runSequence.current += 1;
-        await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
-          runSequence.current,
-          runSequence,
-          dispatch,
-        );
-      } while (followUp.current);
-    })();
-    runRefresh.current = pending;
-    void pending.then(() => {
-      if (runRefresh.current === pending) runRefresh.current = null;
-    });
-    return pending;
-  }, [dispatch, runRefresh, runSequence]);
+  // A read is quiet only while every caller that joined it asked for one.
+  const quietRead = useRef(false);
+  return useCallback(
+    (quiet = false): Promise<void> => {
+      if (runRefresh.current !== null) {
+        followUp.current = true;
+        quietRead.current &&= quiet;
+        return runRefresh.current;
+      }
+      quietRead.current = quiet;
+      if (!quiet) dispatch({ kind: "resource-loading", resource: "run" });
+      const pending = (async (): Promise<void> => {
+        do {
+          followUp.current = false;
+          runSequence.current += 1;
+          await /* NOSONAR typescript:S9382 -- coalesced re-reads run one after another by design. */ readRun(
+            runSequence.current,
+            runSequence,
+            dispatch,
+            quietRead.current,
+          );
+        } while (followUp.current);
+      })();
+      runRefresh.current = pending;
+      void pending.then(() => {
+        if (runRefresh.current === pending) runRefresh.current = null;
+      });
+      return pending;
+    },
+    [dispatch, runRefresh, runSequence],
+  );
 }
 
+// A quiet read is the background re-read when the person returns to the window: its failure is
+// recorded but never replaces what the window already shows with an error banner (U-14).
 async function readRun(
   sequence: number,
   runSequence: RefObject<number>,
   dispatch: RuntimeDispatch,
+  quiet: boolean,
 ): Promise<void> {
   try {
     const snapshot = await getCodingWorkbenchRuntimeStatus();
@@ -434,6 +445,7 @@ async function readRun(
         ...(mapped.correlationId === undefined ? {} : { correlationId: mapped.correlationId }),
       });
     }
+    if (quiet) return;
     dispatch({
       kind: "resource-failed",
       resource: "run",

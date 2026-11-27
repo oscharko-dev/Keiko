@@ -93,7 +93,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
     parentCorrelationId?: string,
     checkModel?: CodingWorkbenchModelCheck,
   ) => Promise<void>;
-  readonly refreshRun: () => Promise<void>;
+  readonly refreshRun: (quiet?: boolean) => Promise<void>;
 }): void {
   useEffect(() => {
     void refreshRuntime();
@@ -137,10 +137,10 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
  * the active run is on screen, and Start is not offered, before the person types a task for it.
  * Not a polling loop: one coalesced status read per return.
  */
-function useRunRereadOnReturn(refreshRun: () => Promise<void>): void {
+function useRunRereadOnReturn(refreshRun: (quiet?: boolean) => Promise<void>): void {
   useEffect(() => {
     const reread = (): void => {
-      if (document.visibilityState === "visible") void refreshRun();
+      if (document.visibilityState === "visible") void refreshRun(true);
     };
     window.addEventListener("focus", reread);
     document.addEventListener("visibilitychange", reread);

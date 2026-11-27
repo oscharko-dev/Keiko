@@ -1100,7 +1100,13 @@ export function CodingWorkbenchWindow({
     workspace: activeWorkspace,
   });
   useCodingWorkbenchIdentityEvidence(runtimeState);
-  const [taskIntent, setTaskIntent] = useWorkbenchComposerDraft(draftKey);
+  const [draftIntent, setDraftIntent] = useWorkbenchComposerDraft(draftKey);
+  const activeRunConflict = useActiveRunConflictNotice({
+    state: runtimeState,
+    taskIntent: draftIntent,
+    setTaskIntent: setDraftIntent,
+  });
+  const { taskIntent, onDraftReset: setTaskIntentEmpty } = activeRunConflict;
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
     active: activeRunState(runtimeState.run.value?.state),
@@ -1114,7 +1120,7 @@ export function CodingWorkbenchWindow({
     ),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
-    onDraftReset: (): void => setTaskIntent(""),
+    onDraftReset: setTaskIntentEmpty,
     leftRun,
     onLeftRun,
   });
@@ -1142,8 +1148,7 @@ export function CodingWorkbenchWindow({
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
   const runWorkspace = useRunWorkspaceBinding(state, activeWorkspace);
-  useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setTaskIntent);
-  const activeRunConflict = useActiveRunConflictNotice({ state, taskIntent, setTaskIntent });
+  useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setDraftIntent);
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
   const t = useCodingWorkbenchTranslate();

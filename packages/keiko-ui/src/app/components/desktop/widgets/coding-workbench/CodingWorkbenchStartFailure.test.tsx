@@ -257,6 +257,7 @@ const otherWindowRun = {
   active: false,
   started: false,
   draft: "conflict" as "conflict" | "replaced",
+  statusFails: false,
 };
 
 function otherWindowDraftResponse(method: string, body: string): Response {
@@ -297,6 +298,9 @@ function otherWindowRunResponse(url: string, init: RequestInit | undefined): Res
     return otherWindowDraftResponse(method, typeof init?.body === "string" ? init.body : "");
   }
   const reading = url.includes("/api/coding-workbench/runtime/status");
+  if (reading && otherWindowRun.statusFails) {
+    return jsonResponse(500, { error: { code: "INTERNAL", message: "Status unavailable." } });
+  }
   return reading && otherWindowRun.started ? otherWindowStatusResponse() : undefined;
 }
 
@@ -366,6 +370,7 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     otherWindowRun.active = false;
     otherWindowRun.started = false;
     otherWindowRun.draft = "conflict";
+    otherWindowRun.statusFails = false;
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     resetSupportReportOutcomesForTests();
@@ -429,6 +434,13 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
       ).length;
   }
 
+  function statusReads(): number {
+    return vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).includes("/api/coding-workbench/runtime/status"))
+      .length;
+  }
+
   async function startRefusedByOtherWindow(task: string): Promise<void> {
     otherWindowRun.active = true;
     const user = userEvent.setup();
@@ -456,19 +468,44 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     expect(screen.getByLabelText("Task instructions")).toHaveValue(task);
   });
 
-  it("puts the task back when the shared draft hands back the other window's empty text (U-14)", async (): Promise<void> => {
+  it("keeps the task in this window only when the shared draft hands back an empty text (U-14)", async (): Promise<void> => {
     otherWindowRun.draft = "replaced";
     const task = "Fix the flaky retry loop";
     await startRefusedByOtherWindow(task);
 
-    // The shared draft saves the task, then the next read hands back the other window's empty text.
+    // The shared draft saved the task once; the other window then cleared it on purpose, so the
+    // next read hands back an empty text. This window keeps showing its task and writes nothing.
     await waitFor(() => expect(draftCalls("PUT")).toBe(1));
+    const reads = draftCalls("GET");
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
-    // The kept task is put back and saved again.
-    await waitFor(() => expect(draftCalls("PUT")).toBe(2), { timeout: 4_000 });
+    await waitFor(() => expect(draftCalls("GET")).toBeGreaterThan(reads));
     expect(screen.getByLabelText("Task instructions")).toHaveValue(task);
+    // A write-back would follow the draft's debounce: poll past it and see that none comes.
+    await expect(
+      waitFor(() => expect(draftCalls("PUT")).toBeGreaterThan(1), { timeout: 900 }),
+    ).rejects.toThrow();
+    expect(draftCalls("PUT")).toBe(1);
+  });
+
+  it("does not flash a refresh error when the read on return fails while a run is followed (U-14)", async (): Promise<void> => {
+    otherWindowRun.active = true;
+    otherWindowRun.started = true;
+    render(<CodingWorkbenchWindow />);
+    await screen.findByRole("button", { name: "Stop run" });
+
+    otherWindowRun.statusFails = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(statusReads()).toBeGreaterThan(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Run could not be refreshed.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
   });
 
   it("shows a run another window started as soon as the person returns to this window (U-14)", async (): Promise<void> => {

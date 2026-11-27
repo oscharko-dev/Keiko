@@ -852,6 +852,28 @@ describe("mode selection, setup plans, and mutation failures", () => {
       expect(restarted.mutation.supersededFailure).toBeUndefined();
     });
 
+    it("is a plain idle mutation when the superseded failure carried no error (U-14)", () => {
+      const next = codingWorkbenchRuntimeReducer(
+        {
+          ...readyState(),
+          mutation: {
+            status: "error",
+            kind: "start",
+            requestId: "req-1",
+            error: null,
+            failedAgainst: { runId: null, revision: 0 },
+          },
+        },
+        { kind: "run-set", snapshot: snapshot({ runId: "run-other", revision: 2 }) },
+      );
+      expect(next.mutation).toStrictEqual({
+        status: "idle",
+        kind: null,
+        requestId: null,
+        error: null,
+      });
+    });
+
     it("clears the error when a different run replaces the one the action targeted", () => {
       const next = codingWorkbenchRuntimeReducer(failedAt(4), {
         kind: "run-set",

@@ -38,15 +38,21 @@ function startsTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
 export interface ActiveRunConflictNotice {
   /** True while the person's kept task is waiting for the other window's run to end. */
   readonly visible: boolean;
-  /** The composer's own edits: they move the kept text, and clearing it is the person's choice. */
+  /** What the composer shows and sends: the kept task while one is held, else the draft. */
+  readonly taskIntent: string;
+  /** The composer's own edits: the person's text replaces the kept one, and may be empty. */
   readonly onTaskIntentChange: (taskIntent: string) => void;
+  /** A deliberate reset (New task, a history selection): it drops the kept task and the notice. */
+  readonly onDraftReset: () => void;
 }
 
 /**
  * U-14: a start refused because another window of this installation already runs a task must never
- * cost the person the task they typed. The refusal arms a guard that holds the text; anything other
- * than the person's own edit that empties the composer while the guard is armed puts it back. The
- * guard ends when the person edits the text, starts again, or the other run ends. Every report is
+ * cost the person the task they typed. The refusal holds that text in this window's own state and
+ * the composer shows it from there: it is never written back to the draft the windows share, so
+ * another window cannot adopt it and a deliberate clear there cannot bring it back. The held text
+ * ends on the person's own edit, a deliberate reset, or a new Start (which commits it to the draft
+ * first, so a failed Start keeps it). The notice ends with the other run. Every report is
  * body-free: the text itself never leaves the composer.
  */
 export function useActiveRunConflictNotice({
@@ -61,56 +67,65 @@ export function useActiveRunConflictNotice({
   const { mutation } = state;
   const runIsActive = activeRunState(state.run.value?.state);
   const [visible, setVisible] = useState(false);
-  const kept = useRef<string | null>(null);
+  const [kept, setKept] = useState<string | null>(null);
+  const keptRef = useRef(kept);
+  keptRef.current = kept;
   const armed = useRef(false);
   const sawRun = useRef(false);
   const latestIntent = useRef(taskIntent);
   latestIntent.current = taskIntent;
-  const disarm = useCallback((): void => {
-    armed.current = false;
-    kept.current = null;
-    sawRun.current = false;
-    setVisible(false);
-  }, []);
 
   useEffect(() => {
     if (startsTaskIntent(mutation)) {
-      disarm();
+      if (keptRef.current !== null) setTaskIntent(keptRef.current);
+      armed.current = false;
+      sawRun.current = false;
+      setKept(null);
+      setVisible(false);
       return;
     }
     if (!refusedAsActiveRunConflict(mutation) || armed.current) return;
     armed.current = true;
-    kept.current = latestIntent.current === "" ? null : latestIntent.current;
+    setKept(latestIntent.current === "" ? null : latestIntent.current);
     setVisible(true);
     reportClientDiagnostic("[keiko] coding workbench start refused: active-run-elsewhere");
-  }, [mutation, disarm]);
+  }, [mutation, setTaskIntent]);
 
   useEffect(() => {
     if (runIsActive) sawRun.current = true;
-    else if (sawRun.current) disarm();
-  }, [runIsActive, disarm]);
+    else if (sawRun.current) {
+      armed.current = false;
+      sawRun.current = false;
+      setVisible(false);
+    }
+  }, [runIsActive]);
 
-  const onTaskIntentChange = useKeptTaskGuard(kept, taskIntent, setTaskIntent);
-  return { visible, onTaskIntentChange };
+  const edits = useHeldTaskEdits({ setKept, setVisible, setTaskIntent });
+  return { visible, taskIntent: kept ?? taskIntent, ...edits };
 }
 
-// While a task is kept, anything other than the person's own edit that empties the composer puts it
-// back; the person's own edits move the kept text, and clearing it on purpose ends the guard.
-function useKeptTaskGuard(
-  kept: { current: string | null },
-  taskIntent: string,
-  setTaskIntent: (taskIntent: string) => void,
-): (taskIntent: string) => void {
-  useEffect(() => {
-    if (kept.current === null || taskIntent !== "") return;
-    setTaskIntent(kept.current);
-    reportClientDiagnostic("[keiko] coding workbench kept task restored: active-run-elsewhere");
-  }, [kept, taskIntent, setTaskIntent]);
-  return useCallback(
+// The person's own ways to end the held task: an edit replaces it, a deliberate reset drops it and
+// the notice with it. Neither writes the held text anywhere.
+function useHeldTaskEdits({
+  setKept,
+  setVisible,
+  setTaskIntent,
+}: {
+  readonly setKept: (kept: string | null) => void;
+  readonly setVisible: (visible: boolean) => void;
+  readonly setTaskIntent: (taskIntent: string) => void;
+}): Pick<ActiveRunConflictNotice, "onTaskIntentChange" | "onDraftReset"> {
+  const onTaskIntentChange = useCallback(
     (value: string): void => {
-      if (kept.current !== null) kept.current = value === "" ? null : value;
+      setKept(null);
       setTaskIntent(value);
     },
-    [kept, setTaskIntent],
+    [setKept, setTaskIntent],
   );
+  const onDraftReset = useCallback((): void => {
+    setKept(null);
+    setVisible(false);
+    setTaskIntent("");
+  }, [setKept, setVisible, setTaskIntent]);
+  return { onTaskIntentChange, onDraftReset };
 }
