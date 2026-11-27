@@ -170,8 +170,9 @@ import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
+import { movedTaskBranch, type TaskBranchMove } from "./codingWorkbenchTaskBranch";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
-import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
+import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
@@ -705,6 +706,7 @@ function WorkbenchContextControls({
   offeredLocations,
   onSelectLocation,
   placement = "composer",
+  catalogRefreshKey,
 }: {
   readonly repositoryRoot: string | null;
   readonly selectedBranch: string | undefined;
@@ -713,12 +715,13 @@ function WorkbenchContextControls({
   readonly activeWorkspace: WorkbenchWorkspaceApi;
   readonly mutationPending: boolean;
   readonly onSelectRepository: (root: string) => void;
-  readonly onSelectBranch: (branch: string) => void;
+  readonly onSelectBranch: (branch: string, repositoryRoot: string | null) => void;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly location: WorkbenchExecutionLocation;
   readonly offeredLocations: readonly WorkbenchExecutionLocation[] | undefined;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly placement?: "composer" | "setup";
+  readonly catalogRefreshKey: string;
 }): ReactNode {
   const branch = runIsActive
     ? (runWorkspace.bound?.taskBranch ?? null)
@@ -729,12 +732,15 @@ function WorkbenchContextControls({
       branch={branch}
       locked={runIsActive || mutationPending || activeWorkspace.switching}
       onSelect={onSelectRepository}
-      onSelectBranch={onSelectBranch}
+      // The branch is chosen for the repository this window shows, which may be the active
+      // binding's rather than one the window selected itself (#4491).
+      onSelectBranch={(chosen) => onSelectBranch(chosen, repositoryRoot)}
       location={location}
       offeredLocations={offeredLocations}
       onSelectLocation={onSelectLocation}
       onOpenGit={() => onOpenGit(repositoryGitTarget(repositoryRoot))}
       placement={placement}
+      catalogRefreshKey={catalogRefreshKey}
     />
   );
 }
@@ -958,6 +964,22 @@ function useCheckoutRefresh(
 }
 
 /**
+ * A run can move its Local checkout onto a task branch of its own (`keiko_git_branch`); the server's
+ * workspace then names the new branch. Read it again once the run settles, so the branch control
+ * and the next start show the branch the checkout stands on, not the one the run began on (#4491).
+ */
+function useWorkspaceReadAfterRun(
+  runIsActive: boolean,
+  refreshWorkspace: () => Promise<boolean>,
+): void {
+  const wasActive = useRef(runIsActive);
+  useEffect(() => {
+    if (wasActive.current && !runIsActive) void refreshWorkspace();
+    wasActive.current = runIsActive;
+  }, [runIsActive, refreshWorkspace]);
+}
+
+/**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
  * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
  * a window identity the server keeps drafts for (an embedded or test render, or a window restored
@@ -1002,7 +1024,7 @@ export function CodingWorkbenchWindow({
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
-  readonly onSelectBranch?: ((branch: string) => void) | undefined;
+  readonly onSelectBranch?: ((branch: string, repositoryRoot: string | null) => void) | undefined;
   readonly onSelectLocation?: ((location: WorkbenchExecutionLocation) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
@@ -1081,6 +1103,7 @@ export function CodingWorkbenchWindow({
     offeredExecutionLocations(state),
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
+  useWorkspaceReadAfterRun(runIsActive, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
@@ -1102,6 +1125,12 @@ export function CodingWorkbenchWindow({
     repositoryRoot === null && !runIsActive,
     authority.errorMessage,
   );
+  const taskBranchMove = movedTaskBranch(history.detail, {
+    repositoryRoot,
+    checkoutBranch: branchInventory.currentBranch,
+    selectedBranch,
+    runIsActive,
+  });
 
   useEffect(() => {
     // A failed decision leaves the request open; a later disappearance has another cause.
@@ -1147,6 +1176,7 @@ export function CodingWorkbenchWindow({
       runWorkspace={runWorkspace}
       repositoryRoot={repositoryRoot}
       runIsActive={runIsActive}
+      taskBranchMove={taskBranchMove}
     />
   );
 }
@@ -1424,13 +1454,15 @@ interface WorkbenchContentProps {
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository: (root: string) => void;
-  readonly onSelectBranch: (branch: string) => void;
+  readonly onSelectBranch: (branch: string, repositoryRoot: string | null) => void;
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
   /** One repository projection shared by the information panel and composer. */
   readonly repositoryRoot: string | null;
   readonly runIsActive: boolean;
+  /** An open local task whose branch is not the one its next message would run on (#4491). */
+  readonly taskBranchMove: TaskBranchMove | null;
 }
 
 function WorkbenchAlert({
@@ -1478,6 +1510,23 @@ function workbenchFailureReport(failure: CodingWorkbenchClientError | null): Rea
  * panel reports a lost binding and why nothing the operator does in the other workspace reaches
  * this run. Stating it is what turns two silent inert panels into one actionable fact.
  */
+// #4491: the next message of this local task would be refused on the branch the checkout moved to.
+function TaskBranchMovedNotice({ move }: { readonly move: TaskBranchMove | null }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const blocked = move !== null;
+  useEffect(() => {
+    // Body-free: the branch names are the person's data and stay out of the diagnostic.
+    if (blocked)
+      reportClientDiagnostic("[keiko] coding workbench start blocked: task-branch-moved");
+  }, [blocked]);
+  if (move === null) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.composer.taskBranchMoved", { ...move })}
+    </output>
+  );
+}
+
 function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (!visible) return null;
@@ -1620,9 +1669,17 @@ function workbenchStartBlocker(
   showSetup: boolean,
   authorityError: string | null,
   locationState: WorkbenchExecutionLocationState,
+  taskBranchMove: TaskBranchMove | null,
 ): string | null {
-  if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
-  return t(locationBlockerKey(locationState));
+  if (!locationState.ready) return t(locationBlockerKey(locationState));
+  if (taskBranchMove !== null)
+    return t("codingWorkbench.composer.taskBranchMoved", { ...taskBranchMove });
+  return startBlockedReason(state, t, showSetup, authorityError);
+}
+
+// The repository catalog reloads when the selected folder's workspace is found lost or back (#4491).
+function catalogRefreshKeyOf(locationState: WorkbenchExecutionLocationState): string {
+  return locationState.unbound ? "unbound" : "bound";
 }
 
 function locationMutationPending(
@@ -1636,8 +1693,9 @@ function locationMutationPending(
 function canStartAtLocation(
   state: CodingWorkbenchRuntimeState,
   locationState: WorkbenchExecutionLocationState,
+  taskBranchMove: TaskBranchMove | null,
 ): boolean {
-  return state.canStart && locationState.ready;
+  return state.canStart && locationState.ready && taskBranchMove === null;
 }
 
 function WorkbenchColumns({
@@ -1664,8 +1722,9 @@ function WorkbenchColumns({
   onSelectLocation,
   runWorkspace,
   repositoryRoot,
-  runIsActive,
+  taskBranchMove,
 }: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+  const runIsActive = runIsActiveFrom(state);
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const connectors = useCodingWorkbenchConnectors();
@@ -1682,6 +1741,7 @@ function WorkbenchColumns({
     showSetup,
     authority.errorMessage,
     locationState,
+    taskBranchMove,
   );
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -1744,16 +1804,7 @@ function WorkbenchColumns({
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
-  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
-  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
-  // worktree may have moved (native edits emit no runtime event of their own, #3897).
-  const journeyChanges = useCodingWorkbenchChanges({
-    root: liveWorkspaceRoot,
-    runId: state.run.value?.runId,
-    changeSignal: changesRefreshSignal(state.events, activity.feed),
-    bindingPending: workspaceBindingPending,
-    submittedRoot: runBoundRoot,
-  });
+  const changesSignal = changesRefreshSignal(state.events, activity.feed);
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
   // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.
@@ -1761,7 +1812,18 @@ function WorkbenchColumns({
     runId: state.run.value?.runId,
     live: REVERT_READ_STATES.has(state.run.value?.state ?? ""),
     revision: state.run.value?.revision,
-    changeSignal: changesRefreshSignal(state.events, activity.feed),
+    changeSignal: changesSignal,
+  });
+  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
+  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
+  // worktree may have moved (native edits emit no runtime event of their own, #3897), and when an undo or
+  // restore puts files back.
+  const journeyChanges = useCodingWorkbenchChanges({
+    root: liveWorkspaceRoot,
+    runId: state.run.value?.runId,
+    changeSignal: changesSignalWithUndo(changesSignal, revert.revert?.staged),
+    bindingPending: workspaceBindingPending,
+    submittedRoot: runBoundRoot,
   });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
@@ -1800,7 +1862,7 @@ function WorkbenchColumns({
       runId={runId}
       continuesConversation={history.conversationId !== undefined || history.fork !== null}
       deliveryNotice={promptDelivery.notice}
-      canStart={canStartAtLocation(state, locationState)}
+      canStart={canStartAtLocation(state, locationState, taskBranchMove)}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
@@ -1854,6 +1916,7 @@ function WorkbenchColumns({
       offeredLocations={offeredExecutionLocations(state)}
       onSelectLocation={onSelectLocation}
       onOpenGit={onOpenGit}
+      catalogRefreshKey={catalogRefreshKeyOf(locationState)}
     />
   );
   // #3873: a run restored after a reload keeps its settlement and its captured conversation.
@@ -1878,6 +1941,7 @@ function WorkbenchColumns({
               onSelectLocation={onSelectLocation}
               onOpenGit={onOpenGit}
               placement="setup"
+              catalogRefreshKey={catalogRefreshKeyOf(locationState)}
             />
           )}
           selectedRoot={repositoryRoot ?? undefined}
@@ -1943,7 +2007,7 @@ function WorkbenchColumns({
               key={pendingPermissionKey(state)}
               state={state}
               research={research}
-              onDecision={onDecision}
+              onDecision={followAfter(joinedFollow.jump, onDecision)}
             />
             <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
             <CodingWorkbenchDraftDelivery
@@ -1976,8 +2040,8 @@ function WorkbenchColumns({
             />
             <ChangesetReviewPanel
               review={editorBridge.pendingReview}
-              onApprove={editorBridge.approve}
-              onDeny={editorBridge.deny}
+              onApprove={followAfter(joinedFollow.jump, editorBridge.approve)}
+              onDeny={followAfter(joinedFollow.jump, editorBridge.deny)}
               onRetry={editorBridge.retry}
             />
             <RecoveryPanel
@@ -2012,7 +2076,8 @@ function WorkbenchColumns({
                 questions={questions}
                 focusRef={focusRef}
                 onRunCheck={
-                  canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
+                  canStartAtLocation(state, locationState, taskBranchMove) &&
+                  state.mutation.status !== "pending"
                     ? (): void => {
                         taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
                       }
@@ -2054,6 +2119,7 @@ function WorkbenchColumns({
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <TaskBranchMovedNotice move={taskBranchMove} />
         <DeploymentCeilingNotice state={state} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <div className={styles.cmpRunActions}>
@@ -2487,6 +2553,22 @@ function unboundNoteKey(
 
 function pendingPermissionKey(state: CodingWorkbenchRuntimeState): string {
   return state.run.value?.pendingPermission?.requestId ?? "no-permission";
+}
+
+/**
+ * A decision card sits above the live timeline, so reading it (or "Review now") scrolls the stream up
+ * and stops following. Deciding it hands the stream and any windowed timeline list inside it back to
+ * the newest activity, where the run goes on; otherwise the result lands out of view behind "Jump to
+ * latest" (#4491).
+ */
+function followAfter<A extends readonly unknown[]>(
+  follow: () => void,
+  decide: (...args: A) => void,
+): (...args: A) => void {
+  return (...args: A): void => {
+    follow();
+    decide(...args);
+  };
 }
 
 function PermissionPrompt({

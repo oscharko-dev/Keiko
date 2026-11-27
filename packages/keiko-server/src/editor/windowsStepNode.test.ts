@@ -88,7 +88,7 @@ function resolve(
     activityLog: createActivityLogSink(stateRoot),
     correlationId: "step-node-proof",
     runtime: () => runtime,
-    driveHost: { define: () => true, remove: () => true },
+    driveHost: { define: () => "defined", remove: () => true },
     stepNodePin: pin,
   });
 }

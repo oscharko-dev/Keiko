@@ -35,6 +35,7 @@ const PORTABLE_LAUNCH_FAILED_OPERATION = defineActivityLogOperation({
         "missing-child-pid",
         "pid-publication",
         "state-dir",
+        "state-dir-in-start-folder",
         "spawn-refused",
         "health-timeout",
         "process-exited",
@@ -75,7 +76,7 @@ function errorKindFor(reason: LaunchFailureReason): ActivityLogErrorKind {
   if (reason === "port-in-use" || reason === "setup-busy" || reason === "identity-mismatch") {
     return "conflict";
   }
-  if (reason === "state-dir") return "permission-denied";
+  if (reason === "state-dir" || reason === "state-dir-in-start-folder") return "permission-denied";
   return "unavailable";
 }
 

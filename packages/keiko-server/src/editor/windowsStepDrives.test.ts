@@ -13,7 +13,9 @@ import {
 import {
   defineWindowsStepDrives,
   mapWindowsStepDrives,
+  substDriveHost,
   unmapWindowsStepDrives,
+  type WindowsDriveDefinition,
   type WindowsDriveHost,
   type WindowsStepDriveScope,
 } from "./windowsStepDrives.js";
@@ -28,31 +30,45 @@ afterEach(() => {
 
 interface FakeHost extends WindowsDriveHost {
   readonly defined: Map<string, string>;
+  readonly stranded: Set<string>;
 }
 
 /**
- * Windows refuses letters in `taken` (they name a drive) and in `refuse`; `throwAt` makes the
+ * Windows refuses letters in `taken` (they name a drive) and in `refuse`; a letter in `strand` is
+ * defined but left invisible and unremoved; `keep` letters refuse every removal; `throwAt` makes the
  * n-th definition throw, as a host without subst.exe would.
  */
 function fakeHost(
-  options: { taken?: string[]; refuse?: string[]; keep?: string[]; throwAt?: number } = {},
+  options: {
+    taken?: string[];
+    refuse?: string[];
+    strand?: string[];
+    keep?: string[];
+    throwAt?: number;
+  } = {},
 ): FakeHost {
   const defined = new Map<string, string>();
+  const stranded = new Set<string>();
   let calls = 0;
   return {
     defined,
-    define: (drive, root): boolean => {
+    stranded,
+    define: (drive, root): WindowsDriveDefinition => {
       calls++;
       if (options.throwAt === calls) throw new Error("subst.exe is not in System32");
       if (options.taken?.includes(drive) === true || options.refuse?.includes(drive) === true) {
-        return false;
+        return "refused";
+      }
+      if (options.strand?.includes(drive) === true) {
+        stranded.add(drive);
+        return "stranded";
       }
       defined.set(drive, root);
-      return true;
+      return "defined";
     },
     remove: (drive): boolean => {
       if (options.keep?.includes(drive) === true) return false;
-      return defined.delete(drive);
+      return stranded.delete(drive) || defined.delete(drive);
     },
   };
 }
@@ -171,7 +187,7 @@ describe("mapWindowsStepDrives (#4496)", () => {
 
   it("never throws from the release, also when the host itself throws", () => {
     const steps = scope({
-      define: () => true,
+      define: (): WindowsDriveDefinition => "defined",
       remove: () => {
         throw new Error("subst.exe is not in System32");
       },
@@ -194,5 +210,87 @@ describe("mapWindowsStepDrives (#4496)", () => {
       driveCount: 2,
       refusedCount: 1,
     });
+  });
+
+  it("releases a stranded letter right away and moves on to the next one (#4568 review)", () => {
+    const host = fakeHost({ strand: ["Z:"] });
+    const steps = scope(host);
+    expect(mapWindowsStepDrives([WORK], steps)).toEqual([{ root: WORK, drive: "Y:" }]);
+    expect(host.stranded.size).toBe(0);
+    expect(recorded(steps.stateRoot)).toMatchObject([
+      { outcome: "mapped", driveCount: 1, refusedCount: 0 },
+      { outcome: "released", driveCount: 1, refusedCount: 0 },
+    ]);
+  });
+
+  it("releases a stranded letter also when the host throws on a later letter", () => {
+    const host = fakeHost({ strand: ["Z:"], throwAt: 2 });
+    const steps = scope(host);
+    expect(() => mapWindowsStepDrives([WORK], steps)).toThrow(CommandDeniedError);
+    expect(host.stranded.size).toBe(0);
+    expect(recorded(steps.stateRoot)).toMatchObject([
+      { outcome: "released", driveCount: 1, refusedCount: 0 },
+    ]);
+  });
+
+  it("records a stranded letter Windows still keeps as a failed release, never as a refusal", () => {
+    const host = fakeHost({ strand: ["Z:"], keep: ["Z:"] });
+    const steps = scope(host);
+    expect(mapWindowsStepDrives([WORK], steps)).toEqual([{ root: WORK, drive: "Y:" }]);
+    expect(host.stranded).toEqual(new Set(["Z:"]));
+    expect(recorded(steps.stateRoot)).toMatchObject([
+      { outcome: "mapped", driveCount: 1, refusedCount: 0 },
+      { outcome: "release-failed", driveCount: 1, refusedCount: 1 },
+    ]);
+  });
+});
+
+describe("substDriveHost (#4496)", () => {
+  function runner(results: Record<string, boolean>): {
+    readonly calls: string[];
+    readonly run: (args: readonly string[]) => boolean;
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      run: (args): boolean => {
+        const call = args.join(" ");
+        calls.push(call);
+        return results[call] ?? false;
+      },
+    };
+  }
+
+  it("keeps a letter subst defined and Windows shows", () => {
+    const subst = runner({ "K: D:\\work": true });
+    expect(substDriveHost(subst.run, () => true).define("K:", "D:\\work")).toBe("defined");
+    expect(subst.calls).toEqual(["K: D:\\work"]);
+  });
+
+  it("removes a letter subst defined but Windows does not show, so no mapping is left behind", () => {
+    const subst = runner({ "K: D:\\work": true, "K: /D": true });
+    expect(substDriveHost(subst.run, () => false).define("K:", "D:\\work")).toBe("refused");
+    expect(subst.calls).toEqual(["K: D:\\work", "K: /D"]);
+  });
+
+  it("names a letter stranded when subst /D fails after an invisible definition", () => {
+    const subst = runner({ "K: D:\\work": true, "K: /D": false });
+    expect(substDriveHost(subst.run, () => false).define("K:", "D:\\work")).toBe("stranded");
+    expect(subst.calls).toEqual(["K: D:\\work", "K: /D"]);
+  });
+
+  it("removes nothing when subst refused the letter", () => {
+    const subst = runner({});
+    const visible = (): boolean => {
+      throw new Error("a refused letter is never probed");
+    };
+    expect(substDriveHost(subst.run, visible).define("K:", "D:\\work")).toBe("refused");
+    expect(subst.calls).toEqual(["K: D:\\work"]);
+  });
+
+  it("removes a letter through subst /D", () => {
+    const subst = runner({ "K: /D": true });
+    expect(substDriveHost(subst.run, () => true).remove("K:")).toBe(true);
+    expect(subst.calls).toEqual(["K: /D"]);
   });
 });

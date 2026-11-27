@@ -22,7 +22,11 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
-import { CONVERSATION_REMEMBER_REFUSED_NOTICE } from "./conversation-prompt.js";
+import {
+  CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE,
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
+} from "./conversation-prompt.js";
 import type { RouteContext } from "./routes.js";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -149,29 +153,45 @@ function runtimeDeps(
   };
 }
 
-function memoryRoute(root: string, chatId: string, content: string): RouteContext {
+function memoryRoute(
+  root: string,
+  chatId: string,
+  content: string,
+  memory: "on" | "off" | "absent" = "on",
+): RouteContext {
   return {
     correlationId: "public-memory-zero-sent-source",
     req: mockRequest({
       body: JSON.stringify({
         chatId,
         content,
-        memory: {
-          enabled: true,
-          budgetTokens: 1200,
-          mode: "governed-assist",
-          context: {
-            userId: "local-operator",
-            workspaceId: root,
-            projectId: root,
-            conversationId: chatId,
-          },
-        },
+        ...memoryRouteField(root, chatId, memory),
       }),
     }),
     res: mockResponse().res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
+  };
+}
+
+function memoryRouteField(
+  root: string,
+  chatId: string,
+  memory: "on" | "off" | "absent",
+): Record<string, unknown> {
+  if (memory === "absent") return {};
+  return {
+    memory: {
+      enabled: memory === "on",
+      budgetTokens: 1200,
+      mode: "governed-assist",
+      context: {
+        userId: "local-operator",
+        workspaceId: root,
+        projectId: root,
+        conversationId: chatId,
+      },
+    },
   };
 }
 
@@ -273,6 +293,41 @@ it("forwards actual governed memory authority through the public plural handler 
     expect(JSON.parse(deps.evidenceStore.get(runId) ?? "null")).not.toHaveProperty(
       "connectedContext",
     );
+});
+
+it("tells a grounded answer that a remember request was not stored while memory is off", async () => {
+  const sentFor = async (content: string, memory: "on" | "off" | "absent"): Promise<string> => {
+    const calls: GatewayCallRequest[] = [];
+    const { deps, root, chatId } = fixture(calls);
+    const result = await handleGroundedAsk(memoryRoute(root, chatId, content, memory), deps);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return calls
+      .flatMap((request) => request.messages.map((message) => message.content))
+      .join("\n");
+  };
+  const remember = "Merke dir: Ich bevorzuge kurze Antworten.";
+  expect(await sentFor(remember, "absent")).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+  expect(await sentFor(remember, "off")).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+  expect(await sentFor(remember, "on")).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+  expect(await sentFor("Which package manager should I use for installs?", "absent")).not.toContain(
+    CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  );
+});
+
+// PR #4568 review: memory switched on without a vault stores nothing either, and switching it on
+// would not help, so the answer learns that without being told to ask for the switch.
+it("tells a grounded answer with memory on but no vault that nothing was stored, without the switch", async () => {
+  const calls: GatewayCallRequest[] = [];
+  const { deps, root, chatId } = fixture(calls);
+  const remember = "Merke dir: Ich bevorzuge kurze Antworten.";
+  const result = await handleGroundedAsk(memoryRoute(root, chatId, remember, "on"), {
+    ...deps,
+    memoryVault: undefined,
+  });
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const sent = calls.flatMap((request) => request.messages.map((message) => message.content));
+  expect(sent.join("\n")).toContain(CONVERSATION_REMEMBER_MEMORY_UNAVAILABLE_NOTICE);
+  expect(sent.join("\n")).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
 });
 
 it("tells a grounded answer that a refused remember request was not stored (#4213)", async () => {

@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
+  CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -568,6 +569,165 @@ describe("CodingWorkbenchTimeline", () => {
     expect(done[0]?.open).toBe(false);
     // A carried-out step says no more than its badge.
     expect(done[0]).not.toHaveTextContent("Keiko carried out this step.");
+  });
+
+  // Seen in the 1.5.9 release walk (#4491): in Full access the governed commit first answers
+  // "approval required" with a proposal and a later step carries it out under the task's authority.
+  // The proposal's row read "Waiting for approval" for good, beside the commit that happened.
+  it("shows a Git proposal a later step took up as prepared, not as waiting for approval", () => {
+    const feed = feedWithRepeatedTools();
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const carriedOut = {
+      callId: "git-commit-execute",
+      tool: "keiko_git_execute",
+      state: "succeeded",
+      occurredAt: "2026-08-23T09:52:09.000Z",
+      presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [
+            {
+              turnId: "turn-commit",
+              messages: [],
+              tools: [proposal, carriedOut],
+              truncated: false,
+            },
+          ],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+    const prepared = container.querySelector<HTMLDetailsElement>('[data-tool-state="prepared"]');
+    expect(prepared?.open).toBe(false);
+    expect(prepared).toHaveTextContent("Prepared");
+    expect(prepared).toHaveTextContent("Prepared here; a later step took it up.");
+    expect(prepared).not.toHaveTextContent("Succeeded");
+  });
+
+  // Audit of 72be7da6f: only a completed execute takes a proposal up. A proposal still waiting while
+  // the run reads on, or one whose execute was refused or failed, keeps saying so.
+  it.each([
+    ["the proposal is the last step", []],
+    [
+      "an unrelated step follows",
+      [{ callId: "read-after", tool: "read", state: "succeeded", occurredAt: AT }],
+    ],
+    [
+      "its execute was refused",
+      [
+        {
+          callId: "git-execute-refused",
+          tool: "keiko_git_execute",
+          state: "succeeded",
+          occurredAt: AT,
+          presentation: { gitOutcome: "not-done", bridgeDurationMs: 9 },
+        },
+      ],
+    ],
+    [
+      "its execute failed",
+      [
+        {
+          callId: "git-execute-failed",
+          tool: "keiko_git_execute",
+          state: "failed",
+          occurredAt: AT,
+          failureOrigin: "tool-error",
+        },
+      ],
+    ],
+  ] as const)("keeps a Git proposal waiting for approval when %s", (_case, later) => {
+    const feed = feedWithRepeatedTools();
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [
+            { turnId: "turn-commit", messages: [], tools: [proposal, ...later], truncated: false },
+          ],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).not.toBeNull();
+  });
+
+  // CodeRabbit on #4568: several proposals can stay open and the facade lets any be redeemed. The
+  // row carries no proposal id, so one completed execute must not mark a guessed proposal prepared.
+  it("keeps several open Git proposals waiting until as many executes completed", () => {
+    const feed = feedWithRepeatedTools();
+    const waiting = (callId: string, tool: string): CodingSafeActivityTool => ({
+      callId,
+      tool,
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    });
+    const execute = (callId: string): CodingSafeActivityTool => ({
+      callId,
+      tool: "keiko_git_execute",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+    });
+    const renderTools = (tools: readonly CodingSafeActivityTool[]): HTMLElement =>
+      render(
+        <Timeline
+          active={false}
+          events={[]}
+          activity={activityLike({
+            ...feed,
+            turns: [
+              {
+                turnId: "turn-open",
+                messages: [],
+                tools: [...tools],
+                truncated: false,
+              },
+            ],
+          })}
+          questions={IDLE_QUESTIONS}
+        />,
+      ).container;
+    const proposals = [
+      waiting("commit-proposal", "keiko_git_commit"),
+      waiting("stage-proposal", "keiko_git_stage"),
+    ];
+
+    const oneRedeemed = renderTools([...proposals, execute("exec-1")]);
+    expect(oneRedeemed.querySelectorAll('[data-tool-state="waiting-for-approval"]')).toHaveLength(
+      2,
+    );
+    expect(oneRedeemed.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    oneRedeemed.remove();
+
+    const bothRedeemed = renderTools([...proposals, execute("exec-1"), execute("exec-2")]);
+    expect(bothRedeemed.querySelectorAll('[data-tool-state="prepared"]')).toHaveLength(2);
+    expect(bothRedeemed.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
   });
 
   // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
@@ -2779,7 +2939,7 @@ describe("CodingWorkbenchTimeline render cost", () => {
     cleanup();
   });
 
-  function failedTools(count: number, onRead: () => void): readonly Record<string, unknown>[] {
+  function failedTools(count: number, onRead: () => void): readonly CodingSafeActivityTool[] {
     return Array.from({ length: count }, (_, index) => ({
       callId: `call-${String(index)}`,
       tool: "edit",
@@ -2794,7 +2954,7 @@ describe("CodingWorkbenchTimeline render cost", () => {
     }));
   }
 
-  function feedOf(tools: readonly Record<string, unknown>[]): AvailableCodingSafeActivityFeed {
+  function feedOf(tools: readonly CodingSafeActivityTool[]): AvailableCodingSafeActivityFeed {
     return {
       ...bareFeed(),
       turns: [

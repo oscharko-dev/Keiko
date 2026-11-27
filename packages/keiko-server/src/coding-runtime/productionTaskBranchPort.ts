@@ -16,12 +16,16 @@ import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js
  *     which is what the workspace authority and the verified-commit context read;
  *  3. the Local checkout's workspace instance takes the branch as its task branch and keeps the
  *     old one as its base branch.
+ *
+ * After those, the run's Coding History task follows the branch, so its next message is admitted on
+ * the branch the workspace now stands on (#4491). That step never refuses and needs no undo.
  */
 export interface ProductionTaskBranchBinding {
   readonly workspaceId: string;
   readonly lifecycle: Pick<WorkspaceLifecycleService, "admitTaskBranch" | "adoptTaskBranch">;
   readonly branches: Pick<GovernedTaskBranches, "record" | "clear">;
   readonly authority: Pick<CodingRuntimeAuthorityService, "rebindGitDeliveryBranch">;
+  readonly followHistory?: (runId: string, branch: string) => void;
 }
 
 export function createProductionTaskBranchPort(
@@ -55,6 +59,7 @@ export function createProductionTaskBranchPort(
         undoAuthority();
         throw error;
       }
+      binding.followHistory?.(adoption.runId, adoption.branch);
       return true;
     },
   };

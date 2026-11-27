@@ -129,11 +129,19 @@ export interface WorkbenchExecutionLocationState {
    * explanation; absent for every other failure, which keeps the generic sentence (#4404).
    */
   readonly reason?: LocationFailureReason;
+  /**
+   * The selected folder has no workspace connection (a repository cloned again at the same path):
+   * the repository catalog reads again whenever this flips, so its notice follows (#4491).
+   */
+  readonly unbound: boolean;
   readonly retry: () => void;
 }
 
-/** A failed checkout whose closed server code tells the person what to do. */
-export type LocationFailureReason = "unregistered" | "git-unreadable";
+/**
+ * A failed checkout whose cause tells the person what to do: a closed server code, or a folder that
+ * still has no workspace after the bind (a repository cloned again at the same path).
+ */
+export type LocationFailureReason = "unregistered" | "git-unreadable" | "unbound";
 
 const LOCATION_FAILURE_REASONS: Readonly<Record<string, LocationFailureReason>> = {
   // The folder is no longer among the registered folders under its real path.
@@ -398,12 +406,19 @@ function bindingError(
   );
 }
 
-/** The named cause of THIS selection's failed attempt; a reason of an earlier selection is not. */
+/**
+ * The named cause of THIS selection's failed attempt; a reason of an earlier selection is not. The
+ * server's own code comes first; a folder still without a workspace is the cause otherwise, never a
+ * guessed branch problem (#4491).
+ */
 function failureReason(
   attempt: BindingAttemptState,
   key: string,
+  error: boolean,
+  unbound: boolean,
 ): { readonly reason?: LocationFailureReason } {
-  const reason = attempt.errorKey === key ? attempt.errorReason : undefined;
+  const named = attempt.errorKey === key ? attempt.errorReason : undefined;
+  const reason = named ?? (error && unbound ? "unbound" : undefined);
   return reason === undefined ? {} : { reason };
 }
 
@@ -497,7 +512,8 @@ export function useWorkbenchExecutionLocation(
     pending,
     error,
     denied: bindingDenied(error, input),
-    ...failureReason(attempt, key),
+    ...failureReason(attempt, key, error, unbound),
+    unbound,
     retry: attempt.retry,
   };
 }

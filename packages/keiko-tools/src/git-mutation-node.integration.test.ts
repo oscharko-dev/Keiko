@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdtempSync,
@@ -562,13 +563,12 @@ describe("node git mutation adapter — global identity and signing policy", () 
 
 // ─── Exact staging follows Git's EFFECTIVE line-ending configuration ─────────────────────────────
 //
-// Exact staging hashes the worktree bytes with `--no-filters`, so it is only equivalent to Git's own
-// staging while no line-ending conversion is in effect. Git resolves `core.autocrlf` /
-// `core.safecrlf` like every single-valued key: the most specific scope that sets it wins. Git for
-// Windows installs `core.autocrlf=true` in its SYSTEM scope by default, so a check that refuses on
-// ANY scope's `true` refused every repository on a stock Windows host — including one that opts
-// out locally, the documented override. The repository-local `false` must win, and an effective
-// conversion must still be refused.
+// Git resolves `core.autocrlf` / `core.safecrlf` like every single-valued key: the most specific
+// scope that sets it wins. Git for Windows installs `core.autocrlf=true` in its SYSTEM scope by
+// default, so a check that refuses on ANY scope's `true` refused every repository on a stock Windows
+// host. The effective value decides: with no conversion the verified bytes are staged as they are;
+// under a conversion a file is admitted only when Git's built-in conversion of it checks the verified
+// bytes out again exactly (#4491), and every other file is still refused.
 describe("node git mutation adapter — stage normalization follows the effective Git configuration", () => {
   let normalizationHome: string;
 
@@ -604,18 +604,130 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(await stageSupported()).toBe(true);
   });
 
-  it("refuses exact staging when an outer autocrlf is not overridden", async () => {
+  it("admits a file Git stores unchanged under an outer autocrlf that is not overridden", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+
+    expect(await stageSupported()).toBe(true);
+  });
+
+  it("admits a file whose every line break is CRLF under an outer autocrlf", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+    writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
+
+    expect(await stageSupported()).toBe(true);
+  });
+
+  it("refuses a file with mixed line breaks under an outer autocrlf", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+    writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
 
     expect(await stageSupported()).toBe(false);
   });
 
-  it("refuses exact staging when the repository-local scope enables a conversion", async () => {
+  // Audit of #4491: Git keeps the bytes of a path whose index entry already stores a CR, so a mixed
+  // file over a CRLF index entry is admitted, while the same file over an LF entry is refused above.
+  it("admits a mixed file whose index entry already stores CRLF under an outer autocrlf", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+    writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
+    git(["-c", "core.autocrlf=false", "add", "a.txt"]);
+    writeFileSync(join(root, "a.txt"), "hello\r\nworld\n", "utf8");
+
+    expect(await stageSupported()).toBe(true);
+  });
+
+  // Git still honours the legacy `crlf` attribute (`crlf=input` acts as `eol=lf`): a raw stage of a
+  // CRLF file there would differ from what Git checks against, so it is refused like `text`/`eol`.
+  it("refuses exact staging when the legacy crlf attribute asks for a conversion", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
+    writeFileSync(join(root, ".gitattributes"), "*.txt crlf=input\n", "utf8");
+    writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  it("refuses a CRLF file when the repository-local scope enables autocrlf=input", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
     git(["config", "core.autocrlf", "input"]);
     git(["config", "core.safecrlf", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
     expect(await stageSupported()).toBe(false);
+  });
+
+  // PR #4568 review: a configured value may hold a newline. Read as lines, the continuation of a
+  // filter command would pose as a later `core.autocrlf` and override the effective one.
+  it("never reads a newline inside a configured value as another key", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = input\n\tsafecrlf = false\n");
+    appendFileSync(
+      join(root, ".git", "config"),
+      '[filter "lab"]\n\tclean = "cat\\ncore.autocrlf false"\n',
+      "utf8",
+    );
+    expect(git(["config", "--get", "filter.lab.clean"])).toContain("\ncore.autocrlf false");
+    writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  // PR #4568 audit: a configured filter driver whose name cannot be overridden on the command line
+  // refuses the stage as unsupported instead of failing the proposal with an unhandled error.
+  it("refuses, without throwing, a conversion while a filter driver name cannot be neutralized", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+    appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
+    writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
+
+    await expect(stageSupported()).resolves.toBe(false);
+  });
+
+  it("refuses exact staging while core.safecrlf resolves to anything but false", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = warn\n");
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  // Review finding on PR #4568: the mode a verified staging hashed under is read once, so a change
+  // to `core.autocrlf` while it runs would have left the converted blob in an index promoted under
+  // the other mode. The check before promotion rereads it and refuses.
+  it("refuses a verified staging whose core.autocrlf changes while it runs, leaving the index alone", async () => {
+    git(["config", "core.autocrlf", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-qm", "base"]);
+    git(["branch", "base"]);
+    git(["checkout", "-qb", "work"]);
+    git(["config", "core.autocrlf", "true"]);
+    writeFileSync(join(root, "b.txt"), "one\r\ntwo\r\n", "utf8");
+    const headSha = git(["rev-parse", "HEAD"]).trim();
+    const verified: GitVerifiedCommitPrecondition = {
+      headSha,
+      stagedTreeDigest: await readGitIndexTreeDigest({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+      }),
+      branchName: "work",
+      baseRef: "base",
+      baseSha: headSha,
+    };
+    const index = git(["ls-files", "--stage"]);
+    let flipped = false;
+    const racing = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      beforeIndexUpdate: () => {
+        if (!flipped) {
+          flipped = true;
+          git(["config", "core.autocrlf", "false"]);
+        }
+        return true;
+      },
+    });
+
+    const staged = await racing.stage({ pathspecs: ["b.txt"], verified });
+
+    expect(flipped).toBe(true);
+    expect(staged.outcome).toBe("failed");
+    expect(git(["ls-files", "--stage"])).toBe(index);
   });
 
   it("refuses exact staging when a key is set without a value, which Git reads as true", async () => {

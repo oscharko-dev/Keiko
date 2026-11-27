@@ -36,9 +36,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function loadMemoryAutonomyMode(
+  signal?: AbortSignal,
   fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
 ): Promise<MemoryAutonomyPolicyWire> {
-  return fetchImpl("/api/memory/autonomy-policy");
+  return signal === undefined
+    ? fetchImpl("/api/memory/autonomy-policy")
+    : fetchImpl("/api/memory/autonomy-policy", { signal });
 }
 
 export async function persistMemoryAutonomyMode(

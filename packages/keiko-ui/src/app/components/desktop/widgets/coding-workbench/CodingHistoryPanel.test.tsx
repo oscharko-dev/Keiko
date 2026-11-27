@@ -200,6 +200,15 @@ describe("history panel messages, focus and dates", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("could not be renamed");
   });
 
+  it("moves focus into the selected title field when Rename opens it (#4491)", async () => {
+    render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+    const input = screen.getByRole("textbox", { name: "Task title" });
+    await waitFor(() => expect(input).toHaveFocus());
+    expect((input as HTMLInputElement).selectionStart).toBe(0);
+    expect((input as HTMLInputElement).selectionEnd).toBe(task.title.length);
+  });
+
   it("returns focus to the Rename button after Save and after Cancel", async () => {
     render(<CodingHistoryPanel onOpen={vi.fn()} onNew={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Rename" }));

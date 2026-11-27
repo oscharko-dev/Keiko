@@ -471,7 +471,12 @@ branch and keeps the old one as its base (`adoptTaskBranch`; a re-selection of t
 that base). `trustedBranchMatches` accepts the live instance only through that record, for that run,
 that workspace and that base, and from then on never again through the envelope's own branch;
 `resolveVerifiedCommitContext` reads both refs from the record, the one seam commit, push, pull
-request and CI share. If the run cannot adopt the branch, the checkout is switched back to the base
+request and CI share. Once all three moved, the run's Coding History task takes the branch too
+(`followTaskBranch`, logged as `coding-runtime.history` `updated` with `branchChanged`, never the
+name): a task's next message is admitted only on the branch its record names, so a record left on
+the base refused every follow-up of a run that made its own task branch (#4491). That step cannot
+refuse and needs no undo; the Workbench reads the workspace again when the run settles, so the
+branch control names the new branch. If the run cannot adopt the branch, the checkout is switched back to the base
 branch and the result is `rebind-failed`; when the kernel cannot switch it back, the result is
 `recovery-required` (`execution-uncertain`), never a restored checkout, whether the adoption was
 refused or threw and whether the switch back failed or threw; an adoption that threw stays the
@@ -2314,7 +2319,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   checks them, together with the branch, inside the same index transaction as staging and again
   just before the reviewed index replaces the live one, with the run's authority at the swap; a
   change that lands after the review or an approval is never accepted as the effect's new snapshot
-  (PR #4064 review). It is an option of the stage tool rather than a tool of its own, so the
+  (PR #4064 review). Staging writes objects from the verified bytes and never runs a filter
+  driver; the effective `core.safecrlf` must be `false` and the paths may carry no `text`, `eol`,
+  `crlf`, `filter`, `ident` or `working-tree-encoding` attribute. Under the effective
+  `core.autocrlf` `false` the verified bytes are staged as they are. Under `true` or `input` the
+  staged object is the one Git's own `git add` stores, admitted only when it checks the verified
+  bytes out again byte for byte: a file Git leaves unchanged, or whose index entry already stores a
+  CR (Git then keeps the new bytes), is staged as its exact bytes; with `true`, a text file whose
+  every line break is CRLF and that holds no other CR is staged as its LF form. Everything else
+  (mixed line breaks over an index entry without CR, CRLF under `input`, a conversion over a binary
+  index entry) stays `unsupported-transformation`. Git for Windows sets `core.autocrlf=true`
+  system-wide, so before this every governed commit in an ordinary Windows checkout was refused
+  (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
+  neutralization; an unreadable configuration refuses), and the check before the index is promoted
+  re-reads the effective line-ending mode and refuses when it differs from the one the objects
+  were hashed under (PR #4568 review). It is an option of the stage tool rather than a tool of its own, so the
   catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
   a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely

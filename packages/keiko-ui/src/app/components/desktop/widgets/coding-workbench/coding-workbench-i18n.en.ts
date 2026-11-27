@@ -349,6 +349,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.starting": "Starting…",
   "codingWorkbench.task.start": "Start coding run",
   "codingWorkbench.composer.pause": "Pause run",
+  "codingWorkbench.composer.taskBranchMoved":
+    "This task works on the branch {taskBranch}, but the next run would use {nextBranch}. Choose {taskBranch} in the branch control to continue here, or start a new task.",
   "codingWorkbench.composer.resume": "Resume run",
   "codingWorkbench.composer.send": "Send follow-up",
   "codingWorkbench.composer.sendNow": "Send now",
@@ -509,6 +511,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The selected checkout could not be opened. Choose a branch in Git, then try again.",
   "codingWorkbench.repository.locationUnregistered":
     "Keiko no longer finds this folder among the added folders. Add it again, then try again.",
+  "codingWorkbench.repository.locationUnbound":
+    "Reconnect this repository in Git, then choose Retry.",
   "codingWorkbench.repository.locationGitUnreadable":
     "Git could not open this checkout. Check that Git is installed and that you chose the repository's top folder, then try again.",
   "codingWorkbench.repository.search": "Search repositories",
@@ -797,6 +801,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.isolation-unavailable": "Cannot run here",
   "codingWorkbench.activity.toolState.dependencies-unavailable": "Dependencies missing",
   "codingWorkbench.activity.toolState.not-done": "Not done",
+  "codingWorkbench.activity.toolState.prepared": "Prepared",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
@@ -1508,6 +1513,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Verification could not run on this computer: for this run Keiko runs project commands only inside a container runtime (Docker or Podman) or, on Windows, inside its own verified isolation, and neither is available here. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
   "codingWorkbench.activity.verification.dependencies-unavailable":
     "Verification has not run: Keiko could not install the project's dependencies, so no check ran. That is not a failing check. Install the dependencies in the project folder yourself, then verify again.",
+  "codingWorkbench.activity.git.prepared": "Prepared here; a later step took it up.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":

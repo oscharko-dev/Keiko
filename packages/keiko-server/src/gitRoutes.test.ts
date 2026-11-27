@@ -134,7 +134,7 @@ afterEach(async () => {
 describe("GET /api/git/status", () => {
   it("returns a clean branch status", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 
@@ -156,7 +156,7 @@ describe("GET /api/git/status", () => {
 
   it("strips an ahead/behind tracking-info suffix from the branch name", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main...origin/main [ahead 2, behind 1]\0"));
 
@@ -177,7 +177,7 @@ describe("GET /api/git/status", () => {
   it("parses a branch header with a long whitespace run and no tracking bracket in bounded time", async () => {
     const adversarialBranch = `x${" ".repeat(20_000)}`;
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok(`## ${adversarialBranch}\0`));
 
@@ -195,7 +195,7 @@ describe("GET /api/git/status", () => {
 
   it("parses staged, unstaged, untracked, branch, and detached porcelain states", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(
         ok("## HEAD (no branch)\0M  src/staged.ts\0 M src/dirty.ts\0?? src/new.ts\0"),
@@ -229,7 +229,7 @@ describe("GET /api/git/status", () => {
     await mkdir(selectedRoot);
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       // rev-parse --show-toplevel --show-prefix: git reports the prefix with a trailing slash.
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
@@ -286,7 +286,7 @@ describe("GET /api/git/status", () => {
 
   it("marks process-truncated status output as truncated even when change count is below cap", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce({
         ...ok("## main\0M  src/app.ts\0"),
@@ -311,7 +311,7 @@ describe("GET /api/git/status", () => {
     // field; failing to skip it used to surface the old path as a phantom change record. T
     // (typechange) is not part of the wire vocabulary and must degrade to M, not to clean.
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(
         ok(
@@ -350,7 +350,7 @@ describe("GET /api/git/status", () => {
     await mkdir(selectedRoot);
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
@@ -400,6 +400,95 @@ describe("GET /api/git/status", () => {
     });
   });
 
+  // PR #4568 review: the Git window binds a generated commit draft to what is staged; the same path
+  // staged again with other content keeps its path and index status, so the status names a digest
+  // of the staged object ids, never their content.
+  it("names a digest of the staged object ids that moves when the same path is staged again", async () => {
+    const read = async (): Promise<Record<string, unknown>> =>
+      (
+        await handleGitStatus(
+          ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+          deps(defaultGitProcessRunner),
+        )
+      ).body as Record<string, unknown>;
+    await runRealGit(["init", "--quiet"]);
+    expect((await read()).stagedDigest).toBeUndefined();
+    await writeFile(join(root, "a.md"), "first");
+    await runRealGit(["add", "a.md"]);
+    const first = await read();
+    expect(first.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(await read()).toMatchObject({ stagedDigest: first.stagedDigest });
+    await writeFile(join(root, "a.md"), "second");
+    await runRealGit(["add", "a.md"]);
+    const second = await read();
+    expect(second).toMatchObject({ stagedCount: 1, changes: first.changes });
+    expect(second.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).not.toBe(first.stagedDigest);
+    expect(JSON.stringify(second)).not.toContain("second");
+  });
+
+  // PR #4568 audit pin: the raw listing names every index entry whatever the person's diff
+  // configuration hides, so a submodule pointer staged again moves the digest even with
+  // diff.ignoreSubmodules=all.
+  it("moves the staged digest for a staged submodule pointer the diff configuration hides", async () => {
+    const read = async (): Promise<Record<string, unknown>> =>
+      (
+        await handleGitStatus(
+          ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+          deps(defaultGitProcessRunner),
+        )
+      ).body as Record<string, unknown>;
+    await runRealGit(["init", "--quiet"]);
+    await runRealGit(["config", "diff.ignoreSubmodules", "all"]);
+    await writeFile(join(root, "a.md"), "first");
+    await runRealGit(["add", "a.md"]);
+    const pointer = (oid: string): Promise<unknown> =>
+      runRealGit(["update-index", "--add", "--cacheinfo", `160000,${oid},vendor`]);
+    await pointer("1".repeat(40));
+    const first = await read();
+    await pointer("2".repeat(40));
+    const second = await read();
+    expect(first.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).not.toBe(first.stagedDigest);
+  });
+
+  // PR #4568 audit: a folder-scoped status shows no staged change outside its folder, yet a commit
+  // takes the whole index, so the digest still names what is staged there.
+  it("names the staged digest of the whole index in a status scoped to a folder", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "inside.md"), "inside");
+    await writeFile(join(root, "outside.md"), "outside");
+    await runRealGit(["add", "outside.md"]);
+    const scoped = (
+      await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(join(root, "sub"))}`),
+        deps(defaultGitProcessRunner),
+      )
+    ).body as Record<string, unknown>;
+    expect(scoped.stagedCount).toBe(0);
+    expect(scoped.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  // PR #4568 review: a `path`-filtered status of the repository root shows no staged change of
+  // another path either, so it names the whole index's digest as well.
+  it("names the staged digest of the whole index in a path-filtered status", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "inside.md"), "inside");
+    await writeFile(join(root, "outside.md"), "outside");
+    await runRealGit(["add", "outside.md"]);
+    const filtered = (
+      await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=sub%2Finside.md`),
+        deps(defaultGitProcessRunner),
+      )
+    ).body as Record<string, unknown>;
+    expect(filtered.stagedCount).toBe(0);
+    expect(filtered.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   it("reports selected ignored roots and derives untracked folders from real Git records", async () => {
     await runRealGit(["init", "--quiet"]);
     await mkdir(join(root, "new"));
@@ -443,7 +532,7 @@ describe("GET /api/git/status", () => {
 
   it("opts into ignored entries without counting ignored-only paths as dirty", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0!! build/cache.bin\0"));
 
@@ -465,7 +554,7 @@ describe("GET /api/git/status", () => {
 
   it("preserves the default status invocation and rejects invalid ignored options", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 
@@ -479,7 +568,7 @@ describe("GET /api/git/status", () => {
 
     const invalid = await handleGitStatus(
       ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=yes`),
-      deps(vi.fn<GitProcessRunner>()),
+      deps(vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")))),
     );
     expect(invalid).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
@@ -490,7 +579,7 @@ describe("GET /api/git/status", () => {
     store.createProject(selectedRoot, "nested fixture");
     const path = "src/:(top)*.ts";
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
@@ -528,7 +617,7 @@ describe("GET /api/git/status", () => {
   it.each(["../secret.ts", "/absolute.ts", "src/../../secret.ts"])(
     "rejects invalid file-scoped status path %s before invoking Git",
     async (path) => {
-      const runner = vi.fn<GitProcessRunner>();
+      const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
 
       const result = await handleGitStatus(
         ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
@@ -677,7 +766,7 @@ describe("GET /api/git/status — byte-cap cut (large untracked tree)", () => {
     activityLog?: ServerLogSink,
   ): Promise<Awaited<ReturnType<typeof handleGitStatus>>> {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(statusRun);
     const base = deps(runner);
@@ -2379,7 +2468,7 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
   it("writes nothing when every git run succeeds", async () => {
     const activity = captureActivityLog();
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(ok("## main\0"));
 

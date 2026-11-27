@@ -221,6 +221,7 @@ export type CodingWorkbenchRuntimeStateAction =
       readonly requestId: string;
     }
   | { readonly kind: "mutation-complete" }
+  | { readonly kind: "session-renewed" }
   | { readonly kind: "mutation-cancelled" }
   | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
@@ -728,6 +729,11 @@ const runtimeActionHandlers = {
     }),
   "mutation-complete": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: IDLE_MUTATION }),
+  // A refusal belongs to the session it was given under; a new session shows the present instead.
+  "session-renewed": (state): CodingWorkbenchRuntimeState =>
+    state.mutation.status === "error"
+      ? projectReadiness({ ...state, mutation: IDLE_MUTATION })
+      : state,
   "mutation-cancelled": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: CANCELLED_MUTATION }),
   "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>

@@ -4729,6 +4729,31 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     expect(outcome).toHaveTextContent("Succeeded");
   });
 
+  it("keeps an unedited generated draft when a stage click is refused", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+        blockReason: "policy-denied",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+    await screen.findByTestId("git-staging-outcome");
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
+  });
+
   it("surfaces a blocked staging outcome without refreshing", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusRich()),
@@ -4790,6 +4815,78 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 
     // The repo-A outcome was invalidated on switch — no banner appears under repo B.
     expect(screen.queryByTestId("git-staging-outcome")).not.toBeInTheDocument();
+  });
+
+  it("keeps repository B's generated draft when repository A's stage settles later", async () => {
+    let resolveStage!: (v: Awaited<ReturnType<GitClientSeam["stage"]>>) => void;
+    const stagePending = new Promise<Awaited<ReturnType<GitClientSeam["stage"]>>>((res) => {
+      resolveStage = res;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(() => stagePending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
+    fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await act(async () => {
+      resolveStage({ schemaVersion: "1", status: "succeeded", actionKind: "stage" });
+    });
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+  });
+
+  it("clears an unedited generated draft when staging succeeds in the active repository", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "stage",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+  });
+
+  it("clears an unedited generated draft when the staging request rejects in the active repository", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => {
+        throw new Error("network timeout after the server changed the index");
+      }),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
   });
 });
 
@@ -5192,6 +5289,59 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
 
     expect(screen.getByRole("dialog", { name: "New branch" })).toBeInTheDocument();
     expect(client.commitPropose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a generated draft when the branch the protected branch asks for is created", async () => {
+    const user = userEvent.setup();
+    let branch = "dev";
+    const stagedChange = change("src/index.ts", { indexStatus: "M", staged: true });
+    const getStatus = vi.fn(async () =>
+      makeStatus({ branch, clean: false, stagedCount: 1, changes: [stagedChange] }),
+    );
+    const listBranches = vi.fn(async () =>
+      makeBranchList({
+        branches: [
+          { name: "dev", headRefHash: "aaa", current: branch === "dev" },
+          ...(branch === "dev"
+            ? []
+            : [{ name: "feature/keep-draft", headRefHash: "aaa", current: true }]),
+        ],
+      }),
+    );
+    const client = makeClient({
+      getStatus,
+      listBranches,
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
+        makeCommitPreview(
+          branch === "dev"
+            ? { policyOutcome: "blocked", policyBlockReason: "protected-branch" }
+            : {},
+        ),
+      ),
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => {
+        branch = "feature/keep-draft";
+        return { schemaVersion: "1", status: "succeeded", actionKind: "branch-switch" };
+      }),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+    await user.click(await screen.findByRole("button", { name: "Create branch first" }));
+    const dialog = screen.getByRole("dialog", { name: "New branch" });
+    await user.type(within(dialog).getByLabelText("Branch name"), "feature/keep-draft");
+    const reads = getStatus.mock.calls.length;
+    await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
+
+    await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(listBranches).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(client.commitPreview).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
   });
 });
 

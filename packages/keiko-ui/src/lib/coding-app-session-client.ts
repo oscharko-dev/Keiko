@@ -381,9 +381,39 @@ function publishSessionRefresh(): void {
   for (const listener of redemptionListeners) listener();
 }
 
-/** Notify readers that the browser session was restored without a page load. */
+// A new session, not a re-inspection of the current one: what this window was refused under the
+// previous session (often a previous Keiko process) no longer describes the present.
+let establishedSessions = 0;
+const establishedListeners = new Set<() => void>();
+
+function publishSessionEstablished(): void {
+  establishedSessions += 1;
+  for (const listener of establishedListeners) listener();
+  publishSessionRefresh();
+}
+
+/** How many new app sessions this window received after boot; a re-inspection is not counted. */
+export function useCodingAppSessionEstablishments(): number {
+  return useSyncExternalStore(
+    (listener): (() => void) => {
+      establishedListeners.add(listener);
+      return (): void => {
+        establishedListeners.delete(listener);
+      };
+    },
+    () => establishedSessions,
+    () => 0,
+  );
+}
+
+/** Notify readers that the browser session changed without a page load; it re-inspects only. */
 export function notifyCodingAppSessionChanged(): void {
   publishSessionRefresh();
+}
+
+/** Notify readers that this window received a NEW app session; a refusal given before it is stale. */
+export function notifyCodingAppSessionEstablished(): void {
+  publishSessionEstablished();
 }
 
 /**
@@ -411,6 +441,6 @@ export async function redeemCodingAppSessionPairingNavigation(
   await bootRedemption;
   if (!(await redeemCodingAppSessionPairingFragment(seams))) return false;
   await ensureLocalCodingAppSession(seams);
-  publishSessionRefresh();
+  publishSessionEstablished();
   return true;
 }

@@ -15,6 +15,7 @@ export const LAUNCH_FAILURE_REASONS = [
   "missing-child-pid",
   "pid-publication",
   "state-dir",
+  "state-dir-in-start-folder",
   "spawn-refused",
   "health-timeout",
   "process-exited",

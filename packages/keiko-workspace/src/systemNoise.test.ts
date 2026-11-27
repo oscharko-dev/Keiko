@@ -8,8 +8,6 @@ describe("Windows system noise (#4437)", () => {
   it.each([
     "$Recycle.Bin",
     "$RECYCLE.BIN",
-    "RECYCLER",
-    "Recycled",
     "System Volume Information",
     "desktop.ini",
     "Desktop.INI",
@@ -19,6 +17,7 @@ describe("Windows system noise (#4437)", () => {
     "NTUSER.DAT",
     "ntuser.dat.LOG1",
     "ntuser.ini",
+    "NTUSER.POL",
     "NTUSER.DAT{53b39e88-18c4-11ea-a811-000d3aa4692b}.TM.blf",
   ])("prunes %s at any depth", (name) => {
     expect(isSystemNoiseEntry(name, ANYWHERE)).toBe(true);
@@ -26,6 +25,8 @@ describe("Windows system noise (#4437)", () => {
   });
 
   it.each([
+    "RECYCLER",
+    "Recycled",
     "Windows",
     "Windows.old",
     "$WINDOWS.~BT",
@@ -65,6 +66,11 @@ describe("Windows system noise (#4437)", () => {
     "System Volume",
     "ntuser",
     "ntuserdat",
+    // A person's own files that only start like a profile file (#4483 audit).
+    "ntuser.notes.md",
+    "NTUSER.txt",
+    "ntuser.database.md",
+    "ntuser.data",
     "",
     ".",
     "..",

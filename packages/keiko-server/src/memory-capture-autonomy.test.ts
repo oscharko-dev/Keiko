@@ -954,6 +954,31 @@ describe("explicit remember statement in chat", () => {
     expect(longMessage).toEqual({ kind: "rejected", reason: "exceeds-length-limit" });
   });
 
+  // 1.5.9 night walk: with Chat memory off, "Merke dir: …" stored nothing and the answer said it was
+  // noted. The turn records that the statement met a switched-off memory, body-free.
+  it("records a remember statement that meets switched-off memory, and stores nothing", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    const sink = captureActivityLog();
+    const content = "Merke dir: Mein Lieblingsprojekt heißt Nordlicht.";
+
+    const off = { content, memory: { enabled: false } } as unknown as SendDesktopChatRequest;
+    expect(await collectMemoryActions(deps, off, ctx, "request-off")).toEqual([]);
+    const absent = { content } as unknown as SendDesktopChatRequest;
+    expect(await collectMemoryActions(deps, absent, undefined, "request-absent")).toEqual([]);
+    const ordinary = { content: "Wie spät ist es?" } as unknown as SendDesktopChatRequest;
+    await collectMemoryActions(deps, ordinary, undefined, "request-ordinary");
+
+    const lines = sink.events.filter((event) => event.op === "memory.explicit.remember");
+    expect(lines.map((line) => [line.correlationId, line.extra?.outcome])).toEqual([
+      ["request-off", "memory-off"],
+      ["request-absent", "memory-off"],
+    ]);
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+    expect(sink.lines().join("\n")).not.toContain("Nordlicht");
+  });
+
   it("records a refusal as remember only when a remember statement was refused", async () => {
     const vault = makeVault();
     const ctx = context();

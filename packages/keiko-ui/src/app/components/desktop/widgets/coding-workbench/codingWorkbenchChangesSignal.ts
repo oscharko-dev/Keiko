@@ -62,3 +62,16 @@ export function changesRefreshSignal(
   const displacedSuffix = displaced === 0 ? "" : `|d${String(displaced)}`;
   return `${cursor ?? "-"}|${String(settled)}${displacedSuffix}`;
 }
+
+/**
+ * The Changes signal joined with the undo state of the newest turn. An undo or restore puts files
+ * back without a runtime event or a settled tool, so without this the list kept showing the undone
+ * file as changed. `undoStaged` is `undefined` while the run offers no undo.
+ */
+export function changesSignalWithUndo(
+  signal: string | null,
+  undoStaged: boolean | undefined,
+): string | null {
+  if (undoStaged === undefined) return signal;
+  return `${signal ?? "-"}|u${undoStaged ? "1" : "0"}`;
+}

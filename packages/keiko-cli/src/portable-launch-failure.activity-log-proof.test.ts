@@ -38,6 +38,17 @@ describe("portable.launch.failed activity log proof", () => {
     });
   });
 
+  it("persists a state directory inside the start folder as a closed, body-free refusal", () => {
+    const line = formatActivityLogProofLine(
+      emitted("state-dir-in-start-folder", "not-requested" as never)[0] ?? {},
+    );
+    const record = expectActivityLogProof("portable.launch.failed.emitted-line", line);
+    expect(record).toMatchObject({
+      reason: "state-dir-in-start-folder",
+      errorKind: "permission-denied",
+    });
+  });
+
   it("accepts every closed reason through the registered formatter, with a closed error kind", () => {
     for (const reason of LAUNCH_FAILURE_REASONS) {
       const events = emitted(reason, "failed");

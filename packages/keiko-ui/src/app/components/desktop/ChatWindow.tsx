@@ -240,6 +240,7 @@ import type {
   VoiceCapabilityResolution,
 } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
+import { latestRegenerableAssistantId } from "./chat-regenerate-eligibility";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ChevronIcon = Icons.chevron;
@@ -1409,13 +1410,7 @@ function ConversationThreadImpl({
       ? streamingAssistantMessage
       : undefined;
   const lastTurnId = turns.at(-1)?.id;
-  const latestAssistantId = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message?.role === "assistant") return message.id;
-    }
-    return undefined;
-  }, [messages]);
+  const latestAssistantId = useMemo(() => latestRegenerableAssistantId(messages), [messages]);
   return (
     <div
       className="chatw-thread"

@@ -874,10 +874,10 @@ selections retain 400 and authority denials retain their existing status. The ex
 Activity Log records the closed failure kind and request correlation without exposing paths.
 Windows system noise is pruned while descending, never by the security tier (#4437,
 `packages/keiko-workspace/src/systemNoise.ts`). At any depth these names are pruned
-case-insensitively: `$Recycle.Bin`, `RECYCLER`, `RECYCLED`, `System Volume Information`,
-`desktop.ini`, `Thumbs.db`, `ehthumbs.db`, `ehthumbs_vista.db` and the profile registry hives
-(`ntuser.*`). Directly below a connected drive root (`C:\`) the operating-system folders and files
-`Windows`, `Windows.old`, `$Windows.~BT`, `$Windows.~WS`, `$WinREAgent`, `$GetCurrent`,
+case-insensitively: `$Recycle.Bin`, `System Volume Information`, `desktop.ini`, `Thumbs.db`,
+`ehthumbs.db`, `ehthumbs_vista.db`, the profile registry hives (`ntuser.dat`, `ntuser.dat.*`, `ntuser.dat{*`) and the profile files
+`ntuser.ini` and `ntuser.pol`. Directly below a connected drive root (`C:\`) the legacy recycle bins
+`RECYCLER` and `RECYCLED` and the operating-system folders and files `Windows`, `Windows.old`, `$Windows.~BT`, `$Windows.~WS`, `$WinREAgent`, `$GetCurrent`,
 `$SysReset`, `Config.Msi`, `PerfLogs`, `Recovery`, `pagefile.sys`, `hiberfil.sys`,
 `swapfile.sys` and `DumpStack.log`/`DumpStack.log.tmp` are pruned as well. A pruned directory is
 never opened. An explicitly selected path is a human decision and is never pruned; the deny list,

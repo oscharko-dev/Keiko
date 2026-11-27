@@ -24,6 +24,9 @@ import {
   removePidFileIfMatches,
   removeStaleShutdownRequest,
   resolveStateDir,
+  assertStateDirOutsideStartFolder,
+  pathInsideRoot,
+  stateDirInsideStartFolder,
   resolveContainedStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
@@ -799,5 +802,102 @@ describe("isInsidePath", () => {
 
   it("rejects a sibling with a shared prefix", () => {
     expect(isInsidePath(ancestor, `${ancestor}c`)).toBe(false);
+  });
+});
+
+describe("assertStateDirOutsideStartFolder (#4491)", () => {
+  it("keeps the .keiko exemption when .keiko is a link to a folder inside the start folder", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    mkdirSync(join(cwd, "data"));
+    symlinkSync(join(cwd, "data"), join(cwd, DEFAULT_STATE_DIR_NAME), "junction");
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, DEFAULT_STATE_DIR_NAME), {});
+    }).not.toThrow();
+    // The UI process accepts its data only below the spelled .keiko, never the link's target.
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "data"), {});
+    }).toThrow(/inside the folder Keiko starts from/u);
+  });
+
+  it("refuses a state directory inside the start folder outside its .keiko", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "state"), {});
+    }).toThrow(/inside the folder Keiko starts from/u);
+  });
+
+  it("admits the start folder's .keiko and folders below it, and folders outside it", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-state-elsewhere-"));
+    for (const stateDir of [
+      join(cwd, DEFAULT_STATE_DIR_NAME),
+      join(cwd, ".keiko", "dev"),
+      outside,
+    ]) {
+      expect(() => {
+        assertStateDirOutsideStartFolder(cwd, stateDir, {});
+      }).not.toThrow();
+    }
+  });
+
+  it("leaves the decision to the UI data folder when KEIKO_UI_DATA_DIR names one", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "state"), {
+        KEIKO_UI_DATA_DIR: "/elsewhere",
+      });
+    }).not.toThrow();
+  });
+
+  it("refuses a KEIKO_UI_DATA_DIR the UI process would refuse, before anything starts", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-state-elsewhere-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(outside, outside, { KEIKO_UI_DATA_DIR: join(cwd, "ui") });
+    }).not.toThrow();
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: join(cwd, "ui") });
+    }).toThrow(/KEIKO_UI_DATA_DIR lies inside the folder Keiko starts from/u);
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, {
+        KEIKO_UI_DATA_DIR: join(cwd, DEFAULT_STATE_DIR_NAME, "ui"),
+      });
+    }).not.toThrow();
+    let refusal: unknown;
+    try {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: "ui" });
+    } catch (e) {
+      refusal = e;
+    }
+    expect(refusal).toMatchObject({ code: "UI_DATA_DIR_INVALID" });
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: `${outside}\0/ui` });
+    }).toThrow(/KEIKO_UI_DATA_DIR must be an absolute path without NUL bytes/u);
+  });
+});
+
+describe("the start-folder placement follows the UI process's containment (#4491)", () => {
+  it("compares case-insensitively on win32, also for a tail that does not exist yet", () => {
+    expect(stateDirInsideStartFolder("C:\\Work", "c:\\work\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\Work", "C:\\WORK\\.KEIKO\\dev", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("C:\\Work", "C:\\Workshop", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("C:\\Work", "D:\\work\\data", "win32")).toBe(false);
+  });
+
+  it("keeps linux byte-exact and darwin's .keiko segment exact", () => {
+    expect(stateDirInsideStartFolder("/Work", "/work/data", "linux")).toBe(false);
+    expect(stateDirInsideStartFolder("/work", "/work/.KEIKO/dev", "darwin")).toBe(true);
+    expect(stateDirInsideStartFolder("/work", "/work/.keiko/dev", "darwin")).toBe(false);
+    expect(stateDirInsideStartFolder("/work", "/WORK/data", "darwin")).toBe(true);
+  });
+
+  it("treats a drive or filesystem root as containing everything below it", () => {
+    expect(pathInsideRoot("C:\\", "C:\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\", "C:\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\", "C:\\.keiko", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/data", "linux")).toBe(true);
+    expect(stateDirInsideStartFolder("/", "/.keiko/x", "linux")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/.keiko/x", "darwin")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/.KEIKO/x", "darwin")).toBe(true);
   });
 });

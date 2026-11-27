@@ -2,6 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
 
+import { ApiError } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+
 import {
   currentConversationMemoryMode,
   resetConversationMemorySettingsForTests,
@@ -35,7 +38,13 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+vi.mock("@/lib/client-diagnostics", async (original) => ({
+  ...(await original<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: vi.fn(),
+}));
+
 afterEach((): void => {
+  vi.mocked(reportClientDiagnostic).mockClear();
   resetAutonomyPersistenceQueueForTests();
   resetConversationMemorySettingsForTests();
 });
@@ -237,4 +246,163 @@ describe("useAutonomyModePolicy", (): void => {
 
     await waitFor((): void => expect(currentConversationMemoryMode()).toBe("autonomous-delivery"));
   });
+
+  it("re-reads the policy and saves again once another surface moved its revision", async (): Promise<void> => {
+    let serverRevision = 7;
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("governed-assist", serverRevision)),
+    );
+    const persist = vi.fn(
+      (mode: CodingWorkbenchMode, expectedRevision: number): Promise<MemoryAutonomyPolicyWire> =>
+        expectedRevision === serverRevision
+          ? Promise.resolve(policy(mode, ++serverRevision))
+          : Promise.reject(conflict()),
+    );
+    const view = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+    // Another window saves a mode: the server moves on while this surface still holds revision 7.
+    serverRevision = 9;
+
+    act((): void => view.result.current.change("supervised-coding"));
+
+    await waitFor((): void => expect(view.result.current.requestedMode).toBe("supervised-coding"));
+    expect(view.result.current.error).toBeNull();
+    expect(persist.mock.calls.map((call) => call[1])).toEqual([7, 9]);
+  });
+
+  it("adopts a lower server revision after Keiko restarted on a reset state", async (): Promise<void> => {
+    let serverRevision = 5;
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("governed-assist", serverRevision)),
+    );
+    const persist = vi.fn(
+      (mode: CodingWorkbenchMode, expectedRevision: number): Promise<MemoryAutonomyPolicyWire> =>
+        expectedRevision === serverRevision
+          ? Promise.resolve(policy(mode, ++serverRevision))
+          : Promise.reject(conflict()),
+    );
+    const view = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+    // The open page now talks to a Keiko whose fresh state starts the policy over at revision 0.
+    serverRevision = 0;
+
+    act((): void => view.result.current.change("autonomous-delivery"));
+
+    await waitFor((): void =>
+      expect(view.result.current.requestedMode).toBe("autonomous-delivery"),
+    );
+    expect(view.result.current.error).toBeNull();
+    expect(persist.mock.calls.map((call) => call[1])).toEqual([5, 0]);
+  });
+
+  it("saves again only once and surfaces a conflict that persists", async (): Promise<void> => {
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("governed-assist", 3)),
+    );
+    const persist = vi.fn((): Promise<MemoryAutonomyPolicyWire> => Promise.reject(conflict()));
+    const view = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+
+    await waitFor((): void => expect(view.result.current.error).toBe("persist"));
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(view.result.current.requestedMode).toBe("governed-assist");
+    expect(reportClientDiagnostic).toHaveBeenCalledTimes(1);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Autonomy mode save failed (after-reread attempt).",
+      expect.objectContaining({ errorKind: expect.any(String) }),
+    );
+  });
+
+  it("frees the intent queue when the re-read after a conflict stalls", async (): Promise<void> => {
+    let loads = 0;
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      ++loads === 1
+        ? Promise.resolve(policy("governed-assist", 3))
+        : new Promise<MemoryAutonomyPolicyWire>(() => undefined),
+    );
+    const persist = vi.fn(
+      (mode: CodingWorkbenchMode, expectedRevision: number): Promise<MemoryAutonomyPolicyWire> =>
+        mode === "supervised-coding"
+          ? Promise.reject(conflict())
+          : Promise.resolve(policy(mode, expectedRevision + 1)),
+    );
+    const view = renderHook((): AutonomyModePolicy =>
+      useAutonomyModePolicy({ load, persist, persistTimeoutMs: 10 }),
+    );
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+    act((): void => view.result.current.change("autonomous-delivery"));
+
+    await waitFor((): void =>
+      expect(view.result.current.requestedMode).toBe("autonomous-delivery"),
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Autonomy mode save failed (after-reread attempt).",
+      expect.objectContaining({ errorKind: expect.any(String) }),
+    );
+  });
+
+  it("runs the save, its re-read and its retry against one deadline", async (): Promise<void> => {
+    const signals: { persist: AbortSignal[]; reload: (AbortSignal | undefined)[] } = {
+      persist: [],
+      reload: [],
+    };
+    let loads = 0;
+    const load = vi.fn((signal?: AbortSignal): Promise<MemoryAutonomyPolicyWire> => {
+      if (++loads === 1) return Promise.resolve(policy("governed-assist", 3));
+      signals.reload.push(signal);
+      return new Promise<MemoryAutonomyPolicyWire>(() => undefined);
+    });
+    const persist = vi.fn(
+      (
+        _mode: CodingWorkbenchMode,
+        _expectedRevision: number,
+        signal?: AbortSignal,
+      ): Promise<MemoryAutonomyPolicyWire> => {
+        if (signal !== undefined) signals.persist.push(signal);
+        return Promise.reject(conflict());
+      },
+    );
+    const view = renderHook((): AutonomyModePolicy =>
+      useAutonomyModePolicy({ load, persist, persistTimeoutMs: 10 }),
+    );
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+
+    await waitFor((): void => expect(view.result.current.error).toBe("persist"));
+    const [persistSignal] = signals.persist;
+    expect(persistSignal).toBeDefined();
+    expect(signals.reload).toEqual([persistSignal]);
+    expect(persistSignal?.aborted).toBe(true);
+  });
+
+  it("does not save again after a failure that is not a revision conflict", async (): Promise<void> => {
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.resolve(policy("governed-assist", 3)),
+    );
+    const persist = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      Promise.reject(new ApiError("BAD_REQUEST", "Invalid memory autonomy policy.", 400)),
+    );
+    const view = renderHook((): AutonomyModePolicy => useAutonomyModePolicy({ load, persist }));
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+
+    await waitFor((): void => expect(view.result.current.error).toBe("persist"));
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Autonomy mode save failed (first attempt).",
+      expect.objectContaining({ errorKind: expect.any(String) }),
+    );
+  });
 });
+
+function conflict(): ApiError {
+  return new ApiError("CONFLICT", "Memory autonomy policy changed. Reload and retry.", 409);
+}

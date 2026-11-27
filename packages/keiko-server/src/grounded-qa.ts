@@ -9,6 +9,7 @@ import {
   parseClientTurnId,
   parseMemoryRequest,
   logChatRejection,
+  memoryOffRememberNoticeFor,
   rememberRequestRefusedIn,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
@@ -277,6 +278,7 @@ import {
   renderStandingProfileBlock,
 } from "./conversation-prompt.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { logExplicitMemoryRemember } from "./memory-explicit-statement-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
@@ -3375,10 +3377,10 @@ function groundedMemoryBlocks(memory: ConversationMemoryResultWire): {
 function groundedAnswerContent(
   content: string,
   memory: ConversationMemoryResultWire,
-  rememberRefused: boolean,
+  rememberNotice: string | undefined,
 ): string {
   const { profile, recalled } = groundedMemoryBlocks(memory);
-  const notice = rememberRefused ? [CONVERSATION_REMEMBER_REFUSED_NOTICE] : [];
+  const notice = rememberNotice === undefined ? [] : [rememberNotice];
   const blocks = [...profile, ...notice, ...recalled];
   if (blocks.length === 0) return content;
   return ["User question:", content, "", blocks.join("\n\n")].join("\n");
@@ -3397,7 +3399,7 @@ function withPreparedGroundedMemory(
   prepared: PreparedGroundedAsk,
   context: ConversationMemoryRuntimeContext,
   result: ConversationMemoryResultWire,
-  rememberRefused: boolean,
+  rememberNotice: string | undefined,
 ): PreparedGroundedAsk {
   return {
     ...prepared,
@@ -3406,7 +3408,7 @@ function withPreparedGroundedMemory(
       answerContent: groundedAnswerContent(
         prepared.input.answerContent ?? prepared.input.content,
         result,
-        rememberRefused,
+        rememberNotice,
       ),
     },
     memory: {
@@ -3420,12 +3422,37 @@ function withPreparedGroundedMemory(
   };
 }
 
+// A clear "Merke dir" asked of a grounded answer while Chat memory is off stores nothing: the answer
+// learns that before it is written, like a refused statement (#4213), and the turn records it. It
+// reads the person's own words: after compaction the prompt is the model's summary (PR #4568 review).
+function memoryOffRememberNotice(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): string | undefined {
+  const content = groundedSpokenContent(prepared);
+  const notice = memoryOffRememberNoticeFor(deps, { content, memory: prepared.input.memory });
+  if (notice === undefined) return undefined;
+  logExplicitMemoryRemember("memory-off", correlationIdOrUnknown(prepared.correlationId));
+  return notice;
+}
+
+function withMemoryOffRememberNotice(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): PreparedGroundedAsk {
+  const notice = memoryOffRememberNotice(prepared, deps);
+  if (notice === undefined) return prepared;
+  const question = prepared.input.answerContent ?? prepared.input.content;
+  const answerContent = ["User question:", question, "", notice].join("\n");
+  return { ...prepared, input: { ...prepared.input, answerContent } };
+}
+
 async function prepareGroundedMemory(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
 ): Promise<PreparedGroundedAsk | RouteResult> {
   const memoryRequest = prepared.input.memory;
-  if (memoryRequest === undefined) return prepared;
+  if (memoryRequest === undefined) return withMemoryOffRememberNotice(prepared, deps);
   const context = prepared.memoryContext;
   if (context === undefined) {
     return groundedMemoryPreparationFailure(
@@ -3448,8 +3475,12 @@ async function prepareGroundedMemory(
       discussionMode: undefined,
     };
     const result = await buildMemoryResult(request, deps, context, prepared.signal);
-    const refused = rememberRequestRefusedIn(deps, request, context);
-    return withPreparedGroundedMemory(prepared, context, result, refused);
+    const notice =
+      memoryOffRememberNotice(prepared, deps) ??
+      (rememberRequestRefusedIn(deps, request, context)
+        ? CONVERSATION_REMEMBER_REFUSED_NOTICE
+        : undefined);
+    return withPreparedGroundedMemory(prepared, context, result, notice);
   } catch (error) {
     if (prepared.signal.aborted) return groundedCancelledResult();
     return groundedMemoryPreparationFailure(prepared, deps, error);

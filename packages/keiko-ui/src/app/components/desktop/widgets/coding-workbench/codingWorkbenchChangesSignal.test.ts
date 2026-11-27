@@ -5,7 +5,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
-import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
+import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
 
 const AT = "2026-10-23T12:00:00.000Z";
 
@@ -185,5 +185,20 @@ describe("changesRefreshSignal", () => {
     expect(
       changesRefreshSignal([statusEvent("c1")], feed([{ tool: "edit", state: "succeeded" }])),
     ).toBe("c1|1");
+  });
+});
+
+describe("changesSignalWithUndo", () => {
+  it("keeps the signal while the run offers no undo", () => {
+    expect(changesSignalWithUndo(null, undefined)).toBeNull();
+    expect(changesSignalWithUndo("c-1|2", undefined)).toBe("c-1|2");
+  });
+
+  it("moves when an undo is staged and again when it is restored", () => {
+    const before = changesSignalWithUndo("c-1|2", false);
+    const undone = changesSignalWithUndo("c-1|2", true);
+    expect(undone).not.toBe(before);
+    expect(changesSignalWithUndo("c-1|2", false)).toBe(before);
+    expect(changesSignalWithUndo(null, true)).not.toBeNull();
   });
 });

@@ -84,6 +84,8 @@ import {
   removePendingUiLaunch,
   removeStaleShutdownRequest,
   removePidFileIfMatches,
+  assertStateDirOutsideStartFolder,
+  placementRefusalReason,
   resolveContainedStateDir,
   writeExclusivePidFile,
   writeBrowserOpenRequest,
@@ -1236,6 +1238,7 @@ async function handleStaleRunning(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   running: PidRecord,
+  refusesReplacement: () => boolean,
 ): Promise<number | "start"> {
   // Health, the "already running" report and the browser handoff address the tracked instance's
   // own endpoint, never the port this invocation asked for (L1).
@@ -1259,7 +1262,7 @@ async function handleStaleRunning(
     );
     return startFailed(deps, "identity-mismatch");
   }
-  return actOnTrackedHealth(options, io, deps, running, { health, retries });
+  return actOnTrackedHealth(options, io, deps, running, { health, retries, refusesReplacement });
 }
 
 /** What a second start does with its tracked UI's settled health (#4504): keep, wait out or restart. */
@@ -1268,7 +1271,16 @@ async function actOnTrackedHealth(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   running: PidRecord,
-  { health, retries }: { readonly health: HealthProbeResult; readonly retries: number },
+  {
+    health,
+    retries,
+    refusesReplacement,
+  }: {
+    readonly health: HealthProbeResult;
+    readonly retries: number;
+    /** Whether the replacement may not start; asked before the stale UI is stopped. */
+    readonly refusesReplacement: () => boolean;
+  },
 ): Promise<number | "start"> {
   const launchBound = running.launchId !== undefined;
   const record = (outcome: LifecycleHealthOutcome): void => {
@@ -1289,6 +1301,8 @@ async function actOnTrackedHealth(
     );
     return startFailed(deps, "health-timeout");
   }
+  // A replacement the placement refuses would leave Keiko stopped, so it is refused first.
+  if (refusesReplacement()) return 1;
   record(health.reachable ? "stale-version" : "stale-unreachable");
   io.out(
     `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running.pid)}.\n`,
@@ -1501,6 +1515,29 @@ async function cmdStart(
   return code;
 }
 
+// #4491 (PR #4568 review): the UI process refuses a state directory inside the folder it starts
+// from, so a start that launches one refuses it first and names the reason. A healthy Keiko that is
+// reused keeps the folder it was started from, so the caller's folder does not bind it.
+function stateDirPlacementRefused(
+  options: LifecycleOptions,
+  io: CliIo,
+  env: EnvSource,
+  cwd: string,
+  deps: Pick<LifecycleRuntimeDeps, "recordFailure">,
+): boolean {
+  try {
+    assertStateDirOutsideStartFolder(cwd, options.stateDir, env);
+    return false;
+  } catch (e) {
+    if (!(e instanceof LauncherError)) throw e;
+    const reason = placementRefusalReason(e.code);
+    if (reason === undefined) throw e;
+    io.err(`${e.message}\n`);
+    startFailed(deps, reason);
+    return true;
+  }
+}
+
 async function startOrReuseUi(
   options: LifecycleOptions,
   io: CliIo,
@@ -1508,15 +1545,17 @@ async function startOrReuseUi(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
+  const refusesPlacement = (): boolean => stateDirPlacementRefused(options, io, env, cwd, deps);
   const running = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (running !== undefined) {
-    const nextAction = await handleStaleRunning(options, io, deps, running);
+    const nextAction = await handleStaleRunning(options, io, deps, running, refusesPlacement);
     if (nextAction !== "start") {
       await applyProvisionedConfig(options, io, env, deps, true);
       return nextAction;
     }
   }
 
+  if (refusesPlacement()) return 1;
   if (!(await ensureStartPortAvailable(options, io, deps))) return startFailed(deps, "port-in-use");
   if (!clearStaleShutdownRequest(options.stateDir, io)) {
     return startFailed(deps, "stale-shutdown-request");
@@ -1968,24 +2007,43 @@ type ParseOutcome =
   | { readonly kind: "options"; readonly value: LifecycleOptions }
   | { readonly kind: "help" }
   | { readonly kind: "usage" }
-  | { readonly kind: "refuse"; readonly message: string };
+  | { readonly kind: "refuse"; readonly message: string; readonly code: string };
 
 function parseWithStateDirGuard(
+  command: LifecycleCommand,
   args: readonly string[],
   cwd: string,
   env: EnvSource,
   home: string,
 ): ParseOutcome {
   try {
-    return parseLifecycleArgs(args, cwd, env, home);
+    const parsed = parseLifecycleArgs(args, cwd, env, home);
+    // #4491: only a start would hand the UI process a state directory it refuses. A restart checks
+    // before it stops Keiko; a start checks once it knows it launches a new UI process.
+    if (parsed.kind === "options" && command === "restart") {
+      assertStateDirOutsideStartFolder(cwd, parsed.value.stateDir, env);
+    }
+    return parsed;
   } catch (e) {
-    if (e instanceof LauncherError) return { kind: "refuse", message: `${e.message}\n` };
+    if (e instanceof LauncherError)
+      return { kind: "refuse", message: `${e.message}\n`, code: e.code };
     throw e;
   }
 }
 
 function lifecycleInvocationCorrelationId(env: EnvSource): string {
   return installLayoutOverrideEvidence(env)?.correlationId ?? randomUUID();
+}
+
+function refusedAtParse(
+  outcome: Extract<ParseOutcome, { readonly kind: "refuse" }>,
+  io: CliIo,
+  recordFailure: LifecycleRuntimeDeps["recordFailure"],
+): number {
+  io.err(outcome.message);
+  const reason = placementRefusalReason(outcome.code);
+  if (reason !== undefined) startFailed({ recordFailure }, reason);
+  return 1;
 }
 
 export async function runLifecycleCli(
@@ -1997,7 +2055,7 @@ export async function runLifecycleCli(
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const home = (deps.homedir ?? defaultHomedir)();
-  const outcome = parseWithStateDirGuard(args, cwd, env, home);
+  const outcome = parseWithStateDirGuard(command, args, cwd, env, home);
   if (outcome.kind === "help") {
     io.out(USAGE);
     return 0;
@@ -2007,8 +2065,7 @@ export async function runLifecycleCli(
     return 2;
   }
   if (outcome.kind === "refuse") {
-    io.err(outcome.message);
-    return 1;
+    return refusedAtParse(outcome, io, deps.recordFailure);
   }
 
   const options = outcome.value;

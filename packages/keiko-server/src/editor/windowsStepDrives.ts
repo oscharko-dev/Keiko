@@ -45,10 +45,17 @@ const WINDOWS_STEP_DRIVES_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * What defining a letter did: `defined` (the step's now), `refused` (Windows refused it; it may be
+ * another mapping's), or `stranded` (subst defined it, Windows does not show it and refused to remove
+ * it again: it stays in this logon session and must still be released).
+ */
+export type WindowsDriveDefinition = "defined" | "refused" | "stranded";
+
 /** How drive letters are defined in this logon session; injectable for tests. */
 export interface WindowsDriveHost {
-  /** Defines the letter (such as `"K:"`) as `root`; false when Windows refused it. */
-  readonly define: (drive: string, root: string) => boolean;
+  /** Defines the letter (such as `"K:"`) as `root`. */
+  readonly define: (drive: string, root: string) => WindowsDriveDefinition;
   /** Removes the letter; false when Windows refused it. */
   readonly remove: (drive: string) => boolean;
 }
@@ -91,12 +98,16 @@ function distinctRoots(roots: readonly string[]): readonly string[] {
 interface LetterPool {
   readonly free: string[];
   refused: number;
+  readonly stranded: string[];
 }
 
 function defineOne(root: string, pool: LetterPool, host: WindowsDriveHost): string | undefined {
   for (let drive = pool.free.shift(); drive !== undefined; drive = pool.free.shift()) {
-    if (host.define(drive, root)) return drive;
-    pool.refused++;
+    const definition = host.define(drive, root);
+    if (definition === "defined") return drive;
+    // A stranded letter is no refusal: it is this step's own leftover and is released again.
+    if (definition === "stranded") pool.stranded.push(drive);
+    else pool.refused++;
   }
   return undefined;
 }
@@ -111,20 +122,32 @@ export function removeWindowsStepDrives(
 
 /**
  * Defines a letter for each distinct granted directory into `drives`, until one cannot get a
- * letter. `drives` belongs to the caller, so a host that throws midway leaves no letter unknown.
+ * letter. `drives` and `stranded` belong to the caller, so a host that throws midway leaves no
+ * letter unknown.
  */
 export function defineWindowsStepDrives(
   roots: readonly string[],
   host: WindowsDriveHost,
   drives: WindowsStepDrive[],
+  stranded: string[] = [],
 ): { readonly outcome: DriveOutcome; readonly refusedCount: number } {
-  const pool: LetterPool = { free: [...LETTERS], refused: 0 };
+  const pool: LetterPool = { free: [...LETTERS], refused: 0, stranded };
   for (const root of distinctRoots(roots)) {
     const drive = defineOne(root, pool, host);
     if (drive === undefined) return { outcome: "no-free-letter", refusedCount: pool.refused };
     drives.push({ root, drive });
   }
   return { outcome: "mapped", refusedCount: pool.refused };
+}
+
+// A stranded letter is released once more right away; one Windows still keeps is recorded as a
+// failed release (PR #4568 review), never dropped silently.
+function releaseStranded(stranded: readonly string[], scope: WindowsStepDriveScope): void {
+  if (stranded.length === 0) return;
+  unmapWindowsStepDrives(
+    stranded.map((drive) => ({ root: "", drive })),
+    scope,
+  );
 }
 
 function record(
@@ -168,15 +191,18 @@ export function mapWindowsStepDrives(
   scope: WindowsStepDriveScope,
 ): readonly WindowsStepDrive[] {
   const drives: WindowsStepDrive[] = [];
+  const stranded: string[] = [];
   let definition: ReturnType<typeof defineWindowsStepDrives>;
   try {
-    definition = defineWindowsStepDrives(roots, scope.host, drives);
+    definition = defineWindowsStepDrives(roots, scope.host, drives, stranded);
   } catch (error) {
     diagnose(scope, "editor.verification.windows-step-drives.define-failed", error);
     unmapWindowsStepDrives(drives, scope);
+    releaseStranded(stranded, scope);
     throw stepRefusal();
   }
   record(scope, definition.outcome, drives.length, definition.refusedCount);
+  releaseStranded(stranded, scope);
   if (definition.outcome === "mapped") return drives;
   unmapWindowsStepDrives(drives, scope);
   throw stepRefusal();
@@ -215,9 +241,26 @@ export function nodeWindowsDriveHost(env: NodeJS.ProcessEnv): WindowsDriveHost {
     });
     return result.error === undefined && result.status === 0;
   };
+  return substDriveHost(subst, (drive): boolean => existsSync(`${drive}\\`));
+}
+
+/**
+ * The drive host over a `subst` runner. A letter subst reported but Windows does not show is not the
+ * step's, so its mapping is removed again; otherwise it would stay defined in the logon session with
+ * no step recording it. A letter subst refused is never removed: the refusal usually means another
+ * mapping took the letter since the pool was read, and that mapping belongs to the person.
+ */
+export function substDriveHost(
+  subst: (args: readonly string[]) => boolean,
+  driveVisible: (drive: string) => boolean,
+): WindowsDriveHost {
+  const remove = (drive: string): boolean => subst([drive, "/D"]);
   return {
-    // A letter subst reported but Windows does not show is not the step's.
-    define: (drive, root) => subst([drive, root]) && existsSync(`${drive}\\`),
-    remove: (drive) => subst([drive, "/D"]),
+    define: (drive, root): WindowsDriveDefinition => {
+      if (!subst([drive, root])) return "refused";
+      if (driveVisible(drive)) return "defined";
+      return remove(drive) ? "refused" : "stranded";
+    },
+    remove,
   };
 }

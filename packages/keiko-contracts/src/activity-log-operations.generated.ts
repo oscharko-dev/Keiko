@@ -11689,6 +11689,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      branchChanged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       errorClass: {
         type: "string",
         dataClass: "error-kind",
@@ -39477,7 +39482,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["stored", "confirmed", "replayed", "suppressed", "refused"],
+        values: ["stored", "confirmed", "replayed", "suppressed", "refused", "memory-off"],
       },
     },
     causal: "none",
@@ -39950,6 +39955,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "missing-child-pid",
           "pid-publication",
           "state-dir",
+          "state-dir-in-start-folder",
           "spawn-refused",
           "health-timeout",
           "process-exited",

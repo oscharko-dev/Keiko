@@ -171,6 +171,11 @@ type TimelineItem =
       readonly order: number;
       readonly tool: CodingSafeActivityTool;
       readonly count: number;
+      /**
+       * A Git step the server answered as prepared and waiting for approval, after which the run
+       * went on: a later step took it up, so it no longer waits for anyone (#4491).
+       */
+      readonly superseded?: boolean;
     }
   | {
       readonly kind: "plan";
@@ -545,7 +550,7 @@ function timelineItems(
   }
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
-  const compacted = compactToolItems(orderedItems);
+  const compacted = compactToolItems(markSupersededGitProposals(orderedItems));
   return feed?.plan === undefined
     ? compacted
     : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
@@ -590,6 +595,50 @@ function insertPlan(
   );
   if (anchor < 0) return [...items, planItem].sort(compareTimelineItems);
   return [...items.slice(0, anchor + 1), planItem, ...items.slice(anchor + 1)];
+}
+
+/**
+ * A governed commit (or stage, unstage, branch) first answers "approval required" with a proposal;
+ * the run then carries it out with `keiko_git_execute`, asking the person first where the mode says
+ * so. Once the next execute after a proposal completed, the proposal is no decision anyone waits on:
+ * in Full access it read "Waiting for approval" for good, beside the commit that happened (#4491).
+ * Any other later step, or an execute that was refused or failed, leaves the proposal as it was.
+ * With several proposals open at once the row cannot tell which one an execute redeemed, so they
+ * stay waiting until as many completed executes as proposals followed.
+ */
+function markSupersededGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const marked = [...items];
+  let open: number[] = [];
+  let redeemed = 0;
+  marked.forEach((item, index) => {
+    if (item.kind !== "tool") return;
+    if (item.tool.tool === "keiko_git_execute") {
+      if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
+    } else if (item.tool.presentation?.gitOutcome === "waiting-for-approval") {
+      open.push(index);
+    }
+    // The wire row carries no proposal id, so an execute cannot be paired with the one proposal it
+    // redeemed when several are open: the facade lets any of them be redeemed. Keep every open
+    // proposal waiting until the completed executes at least equal their number, so none is ever
+    // shown as prepared that may still wait for a decision.
+    if (open.length > 0 && redeemed >= open.length) {
+      markSuperseded(marked, open);
+      open = [];
+      redeemed = 0;
+    }
+  });
+  return marked;
+}
+
+function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {
+  for (const at of indexes) {
+    const item = marked[at];
+    if (item?.kind === "tool") marked[at] = { ...item, superseded: true };
+  }
+}
+
+function executeCompleted(tool: CodingSafeActivityTool): boolean {
+  return tool.state === "succeeded" && tool.presentation?.gitOutcome === "completed";
 }
 
 function compactToolItems(items: readonly TimelineItem[]): readonly TimelineItem[] {
@@ -1441,7 +1490,7 @@ function ToolRow({
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
   const { tool } = item;
-  const shownState = shownToolState(tool);
+  const shownState = shownToolState(tool, item.superseded === true);
   const origin = toolFailureOrigin(tool);
   return (
     <li
@@ -1473,7 +1522,7 @@ function ToolRow({
           ) : null}
           <ToolSummaryEnd tool={tool} state={shownState} origin={origin} t={t} />
         </summary>
-        <ToolRowBody tool={tool} origin={origin} t={t} />
+        <ToolRowBody tool={tool} origin={origin} prepared={shownState === "prepared"} t={t} />
       </details>
     </li>
   );
@@ -1501,16 +1550,18 @@ function ToolRowTitle({
 function ToolRowBody({
   tool,
   origin,
+  prepared,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
   readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
+  readonly prepared: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <>
       {origin === undefined ? (
-        <ToolOutcome tool={tool} t={t} />
+        <ToolOutcome tool={tool} prepared={prepared} t={t} />
       ) : (
         <>
           <ToolFailureExplanation tool={tool} origin={origin} t={t} />
@@ -1624,7 +1675,7 @@ type UnrunVerificationOutcome = Extract<
 // And for a governed Git step (lab T37, #4271): the facade answers a refused commit, stage or branch
 // as a completed call, so its tool state reads "succeeded" for a step that never happened. The server's
 // closed Git outcome decides the badge instead: still waiting for the human, or not done.
-type UnfinishedGitState = "not-done" | "waiting-for-approval";
+type UnfinishedGitState = "not-done" | "waiting-for-approval" | "prepared";
 type ShownToolState =
   CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome | UnfinishedGitState;
 
@@ -1663,10 +1714,15 @@ function isUnrunVerificationOutcome(
   return outcome !== undefined && UNRUN_VERIFICATION_OUTCOMES.has(outcome);
 }
 
-function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
-  if (tool.state === "succeeded") {
-    return unfinishedGitState(tool.presentation?.gitOutcome) ?? tool.state;
-  }
+// A succeeded call's badge: how its Git step really ended, a proposal a later step took up, or done.
+function succeededToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
+  const git = unfinishedGitState(tool.presentation?.gitOutcome);
+  if (git === undefined) return "succeeded";
+  return superseded && git === "waiting-for-approval" ? "prepared" : git;
+}
+
+function shownToolState(tool: CodingSafeActivityTool, superseded = false): ShownToolState {
+  if (tool.state === "succeeded") return succeededToolState(tool, superseded);
   if (tool.state !== "failed") return tool.state;
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined && exitCode !== 0) return "exited";
@@ -1697,9 +1753,11 @@ function ToolStateBadge({
 // name (#3897).
 function ToolOutcome({
   tool,
+  prepared,
   t,
 }: {
   readonly tool: CodingSafeActivityTool;
+  readonly prepared: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const verificationOutcome = tool.presentation?.verificationOutcome;
@@ -1710,7 +1768,9 @@ function ToolOutcome({
       </p>
     );
   }
-  const sentence = toolOutcomeSentence(tool, t);
+  const sentence = prepared
+    ? t("codingWorkbench.activity.git.prepared")
+    : toolOutcomeSentence(tool, t);
   return sentence === undefined ? null : <p className={styles.cmpToolOutcome}>{sentence}</p>;
 }
 

@@ -11159,6 +11159,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "branchChanged",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "captureSource",
               "type": "string",
               "dataClass": "closed-enum",

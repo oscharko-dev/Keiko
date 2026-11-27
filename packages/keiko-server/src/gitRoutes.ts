@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { chmod, mkdir, mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1321,15 +1321,62 @@ export async function handleGitStatus(
       const untrackedDirectories = includeIgnored
         ? await untrackedDirectoryMetadata(repo, options, body)
         : undefined;
+      const redactedBody = redacted(deps, {
+        ...body,
+        ...(untrackedDirectories === undefined ? {} : { untrackedDirectories }),
+      });
+      const pathFiltered = path !== undefined;
       return {
         status: 200,
-        body: redacted(deps, {
-          ...body,
-          ...(untrackedDirectories === undefined ? {} : { untrackedDirectories }),
-        }),
+        body: await withStagedDigest(repo, options, redactedBody, pathFiltered),
       };
     },
   );
+}
+
+// The identity of what is staged: Git's raw listing of the staged changes names each path with its
+// modes and object ids, never its content, so the same path staged again with other content gets
+// another digest (PR #4568 review). A listing Git cannot give, or one cut at its cap, yields none.
+// The digest names the whole index, which is what a commit takes. The shown `stagedCount` counts
+// only the capped, possibly folder- or path-scoped change list, so a cut, folder-scoped or
+// `path`-filtered status reads the digest even when it shows nothing staged (PR #4568 audit and
+// review); a complete, unfiltered repository-wide status with nothing staged needs none.
+async function withStagedDigest<
+  Body extends { readonly stagedCount: number; readonly truncated: boolean },
+>(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+  body: Body,
+  pathFiltered: boolean,
+): Promise<Body & { readonly stagedDigest?: string }> {
+  const partialView = body.truncated || pathFiltered || repo.selectedRootPrefix !== "";
+  if (body.stagedCount === 0 && !partialView) return body;
+  const stagedDigest = await stagedChangesDigest(repo, options);
+  return stagedDigest === undefined ? body : { ...body, stagedDigest };
+}
+
+async function stagedChangesDigest(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+): Promise<string | undefined> {
+  const listing = await options.runner(
+    [
+      ...GIT_BASE_ARGS,
+      "-C",
+      repo.repositoryRoot,
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-abbrev",
+      "--no-ext-diff",
+      "--no-textconv",
+    ],
+    gitProcessOptions(repo, options, options.maxStatusBytes),
+  );
+  // An empty listing: nothing is staged anywhere in the repository.
+  if (listing.exitCode !== 0 || listing.truncated || listing.stdout.length === 0) return undefined;
+  return createHash("sha256").update(listing.stdout).digest("hex");
 }
 
 function prepareDiffContext<Scope>(

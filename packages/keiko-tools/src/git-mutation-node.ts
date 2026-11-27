@@ -11,7 +11,7 @@
 // because it carries the Node execution effect; the pure port, builders, and rules it implements are
 // re-exported from the package's main barrel.
 
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type {
   GitDeliveryExecutionErrorCode,
@@ -53,6 +53,7 @@ import {
 import {
   ensureGitLazyFetchGuardSupported,
   readGitFullRef,
+  readGitIndexLineBreaks,
   readGitIndexTreeDigest,
   readGitCommitIdentity,
   readGitRevision,
@@ -62,8 +63,11 @@ import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
   gitStageAttributesSupported,
+  gitStageFilesSupported,
+  filterDriversOverridable,
   unstageExactFiles,
   type GitStageEffectContext,
+  type GitStageLineEndings,
 } from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 
@@ -260,7 +264,12 @@ async function runPlan(
   return executionResult("succeeded", totalDuration);
 }
 
-async function configuredStageNormalizationSupported(ctx: RunContext): Promise<boolean> {
+const STAGE_CONFIG_KEYS = String.raw`^(core\.(autocrlf|safecrlf)|filter\..+\.(clean|smudge|process|required))$`;
+
+// One read of the configuration a verified staging depends on: the line-ending mode and every
+// configured filter driver name. `undefined` fails closed (an unreadable, cut-short or unparsable
+// answer proves nothing).
+async function readStageConfig(ctx: RunContext): Promise<StageConfig | undefined> {
   const runDeps = {
     ...ctx.runDeps,
     commandRules: GIT_CONFIG_COMMAND_RULES,
@@ -269,34 +278,78 @@ async function configuredStageNormalizationSupported(ctx: RunContext): Promise<b
   const result = await runCommand(
     {
       command: "git",
-      args: ["config", "--get-regexp", String.raw`^core\.(autocrlf|safecrlf)$`],
+      args: ["config", "-z", "--get-regexp", STAGE_CONFIG_KEYS],
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
     },
     runDeps,
   );
-  if (result.truncated) return false;
-  if (result.exitCode === 1 && result.stdout.length === 0) return true;
-  return result.exitCode === 0 && effectiveNormalizationDisabled(result.stdout);
+  if (result.truncated) return undefined;
+  if (result.exitCode === 1 && result.stdout.length === 0)
+    return { lineEndings: "exact", filterDrivers: [] };
+  return result.exitCode === 0 ? effectiveStageConfig(result.stdout) : undefined;
+}
+
+interface StageConfig {
+  readonly lineEndings: GitStageLineEndings;
+  readonly filterDrivers: readonly string[];
+}
+
+async function configuredStageLineEndings(
+  ctx: RunContext,
+): Promise<GitStageLineEndings | undefined> {
+  return (await readStageConfig(ctx))?.lineEndings;
 }
 
 // `--get-regexp` lists every scope that sets a key, in Git's own precedence order (system, global,
 // local, worktree, command line), and Git resolves a single-valued key to its LAST value. Only the
-// effective value decides whether `git add` would convert line endings: judging every scope refused
-// every repository on a stock Git for Windows host, whose SYSTEM scope sets `core.autocrlf=true`,
-// even after the repository opts out locally. A value Git would read as anything but `false` —
-// `true`, `input`, `warn`, or a bare key (true) — still fails closed, as does any unparsable line.
-function effectiveNormalizationDisabled(stdout: string): boolean {
+// effective value counts: judging every scope refused every repository on a stock Git for Windows
+// host, whose SYSTEM scope sets `core.autocrlf=true`, even after the repository opts out locally.
+// `core.safecrlf` must still resolve to `false`. `core.autocrlf` `false` stages the verified bytes
+// as they are; `true` (also a bare key) and `input` admit a file only when Git's built-in conversion
+// of it round-trips exactly (`stageExactFiles`). Any other value or unparsable record fails
+// closed. `-z` ends each record with NUL and separates its key from its value with the first
+// newline, so a value holding a newline (a filter command, say) can never pose as another key
+// (PR #4568 review); a record without a newline is a bare key.
+const FILTER_DRIVER_KEY = /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu;
+const CRLF_KEY = /^core\.(?:autocrlf|safecrlf)$/iu;
+
+function effectiveStageConfig(stdout: string): StageConfig | undefined {
   const effective = new Map<string, string>();
-  for (const line of stdout.trim().split(/\r?\n/u)) {
-    const match = /^(core\.(?:autocrlf|safecrlf))(?: (.*))?$/iu.exec(line);
-    const key = match?.[1];
-    if (key === undefined) return false;
-    effective.set(key.toLowerCase(), match?.[2] ?? "");
+  const drivers = new Set<string>();
+  if (!stdout.endsWith("\0")) return undefined;
+  for (const record of stdout.slice(0, -1).split("\0")) {
+    const newline = record.indexOf("\n");
+    const key = newline === -1 ? record : record.slice(0, newline);
+    const driver = FILTER_DRIVER_KEY.exec(key)?.[1];
+    if (driver !== undefined) {
+      drivers.add(driver);
+      continue;
+    }
+    if (!CRLF_KEY.test(key)) return undefined;
+    effective.set(
+      key.toLowerCase(),
+      newline === -1 ? "true" : record.slice(newline + 1).toLowerCase(),
+    );
   }
-  return [...effective.values()].every((value) => value.toLowerCase() === "false");
+  return stageConfigOf(effective, drivers);
 }
+
+function stageConfigOf(
+  effective: ReadonlyMap<string, string>,
+  drivers: ReadonlySet<string>,
+): StageConfig | undefined {
+  if ((effective.get("core.safecrlf") ?? "false") !== "false") return undefined;
+  const lineEndings = AUTOCRLF_LINE_ENDINGS.get(effective.get("core.autocrlf") ?? "false");
+  return lineEndings === undefined ? undefined : { lineEndings, filterDrivers: [...drivers] };
+}
+
+const AUTOCRLF_LINE_ENDINGS: ReadonlyMap<string, GitStageLineEndings> = new Map([
+  ["false", "exact"],
+  ["true", "autocrlf-true"],
+  ["input", "autocrlf-input"],
+]);
 
 async function execStage(
   ctx: RunContext,
@@ -304,13 +357,15 @@ async function execStage(
 ): Promise<GitDeliveryExecutionResult> {
   if (request.verified === undefined) return execPlan(ctx, () => buildStageArgv(request));
   try {
-    if (
-      !(await configuredStageNormalizationSupported(ctx)) ||
-      !(await verifiedFactsMatch(ctx, request))
-    )
+    const lineEndings = await configuredStageLineEndings(ctx);
+    if (lineEndings === undefined || !(await verifiedFactsMatch(ctx, request)))
       return failureFromExit(0, 0);
     if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
-    const succeeded = await stageExactFiles(verifiedIndexEffect(ctx, request), request);
+    const succeeded = await stageExactFiles(
+      verifiedIndexEffect(ctx, request, lineEndings),
+      request,
+      lineEndings,
+    );
     return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
   } catch (error) {
     return failureFromThrow(error, 0, 0);
@@ -341,14 +396,24 @@ async function execUnstage(
 function verifiedIndexEffect(
   ctx: RunContext,
   request: Pick<GitCommitExecRequest, "verified">,
+  stagedLineEndings?: GitStageLineEndings,
 ): GitStageEffectContext {
+  let filterDrivers: Promise<readonly string[] | undefined> | undefined;
   return {
     workspaceRoot: ctx.runDeps.workspace.root,
     fs: workspaceFsOf(ctx.runDeps),
-    check: () => verifiedFactsMatch(ctx, request),
+    // A staging also re-reads the effective line-ending mode its objects were hashed under: a
+    // change after the selection stops the stage before the index is promoted.
+    check: async () =>
+      (await verifiedFactsMatch(ctx, request)) &&
+      (stagedLineEndings === undefined ||
+        (await configuredStageLineEndings(ctx)) === stagedLineEndings),
+    // Read once per staging, not once per hashed file (PR #4568 audit: Windows spawn cost).
+    filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     run: (argv, stdin, indexPath) =>
       runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+    indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
 }
 
@@ -618,17 +683,26 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
 export async function readGitStageSupport(
   deps: NodeGitMutationAdapterDeps,
   paths: readonly string[],
+  fs?: WorkspaceFs,
 ): Promise<boolean> {
   const ctx = buildRunContext(deps);
-  if (!(await configuredStageNormalizationSupported(ctx))) return false;
-  return gitStageAttributesSupported(
-    {
-      workspaceRoot: deps.workspace.root,
-      authorized: () => !ctx.signal.aborted,
-      check: () => Promise.resolve(!ctx.signal.aborted),
-      run: (argv, stdin) => runOne(ctx, argv, stdin),
-    },
-    paths,
+  // One configuration read for the whole admission; a driver that cannot be neutralized refuses
+  // here as an unsupported transformation instead of failing a hash (PR #4568 audit).
+  const config = await readStageConfig(ctx);
+  if (config === undefined || !filterDriversOverridable(config.filterDrivers)) return false;
+  const { lineEndings, filterDrivers } = config;
+  const effect: GitStageEffectContext = {
+    workspaceRoot: deps.workspace.root,
+    fs: fs ?? workspaceFsOf(ctx.runDeps),
+    authorized: () => !ctx.signal.aborted,
+    check: () => Promise.resolve(!ctx.signal.aborted),
+    filterDriverNames: () => Promise.resolve(filterDrivers),
+    run: (argv, stdin) => runOne(ctx, argv, stdin),
+    indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+  };
+  return (
+    (await gitStageAttributesSupported(effect, paths)) &&
+    (await gitStageFilesSupported(effect, paths, lineEndings))
   );
 }
 

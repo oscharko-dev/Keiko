@@ -155,12 +155,15 @@ export function logExplicitMemoryForget(
   );
 }
 
+// `memory-off`: a clear remember statement in a turn sent with Chat memory switched off (or no vault):
+// nothing is stored and the answer is told so.
 const MEMORY_EXPLICIT_REMEMBER_OUTCOMES = [
   "stored",
   "confirmed",
   "replayed",
   "suppressed",
   "refused",
+  "memory-off",
 ] as const;
 
 export type MemoryExplicitRememberOutcome = (typeof MEMORY_EXPLICIT_REMEMBER_OUTCOMES)[number];

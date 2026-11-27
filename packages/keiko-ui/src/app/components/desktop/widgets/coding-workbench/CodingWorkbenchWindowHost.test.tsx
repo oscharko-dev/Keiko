@@ -27,7 +27,7 @@ interface WindowProps {
   readonly onOpenHistory?: () => void;
   readonly onOpenGit?: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository?: (root: string) => void;
-  readonly onSelectBranch?: (branch: string) => void;
+  readonly onSelectBranch?: (branch: string, repositoryRoot: string | null) => void;
   readonly leftRun?: string | undefined;
   readonly onLeftRun?: (runId: string | undefined) => void;
 }
@@ -341,7 +341,7 @@ describe("CodingWorkbenchWindowHost", () => {
     renderHost({ repositoryPath: "/repos/cfg" });
     const props = windowRendered.mock.calls.at(-1)?.[0];
 
-    props?.onSelectBranch?.("feature/x");
+    props?.onSelectBranch?.("feature/x", "/repos/cfg");
 
     expect(diagnostics.writes).toEqual([]);
   });
@@ -350,12 +350,32 @@ describe("CodingWorkbenchWindowHost", () => {
     const context = renderHost({ repositoryPath: "/repos/a" });
     const props = windowRendered.mock.calls.at(-1)?.[0];
 
-    props?.onSelectBranch?.("release");
+    props?.onSelectBranch?.("release", "/repos/a");
 
     expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith({
       targetBranch: "release",
       targetBranchRoot: "/repos/a",
     });
+  });
+
+  // #4491: a window that shows the active binding's repository has no root of its own. The pick
+  // pins that repository; stored for no repository, `resolvedTargetBranch` dropped it.
+  it("pins the shown repository when a window without its own repository chooses a branch", () => {
+    windowRendered.mockClear();
+    const context = contextFixture({ activeBinding: BOUND });
+    const view = render(<CodingWorkbenchWindowHost cfg={{}} context={context} />);
+    const props = windowRendered.mock.calls.at(-1)?.[0];
+
+    props?.onSelectBranch?.("fix/elsewhere", "/repos/bound");
+
+    const patch = {
+      repositoryPath: "/repos/bound",
+      targetBranch: "fix/elsewhere",
+      targetBranchRoot: "/repos/bound",
+    };
+    expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith(patch);
+    view.rerender(<CodingWorkbenchWindowHost cfg={patch} context={context} />);
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedBranch).toBe("fix/elsewhere");
   });
 
   it("keeps the target branch selected while its repository stays bound", () => {

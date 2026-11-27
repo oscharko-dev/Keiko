@@ -12,6 +12,7 @@ function state(
     pending: false,
     error: false,
     denied: false,
+    unbound: false,
     retry: vi.fn(),
     ...overrides,
   };
@@ -62,6 +63,7 @@ describe("a checkout failure the server named", () => {
       "unregistered",
       "Keiko no longer finds this folder among the added folders. Add it again, then try again.",
     ],
+    ["unbound", "Reconnect this repository in Git, then choose Retry."],
   ] as const)("says the %s cause with Retry and without the branch guess", (reason, text) => {
     render(<LocationBindingNotices locationState={state({ error: true, reason })} />);
     expect(screen.getByRole("alert")).toHaveTextContent(text);

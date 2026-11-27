@@ -18,6 +18,7 @@ function fixture(
   options: {
     readonly rebind?: "refuse" | "ok";
     readonly adopt?: "ok" | "throw";
+    readonly history?: boolean;
   } = {},
 ): {
   readonly port: ReturnType<typeof createProductionTaskBranchPort>;
@@ -53,6 +54,13 @@ function fixture(
         return options.rebind === "refuse" ? undefined : undo;
       },
     },
+    ...(options.history === true
+      ? {
+          followHistory: (runId: string, branch: string): void => {
+            calls.push(`history:${runId}:${branch}`);
+          },
+        }
+      : {}),
   });
   return { port, calls, branches, undo };
 }
@@ -76,6 +84,28 @@ describe("the workspace side of a governed task branch (#3907)", () => {
       workspaceDigest: adoption.workspaceDigest,
     });
     expect(undo).not.toHaveBeenCalled();
+  });
+
+  // Seen in the 1.5.9 release walk (#4491): a Full access run created its own task branch, and the
+  // task's next message was refused (`conversation-not-admitted`) because its Coding History record
+  // still named the old branch while the workspace stood on the new one.
+  it("moves the run's Coding History task onto the branch once the workspace adopted it", () => {
+    const { port, calls } = fixture({ history: true });
+    expect(port?.adopt(adoption)).toBe(true);
+    expect(calls).toEqual([
+      "rebind:run-branch:feature/x:main",
+      "adopt:local:one:feature/x:main",
+      "history:run-branch:feature/x",
+    ]);
+  });
+
+  it("leaves the Coding History task where it was when the move is refused or undone", () => {
+    const refused = fixture({ rebind: "refuse", history: true });
+    expect(refused.port?.adopt(adoption)).toBe(false);
+    expect(refused.calls).not.toContain("history:run-branch:feature/x");
+    const undone = fixture({ adopt: "throw", history: true });
+    expect(() => undone.port?.adopt(adoption)).toThrow("instance refused");
+    expect(undone.calls).not.toContain("history:run-branch:feature/x");
   });
 
   it("changes nothing when the authority refuses the move", () => {

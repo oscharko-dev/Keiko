@@ -47,7 +47,9 @@ function reportCatalogFailure(error: unknown): void {
   });
 }
 
-function useGitRepositoryCatalog(): CatalogState {
+// `refreshKey` reloads the catalog when the Workbench learns a folder's workspace came back (#4491),
+// so a recovered repository no longer reads as unavailable until the window is reopened.
+function useGitRepositoryCatalog(refreshKey: string | undefined): CatalogState {
   const [repositories, setRepositories] = useState<readonly ProjectWithAvailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -75,7 +77,7 @@ function useGitRepositoryCatalog(): CatalogState {
     return (): void => {
       request.current += 1;
     };
-  }, [reload]);
+  }, [reload, refreshKey]);
   return { repositories, loading, error, reload };
 }
 
@@ -557,9 +559,12 @@ interface RepositorySelectorState {
 function useRepositorySelectorState(
   root: string | null,
   locked: boolean,
-  offered: readonly WorkbenchExecutionLocation[] | undefined,
+  {
+    offeredLocations: offered,
+    catalogRefreshKey,
+  }: Pick<CodingWorkbenchRepositorySelectorProps, "offeredLocations" | "catalogRefreshKey">,
 ): RepositorySelectorState {
-  const catalog = useGitRepositoryCatalog();
+  const catalog = useGitRepositoryCatalog(catalogRefreshKey);
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
@@ -591,6 +596,8 @@ interface CodingWorkbenchRepositorySelectorProps {
   readonly onSelectLocation: (location: WorkbenchExecutionLocation) => void;
   readonly onOpenGit: () => void;
   readonly placement?: SelectorPlacement;
+  /** A change reloads the repository catalog (the folder's workspace availability moved). */
+  readonly catalogRefreshKey?: string | undefined;
 }
 
 function LocationSelectorField({
@@ -724,7 +731,7 @@ export function CodingWorkbenchRepositorySelector({
   ...work
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const state = useRepositorySelectorState(root, locked, work.offeredLocations);
+  const state = useRepositorySelectorState(root, locked, work);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField

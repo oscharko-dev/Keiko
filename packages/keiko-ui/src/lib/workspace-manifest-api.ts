@@ -14,7 +14,7 @@ import { bffFetchJson } from "./http";
 import {
   codingAppSessionPairingSettled,
   ensureLocalCodingAppSession,
-  notifyCodingAppSessionChanged,
+  notifyCodingAppSessionEstablished,
 } from "./coding-app-session-client";
 
 const WORKSPACES_URL = "/api/workspaces";
@@ -75,7 +75,7 @@ export async function fetchWorkspaceManifestAccess(): Promise<WorkspaceManifestA
   if (access.session !== "unpaired") return access;
   if (!(await ensureLocalCodingAppSession())) return access;
   const retried = await readWorkspaceManifestAccess();
-  if (retried.session === "paired") notifyCodingAppSessionChanged();
+  if (retried.session === "paired") notifyCodingAppSessionEstablished();
   return retried;
 }
 

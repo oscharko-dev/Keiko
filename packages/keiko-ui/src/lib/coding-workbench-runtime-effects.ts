@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
@@ -14,7 +14,10 @@ import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/share
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import type { CodingWorkbenchModelCheck } from "./coding-workbench-provider-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
-import { useCodingAppSessionRedemptions } from "./coding-app-session-client";
+import {
+  useCodingAppSessionEstablishments,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
   CodingWorkbenchRuntimeState,
@@ -206,6 +209,21 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
       cancelled = true;
     };
   }, [dispatch, redemptions]);
+}
+
+/**
+ * A refused start stays on screen until the next action, but only within the session it was refused
+ * under: after a new pairing (typically a restarted Keiko) its support id names a request of the
+ * previous session, so the window drops it rather than presenting it as current.
+ */
+export function useCodingWorkbenchSessionRenewalEffect(dispatch: RuntimeDispatch): void {
+  const established = useCodingAppSessionEstablishments();
+  const seen = useRef(established);
+  useEffect(() => {
+    if (seen.current === established) return;
+    seen.current = established;
+    dispatch({ kind: "session-renewed" });
+  }, [dispatch, established]);
 }
 
 export function useCodingWorkbenchWorkspaceEffect({

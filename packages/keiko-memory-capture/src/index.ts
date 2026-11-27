@@ -27,6 +27,7 @@ export {
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,
+  isRememberRequest,
 } from "./intent-explicit.js";
 export { extractSalientMemories, SALIENCE_FACT_TYPES } from "./salience.js";
 export { sameFactWord } from "./fact-text.js";

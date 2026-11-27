@@ -363,3 +363,39 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     expect(selectableRepositories).toHaveBeenCalledTimes(2);
   });
 });
+
+// #4491: a repository cloned again at the same path reads as unavailable until it is reconnected in
+// Git; once the Workbench learns the folder's workspace is back, the catalog is read again so the
+// notice clears without reopening the window.
+describe("CodingWorkbenchRepositorySelector after a folder's workspace came back", () => {
+  it("reads the catalog again when the refresh key changes", async () => {
+    selectableRepositories
+      .mockResolvedValueOnce([{ ...project("/repos/plain-folder"), workspaceAvailable: false }])
+      .mockResolvedValue([project("/repos/plain-folder")]);
+    listBranches.mockResolvedValue(branchList(["main"]));
+    const view = renderSelector({ catalogRefreshKey: "unbound" });
+    expect(
+      await screen.findByText(/This repository is no longer available in Git/u),
+    ).toBeInTheDocument();
+
+    view.rerender(
+      <CodingWorkbenchRepositorySelector
+        root="/repos/plain-folder"
+        branch={null}
+        location="local"
+        locked={false}
+        onSelect={vi.fn()}
+        onSelectBranch={vi.fn()}
+        onSelectLocation={vi.fn()}
+        onOpenGit={vi.fn()}
+        placement="setup"
+        catalogRefreshKey="bound"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText(/This repository is no longer available in Git/u)).toBeNull(),
+    );
+    expect(selectableRepositories).toHaveBeenCalledTimes(2);
+  });
+});

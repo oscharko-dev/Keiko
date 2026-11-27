@@ -25,6 +25,7 @@ import {
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
   useCodingWorkbenchRuntimeStream,
+  useCodingWorkbenchSessionRenewalEffect,
   useCodingWorkbenchWorkspaceEffect,
 } from "./coding-workbench-runtime-effects";
 import { codingWorkbenchRuntimeReducer } from "./coding-workbench-live-state";
@@ -82,6 +83,7 @@ export function useCodingWorkbenchRuntime(
     dispatch,
   });
   useCodingWorkbenchPairingEffect(dispatch);
+  useCodingWorkbenchSessionRenewalEffect(dispatch);
   const intent = useModelIntent();
   useCodingWorkbenchRuntimeRefreshEffects({ state, ...resources, intent });
   useCodingWorkbenchWorkspaceEffect({

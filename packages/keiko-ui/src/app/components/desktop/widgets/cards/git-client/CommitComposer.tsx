@@ -87,6 +87,12 @@ interface CommitComposerProps {
   readonly previewRequestRevision?: number | null;
   readonly previewError: string | null;
   readonly previewRevision: number;
+  /**
+   * What a generated draft describes: it is cleared, unless edited, once this moves. Defaults to
+   * `previewRevision`; the Git window passes the staged selection, so a status read or a new branch
+   * that keeps the staged changes keeps the draft.
+   */
+  readonly draftRevision?: string | undefined;
   readonly layout?: CommitComposerLayout | undefined;
   readonly summaryValue?: string | undefined;
   readonly bodyValue?: string | undefined;
@@ -1049,7 +1055,7 @@ interface CommitComposerController {
 
 interface AppliedCommitDraft {
   readonly message: string;
-  readonly previewRevision: number;
+  readonly revision: string;
 }
 
 // A snapshot of the composer state at the moment `Generate with Keiko` was clicked. A late
@@ -1090,11 +1096,11 @@ function draftGenerationErrorText(error: unknown, t: OptionalWidgetTranslate): s
 
 function clearStaleAppliedDraft(
   appliedDraft: AppliedCommitDraft | null,
-  previewRevision: number,
+  revision: string,
   currentMessage: string,
   clear: () => void,
 ): AppliedCommitDraft | null {
-  if (appliedDraft === null || appliedDraft.previewRevision === previewRevision) {
+  if (appliedDraft === null || appliedDraft.revision === revision) {
     return appliedDraft;
   }
   if (appliedDraft.message === currentMessage) {
@@ -1108,7 +1114,7 @@ function clearStaleAppliedDraft(
 
 interface ClearStaleCommitDraftInput {
   readonly appliedDraftRef: { current: AppliedCommitDraft | null };
-  readonly previewRevision: number;
+  readonly revision: string;
   readonly summary: string;
   readonly body: string;
   readonly setSummary: (value: string) => void;
@@ -1117,7 +1123,7 @@ interface ClearStaleCommitDraftInput {
 
 function useClearStaleCommitDraft({
   appliedDraftRef,
-  previewRevision,
+  revision,
   summary,
   body,
   setSummary,
@@ -1126,14 +1132,14 @@ function useClearStaleCommitDraft({
   useEffect(() => {
     appliedDraftRef.current = clearStaleAppliedDraft(
       appliedDraftRef.current,
-      previewRevision,
+      revision,
       composeCommitMessage(summary, body),
       () => {
         setSummary("");
         setBody("");
       },
     );
-  }, [appliedDraftRef, body, previewRevision, setBody, setSummary, summary]);
+  }, [appliedDraftRef, body, revision, setBody, setSummary, summary]);
 }
 
 function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
@@ -1143,9 +1149,10 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   );
   const [body, setBody] = useControlledComposerField(props.bodyValue, props.onBodyChange);
   const appliedDraftRef = useRef<AppliedCommitDraft | null>(null);
+  const draftRevision = props.draftRevision ?? String(props.previewRevision);
   useClearStaleCommitDraft({
     appliedDraftRef,
-    previewRevision: props.previewRevision,
+    revision: draftRevision,
     summary,
     body,
     setSummary,
@@ -1162,10 +1169,10 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
       // preview-revision bump.
       appliedDraftRef.current = {
         message: composeCommitMessage(draft.summary, draft.body),
-        previewRevision: props.previewRevision,
+        revision: draftRevision,
       };
     },
-    [props.previewRevision, setBody, setSummary],
+    [draftRevision, setBody, setSummary],
   );
   const updateSummary = useCallback(
     (value: string): void => {

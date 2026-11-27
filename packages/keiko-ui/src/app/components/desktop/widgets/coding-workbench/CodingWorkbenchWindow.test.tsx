@@ -121,13 +121,32 @@ vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
 }));
 // The central MCP read is not part of what this file proves; a stable empty list keeps it hermetic.
+// A windowed timeline list scrolls by itself inside the stream; this probe lets a test report one
+// whose reader scrolled up, around the real Timeline.
+const listFollowProbe = vi.hoisted(() => ({ active: false, resume: vi.fn() }));
+vi.mock("./CodingWorkbenchSections", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./CodingWorkbenchSections")>();
+  const react = await import("react");
+  const { ListFollowContext } = await import("./CodingWorkbenchJumpToLatest");
+  const Timeline = (props: React.ComponentProps<typeof original.Timeline>): React.ReactNode => {
+    const report = react.useContext(ListFollowContext);
+    react.useEffect(() => {
+      if (listFollowProbe.active) report?.({ paused: true, resume: listFollowProbe.resume });
+    }, [report]);
+    return react.createElement(original.Timeline, props);
+  };
+  return { ...original, Timeline };
+});
 vi.mock("../../useMcpServerChoices", () => {
   const choices = { servers: [], loading: false, failed: false, reload: (): void => undefined };
   return { useMcpServerChoices: (): typeof choices => choices };
 });
+const selectableRepositoriesMock = vi.hoisted(() =>
+  vi.fn((): Promise<readonly ProjectWithAvailability[]> => Promise.resolve([])),
+);
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
-  selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
+  selectableRepositories: selectableRepositoriesMock,
 }));
 // #3389 AC3 mark-ready wiring: the mint/execute pair the propose-ready control performs, and the
 // journey-refresh read the window uses to obtain a real, matching `JourneyOutcome`. `proposePrMarkReady`
@@ -601,6 +620,7 @@ beforeEach(() => {
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
+  selectableRepositoriesMock.mockReset().mockResolvedValue([]);
   repositoryBranchHookMock.mockReset().mockImplementation((root) => ({
     root,
     response: null,
@@ -1364,6 +1384,62 @@ describe("CodingWorkbenchWindow", () => {
     });
   });
 
+  // #4491: a continued local task whose checkout moved to another branch was refused by the server
+  // with an opaque "Review the live state and retry"; the Workbench now names both branches first.
+  it("names both branches instead of starting a local task whose checkout moved", async () => {
+    const actual =
+      await vi.importActual<typeof import("./useCodingTaskSession")>("./useCodingTaskSession");
+    vi.spyOn(codingHistoryApi, "fetchCodingTask").mockResolvedValue({
+      task: {
+        id: "chat-one",
+        title: "Previous task",
+        projectPath: "/repo",
+        modelId: "coding",
+        branch: "fix/sum",
+        workspaceId: "local:/repo",
+        taskId: "task-1",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        latestRunId: "run-one",
+      },
+      messages: [],
+      truncated: false,
+    });
+    taskSessionHookMock.mockImplementation(actual.useCodingTaskSession);
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "succeeded", runId: "run-one", conversationId: "chat-one" }),
+          error: null,
+        },
+      }),
+      actions: liveActions,
+    });
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => {
+      diagnostics.push(message);
+    });
+    render(<CodingWorkbenchWindow selectedRoot="/repo" selectedLocation="local" />);
+
+    const notice =
+      "This task works on the branch fix/sum, but the next run would use dev. Choose fix/sum in " +
+      "the branch control to continue here, or start a new task.";
+    expect((await screen.findAllByText(notice)).length).toBeGreaterThan(0);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Task instructions"), "Continue");
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    await user.click(start);
+    expect(liveActions.start).not.toHaveBeenCalled();
+    expect(diagnostics.filter((line) => line.includes("start blocked"))).toEqual([
+      "[keiko] coding workbench start blocked: task-branch-moved",
+    ]);
+    resetClientDiagnosticWriter();
+  });
+
   // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable
   // from an unsent draft, and re-submittable as a brand-new follow-up by mistake if the operator
   // later paused and clicked Send instead of Resume. `actions.start`'s own returned promise always
@@ -1570,6 +1646,53 @@ describe("CodingWorkbenchWindow", () => {
     );
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
+  });
+
+  // #4491: a window that shows the active binding's repository selected none itself; the branch it
+  // chose was stored for no repository and dropped, so the branch control did nothing.
+  it("hands a chosen branch over with the repository the window shows", async () => {
+    const user = userEvent.setup();
+    const onSelectBranch = vi.fn();
+    repositoryBranchHookMock.mockImplementation((root) => ({
+      root,
+      response: null,
+      loading: false,
+      error: null,
+      denied: false,
+      branches: [
+        { name: "task-1", headRefHash: "a".repeat(40), current: false },
+        { name: "fix/elsewhere", headRefHash: "b".repeat(40), current: true },
+      ],
+      currentBranch: root === null ? null : "fix/elsewhere",
+      ordinaryFolder: false,
+      refresh: vi.fn(() => Promise.resolve()),
+    }));
+    selectableRepositoriesMock.mockResolvedValue([
+      {
+        path: "/repos/keiko",
+        name: "keiko",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+        workspaceAvailable: true,
+      },
+    ]);
+    runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
+    render(
+      <ActiveWorkspaceProvider
+        value={activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task")}
+      >
+        <CodingWorkbenchWindow onSelectBranch={onSelectBranch} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    const branch = screen.getByRole("combobox", { name: "Choose coding branch" });
+    await waitFor(() => expect(branch).toBeEnabled());
+    await user.click(branch);
+    await user.click(await screen.findByRole("option", { name: "fix/elsewhere" }));
+
+    expect(onSelectBranch).toHaveBeenCalledExactlyOnceWith("fix/elsewhere", "/repos/keiko");
   });
 
   it("uses the bound repository for the composer context", () => {
@@ -2808,6 +2931,130 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(1, "approved");
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
+  });
+
+  // Seen in the 1.5.9 release walk (#4491): the approval card sits above the live timeline, so
+  // "Review now" scrolls the stream up to it and following stops. After Approve the run went on below
+  // and finished while the stream stayed on the first message behind "7 new steps".
+  it("follows the newest activity again once the person decides an approval", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(deliveryApprovalState("push"));
+    const log = screen.getByRole("log");
+    const scrollTop = pinLogGeometry(log);
+    // The stream scrolled up to the card, which stops following.
+    scrollTop.value = 100;
+    fireEvent.scroll(log);
+
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+
+    expect(liveActions.decideApproval).toHaveBeenCalledWith("approved");
+    expect(scrollTop.value).toBe(1720);
+  });
+
+  it("resumes a windowed timeline list the reader scrolled up in once an approval is decided", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    listFollowProbe.active = true;
+    listFollowProbe.resume.mockClear();
+    try {
+      renderWorkbench(deliveryApprovalState("push"));
+      expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+
+      expect(listFollowProbe.resume).toHaveBeenCalledTimes(1);
+    } finally {
+      listFollowProbe.active = false;
+    }
+  });
+
+  // Seen in the 1.5.9 release walk (#4491): a Full access run created its own task branch, but the
+  // branch control kept the branch the run began on, because the workspace was not read again.
+  it("reads the workspace again once a run settles, so the branch control shows its task branch", () => {
+    const workspace = activeWorkspaceWithBinding("/repo", "/repo");
+    const running = liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+      },
+      events: [event(1)],
+    });
+    runtimeHookMock.mockReturnValue({ state: running, actions: actions() });
+    const view = render(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(workspace.refresh).not.toHaveBeenCalled();
+
+    const settled = liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "succeeded",
+          runId: "run-1",
+          revision: 3,
+          updatedAt: "2026-07-13T12:09:00.000Z",
+        }),
+      },
+      events: [event(1)],
+    });
+    runtimeHookMock.mockReturnValue({ state: settled, actions: actions() });
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(workspace.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the newest activity again once the person decides a changeset review", async () => {
+    const user = userEvent.setup();
+    const deny = vi.fn();
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: {
+        actionId: "action-1",
+        diff: { files: [], truncated: false, totalBytes: 0 },
+        deciding: false,
+        deliveryFailed: false,
+        deliveryFailure: null,
+      },
+      approve: vi.fn(),
+      deny,
+      retry: vi.fn(),
+      bridgeUnavailable: false,
+    });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+        },
+        events: [event(1)],
+      }),
+    );
+    const log = screen.getByRole("log");
+    const scrollTop = pinLogGeometry(log);
+    scrollTop.value = 100;
+    fireEvent.scroll(log);
+
+    await user.click(screen.getByRole("button", { name: "Reject change" }));
+
+    expect(deny).toHaveBeenCalledTimes(1);
+    expect(scrollTop.value).toBe(1720);
   });
 
   // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
@@ -4291,6 +4538,22 @@ describe("CodingWorkbenchWindow", () => {
         await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
       },
     );
+
+    it("reads the Changes list again when an undo puts files back and when they are restored", async () => {
+      const newest = { staged: false, fileCount: 1, additions: 1, deletions: 1 };
+      revertHookMock.mockReturnValue({ revert: newest });
+      const feed = feedWithTools([{ tool: "edit", state: "succeeded" }]);
+      const run = mountRun(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(1));
+
+      revertHookMock.mockReturnValue({ revert: { ...newest, staged: true } });
+      run.rerenderWith(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+
+      revertHookMock.mockReturnValue({ revert: newest });
+      run.rerenderWith(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(3), { timeout: 3_000 });
+    });
   });
 
   it("announces an unavailable authentication setup plan in the single live status", () => {

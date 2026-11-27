@@ -633,6 +633,29 @@ describe("ChatWindow cancel button", () => {
     expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
   });
 
+  it("does not offer regeneration on an answer a newer stopped question follows", () => {
+    // The server regenerates only the last question-or-answer message; a stopped question after
+    // the answer makes it refuse, so the control must not be offered there.
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({ id: "u1", content: "First question" }),
+          makeMessage({ id: "a1", role: "assistant", content: "First answer", timestamp: 2 }),
+          makeMessage({
+            id: "u2",
+            content: "Stopped question",
+            timestamp: 3,
+            turnState: "cancelled",
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByText("First answer")).toBeInTheDocument();
+    expect(screen.getAllByText("Stopped question").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+  });
+
   it("does not offer plain regeneration while inspecting an older grounded response version", async () => {
     const user = userEvent.setup();
     const groundedAnswer = copyTestGroundedAnswer("Current grounded answer", 1);

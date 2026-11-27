@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { PROMPT_COMPACTION_SYSTEM } from "./chat-prompt-compaction.js";
+import { CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE } from "./conversation-prompt.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createRunRegistry } from "./runs.js";
@@ -229,6 +230,26 @@ it("recalls memory for the person's own words when a long grounded prompt was co
   expect(JSON.stringify((result.body as { readonly memory?: unknown }).memory)).toContain(
     "memory-numbers",
   );
+});
+
+// PR #4568 review: compaction replaces the prompt with the model's summary, which no longer starts
+// with the person's "Merke dir". The memory-off notice reads the person's own words, so a clear
+// remember request with Chat memory off is still answered as not stored.
+it("tells a compacted remember request with memory off that nothing was stored", async () => {
+  const calls: GatewayCallRequest[] = [];
+  const { deps, root, chatId } = fixture(calls);
+  const content = `Merke dir: ${OWN_WORDS} ${FILLER}${FILLER}`;
+  const result = await handleGroundedAsk(
+    groundedRoute(root, chatId, content, { enabled: false }),
+    deps,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  expect(calls.some((request) => systemOf(request) === PROMPT_COMPACTION_SYSTEM)).toBe(true);
+  const answering = calls.filter(
+    (request) => systemOf(request) !== PROMPT_COMPACTION_SYSTEM && !isSalienceCall(request),
+  );
+  expect(texts(answering, "user")).toContain(SUMMARY);
+  expect(texts(answering, "user")).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
 });
 
 it.each([true, false])(

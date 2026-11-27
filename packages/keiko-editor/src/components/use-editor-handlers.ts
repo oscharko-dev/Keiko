@@ -1373,10 +1373,22 @@ function useMountHandler(
   useRuntimeWiringRefresh(refreshArgs);
   return useCallback<OnMount>(
     (editor, monaco): void => {
+      releaseReplacedRuntime(baseArgs.refs);
       mountEditorRuntime({ ...baseArgs, editor, monaco, autoFocus });
     },
     [autoFocus, baseArgs],
   );
+}
+
+// A reload shows the loading placeholder, so the ready surface mounts a new Monaco editor while this
+// component stays (#4491). The replaced editor's wiring and model lease are released first: Monaco
+// language providers are global, so an undisposed set answered every request again (inlay hints
+// shown twice), and a held lease kept the model from ever being evicted.
+function releaseReplacedRuntime(refs: EditorRefs): void {
+  refs.modelAttachmentRef.current?.detach();
+  refs.modelAttachmentRef.current = null;
+  refs.disposeRef.current?.();
+  refs.disposeRef.current = null;
 }
 
 function useUnmountDisposal(refs: EditorRefs): void {

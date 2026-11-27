@@ -16,7 +16,7 @@ import {
 import { recordResponseCorrelationId } from "@/lib/bff-correlation";
 import { ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
-import { AddRepositoryDialog } from "./AddRepositoryDialog";
+import { AddRepositoryDialog, examplePath } from "./AddRepositoryDialog";
 import { DEFAULT_GIT_CLIENT, type GitClientSeam } from "./git-client-seam";
 
 const PROJECT_FIXTURE: ProjectWithAvailability = {
@@ -56,6 +56,31 @@ function correlatedProjectResponse(correlationId: string): { project: ProjectWit
   recordResponseCorrelationId(value, correlationId);
   return value;
 }
+
+// #4491 (Windows 1.5.9 lab): the path fields showed a macOS path on Windows.
+describe("AddRepositoryDialog example paths", () => {
+  it("shows a drive path in a Windows browser and a POSIX path elsewhere", () => {
+    const windows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+    const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15";
+    expect(examplePath("existing-repo", windows)).toBe("C:\\Users\\me\\Work\\existing-repo");
+    expect(examplePath("existing-repo", mac)).toBe("/Users/me/Work/existing-repo");
+  });
+
+  it("uses the browser's own form in the local path field", () => {
+    render(
+      <AddRepositoryDialog
+        client={makeClient()}
+        onAdded={vi.fn()}
+        onClose={vi.fn()}
+        initialMode="open"
+      />,
+    );
+    expect(screen.getByLabelText("Local repository path")).toHaveAttribute(
+      "placeholder",
+      examplePath("existing-repo"),
+    );
+  });
+});
 
 describe("AddRepositoryDialog — settlement after the dialog has closed", () => {
   it("reports a discarded-succeeded clone settlement, with the response's correlation id and no path/URL", async () => {

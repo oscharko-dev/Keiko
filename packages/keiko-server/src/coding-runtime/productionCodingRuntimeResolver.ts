@@ -242,6 +242,8 @@ export interface ProductionCodingRuntimeResolverInput {
    * `verifiedCommit.governedTaskBranch`; absent, a run cannot be given a task branch.
    */
   readonly governedTaskBranches?: GovernedTaskBranches | undefined;
+  /** Moves a run's Coding History task onto the task branch the run adopted (#4491). */
+  readonly followTaskBranchInHistory?: ((runId: string, branch: string) => void) | undefined;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
@@ -1076,6 +1078,9 @@ function taskBranchPortFor(
         lifecycle: input.workspaceAuthority.workspaceLifecycle,
         branches: input.governedTaskBranches,
         authority,
+        ...(input.followTaskBranchInHistory === undefined
+          ? {}
+          : { followHistory: input.followTaskBranchInHistory }),
       });
 }
 

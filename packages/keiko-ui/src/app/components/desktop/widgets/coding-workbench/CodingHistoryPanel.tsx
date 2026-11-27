@@ -453,6 +453,12 @@ function RenameForm({
   readonly onCancel: () => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const input = useRef<HTMLInputElement>(null);
+  // The Rename button that held focus is gone; the title field takes it over, ready to retype.
+  useEffect(() => {
+    input.current?.focus();
+    input.current?.select();
+  }, []);
   return (
     <form
       onSubmit={(event) => {
@@ -462,6 +468,7 @@ function RenameForm({
       className={styles.cmpRename}
     >
       <input
+        ref={input}
         className={styles.cmpInput}
         aria-label={t("codingWorkbench.history.taskTitle")}
         value={title}
