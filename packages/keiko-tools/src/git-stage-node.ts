@@ -100,12 +100,17 @@ function withoutCrlf(bytes: Uint8Array): Uint8Array {
 }
 const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
 
+/** Whether every configured filter driver can be overridden with `-c filter.<name>.<key>=`. */
+export function filterDriversOverridable(names: readonly string[]): boolean {
+  return names.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name));
+}
+
 // Overrides of every configured filter driver (the read path's mechanism, keiko-git
 // `filterNeutralizingArgs`): `--no-filters` alone would also drop the `core.autocrlf` conversion
 // this path needs. A name that cannot be overridden, or an unreadable configuration, refuses.
 async function filterNeutralizingArgs(ctx: GitStageEffectContext): Promise<readonly string[]> {
   const names = await ctx.filterDriverNames();
-  if (!names?.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name)))
+  if (names === undefined || !filterDriversOverridable(names))
     throw new Error("git-stage-filter-config-unavailable");
   return names.flatMap((name) => [
     "-c",

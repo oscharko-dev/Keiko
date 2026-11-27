@@ -669,6 +669,16 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(await stageSupported()).toBe(false);
   });
 
+  // PR #4568 audit: a configured filter driver whose name cannot be overridden on the command line
+  // refuses the stage as unsupported instead of failing the proposal with an unhandled error.
+  it("refuses, without throwing, a conversion while a filter driver name cannot be neutralized", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+    appendFileSync(join(root, ".git", "config"), '[filter "a=b"]\n\tclean = cat\n', "utf8");
+    writeFileSync(join(root, "a.txt"), "hello\r\nworld\r\n", "utf8");
+
+    await expect(stageSupported()).resolves.toBe(false);
+  });
+
   it("refuses exact staging while core.safecrlf resolves to anything but false", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = warn\n");
 

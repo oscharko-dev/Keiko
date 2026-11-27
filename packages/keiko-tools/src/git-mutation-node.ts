@@ -64,6 +64,7 @@ import {
   stageExactFiles,
   gitStageAttributesSupported,
   gitStageFilesSupported,
+  filterDriversOverridable,
   unstageExactFiles,
   type GitStageEffectContext,
   type GitStageLineEndings,
@@ -397,6 +398,7 @@ function verifiedIndexEffect(
   request: Pick<GitCommitExecRequest, "verified">,
   stagedLineEndings?: GitStageLineEndings,
 ): GitStageEffectContext {
+  let filterDrivers: Promise<readonly string[] | undefined> | undefined;
   return {
     workspaceRoot: ctx.runDeps.workspace.root,
     fs: workspaceFsOf(ctx.runDeps),
@@ -406,7 +408,8 @@ function verifiedIndexEffect(
       (await verifiedFactsMatch(ctx, request)) &&
       (stagedLineEndings === undefined ||
         (await configuredStageLineEndings(ctx)) === stagedLineEndings),
-    filterDriverNames: async () => (await readStageConfig(ctx))?.filterDrivers,
+    // Read once per staging, not once per hashed file (PR #4568 audit: Windows spawn cost).
+    filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     run: (argv, stdin, indexPath) =>
       runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
@@ -683,14 +686,17 @@ export async function readGitStageSupport(
   fs?: WorkspaceFs,
 ): Promise<boolean> {
   const ctx = buildRunContext(deps);
-  const lineEndings = await configuredStageLineEndings(ctx);
-  if (lineEndings === undefined) return false;
+  // One configuration read for the whole admission; a driver that cannot be neutralized refuses
+  // here as an unsupported transformation instead of failing a hash (PR #4568 audit).
+  const config = await readStageConfig(ctx);
+  if (config === undefined || !filterDriversOverridable(config.filterDrivers)) return false;
+  const { lineEndings, filterDrivers } = config;
   const effect: GitStageEffectContext = {
     workspaceRoot: deps.workspace.root,
     fs: fs ?? workspaceFsOf(ctx.runDeps),
     authorized: () => !ctx.signal.aborted,
     check: () => Promise.resolve(!ctx.signal.aborted),
-    filterDriverNames: async () => (await readStageConfig(ctx))?.filterDrivers,
+    filterDriverNames: () => Promise.resolve(filterDrivers),
     run: (argv, stdin) => runOne(ctx, argv, stdin),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
