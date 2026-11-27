@@ -151,6 +151,23 @@ describe("parseGitEditorUnifiedDiff", () => {
     expect(copied.files).toMatchObject([{ path: decoded, status: "modified" }]);
   });
 
+  it("drops a file whose name starts like a UNC or extended-length Windows path", () => {
+    const section = (spelled: string): string[] => [
+      `diff --git "a/${spelled}" "b/${spelled}"`,
+      `--- "a/${spelled}"\t`,
+      `+++ "b/${spelled}"\t`,
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+    ];
+    const parsed = parseGitEditorUnifiedDiff(
+      [...section("\\\\\\\\server\\\\share.js"), ...section("ok.js"), ""].join("\n"),
+      { scope: "staged", selectedRootPrefix: "", processTruncated: false },
+    );
+    expect(parsed.files.map((file) => file.path)).toEqual(["ok.js"]);
+    expect(parsed.truncated).toBe(true);
+  });
+
   it("drops a file outside the selected-root prefix while keeping one inside it", () => {
     const parsed = parseGitEditorUnifiedDiff(
       [

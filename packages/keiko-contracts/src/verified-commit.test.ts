@@ -176,6 +176,8 @@ describe("transient verified commit review", () => {
     "../outside.js",
     "dir/../../outside.js",
     "dir\\..\\outside.js",
+    "\\\\server\\share\\f.js",
+    "\\\\?\\C:\\f.js",
     "..\\outside.js",
     "~/secrets.env",
     "C:/Windows/system32",

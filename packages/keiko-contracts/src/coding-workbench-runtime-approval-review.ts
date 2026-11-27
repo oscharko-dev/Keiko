@@ -346,11 +346,15 @@ function isReviewablePath(value: unknown): boolean {
  * holds: a colon or a backslash is an ordinary character there, and Git itself never emits a
  * Windows separator or drive. Those two stay legal; everything that makes a path escape does not:
  * absolute, home- or drive-anchored, NUL, empty/dot/dot-dot segments (a backslash also splits a
- * segment, so `..\x` is refused), invisible format characters and anything past the length bound.
+ * segment, so `..\x` is refused), a leading backslash (a UNC or `\\?\` name, refused outright as
+ * the fail-closed choice: no real repository path starts that way), invisible format characters
+ * and anything past the length bound. The path is display text only: the card shows it and no
+ * file operation ever resolves it, so this check keeps the card honest and not the filesystem safe.
  */
 function isReviewableRepositoryPath(value: unknown): boolean {
   return (
     validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
+    !value.startsWith("\\") &&
     !value.split(/[/\\]/u).includes("..") &&
     isPortableWorkspaceRelativePath(value.replaceAll("\\", "_"))
   );

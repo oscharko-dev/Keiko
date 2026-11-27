@@ -147,3 +147,69 @@ describe("a path header Git would not have written stays refused", () => {
     expect(redact(patch)).not.toContain(preamble.trimEnd());
   });
 });
+
+const TOKEN_TAIL = "hp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+const OCTAL_G = "\\147";
+
+function patchAround(headerLine: string): string {
+  // A rename record belongs to a file section, so it follows that section's `diff --git` line.
+  const lead = headerLine.startsWith("rename") ? "diff --git a/o b/n\nsimilarity index 90%\n" : "";
+  return `${lead}${headerLine}\nindex a25fe44..1d003d2 100644\n--- a/x.js\n+++ b/x.js\n@@ -1 +1 @@\n-b\n+c\n`;
+}
+
+describe("a credential spelled in a path header never reaches the output", () => {
+  it.each([
+    ["an octal-spelled token", `diff --git "a/${OCTAL_G}${TOKEN_TAIL}" "b/y"`],
+    ["an octal-spelled token in the second path", `diff --git "a/y" "b/${OCTAL_G}${TOKEN_TAIL}"`],
+    [
+      "a token with a non-canonical octal escape beside a quoted character",
+      `diff --git "a/caf\\303\\251/${OCTAL_G}${TOKEN_TAIL}" "b/y"`,
+    ],
+    ["a plain token inside quotes", `diff --git "a/caf\\303\\251/g${TOKEN_TAIL}" "b/y"`],
+    [
+      "a password field in a quoted path",
+      'diff --git "a/caf\\303\\251 password=hunter2hunter2" "b/y"',
+    ],
+    [
+      "an api key field in a quoted path",
+      'diff --git "a/caf\\303\\251 api_key=abcd1234efgh5678" "b/y"',
+    ],
+    [
+      "an octal-spelled token on a rename line",
+      `rename to "caf\\303\\251/${OCTAL_G}${TOKEN_TAIL}"`,
+    ],
+  ])("masks %s", (_label, header) => {
+    const redacted = redact(patchAround(header));
+    for (const value of [TOKEN_TAIL, "hunter2hunter2", "abcd1234efgh5678"])
+      expect(redacted).not.toContain(value);
+  });
+
+  it.each([
+    ["a tail after two quoted paths", 'diff --git "a/x\\303\\251" "b/x\\303\\251" extra\\303\\251'],
+    ["a third path token", 'diff --git "a/x\\303\\251" "b/x\\303\\251" "c/x"'],
+    ["two paths on a rename line", 'rename from "a/x\\303\\251" "b/y"'],
+    ["a raw control character in a quoted path", 'diff --git "a/x\u0001\\303\\251" "b/y"'],
+  ])("masks the header with %s", (_label, header) => {
+    expect(redact(patchAround(header))).not.toContain(header.slice(0, 40));
+  });
+
+  it("masks a header carrying an octal spelling of a printable byte, for any name", async () => {
+    await checkProperty({
+      name: "non-canonical escape in a quoted header is masked",
+      generate: (random) => {
+        const name = fileName(random);
+        const printable = Array.from(name).findIndex((char) => /^[a-z0-9_]$/u.test(char));
+        return { name, printable };
+      },
+      runs: 60,
+      property: ({ name, printable }: { name: string; printable: number }): void => {
+        if (printable < 0) return;
+        const characters = Array.from(name);
+        const octal = `\\${(characters[printable]?.codePointAt(0) ?? 0).toString(8).padStart(3, "0")}`;
+        characters[printable] = octal;
+        const hostile = `"a/${characters.join("").replaceAll('"', '\\"')}\\303\\251"`;
+        expect(redact(patchAround(`diff --git ${hostile} "b/y"`))).not.toContain(octal);
+      },
+    });
+  });
+});

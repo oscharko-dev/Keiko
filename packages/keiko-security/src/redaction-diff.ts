@@ -1,5 +1,4 @@
 import {
-  decodeGitQuotedPath,
   parseUnifiedDiff,
   PatchParseError,
   type UnifiedDiffFileSource,
@@ -435,49 +434,134 @@ function projectUnownedText(
 }
 
 function unsafeUnownedText(text: string, ports: ProjectionPorts): boolean {
-  const unclassified = withoutGitPathHeaderLines(text);
+  const unclassified = withoutGitPathHeaderLines(text, ports);
   return (
     (unclassified.includes("\\") && /["'`[{]/u.test(unclassified)) ||
     ports.redactPlain(text) !== text
   );
 }
 
-const GIT_PATH_HEADER = /^(?:diff --git |(?:rename|copy) (?:from|to) )/u;
+const GIT_PATH_HEADER = /^(?:(diff --git )|(?:rename|copy) (?:from|to) )/u;
+// Git names a control byte by its letter and writes every other byte it quotes in octal.
+const NAMED_ESCAPES: ReadonlyMap<string, number> = new Map([
+  ["a", 0x07],
+  ["b", 0x08],
+  ["t", 0x09],
+  ["n", 0x0a],
+  ["v", 0x0b],
+  ["f", 0x0c],
+  ["r", 0x0d],
+  ['"', 0x22],
+  ["\\", 0x5c],
+]);
+const NAMED_ESCAPE_BYTES: ReadonlySet<number> = new Set(NAMED_ESCAPES.values());
 
-/**
- * Whether the text is a string of Git path tokens: plain text without quote or backslash, or a
- * C-quoted path that decodes to valid UTF-8. Git quotes every path holding a non-ASCII byte, a
- * control character, a double quote or a backslash, so a quoted token is the ordinary spelling of
- * a legitimate name and not an escaped literal that could hide a value. A malformed quote fails.
- */
-function isGitPathTokens(text: string): boolean {
-  let from = 0;
-  while (from < text.length) {
-    const open = text.indexOf('"', from);
-    const plain = text.slice(from, open === -1 ? text.length : open);
-    if (plain.includes("\\")) return false;
-    if (open === -1) return true;
-    let close = open + 1;
-    while (close < text.length && text[close] !== '"') close += text[close] === "\\" ? 2 : 1;
-    if (close >= text.length || decodeGitQuotedPath(text.slice(open, close + 1)) === undefined)
-      return false;
-    from = close + 1;
-  }
-  return true;
+/** One escape of Git's `quote_c_style`, as its byte and length; undefined when Git never writes it. */
+function canonicalEscape(content: string, at: number): readonly [number, number] | undefined {
+  const named = NAMED_ESCAPES.get(content.charAt(at + 1));
+  if (named !== undefined) return [named, 2];
+  const octal = /^[0-3][0-7]{2}$/u.test(content.slice(at + 1, at + 4))
+    ? Number.parseInt(content.slice(at + 1, at + 4), 8)
+    : undefined;
+  // Git writes octal only for a byte it has no letter for: a control byte or one at 0x7f and above.
+  if (octal === undefined || (octal >= 0x20 && octal < 0x7f) || NAMED_ESCAPE_BYTES.has(octal))
+    return undefined;
+  return [octal, 4];
 }
 
 /**
- * The extended header lines that name paths (`diff --git`, `rename|copy from|to`) carry the path as
- * the tool spelled it. They are classified by the closed grammar above, so only they leave the
- * escaped-literal refusal; the credential floor still runs over the whole text.
+ * Decodes a path in exactly the spelling Git writes: a plain printable ASCII character or any
+ * non-ASCII character stays itself, and a quote, backslash, control byte or DEL is escaped as Git
+ * escapes it. Any other spelling (an octal escape of a printable byte, a raw control character, an
+ * unescaped quote, an unknown escape) is something Git never emits and is refused, so an escape
+ * can never hide a value from the redactor. Undefined unless the result is valid UTF-8.
  */
-function withoutGitPathHeaderLines(text: string): string {
+function decodeCanonicalQuotedPath(token: string): string | undefined {
+  if (token.length < 2 || !token.startsWith('"') || !token.endsWith('"')) return undefined;
+  const content = token.slice(1, -1);
+  const bytes: number[] = [];
+  let at = 0;
+  while (at < content.length) {
+    const step = canonicalStep(content, at);
+    if (step === undefined) return undefined;
+    bytes.push(...Array.from(step.bytes));
+    at += step.length;
+  }
+  // Bytes that are not valid UTF-8 decode to U+FFFD; a path holding one has no reliable identity.
+  const decoded = new TextDecoder("utf-8").decode(Uint8Array.from(bytes));
+  return decoded.includes("\uFFFD") ? undefined : decoded;
+}
+
+/** The bytes and source length of the character or escape at `at`; undefined for a spelling Git never writes. */
+function canonicalStep(
+  content: string,
+  at: number,
+): { readonly bytes: ArrayLike<number>; readonly length: number } | undefined {
+  const character = String.fromCodePoint(content.codePointAt(at) ?? 0);
+  if (character === "\\") {
+    const escape = canonicalEscape(content, at);
+    return escape === undefined ? undefined : { bytes: [escape[0]], length: escape[1] };
+  }
+  const code = character.codePointAt(0) ?? 0;
+  if (character === '"' || code < 0x20 || code === 0x7f) return undefined;
+  return { bytes: new TextEncoder().encode(character), length: character.length };
+}
+
+function closingQuote(text: string): number {
+  for (let at = 1; at < text.length; at += 1) {
+    if (text[at] === "\\") at += 1;
+    else if (text[at] === '"') return at;
+  }
+  return -1;
+}
+
+/** The two path tokens of a `diff --git` line, or undefined unless there are exactly two. */
+function splitDiffGitTokens(rest: string): readonly [string, string] | undefined {
+  if (rest.startsWith('"')) {
+    const close = closingQuote(rest);
+    return close < 0 || rest[close + 1] !== " "
+      ? undefined
+      : [rest.slice(0, close + 1), rest.slice(close + 2)];
+  }
+  const quoted = rest.indexOf(' "');
+  if (quoted >= 0) return [rest.slice(0, quoted), rest.slice(quoted + 1)];
+  const plain = rest.lastIndexOf(" b/");
+  return plain < 0 ? undefined : [rest.slice(0, plain), rest.slice(plain + 1)];
+}
+
+/** A quoted token in Git's own spelling, or a plain one that holds no quote and no escape. */
+function decodedPathToken(token: string): string | undefined {
+  if (token.startsWith('"')) return decodeCanonicalQuotedPath(token);
+  return /["\\]/u.test(token) ? undefined : token;
+}
+
+/**
+ * Whether one header line is a path record in Git's closed grammar: `diff --git` names exactly two
+ * path tokens and `rename|copy from|to` exactly one, with no tail. Each decoded path also passes
+ * the credential floor, because a value spelled in escapes is a value once decoded.
+ */
+function isCanonicalGitPathHeader(line: string, ports: ProjectionPorts): boolean {
+  const match = GIT_PATH_HEADER.exec(line);
+  if (match === null) return false;
+  const rest = line.slice(match[0].length);
+  const tokens = match[1] === undefined ? [rest] : splitDiffGitTokens(rest);
+  if (tokens === undefined) return false;
+  return tokens.every((token) => {
+    const decoded = decodedPathToken(token);
+    return decoded !== undefined && ports.redactPlain(decoded) === decoded;
+  });
+}
+
+/**
+ * The extended header lines that name paths carry the path as Git spelled it. Only a line in the
+ * closed grammar above leaves the escaped-literal refusal; the credential floor still runs over
+ * the whole text.
+ */
+function withoutGitPathHeaderLines(text: string, ports: ProjectionPorts): string {
   return text
     .split(/(?<=\n)/u)
-    .filter((line) => {
-      const body = line.endsWith("\n") ? line.slice(0, -1) : line;
-      const match = GIT_PATH_HEADER.exec(body);
-      return match === null || !isGitPathTokens(body.slice(match[0].length));
-    })
+    .filter(
+      (line) => !isCanonicalGitPathHeader(line.endsWith("\n") ? line.slice(0, -1) : line, ports),
+    )
     .join("");
 }

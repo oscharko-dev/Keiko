@@ -431,7 +431,9 @@ function relativePathUnderPrefix(path: string, normalizedPrefix: string): string
 // to be one. A backslash also splits a segment for the traversal test, so `..\x` stays refused.
 function isRepositoryRelativePath(path: string): boolean {
   return (
-    !path.split(/[/\\]/u).includes("..") && isRootRelativeFileIdentifier(path.replaceAll("\\", "_"))
+    !path.startsWith("\\") &&
+    !path.split(/[/\\]/u).includes("..") &&
+    isRootRelativeFileIdentifier(path.replaceAll("\\", "_"))
   );
 }
 
