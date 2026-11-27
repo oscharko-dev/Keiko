@@ -50337,6 +50337,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
+      deadlineMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "start",

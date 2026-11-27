@@ -196,6 +196,9 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       state: "started",
       reason: "none",
       reservationId: this.reservation.reservationId,
+      ...(Number.isFinite(this.deadlineAt)
+        ? { deadlineMs: Math.max(0, this.deadlineAt - this.startedAt) }
+        : {}),
     });
   }
   public beforeEffect(guard: Consumer["guard"], revalidate: () => void): boolean {

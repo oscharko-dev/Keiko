@@ -165,6 +165,9 @@ export type ToolLifecycleStarted = ToolLifecycleIdentity & {
   readonly state: "started";
   readonly reason: "none";
   readonly reservationId: string;
+  // The effective per-call deadline (ms from admission): the smaller of the descriptor budget and the
+  // authority expiry. Lets an aborted or timed-out call be located from the log alone.
+  readonly deadlineMs?: number;
 };
 interface ToolLifecycleSettlement {
   readonly op: typeof TOOL_LIFECYCLE_OPERATIONS.terminal;

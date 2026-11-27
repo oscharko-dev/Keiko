@@ -1107,6 +1107,8 @@ it("passes the actual opaque catalog invocation to the private original-read del
   const admitted = log.events.filter((event) => event.op === "tool-catalog.invocation-started");
   const settled = log.events.filter((event) => event.op === "tool-catalog.invocation-settled");
   expect(admitted).toHaveLength(1);
+  // The effective per-call deadline is recorded so an abort is located from the log alone (W-5).
+  expectEffectiveDeadlineLogged(admitted);
   expect(settled).toHaveLength(1);
   expect(seen).toEqual([admitted[0]?.extra?.invocationId]);
   expect(settled[0]?.extra?.invocationId).toBe(seen[0]);
@@ -1218,3 +1220,9 @@ describe("a large governed changeset edit through the canonical boundary", () =>
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+function expectEffectiveDeadlineLogged(admitted: readonly { readonly extra?: unknown }[]): void {
+  const extra = admitted[0]?.extra as { readonly deadlineMs?: number } | undefined;
+  expect(extra?.deadlineMs).toBeGreaterThan(0);
+  expect(extra?.deadlineMs).toBeLessThanOrEqual(30_000);
+}

@@ -68,7 +68,13 @@ const TERMINAL_OPTIONAL = [
 const PROVIDER_REASONS: ReadonlySet<string> = new Set(TOOL_PROVIDER_REASONS);
 const DIGEST_FIELDS = new Set(["catalogRevision", "projectionDigest", "handlerSetDigest"]);
 const ID_FIELDS = new Set(["invocationId", "reservationId", "settlementId"]);
-const METRIC_FIELDS = new Set(["durationMs", "inputBytes", "outputBytes", "resultCount"]);
+const METRIC_FIELDS = new Set([
+  "durationMs",
+  "deadlineMs",
+  "inputBytes",
+  "outputBytes",
+  "resultCount",
+]);
 const TOKEN = /^[A-Za-z0-9_.-]{1,128}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const READINESS: ReadonlySet<string> = new Set(TOOL_HANDLER_READINESS);
@@ -257,6 +263,7 @@ const TOOL_CATALOG_INVOCATION_STARTED_OPERATION = defineActivityLogOperation({
       values: ["none"],
     },
     reservationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    deadlineMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -419,7 +426,7 @@ function validDiagnostics(key: string, value: CatalogJsonValue | undefined): boo
 }
 function metricMaximum(key: string): number {
   if (key === "resultCount") return TOOL_CATALOG_LIMITS.maxArrayItems;
-  if (key === "durationMs") return Number.MAX_SAFE_INTEGER;
+  if (key === "durationMs" || key === "deadlineMs") return Number.MAX_SAFE_INTEGER;
   // The largest per-tool argument ceiling; `inputBytesWithinTool` holds each tool to its own.
   if (key === "inputBytes") return CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
   return TOOL_CATALOG_LIMITS.maxResultBytes;
@@ -452,6 +459,7 @@ function validStateField(key: string, value: CatalogJsonValue): boolean {
 function optionalFields(phase: ToolLifecyclePhase): readonly string[] {
   if (phase === "terminal") return ["parentCorrelationId", ...TERMINAL_OPTIONAL];
   if (phase === "projection") return ["parentCorrelationId", "resultCount"];
+  if (phase === "invocation-started") return ["parentCorrelationId", "deadlineMs"];
   return ["parentCorrelationId"];
 }
 function terminalStatus(value: CatalogJsonObject): void {
@@ -666,6 +674,7 @@ function writeInvocationStarted(
       state: event.state,
       reason: event.reason,
       reservationId: event.reservationId,
+      ...(event.deadlineMs === undefined ? {} : { deadlineMs: event.deadlineMs }),
     }),
   );
 }
