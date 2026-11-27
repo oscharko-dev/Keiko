@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { CODING_WORKBENCH_TOOL_CALL_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
 import {
@@ -74,6 +75,9 @@ interface ParsedAsk {
   readonly actionId: string;
 }
 
+// Only the call that opened a prompt is named by it (`callId`, the Workbench's "Waiting for approval"
+// row): identical asks from other calls join that prompt, or queue behind it, and their rows keep
+// their feed state until their own ask is the one shown.
 // One run may keep this many prompts open, so a run that asks in a loop cannot use the whole
 // registry up for the others; the global ceiling still bounds the process.
 const MAX_PENDING_ASKS_PER_RUN = 16;
@@ -89,8 +93,6 @@ const ASK_IDENTITY_FIELDS: ReadonlySet<string> = new Set([
   "expiresAt",
 ]);
 const ASK_KEYS: readonly string[] = ["action", "runId", "actionId", "properties"];
-// The call id shape the safe-activity settlement accepts (productionOpenCodeBackend.ts).
-const CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UNAVAILABLE: OpenCodeV2ApprovalDecision = { outcome: "unavailable" };
 
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -108,7 +110,7 @@ function exactKeys(value: Readonly<Record<string, unknown>>, keys: readonly stri
 // actionId that does not hash to the ask id, or names another session, fails closed.
 function boundActionId(value: unknown, sessionId: string, askId: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith(`${sessionId}:`)) return false;
-  if (!CALL_ID.test(value.slice(sessionId.length + 1))) return false;
+  if (!CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(value.slice(sessionId.length + 1))) return false;
   const digest = createHash("sha256").update(value, "utf8").digest("hex");
   return askId === `per_${digest.slice(0, 32)}`;
 }

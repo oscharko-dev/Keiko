@@ -671,6 +671,13 @@ export interface CodingWorkbenchAuthorityEnvelope {
   readonly approvalProofDigest: string;
 }
 
+/**
+ * The shape of the opaque id of one model tool call: a bounded token that carries no content. The
+ * permission request's `callId`, the native policy's call id and the governed ask's bound action
+ * id all share it.
+ */
+export const CODING_WORKBENCH_TOOL_CALL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
 export interface CodingWorkbenchPermissionRequest {
   readonly requestId: string;
   readonly kind: CodingWorkbenchPermissionRequestKind;

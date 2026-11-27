@@ -222,7 +222,9 @@ export interface CodingWorkbenchTimelineProps {
    * The id of the tool call the run's pending approval holds back (the ask's `callId`). While the
    * run waits for the person, exactly that call's row reads "Waiting for approval" instead of
    * "Running". Absent when no approval is pending or the ask names no call: no row is marked then,
-   * so an ambiguous guess never mislabels a tool that is really running.
+   * so an ambiguous guess never mislabels a tool that is really running. Only the call that opened
+   * the prompt is named: identical asks from other calls join it or queue behind it, and their
+   * rows keep their feed state until their own ask is the one shown.
    */
   readonly awaitingApprovalCallId?: string | undefined;
 }
@@ -1523,7 +1525,7 @@ function ToolRow({
       className={styles.timelineItem}
       aria-posinset={position}
       aria-setsize={total}
-      aria-busy={tool.state === "running" || tool.state === "pending"}
+      aria-busy={shownState === "running" || shownState === "pending"}
       data-timeline-kind="tool"
     >
       <details

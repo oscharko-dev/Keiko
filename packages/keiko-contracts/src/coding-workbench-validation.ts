@@ -27,6 +27,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuthorityEnvelope,
@@ -586,16 +587,16 @@ function validateNativePermission(
   }
 }
 
-/** The opaque tool call id an ask holds back: a bounded token, never content. */
-const PERMISSION_CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
-
 function validatePermissionCallId(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
 ): void {
   if (value.callId === undefined) return;
-  if (typeof value.callId !== "string" || !PERMISSION_CALL_ID.test(value.callId)) {
+  if (
+    typeof value.callId !== "string" ||
+    !CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(value.callId)
+  ) {
     errors.push(`${path}.callId is invalid`);
   }
 }

@@ -1,4 +1,5 @@
 import { cleanup, render } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
@@ -25,10 +26,10 @@ function tool(callId: string, state: CodingSafeActivityTool["state"]): CodingSaf
   return { callId, tool: "shell", state, occurredAt: AT };
 }
 
-function renderRows(
+function timelineOf(
   tools: readonly CodingSafeActivityTool[],
   awaitingApprovalCallId: string | undefined,
-): HTMLElement {
+): ReactElement {
   const feed: AvailableCodingSafeActivityFeed = {
     schemaVersion: "1",
     availability: "available",
@@ -38,7 +39,7 @@ function renderRows(
     truncated: false,
     droppedEventCount: 0,
   };
-  return render(
+  return (
     <I18nProvider>
       <Timeline
         active
@@ -47,8 +48,15 @@ function renderRows(
         questions={IDLE_QUESTIONS}
         awaitingApprovalCallId={awaitingApprovalCallId}
       />
-    </I18nProvider>,
-  ).container;
+    </I18nProvider>
+  );
+}
+
+function renderRows(
+  tools: readonly CodingSafeActivityTool[],
+  awaitingApprovalCallId: string | undefined,
+): HTMLElement {
+  return render(timelineOf(tools, awaitingApprovalCallId)).container;
 }
 
 function states(container: HTMLElement): string[] {
@@ -90,5 +98,19 @@ describe("a tool call held back by a pending approval", () => {
 
   it("never rewrites a call that already ended", () => {
     expect(states(renderRows([tool("call-a", "failed")], "call-a"))).toEqual(["failed"]);
+  });
+
+  it("is not busy while it waits for the person, and is busy again once the ask clears", () => {
+    const running = [tool("call-a", "running")];
+    const view = render(timelineOf(running, "call-a"));
+    const busy = (): string | null =>
+      view.container.querySelector('[data-timeline-kind="tool"]')?.getAttribute("aria-busy") ??
+      null;
+    expect(busy()).toBe("false");
+    // The decision came in: the run left the approval wait, so the same call reads Running again.
+    view.rerender(timelineOf(running, undefined));
+    expect(states(view.container)).toEqual(["running"]);
+    expect(busy()).toBe("true");
+    expect(view.container).toHaveTextContent("Running");
   });
 });

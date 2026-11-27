@@ -12,6 +12,7 @@ import type {
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   codingWorkbenchPolicyEffectFor,
   isCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
@@ -198,7 +199,6 @@ function permissionLogValue(permission: string): PermissionLogValue {
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-const CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 /**
  * Git operations Keiko owns as product actions (signed commits, bounded refs, human-controlled
@@ -703,7 +703,7 @@ function parseSource(
     messageID.length > 0 &&
     messageID.length <= 128 &&
     typeof id === "string" &&
-    CALL_ID.test(id)
+    CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(id)
     ? { messageID, id }
     : null;
 }

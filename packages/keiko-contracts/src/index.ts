@@ -1008,6 +1008,7 @@ export type {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  CODING_WORKBENCH_TOOL_CALL_ID_PATTERN,
   codingWorkbenchPolicyEffectFor,
   compareCodingWorkbenchModeAuthority,
   decideCodingWorkbenchActionForMode,
