@@ -2687,6 +2687,7 @@
     "keiko-tools/git-ci-workflow-definitions",
     "keiko-tools/git-commit-intent-node",
     "keiko-tools/git-default-branch-node",
+    "keiko-tools/git-head-state",
     "keiko-tools/git-index-identity",
     "keiko-tools/git-index-stat",
     "keiko-tools/git-journey-facts",

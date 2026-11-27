@@ -25,6 +25,7 @@ import type {
   GitDeliveryRecoveryStrategyHint,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "./types.js";
+import type { GitHeadState } from "./git-head-state.js";
 
 // ─── Concrete execution operands ──────────────────────────────────────────────────────────
 // These carry the concrete operands (paths, message, refs) the content-free contract inputs
@@ -57,12 +58,17 @@ export interface GitCommitExecRequest {
   readonly verified?: GitVerifiedCommitPrecondition;
 }
 
+/**
+ * What a verified stage, unstage or commit was reviewed against. `head` and `base` are explicit
+ * states: an unborn branch (a fresh repository) is its own base, and its first commit is a root
+ * commit created with a zero old value (#4491).
+ */
 export interface GitVerifiedCommitPrecondition {
-  readonly headSha: string;
+  readonly head: GitHeadState;
   readonly stagedTreeDigest: string;
   readonly branchName: string;
   readonly baseRef: string;
-  readonly baseSha: string;
+  readonly base: GitHeadState;
 }
 
 export interface GitAbortExecRequest {

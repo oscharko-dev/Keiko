@@ -22,7 +22,12 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
-import { readVerifiedCommitFacts, untrackedOutsideCandidate } from "./verifiedCommitFacts.js";
+import {
+  readVerifiedCommitFacts,
+  untrackedOutsideCandidate,
+  verifiedBaseObjectId,
+  verifiedHeadObjectId,
+} from "./verifiedCommitFacts.js";
 import type { VerifiedCommitFacts } from "./verifiedCommitTypes.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { mintProposalId } from "./proposalId.js";
@@ -312,8 +317,8 @@ export async function assertDraftLocalCandidate(
   assertDraftAuthority(context);
   if (
     !(facts.clean || admitsUntrackedBesidePush(options, context, facts)) ||
-    facts.headSha !== binding.headSha ||
-    facts.baseSha !== binding.baseSha ||
+    verifiedHeadObjectId(facts) !== binding.headSha ||
+    verifiedBaseObjectId(facts) !== binding.baseSha ||
     facts.stagedTreeDigest !== tree
   )
     throw new DraftDeliveryFailure("remote-drift");

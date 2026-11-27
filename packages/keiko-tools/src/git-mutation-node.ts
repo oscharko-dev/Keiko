@@ -58,7 +58,11 @@ import {
   readGitCommitIdentity,
   readGitRevision,
   readGitTreeDigest,
+  readGitHeadState,
+  readGitBaseState,
+  type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
+import { gitZeroObjectId, sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
@@ -454,14 +458,22 @@ type VerifiedCommitExecRequest = GitCommitExecRequest & {
   readonly verified: NonNullable<GitCommitExecRequest["verified"]>;
 };
 
+function validRevisionState(state: GitHeadState): boolean {
+  if (state.kind === "born") return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(state.sha);
+  return isSafeGitRefName(state.branch);
+}
+
 function validVerifiedOperands(
   request: GitCommitExecRequest,
 ): request is VerifiedCommitExecRequest {
   const v = request.verified;
   if (v === undefined) return false;
   return [
-    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.headSha),
-    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.baseSha),
+    validRevisionState(v.head),
+    validRevisionState(v.base),
+    // An unborn head is the branch being committed to; an unborn base is that same branch.
+    v.head.kind === "born" || v.head.branch === v.branchName,
+    v.base.kind === "born" || (v.head.kind === "unborn" && v.baseRef === v.branchName),
     /^[a-f0-9]{64}$/u.test(v.stagedTreeDigest),
     isSafeGitRefName(v.branchName),
     isSafeGitRefName(v.baseRef),
@@ -490,16 +502,22 @@ async function verifiedFactsMatch(
   if (expected === undefined || ctx.signal.aborted || ctx.beforeCommitRefUpdate?.() === false)
     return false;
   const deps = commitReadDeps(ctx);
-  const headSha = await readGitRevision(deps, "HEAD");
-  const branch = await readGitFullRef(deps, "HEAD");
+  // A head that was unborn and is born now (or the reverse) is drift like any moved head: the
+  // comparison is on the whole state, branch included.
+  const head = await readGitHeadState(deps);
+  const branch = head.kind === "unborn" ? head.branch : await headBranchName(deps);
   const indexDigest = await readGitIndexTreeDigest(deps);
-  const baseSha = await readGitRevision(deps, expected.baseRef);
+  const base = await readGitBaseState(deps, expected.baseRef, head);
   return (
-    headSha === expected.headSha &&
-    branch === `refs/heads/${expected.branchName}` &&
+    sameGitHeadState(head, expected.head) &&
+    branch === expected.branchName &&
     indexDigest === expected.stagedTreeDigest &&
-    baseSha === expected.baseSha
+    sameGitHeadState(base, expected.base)
   );
+}
+
+async function headBranchName(deps: NodeGitWorktreeReaderDeps): Promise<string> {
+  return (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
 }
 
 async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): Promise<string> {
@@ -527,14 +545,19 @@ async function prepareVerifiedCommit(
   if (!(await verifiedFactsMatch(ctx, request))) return undefined;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   const deps = commitReadDeps(ctx);
-  const baseRef = await readGitFullRef(deps, request.verified.baseRef);
+  // An unborn branch is its own base and has no ref to resolve yet; its full name is the branch's.
+  const baseRef =
+    request.verified.base.kind === "unborn"
+      ? `refs/heads/${request.verified.branchName}`
+      : await readGitFullRef(deps, request.verified.baseRef);
   if ((await readGitTreeDigest(deps, tree)) !== request.verified.stagedTreeDigest) return undefined;
+  // The first commit of an unborn branch is a root commit: no parent.
+  const parent = request.verified.head.kind === "born" ? ["-p", request.verified.head.sha] : [];
   const head = await checkedObjectCommand(ctx, [
     "commit-tree",
     tree,
     "-S",
-    "-p",
-    request.verified.headSha,
+    ...parent,
     "-m",
     request.message,
   ]);
@@ -551,10 +574,19 @@ function verifiedCommitRefTransaction(
   prepared: PreparedVerifiedCommit,
 ): string | undefined {
   const branchRef = `refs/heads/${verified.branchName}`;
-  const update = `update ${branchRef} ${prepared.head} ${verified.headSha}\n`;
-  if (prepared.baseRef !== branchRef)
-    return `start\nverify ${prepared.baseRef} ${verified.baseSha}\n${update}prepare\ncommit\n`;
-  return verified.baseSha === verified.headSha ? `start\n${update}prepare\ncommit\n` : undefined;
+  // An unborn branch is created with the all-zero old value, so a branch that appeared since the
+  // review fails the compare-and-swap instead of being overwritten.
+  const update =
+    verified.head.kind === "born"
+      ? `update ${branchRef} ${prepared.head} ${verified.head.sha}\n`
+      : `update ${branchRef} ${prepared.head} ${gitZeroObjectId(verified.head.objectIdLength)}\n`;
+  if (prepared.baseRef !== branchRef) {
+    if (verified.base.kind !== "born") return undefined;
+    return `start\nverify ${prepared.baseRef} ${verified.base.sha}\n${update}prepare\ncommit\n`;
+  }
+  return sameGitHeadState(verified.base, verified.head)
+    ? `start\n${update}prepare\ncommit\n`
+    : undefined;
 }
 
 async function updateVerifiedCommitRef(
@@ -619,9 +651,11 @@ async function createdCommitMatches(
   const expected = request.verified;
   if (expected === undefined) return false;
   const actual = await readGitCommitIdentity(commitReadDeps(ctx), head);
+  // Exactly the reviewed parent: one for a born head, none for the root commit of an unborn one.
+  const parents = expected.head.kind === "born" ? [expected.head.sha] : [];
   return (
-    actual.parentShas.length === 1 &&
-    actual.parentShas[0] === expected.headSha &&
+    actual.parentShas.length === parents.length &&
+    actual.parentShas.every((sha, index) => sha === parents[index]) &&
     actual.treeDigest === expected.stagedTreeDigest &&
     actual.messageDigest === gitCommitMessageDigest(request.message)
   );
@@ -737,6 +771,8 @@ export {
   readGitBlobText,
   readGitCommitIdentity,
   readGitRevision,
+  readGitHeadState,
+  readGitBaseState,
   readGitTreeDigest,
   readGitWorktreeSnapshot,
   readGitStagedDiff,
@@ -811,8 +847,20 @@ export {
 export {
   GitRawWorktreeReadError,
   readGitRawWorktreeSnapshot,
+  readGitRawWorktreeSnapshotAtHead,
   readGitRawChanges,
+  readGitRawChangesAtHead,
+  type GitRawChangesAtHead,
 } from "./git-raw-worktree-node.js";
+
+export {
+  gitHeadStateObjectId,
+  gitZeroObjectId,
+  isGitZeroObjectId,
+  sameGitHeadState,
+  type GitHeadState,
+  type GitObjectIdLength,
+} from "./git-head-state.js";
 
 export { gitBlobObjectId } from "./git-index-identity.js";
 

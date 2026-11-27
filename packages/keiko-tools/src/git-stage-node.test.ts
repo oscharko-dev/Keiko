@@ -122,11 +122,11 @@ function request(managed: string): Parameters<typeof stageExactFiles>[1] {
   return {
     pathspecs: ["a.txt"],
     verified: {
-      headSha,
+      head: { kind: "born", sha: headSha },
       stagedTreeDigest: "0".repeat(64),
       branchName: "main",
       baseRef: "refs/heads/main",
-      baseSha: headSha,
+      base: { kind: "born", sha: headSha },
     },
   };
 }
@@ -505,11 +505,11 @@ describe("exact-file staging of a decomposed (NFD) file name", () => {
       stageExactFiles(context(base), {
         pathspecs: [decomposed],
         verified: {
-          headSha,
+          head: { kind: "born", sha: headSha },
           stagedTreeDigest: "0".repeat(64),
           branchName: "main",
           baseRef: "refs/heads/main",
-          baseSha: headSha,
+          base: { kind: "born", sha: headSha },
         },
       }),
     ).resolves.toBe(true);

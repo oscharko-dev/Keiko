@@ -216,14 +216,14 @@ describe("node git mutation adapter — verified unstage", () => {
     git(["add", "b.txt"]);
     const headSha = git(["rev-parse", "HEAD"]).trim();
     return {
-      headSha,
+      head: { kind: "born", sha: headSha },
       stagedTreeDigest: await readGitIndexTreeDigest({
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "" },
       }),
       branchName: "work",
       baseRef: "base",
-      baseSha: headSha,
+      base: { kind: "born", sha: headSha },
     };
   }
 
@@ -700,14 +700,14 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     writeFileSync(join(root, "b.txt"), "one\r\ntwo\r\n", "utf8");
     const headSha = git(["rev-parse", "HEAD"]).trim();
     const verified: GitVerifiedCommitPrecondition = {
-      headSha,
+      head: { kind: "born", sha: headSha },
       stagedTreeDigest: await readGitIndexTreeDigest({
         workspace: info,
         processEnv: { PATH: process.env.PATH ?? "" },
       }),
       branchName: "work",
       baseRef: "base",
-      baseSha: headSha,
+      base: { kind: "born", sha: headSha },
     };
     const index = git(["ls-files", "--stage"]);
     let flipped = false;

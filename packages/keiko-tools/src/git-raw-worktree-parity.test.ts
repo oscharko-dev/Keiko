@@ -20,8 +20,11 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   GitRawWorktreeReadError,
   readGitRawChanges,
+  readGitRawChangesAtHead,
   readGitRawWorktreeSnapshot,
+  readGitRawWorktreeSnapshotAtHead,
 } from "./git-raw-worktree-node.js";
+import { nodeSpawnFn } from "./exec.js";
 
 const dirs: string[] = [];
 const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -217,5 +220,67 @@ describe("an unborn HEAD", () => {
     );
     expect(failure).toBeInstanceOf(GitRawWorktreeReadError);
     expect(failure).toMatchObject({ code: "git-raw-unborn-head" });
+  });
+
+  // #4491: the first commit of a fresh `git init` is a root commit, so the reader that serves it
+  // reports the unborn state explicitly and diffs against the empty tree.
+  it("reads staged files of an unborn branch as additions against the empty tree", async () => {
+    const root = repository(false);
+    writeFileSync(join(root, "a.txt"), "a\n");
+    writeFileSync(join(root, "b.txt"), "b\n");
+    writeFileSync(join(root, "loose.txt"), "loose\n");
+    git(root, ["add", "a.txt", "b.txt"]);
+    expect(gitStatusTracked(root)).toEqual(["A  a.txt", "A  b.txt"]);
+    const raw = await readGitRawChangesAtHead(deps(root));
+    expect(raw.head).toEqual({ kind: "unborn", branch: "master", objectIdLength: 40 });
+    expect(raw.branch).toBe("master");
+    const tracked = raw.changes
+      .filter((change) => !change.untracked)
+      .map((change) => `${change.indexStatus}${change.worktreeStatus} ${change.path}`);
+    expect(porcelain(tracked)).toEqual(porcelain(gitStatusTracked(root)));
+    expect(raw.changes.filter((change) => change.untracked).map((change) => change.path)).toEqual([
+      "loose.txt",
+    ]);
+    const snapshot = await readGitRawWorktreeSnapshotAtHead(deps(root));
+    expect(snapshot).toMatchObject({ stagedFileCount: 2, untrackedFileCount: 1 });
+    expect(snapshot.headSha).toBeUndefined();
+    expect(snapshot.currentBranchName).toBe("master");
+  });
+
+  it("keeps the closed failure for a caller that needs a commit", async () => {
+    const root = repository(false);
+    writeFileSync(join(root, "a.txt"), "a\n");
+    git(root, ["add", "a.txt"]);
+    await expect(readGitRawWorktreeSnapshot(deps(root))).rejects.toMatchObject({
+      code: "git-raw-unborn-head",
+    });
+  });
+
+  it("reads a SHA-256 repository's unborn head with its object id length", async () => {
+    const root = tempDir();
+    git(root, ["init", "-q", "-b", "master", "--object-format=sha256"]);
+    expect((await readGitRawChangesAtHead(deps(root))).head).toEqual({
+      kind: "unborn",
+      branch: "master",
+      objectIdLength: 64,
+    });
+  });
+
+  it("treats a branch that was born during the read as drift", async () => {
+    const root = repository(false);
+    writeFileSync(join(root, "a.txt"), "a\n");
+    git(root, ["add", "a.txt"]);
+    let born = false;
+    const read = readGitRawChangesAtHead({
+      ...deps(root),
+      spawn: (command, args, spawnOptions) => {
+        if (!born && args.includes("--others")) {
+          born = true;
+          git(root, ["commit", "-qm", "concurrent root"]);
+        }
+        return nodeSpawnFn(command, args, spawnOptions);
+      },
+    });
+    await expect(read).rejects.toMatchObject({ code: "git-raw-snapshot-drift" });
   });
 });

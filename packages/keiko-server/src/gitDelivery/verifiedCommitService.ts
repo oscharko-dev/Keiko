@@ -1,5 +1,8 @@
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
-import { readGitRawWorktreeSnapshot } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  readGitRawWorktreeSnapshotAtHead,
+  sameGitHeadState,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { readVerifiedCommitReview } from "./verifiedCommitReview.js";
 import { mintProposalId } from "./proposalId.js";
@@ -40,6 +43,8 @@ import {
 import {
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
+  verifiedBaseObjectId,
+  verifiedHeadObjectId,
   untrackedOutsideCandidate,
   verifiedCommitMessageDigest,
 } from "./verifiedCommitFacts.js";
@@ -334,8 +339,8 @@ function failingEvidence(
 // The same staged candidate on the same head and base; untracked files outside it are not compared.
 function sameCommitCandidate(a: VerifiedCommitFacts, b: VerifiedCommitFacts): boolean {
   return (
-    a.headSha === b.headSha &&
-    a.baseSha === b.baseSha &&
+    sameGitHeadState(a.head, b.head) &&
+    sameGitHeadState(a.base, b.base) &&
     a.stagedTreeDigest === b.stagedTreeDigest &&
     a.repositoryDigest === b.repositoryDigest
   );
@@ -833,11 +838,11 @@ class VerifiedCommitController implements VerifiedCommitService {
         message,
         allowEmpty: false,
         verified: {
-          headSha: facts.headSha,
+          head: facts.head,
           stagedTreeDigest: facts.stagedTreeDigest,
           branchName: context.headRef,
           baseRef: context.baseRef,
-          baseSha: facts.baseSha,
+          base: facts.base,
         },
       },
     };
@@ -858,8 +863,8 @@ class VerifiedCommitController implements VerifiedCommitService {
       runtimeAuthorityDigest: context.runtimeAuthorityDigest,
       workspaceDigest: context.workspaceDigest,
       repositoryDigest: facts.repositoryDigest,
-      baseSha: facts.baseSha,
-      parentSha: facts.headSha,
+      baseSha: verifiedBaseObjectId(facts),
+      parentSha: verifiedHeadObjectId(facts),
       stagedTreeDigest: facts.stagedTreeDigest,
       verificationEvidenceId: this.proof?.evidenceId ?? "verification-unavailable",
       messageDigest: verifiedCommitMessageDigest(message),
@@ -953,8 +958,8 @@ class VerifiedCommitController implements VerifiedCommitService {
     const facts = await this.facts(proposal.context);
     return (
       (facts.clean || this.admitsUntracked(proposal.context, facts)) &&
-      facts.headSha === proposal.binding.parentSha &&
-      facts.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(facts) === proposal.binding.parentSha &&
+      verifiedBaseObjectId(facts) === proposal.binding.baseSha &&
       facts.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
       facts.repositoryDigest === proposal.binding.repositoryDigest
     );
@@ -1114,7 +1119,9 @@ class VerifiedCommitController implements VerifiedCommitService {
           signal: context.signal,
           beforeCommitRefUpdate: () => this.contextIsCurrent(context),
           snapshotReader: () =>
-            readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, this.options.execution ?? {})),
+            readGitRawWorktreeSnapshotAtHead(
+              runtimeGitReadDeps(context, this.options.execution ?? {}),
+            ),
         },
         context.correlationId,
       );

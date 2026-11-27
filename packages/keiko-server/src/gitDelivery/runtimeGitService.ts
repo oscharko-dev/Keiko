@@ -18,10 +18,15 @@ import {
   readGitRevision,
   readGitStageCandidate,
   readGitStageSupport,
-  readGitRawWorktreeSnapshot,
+  readGitRawWorktreeSnapshotAtHead,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
-import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import {
+  readVerifiedCommitFacts,
+  requireBornHead,
+  verifiedBaseObjectId,
+  verifiedHeadObjectId,
+} from "./verifiedCommitFacts.js";
 import { mintProposalId } from "./proposalId.js";
 import type {
   VerifiedCommitRunContext,
@@ -382,8 +387,8 @@ function assembleProposal(
     envelopeDigest: context.envelopeDigest,
     workspaceDigest: context.workspaceDigest,
     repositoryDigest: context.repositoryDigest,
-    headSha: facts.headSha,
-    baseSha: facts.baseSha,
+    headSha: verifiedHeadObjectId(facts),
+    baseSha: verifiedBaseObjectId(facts),
     stagedTreeDigest: facts.stagedTreeDigest,
   };
   return {
@@ -656,7 +661,7 @@ export class RuntimeGitService {
     const facts = await readVerifiedCommitFacts(context, execution);
     if (request.operation === "status") return runtimeGitStatus(context, execution);
     if (request.operation === "branch")
-      return this.branch(context, request.branchName, facts.headSha);
+      return this.branch(context, request.branchName, requireBornHead(facts.head));
     if (request.operation === "fetch" || request.operation === "pull")
       return this.sync(context, request.operation);
     if (request.operation === "diff")
@@ -936,8 +941,8 @@ export class RuntimeGitService {
       return this.stageCurrent(context, { ...proposal, command: proposal.command });
     const current = await readVerifiedCommitFacts(context, this.options.execution ?? {});
     return (
-      current.headSha === proposal.binding.headSha &&
-      current.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(current) === proposal.binding.headSha &&
+      verifiedBaseObjectId(current) === proposal.binding.baseSha &&
       current.stagedTreeDigest === proposal.binding.stagedTreeDigest
     );
   }
@@ -953,8 +958,8 @@ export class RuntimeGitService {
     );
     return (
       context.buffersClean() &&
-      current.headSha === proposal.binding.headSha &&
-      current.baseSha === proposal.binding.baseSha &&
+      verifiedHeadObjectId(current) === proposal.binding.headSha &&
+      verifiedBaseObjectId(current) === proposal.binding.baseSha &&
       current.stagedTreeDigest === proposal.binding.stagedTreeDigest &&
       digest === proposal.command.worktreeDigest
     );
@@ -977,7 +982,9 @@ export class RuntimeGitService {
         signal: context.signal,
         beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
         snapshotReader: () =>
-          readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, this.options.execution ?? {})),
+          readGitRawWorktreeSnapshotAtHead(
+            runtimeGitReadDeps(context, this.options.execution ?? {}),
+          ),
       },
       context.correlationId,
     );

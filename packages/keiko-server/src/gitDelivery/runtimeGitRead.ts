@@ -19,10 +19,11 @@ import { boundWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspac
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
-  readGitRevision,
+  readGitHeadState,
+  sameGitHeadState,
   readGitIndexTreeDigest,
   gitBlobObjectId,
-  readGitRawChanges,
+  readGitRawChangesAtHead,
   readGitIndexEntries,
   readGitTreeEntries,
   readGitBlobText,
@@ -145,7 +146,7 @@ function searchLoggedLineChanges(
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
-): Parameters<typeof readGitRawChanges>[0] {
+): Parameters<typeof readGitRawChangesAtHead>[0] {
   return {
     workspace: context.workspace,
     signal: context.signal,
@@ -156,11 +157,13 @@ export async function runtimeGitStatus(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
 ): Promise<CodingRuntimeGitStatus> {
-  const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution));
   logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   return {
     kind: "status",
-    headSha: raw.headSha,
+    ...(raw.head.kind === "born"
+      ? { head: "born" as const, headSha: raw.head.sha }
+      : { head: "unborn" as const }),
     stagedTreeDigest: raw.stagedTreeDigest,
     branch: raw.branch,
     changes: raw.changes.slice(0, 50),
@@ -235,6 +238,16 @@ function binaryStatus(sides: DiffSides): GitEditorDiffFile["status"] {
   return sides.deleted ? "deleted" : "modified";
 }
 
+// The entry HEAD's tree holds for a path; an unborn HEAD has the empty tree, so no entry.
+async function headTreeEntry(
+  deps: ReturnType<typeof runtimeGitReadDeps>,
+  path: string,
+): Promise<Awaited<ReturnType<typeof readGitIndexEntries>>[number] | undefined> {
+  const head = await readGitHeadState(deps);
+  if (head.kind === "unborn") return undefined;
+  return (await readGitTreeEntries(deps, head.sha)).find((entry) => entry.path === path);
+}
+
 async function readSides(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -243,12 +256,7 @@ async function readSides(
 ): Promise<DiffSides> {
   const deps = runtimeGitReadDeps(context, execution);
   const index = (await readGitIndexEntries(deps)).find((entry) => entry.path === path);
-  const base =
-    scope === "staged"
-      ? (await readGitTreeEntries(deps, await readGitRevision(deps, "HEAD"))).find(
-          (entry) => entry.path === path,
-        )
-      : index;
+  const base = scope === "staged" ? await headTreeEntry(deps, path) : index;
   const before = await objectSide(deps, base);
   const after =
     scope === "staged"
@@ -420,7 +428,7 @@ async function admitSelection(
   paths: readonly string[],
   pending: (change: GitChangedFile) => boolean | undefined,
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution));
   logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const changes = new Map(raw.changes.map((change) => [change.path, change]));
   const admitted: StageSelectionChange[] = [];
@@ -471,7 +479,7 @@ export async function runtimeGitDiff(
 ): Promise<GitEditorDiffResponse> {
   if (!runtimeGitPaths(paths)) throw new Error("git-runtime-paths-invalid");
   const deps = runtimeGitReadDeps(context, execution);
-  const raw = await readGitRawChanges(deps);
+  const raw = await readGitRawChangesAtHead(deps);
   logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const expanded = expandDiffPaths(paths, raw.changes, scope);
   const selection = await readSelectedDiffFiles(
@@ -482,7 +490,7 @@ export async function runtimeGitDiff(
     raw.truncated || expanded.truncated,
   );
   if (
-    (await readGitRevision(deps, "HEAD")) !== raw.headSha ||
+    !sameGitHeadState(await readGitHeadState(deps), raw.head) ||
     (await readGitIndexTreeDigest(deps)) !== raw.stagedTreeDigest
   )
     throw new Error("git-runtime-diff-drift");

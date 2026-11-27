@@ -2431,6 +2431,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   which is equivalent only while the verified base and head agree; when they differ it fails closed
   before any ref update. A distinct base keeps its separate `verify` line in the same atomic
   transaction.
+  The first commit of an unborn branch (a fresh repository, #4491) is a root commit: the facts,
+  the reviewed precondition and the proof carry an explicit unborn state, never an empty sha, the
+  signed object is created without a parent, and its ref is written with the all-zero old value, so
+  a branch that appears after the review fails the compare-and-swap; reading HEAD again as born is
+  drift like any moved head.
   A red check is the commit gate in Ask for approval and Supervised workspace, and failing
   evidence in Full access (owner decision 2026-10-30, #3907 AC3). The same parity lane asked for a
   branch, commit and push while the repository's own `npm run check` was already red; standalone

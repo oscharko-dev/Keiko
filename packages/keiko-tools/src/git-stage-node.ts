@@ -7,6 +7,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
+import { gitHeadObjectIdLength } from "./git-head-state.js";
 import type { GitMutationArgvPlan, GitStageExecRequest } from "./git-mutation-adapter.js";
 
 export interface GitStageEffectContext {
@@ -400,7 +401,12 @@ export async function stageExactFiles(
       const files = await readFiles(ctx.workspaceRoot, request.pathspecs, ctx.fs);
       if (request.worktreeDigest !== undefined && contentDigest(files) !== request.worktreeDigest)
         return false;
-      const entries = await indexEntries(ctx, files, expected.headSha.length, lineEndings);
+      const entries = await indexEntries(
+        ctx,
+        files,
+        gitHeadObjectIdLength(expected.head),
+        lineEndings,
+      );
       if (entries === undefined) return false;
       const result = await ctx.run(
         ["update-index", "-z", "--index-info"],

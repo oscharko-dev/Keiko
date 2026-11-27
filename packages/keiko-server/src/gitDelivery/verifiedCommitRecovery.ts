@@ -1,6 +1,9 @@
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
-import { readGitCommitIdentity } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import {
+  isGitZeroObjectId,
+  readGitCommitIdentity,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { readVerifiedCommitFacts, verifiedBaseObjectId } from "./verifiedCommitFacts.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
 
@@ -17,7 +20,10 @@ export async function reconcileVerifiedCommit(
   )
     return receipt;
   const facts = await readVerifiedCommitFacts(context, seams);
-  if (facts.baseSha !== receipt.baseSha || facts.repositoryDigest !== receipt.repositoryDigest)
+  if (
+    verifiedBaseObjectId(facts) !== receipt.baseSha ||
+    facts.repositoryDigest !== receipt.repositoryDigest
+  )
     return receipt;
   const identity = await readGitCommitIdentity(
     {
@@ -27,9 +33,11 @@ export async function reconcileVerifiedCommit(
     },
     context.headRef,
   );
+  // The root commit of an unborn branch records the all-zero parent and has no parent at all.
+  const parents = isGitZeroObjectId(receipt.parentSha) ? [] : [receipt.parentSha];
   const matched = [
-    identity.parentShas.length === 1,
-    identity.parentShas[0] === receipt.parentSha,
+    identity.parentShas.length === parents.length,
+    identity.parentShas.every((sha, index) => sha === parents[index]),
     identity.treeDigest === receipt.stagedTreeDigest,
     identity.messageDigest === receipt.messageDigest,
   ].every(Boolean);

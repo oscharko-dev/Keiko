@@ -1,9 +1,12 @@
 import {
   GitRawWorktreeReadError,
-  readGitRawChanges,
+  readGitRawChangesAtHead,
   readGitRemoteAliases,
-  readGitRevision,
+  readGitBaseState,
   gitCommitMessageDigest,
+  gitHeadStateObjectId,
+  sameGitHeadState,
+  type GitHeadState,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
@@ -14,7 +17,7 @@ import {
   type VerifiedCommitFacts,
   type VerifiedCommitRunContext,
 } from "./verifiedCommitTypes.js";
-type RawChangedFiles = Awaited<ReturnType<typeof readGitRawChanges>>["changes"];
+type RawChangedFiles = Awaited<ReturnType<typeof readGitRawChangesAtHead>>["changes"];
 
 function cleanCandidate(context: VerifiedCommitRunContext, changes: RawChangedFiles): boolean {
   return (
@@ -74,10 +77,10 @@ export async function readVerifiedCommitFacts(
   // ONE raw read supplies the facts AND an unclean candidate's blocking paths, so the paths can never
   // contradict the refusal they ride on. They used to come from a second read taken after this one,
   // with no cross-check (review finding on PR #3452).
-  const raw = await readGitRawChanges(deps);
+  const raw = await readGitRawChangesAtHead(deps);
   if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
   logDeniedPathExclusion(seams, context.correlationId, raw.deniedPathCount);
-  const baseSha = await readGitRevision(deps, context.baseRef);
+  const base = await readGitBaseState(deps, context.baseRef, raw.head);
   if (raw.branch !== context.headRef) throw new Error("verified-commit-repository-drift");
   const { digest: repositoryDigest } = await readVerifiedRepositoryIdentity(
     deps,
@@ -88,8 +91,8 @@ export async function readVerifiedCommitFacts(
     throw new Error("verified-commit-repository-drift");
   const clean = cleanCandidate(context, raw.changes);
   return {
-    headSha: raw.headSha,
-    baseSha,
+    head: raw.head,
+    base,
     stagedTreeDigest: raw.stagedTreeDigest,
     repositoryDigest,
     clean,
@@ -101,9 +104,23 @@ export function sameVerifiedCommitFacts(a: VerifiedCommitFacts, b: VerifiedCommi
   return (
     a.clean &&
     b.clean &&
-    a.headSha === b.headSha &&
-    a.baseSha === b.baseSha &&
+    sameGitHeadState(a.head, b.head) &&
+    sameGitHeadState(a.base, b.base) &&
     a.stagedTreeDigest === b.stagedTreeDigest &&
     a.repositoryDigest === b.repositoryDigest
   );
+}
+
+// A persisted binding records a head as one object id: the commit, or the all-zero id of an unborn
+// branch. These are the only conversions from the explicit state to that string.
+export function verifiedHeadObjectId(facts: Pick<VerifiedCommitFacts, "head">): string {
+  return gitHeadStateObjectId(facts.head);
+}
+export function verifiedBaseObjectId(facts: Pick<VerifiedCommitFacts, "base">): string {
+  return gitHeadStateObjectId(facts.base);
+}
+/** The commit of a born head; an unborn head fails closed for callers that need a commit. */
+export function requireBornHead(head: GitHeadState): string {
+  if (head.kind === "unborn") throw new GitRawWorktreeReadError("git-raw-unborn-head");
+  return head.sha;
 }

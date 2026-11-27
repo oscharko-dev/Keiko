@@ -39,6 +39,7 @@ import {
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
+import type { GitHeadState } from "./git-head-state.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
 // The dedicated READ-ONLY allowlist. Mirrors the mutation rules' defence-in-depth flag denials but
@@ -787,6 +788,36 @@ export async function readGitHeadIfBorn(
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
     throw new GitWorktreeReadError("git revision did not resolve uniquely");
   return value;
+}
+
+/**
+ * The state of HEAD: its commit when born, or the branch it names when that branch has no commit
+ * yet (a fresh repository, #4491). A detached or otherwise unreadable HEAD still fails closed.
+ */
+export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise<GitHeadState> {
+  const sha = await readGitHeadIfBorn(deps);
+  if (sha !== undefined) return { kind: "born", sha };
+  const ctx = machineReadContext(deps);
+  const branch = (await runRead(ctx, ["branch", "--show-current"])).trim();
+  if (branch === "" || !isSafeGitRefName(branch))
+    throw new GitWorktreeReadError("git head names no branch");
+  const format = (await runRead(ctx, ["rev-parse", "--show-object-format"])).trim();
+  if (format !== "sha1" && format !== "sha256")
+    throw new GitWorktreeReadError("git object format is unsupported");
+  return { kind: "unborn", branch, objectIdLength: format === "sha256" ? 64 : 40 };
+}
+
+/**
+ * The state of a base ref relative to the HEAD it is compared with. An unborn branch is its own
+ * base (a fresh repository has nothing older); any other base must resolve to a commit.
+ */
+export async function readGitBaseState(
+  deps: NodeGitWorktreeReaderDeps,
+  baseRef: string,
+  head: GitHeadState,
+): Promise<GitHeadState> {
+  if (head.kind === "unborn" && baseRef === head.branch) return head;
+  return { kind: "born", sha: await readGitRevision(deps, baseRef) };
 }
 
 export type GitReadConfigKey = "core.filemode";

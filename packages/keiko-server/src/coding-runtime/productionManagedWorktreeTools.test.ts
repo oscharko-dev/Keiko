@@ -3631,11 +3631,11 @@ describe("production managed worktree tools", () => {
         message: "feat: approved",
         allowEmpty: false,
         verified: {
-          headSha: approvalRequiredResult.parentSha,
+          head: { kind: "born", sha: approvalRequiredResult.parentSha },
           stagedTreeDigest: approvalRequiredResult.stagedTreeDigest,
           branchName: "codex/task",
           baseRef: "dev",
-          baseSha: approvalRequiredResult.baseSha,
+          base: { kind: "born", sha: approvalRequiredResult.baseSha },
         },
       },
       context: {

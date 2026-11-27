@@ -23,8 +23,7 @@ import {
   readGitIndexStat,
   readGitIndexEntries,
   readGitTreeEntries,
-  readGitRevision,
-  readGitHeadIfBorn,
+  readGitHeadState,
   readGitConfigValue,
   readGitFullRef,
   readGitRemoteAliases,
@@ -34,6 +33,7 @@ import {
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { workspaceFsOf } from "./exec.js";
+import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
 const MAX_CONTENT_BYTES = 8_388_608;
@@ -56,8 +56,7 @@ export class GitRawWorktreeReadError extends GitWorktreeReadError {
     this.code = code;
   }
 }
-export interface GitRawChanges {
-  readonly headSha: string;
+interface GitRawChangesBody {
   readonly branch: string;
   readonly stagedTreeDigest: string;
   readonly changes: readonly GitChangedFile[];
@@ -77,6 +76,17 @@ export interface GitRawChanges {
    * staged -- and no longer fail the whole read (#4491).
    */
   readonly opaqueUntrackedCount: number;
+}
+/** The raw read of a repository whose HEAD is born: the commit it names is `headSha`. */
+export interface GitRawChanges extends GitRawChangesBody {
+  readonly headSha: string;
+}
+/**
+ * The raw read of a repository whose HEAD may be unborn (#4491). An unborn HEAD diffs against the
+ * empty tree: every index entry is an addition. The state is explicit, never an empty sha.
+ */
+export interface GitRawChangesAtHead extends GitRawChangesBody {
+  readonly head: GitHeadState;
 }
 // A path git reports that this snapshot cannot represent -- not a root-relative file identifier, or
 // carrying a replacement character from an undecodable name -- leaves the snapshot incomplete.
@@ -134,25 +144,36 @@ async function inspectWorkingFile(
     gitBlobObjectId(file.bytes, index.objectId.length) === index.objectId;
   return { status: same ? " " : "M", bytes: file.bytes.length, untracked: false };
 }
+/** Reads the changes of a born HEAD; an unborn HEAD fails closed with `git-raw-unborn-head`. */
 export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promise<GitRawChanges> {
-  const headSha = await readGitHeadIfBorn(deps);
-  if (headSha === undefined) throw new GitRawWorktreeReadError("git-raw-unborn-head");
-  const branch = (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
+  const { head, ...body } = await readGitRawChangesAtHead(deps);
+  if (head.kind === "unborn") throw new GitRawWorktreeReadError("git-raw-unborn-head");
+  return { headSha: head.sha, ...body };
+}
+async function headBranch(deps: NodeGitWorktreeReaderDeps, head: GitHeadState): Promise<string> {
+  if (head.kind === "unborn") return head.branch;
+  return (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
+}
+/** Reads the changes of HEAD whether born or unborn; an unborn HEAD's base is the empty tree. */
+export async function readGitRawChangesAtHead(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<GitRawChangesAtHead> {
+  const head = await readGitHeadState(deps);
+  const branch = await headBranch(deps, head);
   const index = new Map((await readGitIndexEntries(deps)).map((entry) => [entry.path, entry]));
-  const head = new Map(
-    (await readGitTreeEntries(deps, headSha)).map((entry) => [entry.path, entry]),
-  );
+  const headEntries = head.kind === "born" ? await readGitTreeEntries(deps, head.sha) : [];
+  const headTree = new Map(headEntries.map((entry) => [entry.path, entry]));
   // A nested repository is listed as `dir/`: an opaque untracked entry that is counted, never read
   // into and never staged (Git itself reports `?? dir/`).
   const untracked = await readGitUntrackedPaths(deps);
   const opaque = untracked.filter((path) => path.endsWith("/"));
   const paths = [
-    ...new Set([...index.keys(), ...head.keys(), ...untracked.filter((p) => !p.endsWith("/"))]),
+    ...new Set([...index.keys(), ...headTree.keys(), ...untracked.filter((p) => !p.endsWith("/"))]),
   ].sort(compareStrings);
   const scanned = await scanPaths(
     {
       deps,
-      head,
+      head: headTree,
       index,
       stats: parseGitIndexStat(await readGitIndexStat(deps)),
       indexWriteTimeNs: readGitIndexWriteTimeNs(deps.workspace.root, workspaceFsOf(deps)),
@@ -161,13 +182,23 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     paths,
   );
   const stagedTreeDigest = gitIndexEntriesDigest([...index.values()]);
-  if (
-    (await readGitIndexTreeDigest(deps)) !== stagedTreeDigest ||
-    (await readGitRevision(deps, "HEAD")) !== headSha ||
-    (await readGitFullRef(deps, "HEAD")) !== `refs/heads/${branch}`
-  )
+  if (!(await stillSameSnapshot(deps, head, branch, stagedTreeDigest)))
     throw new GitRawWorktreeReadError("git-raw-snapshot-drift");
-  return { headSha, branch, stagedTreeDigest, opaqueUntrackedCount: opaque.length, ...scanned };
+  return { head, branch, stagedTreeDigest, opaqueUntrackedCount: opaque.length, ...scanned };
+}
+// The index, the HEAD state (born commit or unborn branch) and the branch ref must be what they were
+// when the scan began; a branch that was created meanwhile turns an unborn read into drift.
+async function stillSameSnapshot(
+  deps: NodeGitWorktreeReaderDeps,
+  head: GitHeadState,
+  branch: string,
+  stagedTreeDigest: string,
+): Promise<boolean> {
+  return (
+    (await readGitIndexTreeDigest(deps)) === stagedTreeDigest &&
+    sameGitHeadState(await readGitHeadState(deps), head) &&
+    (head.kind === "unborn" || (await readGitFullRef(deps, "HEAD")) === `refs/heads/${branch}`)
+  );
 }
 // Git canonicalizes the value (`--type=bool`), so an empty value or `00` reads as Git reads it.
 function lazyFileMode(deps: NodeGitWorktreeReaderDeps): () => Promise<boolean> {
@@ -250,10 +281,23 @@ async function workingStatus(
 export async function readGitRawWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
-  const raw = await readGitRawChanges(deps);
+  const snapshot = await readGitRawWorktreeSnapshotAtHead(deps);
+  if (snapshot.headSha === undefined) throw new GitRawWorktreeReadError("git-raw-unborn-head");
+  return snapshot;
+}
+
+/**
+ * The same snapshot for the local stage and commit preflight, which can act on an unborn branch
+ * (#4491): `headSha` is absent exactly when HEAD is unborn, as `GitWorktreeSnapshot` documents.
+ * Every caller that needs a commit to push or compare keeps `readGitRawWorktreeSnapshot`.
+ */
+export async function readGitRawWorktreeSnapshotAtHead(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<GitWorktreeSnapshot> {
+  const raw = await readGitRawChangesAtHead(deps);
   if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
   return {
-    headSha: raw.headSha,
+    ...(raw.head.kind === "born" ? { headSha: raw.head.sha } : {}),
     stagedTreeDigest: raw.stagedTreeDigest,
     currentBranchName: raw.branch,
     headDetached: false,

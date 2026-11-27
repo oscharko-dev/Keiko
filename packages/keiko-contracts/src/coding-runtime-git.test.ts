@@ -93,3 +93,28 @@ describe("closed runtime Git branch result", () => {
     expect(isCodingRuntimeGitResult({ ...branch, argv: ["branch"] })).toBe(false);
   });
 });
+
+// #4491: a fresh repository has no commit yet. The status says so with a closed `head` marker
+// instead of an empty or missing sha, and a marker that contradicts the sha is refused.
+describe("runtime Git status of a born and an unborn branch", () => {
+  const body = {
+    kind: "status",
+    stagedTreeDigest: "a".repeat(64),
+    branch: "main",
+    changes: [],
+    truncated: false,
+  };
+  it("accepts a born head with its commit and an unborn head without one", () => {
+    expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "b".repeat(40) })).toBe(true);
+    expect(isCodingRuntimeGitResult({ ...body, head: "unborn" })).toBe(true);
+  });
+  it("refuses every contradictory or incomplete head", () => {
+    expect(isCodingRuntimeGitResult({ ...body, head: "unborn", headSha: "b".repeat(40) })).toBe(
+      false,
+    );
+    expect(isCodingRuntimeGitResult({ ...body, head: "born" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(false);
+    expect(isCodingRuntimeGitResult(body)).toBe(false);
+  });
+});

@@ -1847,6 +1847,7 @@ async function answeredChild(
           outcome,
           git: {
             kind: "status",
+            head: "born",
             headSha: "a".repeat(40),
             stagedTreeDigest: "b".repeat(64),
             branch: "codex/fixture",

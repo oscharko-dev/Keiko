@@ -33,14 +33,22 @@ const STAGE_STATUS_REASONS = {
   "recovery-required": ["execution-uncertain"],
 } as const;
 
-export interface CodingRuntimeGitStatus {
+interface CodingRuntimeGitStatusBody {
   readonly kind: "status";
-  readonly headSha: string;
   readonly stagedTreeDigest: string;
   readonly branch: string;
   readonly changes: readonly GitChangedFile[];
   readonly truncated: boolean;
 }
+/**
+ * The repository's status. `head` says whether the branch has a commit: an unborn branch (a fresh
+ * repository, #4491) has no `headSha` and its next commit is a root commit; a born one names it.
+ */
+export type CodingRuntimeGitStatus = CodingRuntimeGitStatusBody &
+  (
+    | { readonly head: "born"; readonly headSha: string }
+    | { readonly head: "unborn"; readonly headSha?: never }
+  );
 export interface CodingRuntimeGitDiff {
   readonly kind: "diff";
   readonly diff: GitEditorDiffResponse;
@@ -161,11 +169,27 @@ function changes(value: unknown): boolean {
     Array.isArray(value) && value.length <= CODING_RUNTIME_GIT_MAX_PATHS && value.every(change)
   );
 }
+// A born branch names its commit; an unborn one (a fresh repository) has none and says so.
+function statusHead(value: Record<string, unknown>): boolean {
+  if (value.head === "unborn") return value.headSha === undefined;
+  return (
+    value.head === "born" &&
+    typeof value.headSha === "string" &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.headSha)
+  );
+}
 function status(value: Record<string, unknown>): boolean {
   return (
-    keys(value, ["kind", "headSha", "stagedTreeDigest", "branch", "changes", "truncated"]) &&
-    typeof value.headSha === "string" &&
-    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.headSha) &&
+    keys(value, [
+      "kind",
+      "head",
+      "headSha",
+      "stagedTreeDigest",
+      "branch",
+      "changes",
+      "truncated",
+    ]) &&
+    statusHead(value) &&
     typeof value.stagedTreeDigest === "string" &&
     /^[a-f0-9]{64}$/u.test(value.stagedTreeDigest) &&
     typeof value.branch === "string" &&

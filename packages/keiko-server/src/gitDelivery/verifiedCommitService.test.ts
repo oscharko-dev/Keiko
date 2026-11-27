@@ -6,8 +6,8 @@ import {
   runtimeGitStatus,
 } from "./runtimeGitRead.js";
 import {
-  readGitRawChanges,
-  readGitRawWorktreeSnapshot,
+  readGitRawChangesAtHead,
+  readGitRawWorktreeSnapshotAtHead,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { LINE_DIFF_MAX_EDIT_DISTANCE } from "./lineDiff.js";
@@ -88,8 +88,8 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
     await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
   return {
     ...actual,
-    readGitRawChanges: vi.fn(actual.readGitRawChanges),
-    readGitRawWorktreeSnapshot: vi.fn(actual.readGitRawWorktreeSnapshot),
+    readGitRawChangesAtHead: vi.fn(actual.readGitRawChangesAtHead),
+    readGitRawWorktreeSnapshotAtHead: vi.fn(actual.readGitRawWorktreeSnapshotAtHead),
     readGitStageSupport: vi.fn(
       (
         deps: Parameters<typeof actual.readGitStageSupport>[0],
@@ -1060,8 +1060,8 @@ describe("verified Code-task commit service", () => {
   it("names the blocking paths from the same raw read that refused the candidate", async () => {
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
     writeFileSync(join(root, "package-lock.json"), "{}\n");
-    const rawReads = vi.mocked(readGitRawChanges);
-    const snapshotReads = vi.mocked(readGitRawWorktreeSnapshot);
+    const rawReads = vi.mocked(readGitRawChangesAtHead);
+    const snapshotReads = vi.mocked(readGitRawWorktreeSnapshotAtHead);
     rawReads.mockClear();
     snapshotReads.mockClear();
 
@@ -1471,8 +1471,8 @@ describe("productive runtime status/diff/stage lane", () => {
         kind: "unstage",
         pathspecs: ["code.js"],
         verified: {
-          headSha: proposal?.binding.headSha,
-          baseSha: proposal?.binding.baseSha,
+          head: { kind: "born", sha: proposal?.binding.headSha },
+          base: { kind: "born", sha: proposal?.binding.baseSha },
           stagedTreeDigest: proposal?.binding.stagedTreeDigest,
           branchName: "codex/task",
           baseRef: "dev",
@@ -2724,7 +2724,8 @@ describe("deny-listed paths in the run's repository", () => {
     expect(JSON.stringify(status)).not.toContain(".idea");
 
     const facts = await readVerifiedCommitFacts(context(), execution);
-    expect(facts.headSha).toMatch(/^[a-f0-9]{40}$/u);
+    expect(facts.head.kind).toBe("born");
+    expect(facts.head.kind === "born" ? facts.head.sha : "").toMatch(/^[a-f0-9]{40}$/u);
 
     const exclusions = events.filter(
       (event) => event.op === "git.raw-status.denied-paths-excluded",
@@ -2740,5 +2741,52 @@ describe("deny-listed paths in the run's repository", () => {
       formatActivityLogProofLine(exclusions[0] ?? {}),
     );
     expect(persisted).toMatchObject({ deniedPathCount: 2 });
+  });
+});
+
+// #4491: the Workbench could never make the first commit of a fresh repository: the facts read threw
+// `git-raw-unborn-head`, which the proof classifier treats as permanent. An unborn branch is now an
+// explicit state end to end. `checkout --orphan` keeps the fixture's staged file and unborns HEAD.
+describe("the first commit of an unborn branch through the verified flow", () => {
+  function unbornContext(): VerifiedCommitRunContext {
+    return { ...context(), baseRef: "fresh", headRef: "fresh" };
+  }
+  beforeEach(() => {
+    git(["checkout", "-q", "--orphan", "fresh"]);
+    service = createVerifiedCommitService({ ...options, context: unbornContext });
+  });
+
+  it("reads status, facts and the staged diff of the unborn branch", async () => {
+    const execution = options.execution ?? {};
+    const status = await runtimeGitStatus(unbornContext(), execution);
+    expect(status).toMatchObject({ kind: "status", head: "unborn", branch: "fresh" });
+    expect(status).not.toHaveProperty("headSha");
+    expect(status.changes.map((change) => `${change.indexStatus} ${change.path}`)).toEqual([
+      "A code.js",
+    ]);
+    const facts = await readVerifiedCommitFacts(unbornContext(), execution);
+    expect(facts.head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
+    expect(facts.base).toEqual(facts.head);
+    const diff = await runtimeGitDiff(unbornContext(), execution, "staged", ["code.js"]);
+    expect(diff.files.map((file) => [file.path, file.status])).toEqual([["code.js", "added"]]);
+  });
+  it("proposes, approves and commits a root commit that records the zero parent", async () => {
+    const proposalId = await verifiedProposal();
+    const approval = await claim(proposalId);
+    const result = await service.execute(proposalId, approval);
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    expect(isVerifiedCommitResult(result)).toBe(true);
+    expect(result?.parentSha).toBe("0".repeat(40));
+    expect(result?.headSha).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
+    expectLastCommitSigned();
+  });
+  it("refuses the approved root commit when the branch was born after the review", async () => {
+    const proposalId = await verifiedProposal();
+    const approval = await claim(proposalId);
+    git(["update-ref", "refs/heads/fresh", git(["rev-parse", "dev"])]);
+    const result = await service.execute(proposalId, approval);
+    expect(result?.status).not.toBe("succeeded");
+    expect(git(["rev-parse", "HEAD"])).toBe(git(["rev-parse", "dev"]));
   });
 });

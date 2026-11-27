@@ -21,8 +21,14 @@ import {
   createNodeGitMutationAdapter,
   readGitWorktreeSnapshot,
   readGitTreeDigest,
+  readGitHeadState,
+  readGitIndexTreeDigest,
 } from "./git-mutation-node.js";
-import type { GitCommitExecRequest } from "./git-mutation-adapter.js";
+import type { GitHeadState } from "./git-head-state.js";
+import type {
+  GitCommitExecRequest,
+  GitVerifiedCommitPrecondition,
+} from "./git-mutation-adapter.js";
 
 let root: string;
 let signingRoot: string;
@@ -88,6 +94,11 @@ afterEach(() => {
   rmSync(signingRoot, { recursive: true, force: true });
 });
 
+function bornSha(head: GitHeadState): string {
+  if (head.kind !== "born") throw new Error("expected a born head");
+  return head.sha;
+}
+
 async function candidate(): Promise<
   GitCommitExecRequest & { readonly verified: NonNullable<GitCommitExecRequest["verified"]> }
 > {
@@ -98,11 +109,11 @@ async function candidate(): Promise<
     message: "feat: exact verified tree",
     allowEmpty: false,
     verified: {
-      headSha: snapshot.headSha,
+      head: { kind: "born", sha: snapshot.headSha },
       stagedTreeDigest: snapshot.stagedTreeDigest,
       branchName: "codex/task",
       baseRef: "dev",
-      baseSha: git(["rev-parse", "dev"]),
+      base: { kind: "born", sha: git(["rev-parse", "dev"]) },
     },
   };
 }
@@ -248,7 +259,7 @@ describe("verified commit at the sole mutation adapter", () => {
     const result = await adapter().commit(request);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("signature-failed");
-    expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
   });
   it("commits the approved tree and returns its exact SHA while preserving unrelated files", async () => {
     const request = await candidate();
@@ -256,7 +267,7 @@ describe("verified commit at the sole mutation adapter", () => {
     const result = await adapter().commit(request);
     expect(result.outcome).toBe("succeeded");
     expect(result.externalId).toBe(git(["rev-parse", "HEAD"]));
-    expect(git(["rev-parse", "HEAD^"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD^"])).toBe(bornSha(request.verified.head));
     expect(await readGitTreeDigest({ workspace }, result.externalId ?? "")).toBe(
       request.verified.stagedTreeDigest,
     );
@@ -268,7 +279,7 @@ describe("verified commit at the sole mutation adapter", () => {
     writeFileSync(join(root, "code.txt"), "unverified\n");
     git(["add", "code.txt"]);
     expect((await adapter().commit(request)).outcome).toBe("failed");
-    expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
   });
   it("cannot include changes staged during the final effect boundary", async () => {
     const request = await candidate();
@@ -290,7 +301,7 @@ describe("verified commit at the sole mutation adapter", () => {
     let checks = 0;
     const result = await adapter(() => ++checks < 3).commit(request);
     expect(result.outcome).toBe("failed");
-    expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
   });
   // #3907 AC3: a human who checks out the task branch locally gives the run that branch as its own
   // base. Git refuses a ref transaction that both verifies and updates one ref, so the governed
@@ -299,19 +310,19 @@ describe("verified commit at the sole mutation adapter", () => {
     const request = await candidate();
     const ownBase = {
       ...request,
-      verified: { ...request.verified, baseRef: "codex/task", baseSha: request.verified.headSha },
+      verified: { ...request.verified, baseRef: "codex/task", base: request.verified.head },
     };
     const result = await adapter().commit(ownBase);
     expect(result.outcome).toBe("succeeded");
     expect(result.externalId).toBe(git(["rev-parse", "HEAD"]));
-    expect(git(["rev-parse", "HEAD^"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD^"])).toBe(bornSha(request.verified.head));
     expectLastCommitSigned();
   });
   it("atomically refuses movement of a branch that is its own base", async () => {
     const request = await candidate();
     const ownBase = {
       ...request,
-      verified: { ...request.verified, baseRef: "codex/task", baseSha: request.verified.headSha },
+      verified: { ...request.verified, baseRef: "codex/task", base: request.verified.head },
     };
     const other = git([
       "commit-tree",
@@ -345,6 +356,96 @@ describe("verified commit at the sole mutation adapter", () => {
       return true;
     }).commit(request);
     expect(result.outcome).toBe("failed");
-    expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
+    expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
+  });
+});
+
+// #4491: a fresh repository has an unborn HEAD. Its first commit is a root commit created without a
+// parent and published with the all-zero old value, so a branch that appears meanwhile loses the race
+// instead of being overwritten. `checkout --orphan` keeps the fixture's index and gives that state.
+describe("the first commit of an unborn branch at the sole mutation adapter", () => {
+  async function unbornPrecondition(): Promise<GitVerifiedCommitPrecondition> {
+    const head = await readGitHeadState({ workspace });
+    if (head.kind !== "unborn") throw new Error("expected an unborn head");
+    return {
+      head,
+      stagedTreeDigest: await readGitIndexTreeDigest({ workspace }),
+      branchName: "fresh",
+      baseRef: "fresh",
+      base: head,
+    };
+  }
+  async function unbornCandidate(): Promise<
+    GitCommitExecRequest & { readonly verified: GitVerifiedCommitPrecondition }
+  > {
+    return {
+      message: "feat: the first commit",
+      allowEmpty: false,
+      verified: await unbornPrecondition(),
+    };
+  }
+  beforeEach(() => {
+    git(["checkout", "-q", "--orphan", "fresh"]);
+  });
+
+  it("reads the orphan branch as an explicit unborn state", async () => {
+    const head: GitHeadState = await readGitHeadState({ workspace });
+    expect(head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 40 });
+  });
+  it("creates a signed root commit with no parent and the reviewed tree", async () => {
+    const request = await unbornCandidate();
+    const result = await adapter().commit(request);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.externalId).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
+    expect(await readGitTreeDigest({ workspace }, result.externalId ?? "")).toBe(
+      request.verified.stagedTreeDigest,
+    );
+    expectLastCommitSigned();
+  });
+  it("loses the race to a branch created while the commit object is being prepared", async () => {
+    const request = await unbornCandidate();
+    const other = git(["commit-tree", git(["write-tree"]), "-m", "concurrent root"]);
+    let checks = 0;
+    const result = await adapter(() => {
+      if (++checks === 3) git(["update-ref", "refs/heads/fresh", other]);
+      return true;
+    }).commit(request);
+    expect(result.outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"])).toBe(other);
+  });
+  it("refuses an unborn review once the branch exists", async () => {
+    const request = await unbornCandidate();
+    const dev = git(["rev-parse", "dev"]);
+    git(["update-ref", "refs/heads/fresh", dev]);
+    const result = await adapter().commit(request);
+    expect(result.outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"])).toBe(dev);
+  });
+  it("refuses a born review against a branch that is unborn", async () => {
+    const request = await unbornCandidate();
+    const born = {
+      ...request,
+      verified: {
+        ...request.verified,
+        head: { kind: "born", sha: git(["rev-parse", "dev"]) } as const,
+      },
+    };
+    expect((await adapter().commit(born)).outcome).toBe("failed");
+    expect(() => git(["rev-parse", "--verify", "--quiet", "refs/heads/fresh"])).toThrow();
+  });
+  it("stages exact files into the empty index of an unborn branch", async () => {
+    git(["rm", "-q", "--cached", "code.txt"]);
+    const verified = await unbornPrecondition();
+    const result = await adapter().stage({ pathspecs: ["code.txt"], verified });
+    expect(result.outcome).toBe("succeeded");
+    expect(git(["ls-files", "--stage", "code.txt"])).toContain("code.txt");
+  });
+  it("refuses to stage when the unborn branch was born after the review", async () => {
+    git(["rm", "-q", "--cached", "code.txt"]);
+    const verified = await unbornPrecondition();
+    git(["update-ref", "refs/heads/fresh", git(["rev-parse", "dev"])]);
+    const result = await adapter().stage({ pathspecs: ["code.txt"], verified });
+    expect(result.outcome).toBe("failed");
   });
 });

@@ -11,6 +11,7 @@ import type {
 import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execution.js";
 import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import type { GitCommitCommand } from "@oscharko-dev/keiko-tools";
+import type { GitHeadState } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
@@ -34,8 +35,10 @@ export interface VerifiedCommitRunContext {
 }
 
 export interface VerifiedCommitFacts {
-  readonly headSha: string;
-  readonly baseSha: string;
+  /** The commit HEAD names, or the unborn branch whose first commit is a root commit (#4491). */
+  readonly head: GitHeadState;
+  /** The base the candidate is compared with; an unborn branch is its own base. */
+  readonly base: GitHeadState;
   readonly stagedTreeDigest: string;
   readonly repositoryDigest: string;
   readonly clean: boolean;
