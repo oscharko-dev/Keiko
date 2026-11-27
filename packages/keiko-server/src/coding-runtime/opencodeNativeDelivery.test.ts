@@ -18,6 +18,7 @@ import {
   OPENCODE_NATIVE_DELIVERY_TOOL_NAMES,
   isOpenCodeNativeDeliveryToolName,
 } from "./opencodeNativeDeliveryTools.js";
+import { OPENCODE_TOOL_OUTPUT_MAX_BYTES } from "./opencodeLaunchProfile.js";
 import { decideOpenCodeNativePolicy } from "./opencodeNativePolicy.js";
 import { OPENCODE_NATIVE_TOOL_NAMES } from "./opencodeNativeTools.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
@@ -65,7 +66,11 @@ interface GeneratedTool {
   readonly execute: (
     input: Record<string, unknown>,
     context: ToolContext,
-  ) => Promise<{ readonly content: string; readonly output?: unknown }>;
+  ) => Promise<{
+    readonly content: string;
+    readonly output?: unknown;
+    readonly metadata?: { readonly truncated?: boolean };
+  }>;
 }
 
 /** A provider of the runtime's websearch service, as the producer's plugin API registers it. */
@@ -334,6 +339,25 @@ describe("the generated native plugins", () => {
       expect(a.options, name).toEqual(b.options);
     }
   });
+
+  // PERF-2: the producer shortens every tool result that does not say whether it was cut, at the
+  // model-visible cap (51,200 bytes). That would cut a governed JSON result in the middle, so each
+  // governed tool states `truncated: false`: it bounds its own result (the IPC body ceiling and its
+  // per-tool windows) and is never shortened again.
+  it.each(["direct", "native"] as const)(
+    "keep a governed result above the model-visible cap whole by stating it was not truncated (%s)",
+    async (profile) => {
+      const answer = { ...FACADE_RESULT, guidance: "x".repeat(OPENCODE_TOOL_OUTPUT_MAX_BYTES * 2) };
+      expect(JSON.stringify(answer).length).toBeGreaterThan(OPENCODE_TOOL_OUTPUT_MAX_BYTES);
+      expect(JSON.stringify(answer).length).toBeLessThan(CODING_TOOL_MAX_BODY_BYTES);
+      const loaded = await load(profile, "autonomous-delivery", answer);
+      for (const name of EXPECTED_DELIVERY_TOOLS) {
+        const result = await toolOf(loaded, name).execute({ ...(ARGUMENTS[name] ?? {}) }, CONTEXT);
+        expect(result.metadata, name).toEqual({ truncated: false });
+        expect(JSON.parse(result.content), name).toEqual(answer);
+      }
+    },
+  );
 
   it.each(EXPECTED_DELIVERY_TOOLS)(
     "call the tool facade for %s exactly as the mapped tool does: same request, bounds and deadline",

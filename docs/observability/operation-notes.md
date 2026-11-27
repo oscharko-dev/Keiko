@@ -779,6 +779,17 @@ told apart by a digest held in memory only. A verification or Git step keeps its
 operations and has no failure origin. `keiko support analyze` therefore shows a run's pattern, for
 example twelve command failures and no Keiko refusal.
 
+`coding-runtime.tool-output.shortened` records one line per tool call whose result the runtime kept
+only the start of for the model (its `tool_output` cap, 51,200 bytes and 2,000 lines, protects the
+context window), under the run's id. The line carries the tool's closed class, the bytes the model
+kept (`keptBytes`), the lines kept and the lines the whole output had (`keptLines`, `totalLines`,
+absent when the runtime stated none; the original byte size is not reported) and the run's running
+count. The runtime saves the whole output in its tool-output directory in the run's private home,
+which the native policy admits for reads only; neither that path, the output nor the command ever
+reaches the log. The Workbench row carries the same counts as an "output shortened" marker. Keiko's
+own governed tools bound their results themselves and state `truncated: false`, so they never write
+this line.
+
 `coding-runtime.history` also records a refused history request as `event=refused` under the
 request's correlation id, with the closed `errorKind` `unavailable` (404), `conflict` (409) or
 `invalid-request` (400). A status or title update checks that the task exists without reading its

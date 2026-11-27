@@ -12,6 +12,7 @@ import {
   boundedToolText,
   openCodeToolDetail,
   redactToolTexts,
+  shortenedOutput,
   toolOutputPreview,
   withoutCutSecretStart,
 } from "./codingSafeActivityToolDetail.js";
@@ -329,5 +330,62 @@ describe("the deployment's own secrets in a live update", () => {
     const presentation = { command: { text: "ls", truncated: false } };
     expect(redactToolTexts(presentation, [SECRET])).toEqual(presentation);
     expect(redactToolTexts(presentation, [])).toBe(presentation);
+  });
+});
+
+// PERF-2: the pinned runtime keeps the start of a result longer than its cap, ends the content with
+// a marker naming the lines kept and the whole output's lines, and sets `metadata.truncated`.
+describe("a result the runtime shortened for the model", () => {
+  const MARKER_PATH = "/private/state/home/.local/share/opencode/tool-output/tool_0123456789ab";
+  const shortenedState = (head: string, total: number, kept: number): Record<string, unknown> => ({
+    status: "completed",
+    input: { command: "npm test" },
+    metadata: { exit: 0, truncated: true, outputPath: MARKER_PATH },
+    content: [
+      { type: "text", text: head },
+      {
+        type: "text",
+        text: `[showing lines 1-${String(kept)} of ${String(total)}; full output saved to ${MARKER_PATH}]`,
+      },
+    ],
+  });
+
+  it("reports the bytes and lines the model kept, and never the path", () => {
+    const head = lines(380, "tap");
+    const state = shortenedState(head, 200_000, 380);
+    const detail = openCodeToolDetail("shell", shellPart(state), state, "succeeded");
+    expect(detail.outputShortened).toEqual({
+      keptBytes: Buffer.byteLength(head, "utf8"),
+      keptLines: 380,
+      totalLines: 200_000,
+    });
+    expect(isCodingSafeActivityToolPresentation(detail)).toBe(true);
+    expect(JSON.stringify(detail.outputShortened)).not.toContain("tool-output");
+  });
+
+  it("keeps the byte count alone when the runtime stated no usable line counts", () => {
+    const unstated = "head\n[output cut]";
+    const noGain = "head\n[showing lines 1-9 of 9; full output saved to /p]";
+    for (const [text, kept] of [
+      [unstated, unstated],
+      [noGain, "head"],
+    ] as const) {
+      const state = {
+        status: "completed",
+        metadata: { truncated: true },
+        content: [{ type: "text", text }],
+      };
+      expect(shortenedOutput(state)).toEqual({ keptBytes: Buffer.byteLength(kept, "utf8") });
+    }
+  });
+
+  it("states nothing for a result the runtime did not shorten", () => {
+    for (const metadata of [{ truncated: false }, { exit: 0 }, undefined]) {
+      const state = { status: "completed", metadata, content: [{ type: "text", text: "ok" }] };
+      expect(shortenedOutput(state)).toBeUndefined();
+      expect(openCodeToolDetail("shell", shellPart(state), state, "succeeded")).not.toHaveProperty(
+        "outputShortened",
+      );
+    }
   });
 });

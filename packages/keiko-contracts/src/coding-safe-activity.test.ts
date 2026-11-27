@@ -151,6 +151,31 @@ describe("coding safe-activity contract", () => {
     }
   });
 
+  // PERF-2: a result the runtime shortened for the model carries counts only; the lines are both
+  // present or both absent, and the model cannot have kept as many lines as the output had.
+  it("admits only counts as the shortened-output fact of a tool presentation", () => {
+    for (const outputShortened of [
+      { keptBytes: 51_200 },
+      { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 },
+      { keptBytes: 0, keptLines: 0, totalLines: 1 },
+    ]) {
+      expect(isCodingSafeActivityToolPresentation({ outputShortened })).toBe(true);
+    }
+    for (const outputShortened of [
+      true,
+      {},
+      { keptBytes: -1 },
+      { keptBytes: 1.5 },
+      { keptBytes: "1" },
+      { keptBytes: 1, keptLines: 2 },
+      { keptBytes: 1, totalLines: 2 },
+      { keptBytes: 1, keptLines: 5, totalLines: 5 },
+      { keptBytes: 1, path: "/tmp/x" },
+    ]) {
+      expect(isCodingSafeActivityToolPresentation({ outputShortened })).toBe(false);
+    }
+  });
+
   // #3579: a verification that could not check anything must not read as a failed one, so the card
   // gets its reason as a closed word. Nothing outside the vocabulary may reach it.
   it("admits only the closed verification outcome vocabulary on a tool presentation", () => {

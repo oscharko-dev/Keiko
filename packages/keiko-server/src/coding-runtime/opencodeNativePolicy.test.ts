@@ -1391,6 +1391,90 @@ describe("accepted external references (#3900 AC5)", () => {
   });
 });
 
+// PERF-2: the runtime saves the full output of a result it shortened under the run's private tool
+// output directory and tells the model where. Reading it back is the model's own output, so it is a
+// plain read in every mode; nothing else outside the workspace opens, it is never writable, and the
+// sensitive-path, link and hard-link refusals hold inside it.
+describe("the saved full output of a shortened tool result (PERF-2)", () => {
+  function saved(): { readonly root: string; readonly output: string; readonly workspace: string } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-tool-output-")));
+    const output = join(root, "home", ".local", "share", "opencode", "tool-output");
+    const workspace = join(root, "workspace");
+    mkdirSync(output, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(output, "tool_0123456789ab"), "line 1\n");
+    writeFileSync(join(output, ".env"), "TOKEN=x\n");
+    writeFileSync(join(root, "outside.txt"), "outside\n");
+    linkSync(join(root, "outside.txt"), join(output, "linked.txt"));
+    return { root, output, workspace };
+  }
+
+  function effect(
+    paths: { readonly output: string; readonly workspace: string },
+    mode: string,
+    permission: string,
+    resources: readonly string[],
+    overrides: Partial<OpenCodeNativePolicyRequest> = {},
+    toolOutputRoot: string | null = paths.output,
+  ): string {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: paths.workspace,
+      ...(toolOutputRoot === null ? {} : { toolOutputRoot }),
+      request: request(permission, resources, overrides),
+      nowMs: NOW,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  }
+
+  it("reads and searches it without asking in every mode", () => {
+    const paths = saved();
+    try {
+      const file = join(paths.output, "tool_0123456789ab");
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/*`]), mode).toBe(
+          "allow",
+        );
+        expect(effect(paths, mode, "read", [file]), mode).toBe("allow");
+        expect(effect(paths, mode, "grep", ["needle"], { searchPath: paths.output }), mode).toBe(
+          "allow",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("never writes there and refuses credential files, hard links and every other directory", () => {
+    const paths = saved();
+    try {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "edit", [join(paths.output, "tool_0123456789ab")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [join(paths.output, ".env")])).toBe(
+          "deny:sensitive-path",
+        );
+        expect(effect(paths, mode, "read", [join(paths.output, "linked.txt")])).toBe(
+          "deny:linked-file",
+        );
+        expect(effect(paths, mode, "read", [join(paths.root, "outside.txt")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "external_directory", [`${paths.root}/*`])).toBe(
+          "deny:workspace-escape",
+        );
+        // Without the admitted directory the same read is outside the workspace.
+        expect(
+          effect(paths, mode, "read", [join(paths.output, "tool_0123456789ab")], {}, null),
+        ).toBe("deny:workspace-escape");
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+});
+
 it("asks before managed MCP effects in either restricted mode while retaining direct-network denial", () => {
   const admission = openCodeNativeMcpAdmission({
     servers: [

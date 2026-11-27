@@ -248,6 +248,18 @@ export interface CodingSafeActivityToolPresentation {
   readonly errorText?: CodingSafeActivityToolText;
   /** The live feed shed this call's command, output and error text to stay inside its budget. */
   readonly detailOmitted?: true;
+  /** The runtime kept only the start of this call's result for the model; the whole result was saved. */
+  readonly outputShortened?: CodingSafeActivityOutputShortened;
+}
+
+/**
+ * What the runtime kept of a result it shortened for the model's context window. Counts only: the
+ * line counts are present when the runtime stated them.
+ */
+export interface CodingSafeActivityOutputShortened {
+  readonly keptBytes: number;
+  readonly keptLines?: number;
+  readonly totalLines?: number;
 }
 
 /** Untrusted tool text with the credential floor applied; `truncated` when cut to its bound. */
@@ -938,6 +950,7 @@ export function isCodingSafeActivityToolPresentation(
     "output",
     "errorText",
     "detailOmitted",
+    "outputShortened",
   ];
   if (exactKeys(value, allowed, "presentation").length > 0) return false;
   return (
@@ -952,8 +965,21 @@ export function isCodingSafeActivityToolPresentation(
 function validPresentationScalars(value: Record<string, unknown>): boolean {
   return (
     (value.exitCode === undefined || Number.isSafeInteger(value.exitCode)) &&
-    (value.detailOmitted === undefined || value.detailOmitted === true)
+    (value.detailOmitted === undefined || value.detailOmitted === true) &&
+    (value.outputShortened === undefined || isOutputShortened(value.outputShortened))
   );
+}
+
+function isOutputShortened(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    exactKeys(value, ["keptBytes", "keptLines", "totalLines"], "x").length > 0
+  )
+    return false;
+  const { keptBytes, keptLines, totalLines } = value;
+  if (!isCount(keptBytes)) return false;
+  if (keptLines === undefined && totalLines === undefined) return true;
+  return isCount(keptLines) && isCount(totalLines) && keptLines < totalLines;
 }
 
 function validPresentationVocabulary(value: Record<string, unknown>): boolean {

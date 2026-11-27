@@ -1,4 +1,5 @@
 import {
+  type CodingSafeActivityOutputShortened,
   CODING_SAFE_ACTIVITY_MAX_TOOL_COMMAND_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_ERROR_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOL_OUTPUT_PART_CHARS,
@@ -21,7 +22,7 @@ import { redactContent } from "@oscharko-dev/keiko-security";
 
 type ToolDetail = Pick<
   CodingSafeActivityToolPresentation,
-  "failureOrigin" | "durationMs" | "command" | "output" | "errorText"
+  "failureOrigin" | "durationMs" | "command" | "output" | "errorText" | "outputShortened"
 >;
 
 /** What one finished or running OpenCode tool part shows beside its state. */
@@ -39,7 +40,9 @@ export function openCodeToolDetail(
   const errorText = state.status === "error" ? toolErrorText(state.error) : undefined;
   const origin = failureOrigin(name, state, displayState);
   const durationMs = partDuration(part);
+  const shortened = shortenedOutput(state);
   return {
+    ...(shortened === undefined ? {} : { outputShortened: shortened }),
     ...(origin === undefined ? {} : { failureOrigin: origin }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(command === undefined ? {} : { command }),
@@ -105,18 +108,43 @@ function toolErrorText(error: unknown): CodingSafeActivityToolText | undefined {
     : undefined;
 }
 
-function toolOutput(
-  state: Readonly<Record<string, unknown>>,
-): CodingSafeActivityToolOutput | undefined {
+function contentText(state: Readonly<Record<string, unknown>>): string | undefined {
   const content = state.content;
   if (!Array.isArray(content)) return undefined;
-  const text = content
+  return content
     .map((item) => {
       const entry = record(item);
       return entry?.type === "text" && typeof entry.text === "string" ? entry.text : "";
     })
     .join("");
-  return toolOutputPreview(text);
+}
+
+function toolOutput(
+  state: Readonly<Record<string, unknown>>,
+): CodingSafeActivityToolOutput | undefined {
+  const text = contentText(state);
+  return text === undefined ? undefined : toolOutputPreview(text);
+}
+
+// The runtime ends a result it shortened with `[showing lines 1-N of M; full output saved to
+// <path>]` and reports `metadata.truncated`. Only the counts are read; the path stays out.
+const SHORTENING_MARKER =
+  /\n?\[showing (?:lines 1-(\d+)|0 lines) of (\d+); full output saved to [^\]\n]*\]\s*$/u;
+
+/** What the runtime kept of a result it shortened for the model, as counts alone. */
+export function shortenedOutput(
+  state: Readonly<Record<string, unknown>>,
+): CodingSafeActivityOutputShortened | undefined {
+  if (record(state.metadata)?.truncated !== true) return undefined;
+  const text = contentText(state) ?? "";
+  const marker = SHORTENING_MARKER.exec(text);
+  const keptBytes = Buffer.byteLength(marker === null ? text : text.slice(0, marker.index), "utf8");
+  if (marker === null) return { keptBytes };
+  const totalLines = Number(marker[2]);
+  const keptLines = Number(marker[1] ?? 0);
+  return Number.isSafeInteger(totalLines) && keptLines < totalLines
+    ? { keptBytes, keptLines, totalLines }
+    : { keptBytes };
 }
 
 /**

@@ -1521,6 +1521,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.linesShortened": "Long lines were shortened.",
   "codingWorkbench.activity.textShortened": "The text was shortened.",
   "codingWorkbench.activity.detailOmitted": "The command and its output are no longer shown live.",
+  "codingWorkbench.activity.outputShortened": "Output shortened for the model",
+  "codingWorkbench.activity.outputShortened.hint":
+    "The model saw only the start of this result; the rest was kept out of its context.",
+  "codingWorkbench.activity.outputShortened.hintLines":
+    "The model saw the first {kept} of {total} lines of this result; the rest was kept out of its context.",
   "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",
   "codingWorkbench.activity.verification.failed-check":
     "A verification check ran and failed. The model received the failing locations.",

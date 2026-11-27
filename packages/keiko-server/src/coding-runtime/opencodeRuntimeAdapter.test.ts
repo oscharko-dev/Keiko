@@ -195,7 +195,7 @@ interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
-    readonly tool_output: { readonly max_bytes: number };
+    readonly tool_output: { readonly max_bytes: number; readonly max_lines: number };
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -251,9 +251,9 @@ function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerifi
 }
 
 describe("generated OpenCode bundle", () => {
-  it("uses the governed response ceiling for native custom-tool output", () => {
+  it("keeps the model-visible output cap apart from the governed response ceiling", () => {
     const bundle = createGeneratedOpenCodeBundle();
-    expect(bundle.config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
+    expect(bundle.config.tool_output).toEqual({ max_bytes: 51_200, max_lines: 2_000 });
     expect(bundle.toolSources.keiko_verification).toContain(
       `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     );

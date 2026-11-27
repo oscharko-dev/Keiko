@@ -372,7 +372,7 @@ export interface GeneratedOpenCodeBundle {
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
     readonly compaction: Readonly<Record<string, boolean | number>>;
-    readonly tool_output: Readonly<{ readonly max_bytes: number }>;
+    readonly tool_output: Readonly<{ readonly max_bytes: number; readonly max_lines: number }>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -2148,7 +2148,11 @@ function toolSourceFormat(
     assertOpen: [`    assertInvocationOpen(context, ${String(nativeCodeMode)});`],
     subscribeAbort: [],
     unsubscribeAbort: [],
-    result: "      return { content: modelContent(result, text), output: result, metadata: {} };",
+    // `truncated` is the producer's own opt-out: a result that already says whether it was cut is
+    // never shortened again at the model-visible cap, which would cut the facade's JSON in the
+    // middle. The facade bounds every result itself (CODING_TOOL_MAX_BODY_BYTES, per-tool windows).
+    result:
+      "      return { content: modelContent(result, text), output: result, metadata: { truncated: false } };",
     registrationEnd: ["      });"],
     end: ["}"],
   };

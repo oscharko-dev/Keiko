@@ -19845,6 +19845,7 @@
         "state": [
           "coding-runtime.history-projection",
           "coding-runtime.native-question.observed",
+          "coding-runtime.tool-output.shortened",
           "coding-runtime.tool.failed"
         ],
         "end": [],
@@ -19865,6 +19866,10 @@
           "mode": "correlation"
         },
         {
+          "op": "coding-runtime.tool-output.shortened",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-runtime.tool.failed",
           "mode": "correlation"
         }
@@ -19873,6 +19878,7 @@
       "resourceSignals": [
         "coding-runtime.history-projection",
         "coding-runtime.native-question.observed",
+        "coding-runtime.tool-output.shortened",
         "coding-runtime.tool.failed"
       ],
       "replayReferences": [],
@@ -20126,6 +20132,54 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.safe-activity.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.tool-output.shortened",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "keptBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "keptLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "occurrenceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "tool",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "totalLines",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.tool-output.shortened.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         },

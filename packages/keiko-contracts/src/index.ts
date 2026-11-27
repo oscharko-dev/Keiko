@@ -1614,6 +1614,7 @@ export type {
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
+  CodingSafeActivityOutputShortened,
   CodingSafeActivityToolOutput,
   CodingSafeActivityToolRefusalCause,
   CodingSafeActivityToolState,

@@ -278,6 +278,7 @@ import {
   openCodeConfigDirectory,
   openCodePlanDirectory,
   openCodeRepositoryInstructionsPath,
+  openCodeToolOutputDirectory,
 } from "./opencodeLaunchProfile.js";
 import type {
   OpenCodeContextGeometry,
@@ -4458,6 +4459,7 @@ async function handleNativePolicyRequest(
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
+    toolOutputRoot: openCodeToolOutputDirectory(run.runRoot),
     request,
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),

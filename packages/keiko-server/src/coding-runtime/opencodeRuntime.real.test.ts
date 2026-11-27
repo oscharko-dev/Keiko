@@ -57,7 +57,7 @@ import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
 } from "./opencodeV2HttpClient.js";
-import { CODING_TOOL_MAX_BODY_BYTES, type CodingToolResult } from "./codingToolIpc.js";
+import type { CodingToolResult } from "./codingToolIpc.js";
 import {
   createOpenCodeRuntimeComposition,
   incomingHeaders,
@@ -1718,10 +1718,10 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(started).toMatchObject({ runId: RUN_ID, status: "ready" });
         const nativeAcceptedConfig = JSON.parse(
           readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
-        ) as { readonly tool_output?: { readonly max_bytes?: number } };
-        expect(nativeAcceptedConfig.tool_output).toEqual({
-          max_bytes: CODING_TOOL_MAX_BODY_BYTES,
-        });
+        ) as {
+          readonly tool_output?: { readonly max_bytes?: number; readonly max_lines?: number };
+        };
+        expect(nativeAcceptedConfig.tool_output).toEqual({ max_bytes: 51_200, max_lines: 2_000 });
         expect(gateway.calls()).toBeGreaterThan(0);
         expect(productiveActions).toEqual([]);
         expect(runtime.manager.health()).toEqual({ status: "ready", activeRunId: RUN_ID });

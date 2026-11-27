@@ -238,6 +238,7 @@
   "coding-runtime.task-replacement": "tools-workflows",
   "coding-runtime.tool-authority.denied": "tools-workflows",
   "coding-runtime.tool-availability.failed": "tools-workflows",
+  "coding-runtime.tool-output.shortened": "tools-workflows",
   "coding-runtime.tool-result": "tools-workflows",
   "coding-runtime.tool-result-rendered": "tools-workflows",
   "coding-runtime.tool.failed": "tools-workflows",

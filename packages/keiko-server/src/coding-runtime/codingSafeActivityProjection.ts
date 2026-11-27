@@ -328,6 +328,39 @@ const CODING_RUNTIME_TOOL_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * A tool result the runtime shortened for the model's context window, one line per call: the tool's
+ * closed class, the bytes the model kept and, when the runtime stated them, the lines kept and the
+ * lines the whole output had (the original byte size is not reported). A running count makes a run
+ * that keeps overflowing readable from its last line. Body-free: never the output, a path or a command.
+ */
+const CODING_RUNTIME_TOOL_OUTPUT_SHORTENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.tool-output.shortened",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingSafeActivityProjection.toolOutputShortened",
+  fields: {
+    tool: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...NATIVE_TOOL_DENIED_TOOLS, "keiko", "other"],
+    },
+    keptBytes: { type: "integer", dataClass: "count", required: true },
+    keptLines: { type: "integer", dataClass: "count", required: false },
+    totalLines: { type: "integer", dataClass: "count", required: false },
+    occurrenceCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.tool-output.shortened.emitted-line"],
+  releaseImpact: "patch",
+});
+
 // A native tool keeps its closed name, Keiko's governed tools are `keiko`, anything else `other`.
 function toolLogClass(tool: string): string {
   if (NATIVE_TOOL_DENIED_TOOL_SET.has(tool)) return tool;
@@ -660,6 +693,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private supersededRestatementCount = 0;
   private nativeToolDenialCount = 0;
   private readonly recordedDenials = new Set<string>();
+  private toolOutputShortenedCount = 0;
+  private readonly recordedShortenings = new Set<string>();
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -696,6 +731,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       this.supersededRestatementCount = 0;
       this.nativeToolDenialCount = 0;
       this.recordedDenials.clear();
+      this.toolOutputShortenedCount = 0;
+      this.recordedShortenings.clear();
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -1152,8 +1189,38 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   ): SignalApplication {
     const denial = newNativeToolDenial(entry, signal);
     const application = applySignal(entry, signal, this.limits);
-    if (projectionRejection(application) === undefined) this.recordNativeToolDenial(runId, denial);
+    if (projectionRejection(application) === undefined) {
+      this.recordNativeToolDenial(runId, denial);
+      this.recordToolOutputShortened(runId, entry, signal);
+    }
     return application;
+  }
+
+  // Once per call: the first update that reports the runtime kept only the start of a result.
+  private recordToolOutputShortened(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+  ): void {
+    if (signal.kind !== "tool") return;
+    const shortened = signal.presentation?.outputShortened;
+    const digest = callIdDigest(signal.callId);
+    if (shortened === undefined || this.recordedShortenings.has(digest)) return;
+    rememberBoundedIdentity(this.recordedShortenings, digest, this.maxSignalIdentities);
+    this.toolOutputShortenedCount += 1;
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_TOOL_OUTPUT_SHORTENED_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          tool: toolLogClass(signal.tool ?? knownToolName(entry, signal)),
+          keptBytes: shortened.keptBytes,
+          ...(shortened.keptLines === undefined ? {} : { keptLines: shortened.keptLines }),
+          ...(shortened.totalLines === undefined ? {} : { totalLines: shortened.totalLines }),
+          occurrenceCount: this.toolOutputShortenedCount,
+        },
+      ),
+    );
   }
 
   // Once per call: the first OpenCode update that reports the call rejected is recorded, also when
@@ -1871,6 +1938,17 @@ function isSettledToolState(state: CodingSafeActivityToolState): state is Settle
 
 function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
   return RESTATED_TOOL_STATES.has(state);
+}
+
+// The name the feed already holds for a call whose update did not name its tool; empty if none.
+function knownToolName(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): string {
+  const call = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  );
+  return call?.tool ?? "";
 }
 
 function callIdDigest(callId: string): string {

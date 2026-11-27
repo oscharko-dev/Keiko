@@ -1578,6 +1578,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.linesShortened": "Lange Zeilen wurden gekürzt.",
   "codingWorkbench.activity.textShortened": "Der Text wurde gekürzt.",
   "codingWorkbench.activity.detailOmitted": "Befehl und Ausgabe werden live nicht mehr angezeigt.",
+  "codingWorkbench.activity.outputShortened": "Ausgabe für das Modell gekürzt",
+  "codingWorkbench.activity.outputShortened.hint":
+    "Das Modell hat nur den Anfang dieses Ergebnisses gesehen; der Rest blieb außerhalb seines Kontexts.",
+  "codingWorkbench.activity.outputShortened.hintLines":
+    "Das Modell hat die ersten {kept} von {total} Zeilen dieses Ergebnisses gesehen; der Rest blieb außerhalb seines Kontexts.",
   "codingWorkbench.activity.verification.passed":
     "Alle angeforderten Verifizierungsprüfungen sind bestanden.",
   "codingWorkbench.activity.verification.failed-check":

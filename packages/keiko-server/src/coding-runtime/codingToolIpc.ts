@@ -48,7 +48,10 @@ import {
 import { CHANGESET_EDIT_ARGUMENT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
-/** The bound of a tool RESPONSE and of the runtime's `tool_output` (a different direction). */
+/**
+ * The bound of a tool RESPONSE. The runtime's model-visible `tool_output` cap is a different limit
+ * (`OPENCODE_TOOL_OUTPUT_MAX_BYTES`): the two must not be conflated.
+ */
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
 /**
  * The bound of a tool REQUEST. The largest request is a governed changeset edit, so this is that

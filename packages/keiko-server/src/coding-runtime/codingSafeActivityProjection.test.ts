@@ -2806,6 +2806,48 @@ describe("failed tool rows", () => {
     }
   });
 
+  // PERF-2: a result the runtime shortened for the model is shown on its row and written once, with
+  // its counts and closed tool class, under the run's correlation and without any body.
+  it("shows a shortened result on its row and writes one body-free line per call", () => {
+    const log = createBufferedServerLogSink();
+    const projection = assistantTurn({ activityLog: log });
+    const shortened = { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 };
+    const signal = shellCall("call_long", "succeeded", {
+      exitCode: 0,
+      command: { text: PRIVATE_COMMAND, truncated: false },
+      outputShortened: shortened,
+    });
+    projection.ingest(RUN_ID, shellCall("call_long", "running"));
+    projection.ingest(RUN_ID, signal);
+    projection.ingest(RUN_ID, signal);
+    projection.ingest(RUN_ID, shellCall("call_other", "succeeded", { exitCode: 0 }));
+    expect(toolOf(projection, "call_long").presentation?.outputShortened).toEqual(shortened);
+    expect(toolOf(projection, "call_other").presentation).not.toHaveProperty("outputShortened");
+    const lines = log.events.filter((event) => event.op === "coding-runtime.tool-output.shortened");
+    expect(lines.map((line) => line.extra)).toEqual([
+      {
+        tool: "shell",
+        keptBytes: 51_200,
+        keptLines: 380,
+        totalLines: 200_000,
+        occurrenceCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    ]);
+    const first = lines[0];
+    if (first === undefined) throw new Error("expected a tool-output.shortened line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-output.shortened.emitted-line",
+        formatActivityLogProofLine(first),
+      ),
+    ).toMatchObject({ correlationId: RUN_ID, tool: "shell", totalLines: 200_000 });
+    const logged = JSON.stringify(log.events);
+    expect(logged).not.toContain("private-case");
+    expect(logged).not.toContain("call_long");
+  });
+
   it("lets a later update bring back a row's shed detail once the feed has room", () => {
     const projection = assistantTurn({
       limits: { maxTurns: 2, maxTurnBytes: 3_000, maxTotalBytes: 3_400 },

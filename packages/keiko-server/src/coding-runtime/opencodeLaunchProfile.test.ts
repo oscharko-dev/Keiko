@@ -11,6 +11,9 @@ import {
   OPENCODE_CHANGESET_SIZE_LIMIT_TEXT,
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
+  OPENCODE_TOOL_OUTPUT_MAX_BYTES,
+  OPENCODE_TOOL_OUTPUT_MAX_LINES,
+  openCodeToolOutputDirectory,
   openCodeConfigDirectory,
   openCodeRepositoryInstructionsPath,
   resolveOpenCodeContextGeometry,
@@ -178,6 +181,11 @@ describe("OpenCode launch profile", () => {
         resource: `${openCodePlanDirectory("/private/run")}/*`,
         effect: "allow",
       },
+      {
+        action: "external_directory",
+        resource: `${openCodeToolOutputDirectory("/private/run")}/*`,
+        effect: "allow",
+      },
       { action: "external_directory", resource: "/Users/owner/reference/docs/*", effect: "ask" },
     ]);
     // The producer's own local reference, named by position, never by the directory.
@@ -222,6 +230,11 @@ describe("OpenCode launch profile", () => {
       {
         action: "external_directory",
         resource: `${openCodePlanDirectory("/private/run")}/*`,
+        effect: "allow",
+      },
+      {
+        action: "external_directory",
+        resource: `${openCodeToolOutputDirectory("/private/run")}/*`,
         effect: "allow",
       },
     ]);
@@ -359,6 +372,11 @@ describe("OpenCode launch profile", () => {
         {
           action: "external_directory",
           resource: `${openCodePlanDirectory("/private/run")}/*`,
+          effect: "allow",
+        },
+        {
+          action: "external_directory",
+          resource: `${openCodeToolOutputDirectory("/private/run")}/*`,
           effect: "allow",
         },
       ]);
@@ -786,9 +804,22 @@ describe("OpenCode launch profile", () => {
     }
   });
 
-  it("aligns native tool-output truncation with the governed response ceiling", () => {
-    const config = createFixedOpenCodeV2Config(CONTEXT_GEOMETRY);
-    expect(config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
+  // PERF-2: the model-visible tool output cap is the upstream default (51,200 bytes, 2,000
+  // lines), not the 256 KiB governed IPC body ceiling. One long command output at the old cap cost
+  // about 51k prompt tokens on a 131k window. Not a relaxation: it tightens the cap to upstream
+  // parity; Keiko's own tools opt out of the cut at the shim (`truncated: false`).
+  it("holds every profile's tool output to the upstream-parity model-visible cap", () => {
+    expect({
+      bytes: OPENCODE_TOOL_OUTPUT_MAX_BYTES,
+      lines: OPENCODE_TOOL_OUTPUT_MAX_LINES,
+    }).toEqual({ bytes: 51_200, lines: 2_000 });
+    const parity = { max_bytes: 51_200, max_lines: 2_000 };
+    expect(createFixedOpenCodeConfig(CONTEXT_GEOMETRY).tool_output).toEqual(parity);
+    expect(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY).tool_output).toEqual(parity);
+    expect(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, "native").tool_output).toEqual(
+      parity,
+    );
+    expect(OPENCODE_TOOL_OUTPUT_MAX_BYTES).toBeLessThan(CODING_TOOL_MAX_BODY_BYTES);
   });
 
   it("keeps wildcard denial before exact governed allows in the V2 permission list", () => {
@@ -1017,9 +1048,18 @@ describe("plan agent directory (#3897)", () => {
         resource: `${openCodePlanDirectory("/state/run-1")}/*`,
         effect: "allow",
       },
+      {
+        action: "external_directory",
+        resource: `${openCodeToolOutputDirectory("/state/run-1")}/*`,
+        effect: "allow",
+      },
     ]);
     expect(openCodePlanDirectory("/state/run-1")).toBe(
       join("/state/run-1", "home", ".opencode", "plan"),
+    );
+    // Where the pinned runtime saves a shortened result: under its data home in the private home.
+    expect(openCodeToolOutputDirectory("/state/run-1")).toBe(
+      join("/state/run-1", "home", ".local", "share", "opencode", "tool-output"),
     );
     expect(fixed(CONTEXT_GEOMETRY, undefined, "native").permissions).toHaveLength(1);
   });

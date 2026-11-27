@@ -3,6 +3,7 @@
 import { useId, type KeyboardEvent, type ReactNode } from "react";
 import type {
   CodingSafeActivityFeed,
+  CodingSafeActivityOutputShortened,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
   CodingSafeActivityToolOutput,
@@ -108,6 +109,41 @@ export function ToolDuration({
   );
 }
 
+/** The short label on a row whose result the runtime shortened for the model. */
+export function ToolOutputShortenedLabel({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (tool.presentation?.outputShortened === undefined) return null;
+  return (
+    <span className={styles.cmpToolDuration}>{t("codingWorkbench.activity.outputShortened")}</span>
+  );
+}
+
+// What the model received of a shortened result, in plain words: the person still sees the rest.
+function ToolOutputShortenedHint({
+  shortened,
+  t,
+}: {
+  readonly shortened: CodingSafeActivityOutputShortened;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const { keptLines, totalLines } = shortened;
+  return (
+    <p className={styles.cmpToolHint}>
+      {keptLines === undefined || totalLines === undefined
+        ? t("codingWorkbench.activity.outputShortened.hint")
+        : t("codingWorkbench.activity.outputShortened.hintLines", {
+            kept: keptLines,
+            total: totalLines,
+          })}
+    </p>
+  );
+}
+
 /** What an opened failed row says first: what went wrong, in plain words, and what happens next. */
 export function ToolFailureExplanation({
   tool,
@@ -188,6 +224,9 @@ export function ToolTextDetail({
         />
       )}
       {facts.output === undefined ? null : <ToolOutputBlock output={facts.output} t={t} />}
+      {facts.outputShortened === undefined ? null : (
+        <ToolOutputShortenedHint shortened={facts.outputShortened} t={t} />
+      )}
     </>
   );
 }

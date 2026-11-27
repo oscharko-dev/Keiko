@@ -718,6 +718,12 @@ export interface OpenCodeNativePolicyInput {
    */
   readonly planRoot?: string | undefined;
   /**
+   * The run-private directory where the runtime saves the full output of a tool result it
+   * shortened for the model, derived by the server. It is admitted for reads and searches only,
+   * with the sensitive-path and link refusals of every other read root; an edit there is refused.
+   */
+  readonly toolOutputRoot?: string | undefined;
+  /**
    * The operator's accepted external references for this run (#3900 AC5,
    * `opencodeNativeExternalRoots.ts`), the same roots the kernel allowlist reads. Absent, nothing
    * outside the workspace and the plan directory is admitted.
@@ -895,6 +901,7 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
   return {
     workspaceRoot: input.workspaceRoot,
     planRoot: input.planRoot,
+    toolOutputRoot: input.toolOutputRoot,
     externalRoots: input.externalRoots ?? [],
     webSearch: input.webSearch === true,
     codeModeNestedEffectsDecided: input.codeModeNestedEffectsDecided === true,
@@ -922,6 +929,7 @@ type Classified =
 interface AdmittedRoots {
   readonly workspaceRoot: string;
   readonly planRoot?: string | undefined;
+  readonly toolOutputRoot?: string | undefined;
   readonly externalRoots?: readonly string[] | undefined;
   /** The operator admitted a web search integration. */
   readonly webSearch?: boolean | undefined;
@@ -1398,11 +1406,11 @@ function classifyPathAction(
   // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
   if (SEARCH_ACTIONS.has(permission)) {
     const searched = request.searchPath === undefined ? [] : [request.searchPath];
-    return externalRead(searched, roots) ?? guardedPaths(searched, roots, READ);
+    return outsideWorkspaceRead(searched, roots) ?? guardedPaths(searched, roots, READ);
   }
   if (READ_ACTIONS.has(permission))
     return (
-      externalRead(resources, roots) ??
+      outsideWorkspaceRead(resources, roots) ??
       guardedPaths(resources, roots, READ, permission === "read" || permission === "list")
     );
   // The plan agent's notes live in the run's private plan directory, not in the workspace: writing
@@ -1473,7 +1481,7 @@ function externalDirectory(resources: readonly string[], roots: AdmittedRoots): 
     directories.every(
       (directory) => isAbsolute(directory) && workspaceRelative(directory, root) !== undefined,
     );
-  if (within(roots.planRoot)) return READ;
+  if (within(roots.planRoot) || within(roots.toolOutputRoot)) return READ;
   if ((roots.externalRoots ?? []).some((root) => within(root))) return EXTERNAL_READ;
   return {
     reason: "workspace-escape",
@@ -1487,7 +1495,34 @@ function externalDirectory(resources: readonly string[], roots: AdmittedRoots): 
  * `undefined` when a path is not inside one, so the workspace rules decide it.
  */
 function externalRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
-  const root = (roots.externalRoots ?? []).find(
+  return readWithinRoots(paths, roots.externalRoots ?? [], EXTERNAL_READ);
+}
+
+/** A read inside a root outside the workspace the run admits: the saved output or a reference. */
+function outsideWorkspaceRead(
+  paths: readonly string[],
+  roots: AdmittedRoots,
+): Classified | undefined {
+  return toolOutputRead(paths, roots) ?? externalRead(paths, roots);
+}
+
+/**
+ * A read or search inside the directory the runtime saves a shortened result's full output in: an
+ * ordinary read (the model's own output, not an external file), with the same refusals as an
+ * accepted external reference.
+ */
+function toolOutputRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
+  return roots.toolOutputRoot === undefined
+    ? undefined
+    : readWithinRoots(paths, [roots.toolOutputRoot], READ);
+}
+
+function readWithinRoots(
+  paths: readonly string[],
+  candidates: readonly string[],
+  admitted: OpenCodeNativeActionClassification,
+): Classified | undefined {
+  const root = candidates.find(
     (candidate) =>
       paths.length > 0 &&
       paths.every(
@@ -1507,7 +1542,7 @@ function externalRead(paths: readonly string[], roots: AdmittedRoots): Classifie
           "Keiko refused this action: the file is a hard link that can name a file outside the accepted reference.",
       };
   }
-  return EXTERNAL_READ;
+  return admitted;
 }
 
 /**

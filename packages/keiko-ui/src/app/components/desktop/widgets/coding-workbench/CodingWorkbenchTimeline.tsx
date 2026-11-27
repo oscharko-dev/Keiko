@@ -79,6 +79,7 @@ import {
   ToolDuration,
   ToolFailureExplanation,
   ToolFailureLabel,
+  ToolOutputShortenedLabel,
   ToolTextDetail,
   toolFailureOrigin,
   toolGroupSummary,
@@ -1706,6 +1707,7 @@ function ToolSummaryEnd({
     return (
       <>
         <span className="sr-only">{t("codingWorkbench.activity.toolState.succeeded")}</span>
+        <ToolOutputShortenedLabel tool={tool} t={t} />
         <ToolRowDuration tool={tool} t={t} />
       </>
     );

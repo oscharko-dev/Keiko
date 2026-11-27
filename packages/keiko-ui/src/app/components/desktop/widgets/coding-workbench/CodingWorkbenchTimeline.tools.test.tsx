@@ -214,6 +214,40 @@ describe("a failed command's row", () => {
     );
   });
 
+  // PERF-2: a result the runtime shortened for the model says so on the row, and the opened row
+  // says how much of it the model saw.
+  it("marks a result the runtime shortened for the model, with the lines the model saw", () => {
+    const container = renderTools([
+      shell("call-long", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm test", truncated: false },
+        outputShortened: { keptBytes: 51_200, keptLines: 380, totalLines: 200_000 },
+      }),
+    ]);
+    expect(row(container, 0)).toHaveTextContent("Output shortened for the model");
+    expect(row(container, 0)).toHaveTextContent(
+      "The model saw the first 380 of 200000 lines of this result",
+    );
+    const unshortened = renderTools([
+      shell("call-short", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm run build", truncated: false },
+      }),
+    ]);
+    expect(row(unshortened, 0)).not.toHaveTextContent("shortened for the model");
+  });
+
+  it("marks a shortened result whose line counts are unknown", () => {
+    const container = renderTools([
+      shell("call-long", "succeeded", {
+        exitCode: 0,
+        command: { text: "npm test", truncated: false },
+        outputShortened: { keptBytes: 51_200 },
+      }),
+    ]);
+    expect(row(container, 0)).toHaveTextContent("The model saw only the start of this result");
+  });
+
   it("speaks German", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
