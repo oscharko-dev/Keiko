@@ -2917,6 +2917,66 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.decideApproval).toHaveBeenNthCalledWith(2, "denied");
   });
 
+  // Seen in the 1.5.9 release walk (#4491): the approval card sits above the live timeline, so
+  // "Review now" scrolls the stream up to it and following stops. After Approve the run went on below
+  // and finished while the stream stayed on the first message behind "7 new steps".
+  it("follows the newest activity again once the person decides an approval", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    const liveActions = renderWorkbench(deliveryApprovalState("push"));
+    const log = screen.getByRole("log");
+    const scrollTop = pinLogGeometry(log);
+    // The stream scrolled up to the card, which stops following.
+    scrollTop.value = 100;
+    fireEvent.scroll(log);
+
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+
+    expect(liveActions.decideApproval).toHaveBeenCalledWith("approved");
+    expect(scrollTop.value).toBe(1720);
+  });
+
+  it("follows the newest activity again once the person decides a changeset review", async () => {
+    const user = userEvent.setup();
+    const deny = vi.fn();
+    editorBridgeHookMock.mockReturnValue({
+      pendingReview: {
+        actionId: "action-1",
+        diff: { files: [], truncated: false, totalBytes: 0 },
+        deciding: false,
+        deliveryFailed: false,
+        deliveryFailure: null,
+      },
+      approve: vi.fn(),
+      deny,
+      retry: vi.fn(),
+      bridgeUnavailable: false,
+    });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1", revision: 2 }),
+        },
+        events: [event(1)],
+      }),
+    );
+    const log = screen.getByRole("log");
+    const scrollTop = pinLogGeometry(log);
+    scrollTop.value = 100;
+    fireEvent.scroll(log);
+
+    await user.click(screen.getByRole("button", { name: "Reject change" }));
+
+    expect(deny).toHaveBeenCalledTimes(1);
+    expect(scrollTop.value).toBe(1720);
+  });
+
   // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
   // its explicit `nativePermission` must still bind Approve to the authenticated review facts.
   function nativeEditApprovalState(): CodingWorkbenchRuntimeState {

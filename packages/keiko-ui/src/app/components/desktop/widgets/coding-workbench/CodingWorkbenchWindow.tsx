@@ -1990,7 +1990,7 @@ function WorkbenchColumns({
               key={pendingPermissionKey(state)}
               state={state}
               research={research}
-              onDecision={onDecision}
+              onDecision={followAfter(followNewest, onDecision)}
             />
             <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
             <CodingWorkbenchDraftDelivery
@@ -2023,8 +2023,8 @@ function WorkbenchColumns({
             />
             <ChangesetReviewPanel
               review={editorBridge.pendingReview}
-              onApprove={editorBridge.approve}
-              onDeny={editorBridge.deny}
+              onApprove={followAfter(followNewest, editorBridge.approve)}
+              onDeny={followAfter(followNewest, editorBridge.deny)}
               onRetry={editorBridge.retry}
             />
             <RecoveryPanel
@@ -2536,6 +2536,21 @@ function unboundNoteKey(
 
 function pendingPermissionKey(state: CodingWorkbenchRuntimeState): string {
   return state.run.value?.pendingPermission?.requestId ?? "no-permission";
+}
+
+/**
+ * A decision card sits above the live timeline, so reading it (or "Review now") scrolls the stream up
+ * and stops following. Deciding it hands the stream back to the newest activity, where the run goes
+ * on; otherwise the result lands out of view behind "Jump to latest" (#4491).
+ */
+function followAfter<A extends readonly unknown[]>(
+  follow: () => void,
+  decide: (...args: A) => void,
+): (...args: A) => void {
+  return (...args: A): void => {
+    follow();
+    decide(...args);
+  };
 }
 
 function PermissionPrompt({
