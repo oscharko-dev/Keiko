@@ -685,7 +685,7 @@ type ToolMode = "toggle" | "open" | "close";
  * survive, and `shellPanelIsOpen` already counts a minimized window as closed.
  */
 function applyToolMode(
-  list: readonly AppWindow[],
+  list: AppWindow[],
   existing: AppWindow,
   zc: MutateArgs["zc"],
   mode: ToolMode,
@@ -694,7 +694,7 @@ function applyToolMode(
   const minimize =
     mode === "close" ? existing.minimized !== true : mode === "toggle" && outcome === "minimize";
   if (minimize) return list.map((w) => (w.id === existing.id ? { ...w, minimized: true } : w));
-  if (mode === "close" || (mode === "open" && outcome === "minimize")) return [...list];
+  if (mode === "close" || (mode === "open" && outcome === "minimize")) return list;
   const nextZ = nextWorkspaceZ(list, zc);
   return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
 }
@@ -715,10 +715,12 @@ function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggl
   return (type) => {
     const t = WIN_TYPES[type];
     const currentWins = args.winsRef?.current;
-    const outcome = classifyToolToggle(currentWins ?? null, type);
+    // Without the latest list or a measured workspace the outcome is unknown or nothing happens.
+    const unmeasured = currentWins === undefined || worldVP() === null;
+    const outcome = unmeasured ? "blocked" : classifyToolToggle(currentWins, type);
     if (mode !== "close" && wouldExceedWindowLimit(currentWins, type)) {
-      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
-      return outcome;
+      args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return "blocked";
     }
     let windowLimitReached = false;
     setWins((ws) => {

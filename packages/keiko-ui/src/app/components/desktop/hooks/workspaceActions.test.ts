@@ -2675,6 +2675,42 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(wins).toHaveLength(2);
   });
 
+  it("reports a blocked click, not an open, when the window limit stops it or nothing is measured", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const setWins = (update: SetStateAction<AppWindow[] | null>): void => {
+      wins = typeof update === "function" ? update(wins) : update;
+      winsRef.current = wins ?? [];
+    };
+    const limited = makeMutations({
+      setWins,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+    expect(limited.toggleTool("localKnowledge")).toBe("blocked");
+    const unmeasured = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => null, winsRef });
+    expect(unmeasured.toggleTool("settings")).toBe("blocked");
+    const noRef = makeMutations({ setWins, zc: { current: 0 }, worldVP: () => layoutViewport });
+    expect(noRef.toggleTool("settings")).toBe("blocked");
+  });
+
+  it("open on an already frontmost window keeps the list identity so React skips a render", () => {
+    const only = [{ ...win("governedGit", {}, "governedGit"), z: 3 }];
+    let next: AppWindow[] | null = null;
+    const { setToolOpen } = makeMutations({
+      setWins: (update) => {
+        next = typeof update === "function" ? update(only) : update;
+      },
+      zc: { current: 3 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+    setToolOpen("governedGit", true);
+    expect(next).toBe(only);
+  });
+
   it("does not open a tool beyond the workspace-wide window limit", () => {
     let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
       win("files", {}, `files-${String(index)}`),

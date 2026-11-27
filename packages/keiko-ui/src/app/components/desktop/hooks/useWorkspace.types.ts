@@ -88,8 +88,8 @@ export interface WorkspaceClipboardPasteResult {
   readonly limitReached: boolean;
 }
 
-/** What a launcher click did to a tool window: open a new one, restore, raise, or minimize it. */
-export type ToolToggleOutcome = "open" | "restore" | "raise" | "minimize";
+/** What a launcher click did to a tool window: open a new one, restore, raise, or minimize it, or nothing (blocked by the window limit or an unmeasured workspace). */
+export type ToolToggleOutcome = "open" | "restore" | "raise" | "minimize" | "blocked";
 
 export interface WorkspaceApi {
   readonly toggleLayoutLock: () => void;

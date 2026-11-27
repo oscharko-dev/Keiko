@@ -480,12 +480,12 @@ function reopenGitRoot(
   return decision.root;
 }
 
-function pushPanelToggleUnlessRaised(
+function pushPanelToggleUnlessNoop(
   undoStack: WorkspaceUndoStackApi,
-  raisedOnly: boolean,
+  outcome: ToolToggleOutcome,
   action: WorkspaceUiAction,
 ): void {
-  if (!raisedOnly) undoStack.push(action);
+  if (outcome !== "raise" && outcome !== "blocked") undoStack.push(action);
 }
 
 function openShellTool(
@@ -3132,9 +3132,8 @@ function AppShellInner(): ReactNode {
         searchRoot,
         projectRoot,
       );
-      // An open window behind another one is only raised: nothing opened or closed, so there is
-      // nothing for undo to reverse.
-      pushPanelToggleUnlessRaised(undoStack, outcome === "raise", {
+      // A raise or a blocked click opened and closed nothing, so there is nothing for undo to reverse.
+      pushPanelToggleUnlessNoop(undoStack, outcome, {
         kind: "ui.panel.toggle",
         panel,
         before,
