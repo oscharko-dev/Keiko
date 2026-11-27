@@ -1601,7 +1601,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.startRefusedSelectionMismatch":
-    "The repository you see is not the one Keiko had open for this start, so nothing was started and nothing was changed ({code}). Keiko is opening the repository shown now. Check its name and press Start again.",
+    "The repository you see is not the one Keiko had open for this start, so nothing was started and nothing was changed ({code}). Keiko will try to open the repository shown now. Check its name, and press Start again once it is open.",
   "codingWorkbench.alert.startRefusedActiveRun":
     "Another run is still active in this task, so Keiko did not start a second one ({code}). Wait until it has finished or stop it, then start again.",
   "codingWorkbench.alert.startRefusedRecoveryRequired":

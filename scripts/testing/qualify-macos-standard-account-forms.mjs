@@ -29,6 +29,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { arch, homedir, platform, release, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -381,7 +382,9 @@ async function codingRun(baseUrl, context, timeoutMs = RUN_TIMEOUT_MS) {
   );
   ensure(activated.status < 300, `model activation answered HTTP ${String(activated.status)}`);
   await selectLabCheckout(post, context.repository, "main");
+  const repository = await realpath(context.repository);
   const runId = await startRun(session, {
+    repository,
     text: TASK_TEXT,
     mode: MODES[1],
     model: CUSTOMER_SHAPE_MODEL,

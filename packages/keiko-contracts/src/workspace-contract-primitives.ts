@@ -258,14 +258,21 @@ export function isCanonicalWorkspaceRoot(value: unknown): value is string {
 }
 
 /**
- * Whether two repository roots name the same folder as a person sees it: separators folded, a
- * trailing separator ignored and case folded (the same fold the overlap check applies, #2615), so a
- * Windows root written as `C:\Work\App` and as `c:/work/app/` is one folder. Empty never matches.
+ * Whether two repository roots name the same folder as a person sees it: separators folded and a
+ * trailing separator ignored, so a Windows root written as `C:\Work\App` and as `c:/work/app/` is
+ * one folder. Case is folded only where the filesystem is case-insensitive by default (Windows and
+ * macOS, `caseInsensitive`); on Linux two roots differing only in case are two folders. Empty never
+ * matches.
  */
-export function workspaceRootsNameSameFolder(left: string, right: string): boolean {
+export function workspaceRootsNameSameFolder(
+  left: string,
+  right: string,
+  caseInsensitive: boolean,
+): boolean {
   const fold = (value: string): string => {
-    const separated = value.replaceAll("\\", "/").toLowerCase();
-    return separated.length > 1 ? separated.replace(/\/+$/u, "") : separated;
+    const separated = value.replaceAll("\\", "/");
+    const cased = caseInsensitive ? separated.toLowerCase() : separated;
+    return cased.length > 1 ? cased.replace(/\/+$/u, "") : cased;
   };
   return left !== "" && right !== "" && fold(left) === fold(right);
 }

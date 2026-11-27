@@ -3219,12 +3219,29 @@ describe("CodingRuntimeOrchestrator", () => {
 
   it("starts when the expected repository is the active one in another spelling", async () => {
     const f = fixture();
-    const respelled = `${ACTIVE_REPOSITORY_ROOT.toUpperCase().replaceAll("/", "\\")}\\`;
+    // Case is folded only where the filesystem ignores it; on Linux the spelling differs in
+    // separators and the trailing separator alone.
+    const cased =
+      process.platform === "linux" ? ACTIVE_REPOSITORY_ROOT : ACTIVE_REPOSITORY_ROOT.toUpperCase();
+    const respelled = `${cased.replaceAll("/", "\\")}\\`;
 
     expect(
       (await f.orchestrator.start({ ...start, expectedWorkspace: { root: respelled } })).ok,
     ).toBe(true);
   });
+
+  it.runIf(process.platform === "linux")(
+    "refuses a root that differs only in case on a case-sensitive filesystem",
+    async () => {
+      const f = fixture();
+      const root = ACTIVE_REPOSITORY_ROOT.toUpperCase();
+
+      expect(await f.orchestrator.start({ ...start, expectedWorkspace: { root } })).toEqual({
+        ok: false,
+        failureCode: "workspace-selection-mismatch",
+      });
+    },
+  );
 
   it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {
     const f = fixture();

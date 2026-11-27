@@ -1,6 +1,9 @@
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
-import { readCodingPerformanceFirstEvent } from "../coding-runtime-performance-harness.mjs";
+import {
+  codingPerformanceStartBody,
+  readCodingPerformanceFirstEvent,
+} from "../coding-runtime-performance-harness.mjs";
 
 function reader(parts) {
   return {
@@ -23,6 +26,16 @@ function event() {
     revision: 1,
   };
 }
+
+describe("native coding performance start request", () => {
+  // The server refuses a start that does not state the repository it will run in.
+  it("states the repository the fixture activated", () => {
+    expect(codingPerformanceStartBody("/fixture/repository")).toMatchObject({
+      expectedWorkspace: { root: "/fixture/repository" },
+      requestedMode: "autonomous-delivery",
+    });
+  });
+});
 
 describe("native coding performance stream admission", () => {
   it("measures the first received byte while waiting for a complete valid frame", async () => {

@@ -215,6 +215,7 @@ async function prepare(context, repository, modules) {
   const cookie = paired.headers.getSetCookie().at(0)?.split(";").at(0);
   if (cookie === undefined) throw new Error("fixture-pairing-cookie-missing");
   context.cookie = cookie;
+  context.repository = repository;
   await checkModel(context);
   const provisioned = await request(context, "/api/task-workspaces", {
     root: repository,
@@ -302,15 +303,25 @@ async function finished(context, runId, observed) {
   throw new Error("fixture-terminal-deadline");
 }
 
-async function measure(context, observed) {
-  const readinessMs = await readiness(context);
-  const started = performance.now();
-  const snapshot = await request(context, "/api/coding-workbench/runtime/runs", {
+/** The start body: it states the repository the fixture activated, which the server must run in. */
+export function codingPerformanceStartBody(repository) {
+  return {
     requestId: randomUUID(),
     taskIntent: "Return the bounded performance fixture text.",
     requestedMode: "autonomous-delivery",
+    expectedWorkspace: { root: repository },
     modelId: "functional-model",
-  }).then((reply) => reply.json());
+  };
+}
+
+async function measure(context, observed) {
+  const readinessMs = await readiness(context);
+  const started = performance.now();
+  const snapshot = await request(
+    context,
+    "/api/coding-workbench/runtime/runs",
+    codingPerformanceStartBody(context.repository),
+  ).then((reply) => reply.json());
   const coldStartMs = performance.now() - started;
   if (snapshot.state !== "running") throw new Error(`fixture-start-state:${snapshot.state}`);
   const sseFirstByteMs = await firstByte(context, snapshot.runId);

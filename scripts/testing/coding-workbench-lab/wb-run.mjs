@@ -6,6 +6,7 @@
 // that edit files. The driver acts as the operator, so it is fail-closed: the approval policy and
 // the lab repository are always named, and it never runs in the dev server's current workspace.
 import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
@@ -66,11 +67,13 @@ export function selectCheckout(session, repo, branch) {
   return selectLabCheckout((path, body) => session.request("POST", path, body), repo, branch);
 }
 
-export async function startRun(session, { text, mode, model }) {
+/** `repository` is the real path the checkout selection registered; the server refuses a start elsewhere. */
+export async function startRun(session, { text, mode, model, repository }) {
   const started = await session.request("POST", "/api/coding-workbench/runtime/runs", {
     requestId: `lab-${randomUUID()}`,
     taskIntent: text,
     requestedMode: mode.id,
+    expectedWorkspace: { root: repository },
     runtimePreference: "managed-gateway",
     modelId: model,
     projectMemory: { enabled: false },
@@ -173,7 +176,8 @@ async function printAnswer(session) {
 export async function operateRun(session, { approve, repo, branch, task, model, timeoutMs }) {
   log(approvalPolicyLine("wb-run", approve));
   await selectCheckout(session, repo, branch);
-  const runId = await startRun(session, { text: task.text, mode: task.mode, model });
+  const repository = await realpath(repo);
+  const runId = await startRun(session, { text: task.text, mode: task.mode, model, repository });
   const snapshot = await watchRun(session, runId, { approve, deadline: Date.now() + timeoutMs });
   await stopUnfinishedRun((path, body) => session.request("POST", path, body), runId, snapshot);
   const summary = {

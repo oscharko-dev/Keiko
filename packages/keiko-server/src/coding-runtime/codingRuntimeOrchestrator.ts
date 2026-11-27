@@ -1375,7 +1375,7 @@ function wakeModelSelection(modelId: string | undefined): { readonly modelId?: s
 
 // The two roots a mismatch compares, named in the log by digest only: a path is never logged.
 function selectionMismatchDetail(expectedRoot: string, activeRoot: string): string {
-  const digest = (root: string): string => sha256Hex(root.toLowerCase()).slice(0, 16);
+  const digest = (root: string): string => sha256Hex(root).slice(0, 16);
   return `:expected=${digest(expectedRoot)}:active=${digest(activeRoot)}`;
 }
 
@@ -4683,7 +4683,11 @@ export class CodingRuntimeOrchestrator {
     // The run starts in the repository the person sees or not at all: the request states the root
     // the Workbench shows, and the server's global pointer is not allowed to differ from it.
     if (
-      !workspaceRootsNameSameFolder(request.expectedWorkspace.root, active.instance.repositoryRoot)
+      !workspaceRootsNameSameFolder(
+        request.expectedWorkspace.root,
+        active.instance.repositoryRoot,
+        process.platform !== "linux",
+      )
     ) {
       return {
         gap: "workspace-selection-mismatch",
