@@ -2881,15 +2881,24 @@ export class CodingRuntimeOrchestrator {
     return undefined;
   }
 
+  // The bookkeeping every denial owes, whoever denied: a refused verification command blocks the
+  // run's verification evidence (an ordinary decision or the queue-bound refusal alike).
+  private noteApprovalDenied(
+    runId: string,
+    actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
+  ): void {
+    if (actionKind === "verification-command") {
+      this.effort.verificationBlocked(runId, "verification-command-denied");
+    }
+  }
+
   private finishApprovalDecision(
     current: CodingRuntimeSnapshot,
     challenge: ApprovalChallenge,
     decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"],
     actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
   ): CodingRuntimeOrchestratorResult {
-    if (decision === "denied" && actionKind === "verification-command") {
-      this.effort.verificationBlocked(current.runId, "verification-command-denied");
-    }
+    if (decision === "denied") this.noteApprovalDenied(current.runId, actionKind);
     // A denial rejects this one step: the runtime already told the model, and the run goes on
     // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
     this.dropActiveApproval(current.runId);
@@ -3527,6 +3536,7 @@ export class CodingRuntimeOrchestrator {
     const live = this.current();
     if (live?.runId !== current.runId) return this.fail("invalid-intent");
     if (!settled) return this.stopAfterApprovalFailure(live);
+    this.noteApprovalDenied(live.runId, actionKind);
     recordRuntimeApprovalRetired(
       this.deps.activityLog,
       live.runId,

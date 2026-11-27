@@ -4423,25 +4423,77 @@ describe("CodingRuntimeOrchestrator", () => {
         (await f.orchestrator.ingest(verificationPermission(`permission-${String(index + 2)}`))).ok,
       ).toBe(true);
     }
-    const overflowId = `permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`;
-    expect(await f.orchestrator.ingest(verificationPermission(overflowId))).toMatchObject({
-      ok: true,
-      snapshot: { state: "awaiting-approval" },
-    });
+    const overflowId = (offset: number): string =>
+      `permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2 + offset)}`;
+    const effort = (
+      f.orchestrator as unknown as {
+        effort: { verificationBlocked: (...args: unknown[]) => void };
+      }
+    ).effort;
+    const blocked = vi.spyOn(effort, "verificationBlocked");
+    for (const offset of [0, 1]) {
+      expect(await f.orchestrator.ingest(verificationPermission(overflowId(offset)))).toMatchObject(
+        {
+          ok: true,
+          snapshot: { state: "awaiting-approval" },
+        },
+      );
+      expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+        runId: "run-1",
+        requestId: overflowId(offset),
+        decision: "denied",
+      });
+    }
     expect(f.manager.stop).not.toHaveBeenCalled();
-    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
-      runId: "run-1",
-      requestId: overflowId,
-      decision: "denied",
+    // An overflow denial of a verification command owes the same bookkeeping as an ordinary one.
+    expect(blocked).toHaveBeenCalledTimes(2);
+    expect(blocked).toHaveBeenCalledWith("run-1", "verification-command-denied");
+    const waiting = captured.records.filter(
+      (event) => event.op === "coding-runtime.approval.waiting",
+    );
+    const positions = waiting.flatMap((event) => {
+      const position = event.extra?.queuePosition;
+      return typeof position === "number" ? [position] : [];
     });
+    expect(positions).toHaveLength(MAX_QUEUED_APPROVALS_PER_RUN);
+    expect(Math.max(...positions)).toBe(MAX_QUEUED_APPROVALS_PER_RUN);
+    const retired = captured.records.filter(
+      (event) => event.op === "coding-runtime.approval.retired",
+    );
+    expect(retired.map((event) => event.extra)).toMatchObject([
+      { requestId: overflowId(0), reason: "queue-full", replaced: false },
+      { requestId: overflowId(1), reason: "queue-full", replaced: false },
+    ]);
+    expect(retired[0]?.correlationId).toBe(waiting[0]?.correlationId);
+    // The original asks are still served, in order, after the head is decided.
+    for (const id of ["permission-1", "permission-2", "permission-3"]) {
+      expect(f.orchestrator.status().pendingPermission?.requestId).toBe(id);
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: id,
+        decision: "denied",
+        expectedRevision: f.orchestrator.status().revision,
+      });
+    }
+    expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-4");
+  });
+
+  it("fails closed with a closed code when the overflow denial cannot be settled", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(verificationPermission("permission-1"));
+    for (let index = 0; index < MAX_QUEUED_APPROVALS_PER_RUN; index += 1) {
+      await f.orchestrator.ingest(verificationPermission(`permission-${String(index + 2)}`));
+    }
+    f.permissionPort.resolve.mockResolvedValueOnce(false);
     expect(
-      captured.records.find((event) => event.op === "coding-runtime.approval.retired"),
+      await f.orchestrator.ingest(
+        verificationPermission(`permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`),
+      ),
     ).toMatchObject({
-      correlationId: captured.records.find(
-        (event) => event.op === "coding-runtime.approval.waiting",
-      )?.correlationId,
-      extra: { runId: "run-1", requestId: overflowId, reason: "queue-full", replaced: false },
+      ok: true,
+      snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
     });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
   });
 
   // Relocated pin (PR #3625 review): an expired queued ask is still never exposed as an undecidable

@@ -345,10 +345,17 @@ the Workbench stops offering a card nothing can decide; an ask that arrives afte
 queued behind the expired one: the oldest live queued ask takes the card first and the late ask
 queues behind it, and only when no live queued ask waits does the late ask take the expired one's
 place. A queued ask whose wait ran out before its turn is retired as well instead of stopping the
-run. Each retirement writes `coding-runtime.approval.retired`, whose `replaced` is true only when the
-late ask took the expired one's place (1.1.9 lab: the expired card stayed on screen, approving it
-failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
-decided, retired, or whose run settles takes its expiry timer with it.
+run. Each retirement writes `coding-runtime.approval.retired` with `reason=expired`, whose `replaced`
+is true only when the late ask took the expired one's place (1.1.9 lab: the expired card stayed on
+screen, approving it failed as `invalid-intent`, and the model's next ask expired unseen behind it).
+An approval that is decided, retired, or whose run settles takes its expiry timer with it.
+
+The per-run queue of waiting asks is bounded at 64 (`MAX_QUEUED_APPROVALS_PER_RUN`) to protect
+memory only. The 65th and every later ask is denied through the permission port, like any rejected
+step, and written as `coding-runtime.approval.retired` with `reason=queue-full`; the run keeps going
+and the 64 queued asks are served in order (owner decision 2026-11-24, work-ending limits: a bound
+never ends healthy work). Only a denial the runtime cannot settle fails the run closed, as every
+unsettled decision does.
 
 A mapped research fetch (`keiko_research_fetch`, #2387) asks through the research grant, not
 through an approval proof. Below Full access a deployment opens research only through the
