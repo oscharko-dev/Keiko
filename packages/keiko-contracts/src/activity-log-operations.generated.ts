@@ -39955,6 +39955,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "missing-child-pid",
           "pid-publication",
           "state-dir",
+          "state-dir-in-start-folder",
           "spawn-refused",
           "health-timeout",
           "process-exited",

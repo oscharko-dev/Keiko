@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, resolve, sep, win32 } from "node:path";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
@@ -50,7 +50,7 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { isSafeArtifactStageFileName } from "@oscharko-dev/keiko-security/fs-hardening";
-import { assertRealpathContained, isRealpathContained } from "./launcher-paths.js";
+import { assertRealpathContained, resolveWithExistingAncestor } from "./launcher-paths.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   isSegmentManifestFileName,
@@ -159,6 +159,42 @@ export function resolveContainedStateDir(
   return resolved;
 }
 
+function foldedForPlatform(value: string, platform: NodeJS.Platform): string {
+  return platform === "win32" || platform === "darwin"
+    ? value.normalize("NFC").toLowerCase()
+    : value;
+}
+
+/**
+ * Whether `target` is `root` or lies below it, spelled as the platform's filesystem identity sees it
+ * (case-insensitive on win32 and darwin, like the UI process's own check). `relative` carries the
+ * comparison, so a root that already ends in a separator (a drive or filesystem root) works.
+ */
+export function pathInsideRoot(root: string, target: string, platform: NodeJS.Platform): boolean {
+  const api = platform === "win32" ? win32 : posix;
+  const rel = api.relative(foldedForPlatform(root, platform), foldedForPlatform(target, platform));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${api.sep}`) && !api.isAbsolute(rel));
+}
+
+/**
+ * The UI process's rule for where its data may live: inside the start folder only below its
+ * `.keiko`. On darwin the `.keiko` segment itself must be spelled exactly (a case-sensitive volume
+ * holds `.KEIKO` as another folder); win32 accepts any case.
+ */
+export function stateDirInsideStartFolder(
+  startFolder: string,
+  stateDir: string,
+  platform: NodeJS.Platform,
+): boolean {
+  if (!pathInsideRoot(startFolder, stateDir, platform)) return false;
+  const api = platform === "win32" ? win32 : posix;
+  const runtimeRoot = api.join(startFolder, DEFAULT_STATE_DIR_NAME);
+  if (!pathInsideRoot(runtimeRoot, stateDir, platform)) return true;
+  if (platform !== "darwin") return false;
+  const below = stateDir.slice(startFolder.length).replace(/^[\\/]+/u, "");
+  return below.split(api.sep)[0] !== DEFAULT_STATE_DIR_NAME;
+}
+
 /**
  * The UI process keeps its data out of the folder it starts in, apart from that folder's `.keiko`
  * ("KEIKO_UI_DATA_DIR must not be inside the current workspace"), and its data lives in the state
@@ -174,8 +210,15 @@ export function assertStateDirOutsideStartFolder(
 ): void {
   const uiDataDir = env.KEIKO_UI_DATA_DIR;
   if (typeof uiDataDir === "string" && uiDataDir.length > 0) return;
-  if (isRealpathContained(resolve(cwd, DEFAULT_STATE_DIR_NAME), stateDir)) return;
-  if (!isRealpathContained(cwd, stateDir)) return;
+  if (
+    !stateDirInsideStartFolder(
+      resolveWithExistingAncestor(cwd),
+      resolveWithExistingAncestor(stateDir),
+      process.platform,
+    )
+  ) {
+    return;
+  }
   throw new LauncherError(
     "STATE_DIR_IN_START_FOLDER",
     `keiko: the state directory lies inside the folder Keiko starts from, where Keiko keeps no data. Choose a folder outside it, or its ${DEFAULT_STATE_DIR_NAME} folder; refusing to proceed.`,

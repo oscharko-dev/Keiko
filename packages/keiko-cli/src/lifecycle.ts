@@ -1522,6 +1522,7 @@ function stateDirPlacementRefused(
   io: CliIo,
   env: EnvSource,
   cwd: string,
+  deps: Pick<LifecycleRuntimeDeps, "recordFailure">,
 ): boolean {
   try {
     assertStateDirOutsideStartFolder(cwd, options.stateDir, env);
@@ -1529,6 +1530,7 @@ function stateDirPlacementRefused(
   } catch (e) {
     if (!(e instanceof LauncherError)) throw e;
     io.err(`${e.message}\n`);
+    startFailed(deps, "state-dir-in-start-folder");
     return true;
   }
 }
@@ -1540,7 +1542,7 @@ async function startOrReuseUi(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
-  const refusesPlacement = (): boolean => stateDirPlacementRefused(options, io, env, cwd);
+  const refusesPlacement = (): boolean => stateDirPlacementRefused(options, io, env, cwd, deps);
   const running = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (running !== undefined) {
     const nextAction = await handleStaleRunning(options, io, deps, running, refusesPlacement);
@@ -2002,7 +2004,7 @@ type ParseOutcome =
   | { readonly kind: "options"; readonly value: LifecycleOptions }
   | { readonly kind: "help" }
   | { readonly kind: "usage" }
-  | { readonly kind: "refuse"; readonly message: string };
+  | { readonly kind: "refuse"; readonly message: string; readonly code: string };
 
 function parseWithStateDirGuard(
   command: LifecycleCommand,
@@ -2020,13 +2022,26 @@ function parseWithStateDirGuard(
     }
     return parsed;
   } catch (e) {
-    if (e instanceof LauncherError) return { kind: "refuse", message: `${e.message}\n` };
+    if (e instanceof LauncherError)
+      return { kind: "refuse", message: `${e.message}\n`, code: e.code };
     throw e;
   }
 }
 
 function lifecycleInvocationCorrelationId(env: EnvSource): string {
   return installLayoutOverrideEvidence(env)?.correlationId ?? randomUUID();
+}
+
+function refusedAtParse(
+  outcome: Extract<ParseOutcome, { readonly kind: "refuse" }>,
+  io: CliIo,
+  recordFailure: LifecycleRuntimeDeps["recordFailure"],
+): number {
+  io.err(outcome.message);
+  if (outcome.code === "STATE_DIR_IN_START_FOLDER") {
+    startFailed({ recordFailure }, "state-dir-in-start-folder");
+  }
+  return 1;
 }
 
 export async function runLifecycleCli(
@@ -2048,8 +2063,7 @@ export async function runLifecycleCli(
     return 2;
   }
   if (outcome.kind === "refuse") {
-    io.err(outcome.message);
-    return 1;
+    return refusedAtParse(outcome, io, deps.recordFailure);
   }
 
   const options = outcome.value;

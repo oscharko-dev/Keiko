@@ -25,6 +25,8 @@ import {
   removeStaleShutdownRequest,
   resolveStateDir,
   assertStateDirOutsideStartFolder,
+  pathInsideRoot,
+  stateDirInsideStartFolder,
   resolveContainedStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
@@ -832,5 +834,31 @@ describe("assertStateDirOutsideStartFolder (#4491)", () => {
         KEIKO_UI_DATA_DIR: "/elsewhere",
       });
     }).not.toThrow();
+  });
+});
+
+describe("the start-folder placement follows the UI process's containment (#4491)", () => {
+  it("compares case-insensitively on win32, also for a tail that does not exist yet", () => {
+    expect(stateDirInsideStartFolder("C:\\Work", "c:\\work\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\Work", "C:\\WORK\\.KEIKO\\dev", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("C:\\Work", "C:\\Workshop", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("C:\\Work", "D:\\work\\data", "win32")).toBe(false);
+  });
+
+  it("keeps linux byte-exact and darwin's .keiko segment exact", () => {
+    expect(stateDirInsideStartFolder("/Work", "/work/data", "linux")).toBe(false);
+    expect(stateDirInsideStartFolder("/work", "/work/.KEIKO/dev", "darwin")).toBe(true);
+    expect(stateDirInsideStartFolder("/work", "/work/.keiko/dev", "darwin")).toBe(false);
+    expect(stateDirInsideStartFolder("/work", "/WORK/data", "darwin")).toBe(true);
+  });
+
+  it("treats a drive or filesystem root as containing everything below it", () => {
+    expect(pathInsideRoot("C:\\", "C:\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\", "C:\\data", "win32")).toBe(true);
+    expect(stateDirInsideStartFolder("C:\\", "C:\\.keiko", "win32")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/data", "linux")).toBe(true);
+    expect(stateDirInsideStartFolder("/", "/.keiko/x", "linux")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/.keiko/x", "darwin")).toBe(false);
+    expect(stateDirInsideStartFolder("/", "/.KEIKO/x", "darwin")).toBe(true);
   });
 });

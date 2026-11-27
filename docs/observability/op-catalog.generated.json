@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "22b8685b6fafb868cd6495a90b71df9ab6c92f9fc68509eb0a9da264047dc349",
+    "catalogDigest": "8fcbac381d3d6575524265912229252318d229da17bdd3a067cc1b268e645940",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -41557,6 +41557,7 @@
               "missing-child-pid",
               "pid-publication",
               "state-dir",
+              "state-dir-in-start-folder",
               "spawn-refused",
               "health-timeout",
               "process-exited",
@@ -41590,7 +41591,7 @@
         "proofIds": ["portable.launch.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/portable-launch-failure.ts:17",
-        "emitterSites": ["packages/keiko-cli/src/portable-launch-failure.ts:89"]
+        "emitterSites": ["packages/keiko-cli/src/portable-launch-failure.ts:90"]
       },
       {
         "contractKind": "activity-log-operation",

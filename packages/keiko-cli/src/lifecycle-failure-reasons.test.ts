@@ -121,6 +121,46 @@ describe("every non-zero exit of a start records its closed reason", () => {
     expect(result.err).toContain("failed to clear a stale shutdown request");
   });
 
+  it("state-dir-in-start-folder: the state directory lies inside the start folder", async () => {
+    const root = makeRoot();
+    const result = await start(
+      root,
+      [],
+      {
+        homedir: () => root,
+        spawnFn: () => {
+          throw new Error("must not spawn");
+        },
+      },
+      { KEIKO_STATE_DIR: join(root, "data") },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.reasons).toEqual(["state-dir-in-start-folder"]);
+    expect(result.err).toContain("inside the folder Keiko starts from");
+  });
+
+  it("state-dir-in-start-folder: a restart records the refusal before stopping anything", async () => {
+    const root = makeRoot();
+    const reasons: LaunchFailureReason[] = [];
+    const c = makeIo();
+    const code = await runLifecycleCli(
+      "restart",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: join(root, "data") },
+      {
+        cwd: root,
+        homedir: () => root,
+        platform: () => "linux",
+        recordFailure: (reason): void => void reasons.push(reason),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(reasons).toEqual(["state-dir-in-start-folder"]);
+  });
+
   it("invalid-launch-id: the recovered launch identity is malformed", async () => {
     const encoded = Buffer.from(JSON.stringify({ launchId: "not-a-launch-id" }), "utf8").toString(
       "base64url",
