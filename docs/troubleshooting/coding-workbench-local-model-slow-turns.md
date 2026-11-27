@@ -1,10 +1,10 @@
 # Coding Workbench turns are slow or stall on a self-hosted local model
 
-| Field             | Value                                                                                                                                                                  |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Severity          | Medium                                                                                                                                                                 |
-| Surface           | Model gateway / Run engine                                                                                                                                             |
-| Stable identifier | `gateway.prompt.admission` (`promptTokens`), `http.gateway.fetch.completed` (duration) and `http.gateway.fetch.failed` with a cancelled kind on the Activity Log lines |
+| Field             | Value                                                                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                                                                                                        |
+| Surface           | Model gateway / Run engine                                                                                                                                                    |
+| Stable identifier | `gateway.prompt.admission` (`promptTokens`), `http.gateway.fetch.completed` (duration) and `http.gateway.fetch.failed` with `errorKind` `cancelled` on the Activity Log lines |
 
 **Symptom**
 
@@ -58,7 +58,7 @@ waits for the model server to answer.
    on `http.gateway.fetch.completed` is the time the model server needed. A large `promptTokens` with a
    long duration on the first turn and short durations afterwards confirms case 1. A long duration on
    a later turn whose `promptTokens` barely grew confirms case 2. A `http.gateway.fetch.failed` line
-   with a cancelled kind right before a slow turn confirms case 3. A single turn whose `promptTokens`
+   with `errorKind` `cancelled` right before a slow turn confirms case 3. A single turn whose `promptTokens`
    jumped by tens of thousands confirms case 4.
 
 2. Read the Ollama server log on the host that runs the model. Look for the `Prompt processing
