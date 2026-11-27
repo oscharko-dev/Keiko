@@ -85,6 +85,7 @@ import {
 } from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { pathIsDenied } from "./files-deny.js";
+import { insideInstallationPayload } from "./launch-directory.js";
 import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
@@ -425,8 +426,10 @@ export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): Rou
   // Managed worktrees are registered so server-owned trust, manifests, and verification resolve
   // their exact root identity. They are implementation details, not folders the human selected.
   // Filter before availability projection so an unpaired catalog read never exposes their paths.
+  // A row an older installation left in the shared state folder may name program files (a
+  // payload folder): they are never offered, whatever put them there (ADR-0121 D9).
   const visibleProjects = userFacingProjects(
-    deps.store.listProjects(),
+    deps.store.listProjects().filter((project) => !insideInstallationPayload(project.path)),
     deps.managedTaskWorkspaceRoot,
   );
   const projects = putPreferredProjectFirst(

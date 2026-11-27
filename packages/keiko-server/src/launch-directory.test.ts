@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pathIsDenied } from "./files-deny.js";
 import {
+  insideInstallationPayload,
   insideProgramFolder,
   launchedFromProgramFolder,
   PROGRAM_FOLDER_LAUNCH_ENV,
@@ -135,5 +136,34 @@ describe("pathIsDenied on a program-folder launch", () => {
     expect(pathIsDenied("src/index.ts")).toBe(false);
     expect(pathIsDenied("keiko.config.json")).toBe(true);
     expect(pathIsDenied(".env")).toBe(true);
+  });
+});
+
+describe("insideInstallationPayload", () => {
+  it("names the payload of any installation by its layout, with either separator and any case", () => {
+    for (const path of [
+      "C:\\Users\\kstd\\Keiko159\\Keiko\\system\\Keiko\\app",
+      "c:\\users\\kstd\\keiko159\\keiko\\SYSTEM\\keiko\\App\\dist\\x.js",
+      "/Users/me/Keiko/system/Keiko/runtime/node",
+      "/Users/me/Keiko/system/Keiko/Keiko.app/Contents/Resources/app",
+      "/Users/me/Keiko/system/Keiko/.portable",
+      "D:/Keiko/node_modules/@oscharko-dev/keiko/dist",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(true);
+    }
+  });
+
+  it("leaves ordinary folders, look-alikes and relative paths alone", () => {
+    for (const path of [
+      "/Users/me/work/project",
+      "/Users/me/system/Keiko-projects/app",
+      "/Users/me/system/other/app",
+      "/Users/me/Keiko/system",
+      "/Users/me/node_modules/@oscharko-dev/keiko-ui",
+      "C:\\Users\\me\\repo",
+      "system/Keiko/app",
+    ]) {
+      expect(insideInstallationPayload(path), path).toBe(false);
+    }
   });
 });

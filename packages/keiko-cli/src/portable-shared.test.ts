@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -93,5 +94,22 @@ describe("portable target layout", () => {
         extra: true,
       }),
     ).toThrow("portable setup manifest Windows generation binding is malformed");
+  });
+});
+
+// keiko-server `launch-directory.ts` recognises an installation's payload by this layout (it must
+// not depend on the CLI): the standalone payload is `system/Keiko`, whose entries it names.
+describe("the payload layout the server recognises as program files (ADR-0121 D9)", () => {
+  it("keeps the app and runtime folders directly under the payload root", () => {
+    const payload = join("/Keiko", "system", "Keiko");
+    for (const target of ["windows-x64", "linux-x64"] as const) {
+      const layout = layoutFor(target, payload);
+      expect(layout.appRoot).toBe(join(payload, "app"));
+      expect(layout.runtimeNodePath.startsWith(join(payload, "runtime"))).toBe(true);
+      expect(layout.setupManifestPath.startsWith(join(payload, ".portable"))).toBe(true);
+    }
+    expect(layoutFor("macos-arm64", payload).appRoot).toBe(
+      join(payload, "Keiko.app", "Contents", "Resources", "app"),
+    );
   });
 });

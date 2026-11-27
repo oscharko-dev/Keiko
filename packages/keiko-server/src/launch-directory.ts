@@ -64,3 +64,37 @@ export function insideProgramFolder(
   const named = systemName(path);
   return named !== undefined && containsPath(folder, named);
 }
+
+// The entries of an installation's payload folder `system/Keiko` (keiko-cli `portable-shared.ts`
+// `layoutFor`, built by `scripts/build-standalone-package.mjs`): the app and runtime folders, the
+// portable marker folder, and the macOS bundle. Duplicated on purpose like the launch declaration:
+// the server must not depend on the CLI, and keiko-cli's `portable-shared.test.ts` pins the layout.
+const PAYLOAD_ENTRIES: ReadonlySet<string> = new Set(["app", "runtime", ".portable", "keiko.app"]);
+
+function startsAt(segments: readonly string[], index: number, names: readonly string[]): boolean {
+  return names.every((name, offset) => segments[index + offset] === name);
+}
+
+/**
+ * Whether an absolute path lies inside the program files of any Keiko installation, judged by the
+ * folder layout alone: the standalone and in-place payload `system/Keiko/{app,runtime,.portable,
+ * Keiko.app}` and the npm folder's `node_modules/@oscharko-dev/keiko`. The launch declaration only
+ * knows the running installation, so a project row left in the shared state folder by an older
+ * installation (or one registered from another one) is recognised here instead (ADR-0121 D9). Both
+ * Windows and POSIX separators and any letter case are read, so the answer does not depend on the
+ * host that judges it. A relative path is not judged.
+ */
+export function insideInstallationPayload(path: string): boolean {
+  if (!isAbsolute(path) && !/^[A-Za-z]:[\\/]/u.test(path)) return false;
+  const segments = path
+    .split(/[\\/]+/u)
+    .filter((segment) => segment !== "")
+    .map((segment) => segment.toLowerCase());
+  for (let index = 0; index < segments.length; index += 1) {
+    if (startsAt(segments, index, ["node_modules", "@oscharko-dev", "keiko"])) return true;
+    if (!startsAt(segments, index, ["system", "keiko"])) continue;
+    const entry = segments[index + 2];
+    if (entry !== undefined && PAYLOAD_ENTRIES.has(entry)) return true;
+  }
+  return false;
+}

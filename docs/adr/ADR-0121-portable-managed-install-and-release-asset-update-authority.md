@@ -1222,7 +1222,12 @@ spelling of the same folder (a link, a Windows short name). A project at that pa
 listed `readable: false`: no window starts in it (#4371), Files does not offer it as a root, and the
 Coding Workbench does not offer it for a run. This also covers an installation that registered its
 program folder as a project before this rule existed, and a folder outside the program folder that
-the launcher names explicitly is seeded as before. A Chat needs no folder: a person who has chosen
+the launcher names explicitly is seeded as before. The program files of a previous installation
+are refused the same way: the gate also recognises an installation's payload by its layout
+(`system/Keiko/{app,runtime,.portable,Keiko.app}` and the npm folder's
+`node_modules/@oscharko-dev/keiko`), so a row an older version left in the shared state folder is
+neither listed nor registrable, and the CLI never registers its launch folder itself: only the
+server's seed does, through this same predicate. A Chat needs no folder: a person who has chosen
 none still gets one, kept under the launch directory, which only holds it; refusing that Chat would
 leave New chat dead on every fresh installation. The Coding Workbench, Files and Git start empty
 until the person chooses a folder. This is the refused-launch-directory behaviour of #4371 applied

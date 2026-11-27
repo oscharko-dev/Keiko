@@ -599,6 +599,40 @@ describe("GET /api/projects", () => {
 });
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
+describe("a Keiko installation's program files are never a project (ADR-0121 D9)", () => {
+  function previousInstallationPayload(): string {
+    const payload = join(tmp, "Keiko159", "Keiko", "system", "Keiko", "app");
+    mkdirSync(payload, { recursive: true });
+    return payload;
+  }
+
+  it("hides the stored row of another installation's payload and keeps ordinary projects", async () => {
+    const payload = previousInstallationPayload();
+    store.createProject(payload);
+    store.createProject(projDir);
+    const res = await fetch(url("/api/projects"));
+    const body = (await res.json()) as { projects: { path: string }[] };
+    expect(body.projects.map((project) => project.path)).toEqual([projDir]);
+  });
+
+  it("refuses to register another installation's payload and still registers an ordinary folder", async () => {
+    const payload = previousInstallationPayload();
+    const refused = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: payload }),
+    });
+    expect(refused.status).toBe(403);
+    expect(store.listProjects()).toEqual([]);
+    const accepted = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+    expect(accepted.status).toBe(201);
+  });
+});
+
 describe("POST /api/projects", () => {
   it.each(["revoked", "invalidated", "restricted"] as const)(
     "preserves %s script trust when an existing project is explicitly reopened",

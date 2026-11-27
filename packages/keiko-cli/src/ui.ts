@@ -1206,24 +1206,6 @@ export function createPortableHandoffShutdownTrigger(input: {
   };
 }
 
-async function registerLaunchProjectOrReport(
-  cwd: string,
-  handlerDeps: UiHandlerDeps,
-  io: CliIo,
-): Promise<number | null> {
-  const { UiStoreError } = await loadServerModule();
-  try {
-    handlerDeps.store.createProject(cwd);
-    return null;
-  } catch (error) {
-    if (error instanceof UiStoreError) {
-      io.err(uiStoreRefusal(error));
-      return 2;
-    }
-    throw error;
-  }
-}
-
 function ensureStaticRoot(staticRoot: string, io: CliIo): boolean {
   if (existsSync(staticRoot)) {
     return true;
@@ -1980,8 +1962,8 @@ async function launchUiFromDeps(
   if (typeof handlerDeps === "number") return handlerDeps;
   advanceStartupProgress();
   try {
-    const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
-    if (launchProjectResult !== null) return launchProjectResult;
+    // The launch folder is seeded as the default project by the server's own seed (initialProjectPath),
+    // which refuses a program folder; the CLI registers nothing itself (ADR-0121 D9).
     advanceStartupProgress();
     await startUiServer({
       staticRoot,
