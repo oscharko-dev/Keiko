@@ -72,6 +72,7 @@ describe("closed runtime Git branch result", () => {
     ["blocked", "not-on-base"],
     ["blocked", "not-local-checkout"],
     ["blocked", "executable-filters"],
+    ["blocked", "unborn-head"],
     ["blocked", "authority-denied"],
     ["blocked", "policy-block"],
     ["blocked", "preflight-block"],

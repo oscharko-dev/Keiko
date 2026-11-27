@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  readProductionWorkspaceGitState,
   readProductionWorkspaceHead,
   type ProductionWorkspaceHeadFileSystem,
 } from "./productionWorkspaceHeadReader.js";
@@ -289,5 +290,60 @@ describe("production workspace HEAD reader worktree layouts", () => {
     expect(
       readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
     ).toBeUndefined();
+  });
+
+  describe("an unborn branch (#4491)", () => {
+    function unbornRepo(): string {
+      const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-unborn-"));
+      roots.push(root);
+      git(root, ["init", "-q", "-b", "main"]);
+      return root;
+    }
+
+    it("reads as the zero object id with the branch, never an empty string", () => {
+      const root = unbornRepo();
+      expect(readProductionWorkspaceGitState(root, root)).toMatchObject({
+        head: "0".repeat(40),
+        headState: "unborn",
+        branch: "main",
+      });
+      expect(readProductionWorkspaceHead(root, root)).toBe("0".repeat(40));
+    });
+
+    it("takes the zero id of a SHA-256 repository", () => {
+      const root = unbornRepo();
+      writeFileSync(
+        join(root, ".git", "config"),
+        "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectformat = sha256\n",
+      );
+      expect(readProductionWorkspaceHead(root, root)).toBe("0".repeat(64));
+    });
+
+    it("stays born once the first commit exists, and reads a packed branch as born", () => {
+      const root = unbornRepo();
+      git(root, ["config", "user.email", "runtime@keiko.example"]);
+      git(root, ["config", "user.name", "Keiko Runtime"]);
+      writeFileSync(join(root, "file.txt"), "bounded");
+      git(root, ["add", "file.txt"]);
+      git(root, ["commit", "-q", "-m", "fixture"]);
+      expect(readProductionWorkspaceGitState(root, root)?.headState).toBe("born");
+      git(root, ["pack-refs", "--all"]);
+      expect(readProductionWorkspaceGitState(root, root)).toMatchObject({
+        headState: "born",
+        head: git(root, ["rev-parse", "HEAD"]),
+      });
+    });
+
+    it("is not unborn when the branch ref is a directory or a dangling link", () => {
+      const root = unbornRepo();
+      mkdirSync(join(root, ".git", "refs", "heads", "main"));
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
+
+    it("is not unborn for a HEAD naming something other than a local branch", () => {
+      const root = unbornRepo();
+      writeFileSync(join(root, ".git", "HEAD"), "ref: refs/remotes/origin/main\n");
+      expect(readProductionWorkspaceHead(root, root)).toBeUndefined();
+    });
   });
 });

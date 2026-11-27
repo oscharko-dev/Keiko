@@ -23,7 +23,10 @@ import {
   GIT_EDITOR_SCHEMA_VERSION,
   parseGitEditorBlameRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
-import { GIT_REPOSITORY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
+  GIT_REPOSITORY_SCHEMA_VERSION,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   classifyGitFailure,
@@ -159,6 +162,8 @@ export interface GitBranchListResponse {
   readonly reason?: GitRepositoryStatusResponse["reason"] | undefined;
   readonly message?: string | undefined;
   readonly branches: readonly GitBranchListEntry[];
+  /** The branch HEAD names when that branch has no commit yet (a fresh `git init`); it is in no list. */
+  readonly unbornBranch?: string | undefined;
   readonly truncated: boolean;
 }
 
@@ -811,6 +816,25 @@ function branchListFailure(
   };
 }
 
+// HEAD is symbolic on a branch that has no commit yet: `for-each-ref` lists nothing for it, so the
+// Workbench would show no branch for a fresh `git init` (#4491). A detached HEAD fails the read.
+async function readUnbornBranch(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+): Promise<string | undefined> {
+  const result = await options.runner(
+    [...GIT_BASE_ARGS, "-C", repo.repositoryRoot, "symbolic-ref", "--quiet", "--short", "HEAD"],
+    {
+      cwd: repo.repositoryRoot,
+      maxBytes: options.maxStatusBytes,
+      timeoutMs: options.timeoutMs,
+      ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+    },
+  );
+  const name = result.exitCode === 0 ? result.stdout.trim() : "";
+  return name.length > 0 && isSafeGitRefName(name) ? name : undefined;
+}
+
 export async function handleGitBranches(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -841,6 +865,10 @@ export async function handleGitBranches(
     if (result.exitCode !== 0) {
       return { status: 200, body: redacted(deps, branchListFailure(repo, result)) };
     }
+    const branches = parseBranches(result.stdout);
+    const unbornBranch = branches.some((entry) => entry.current)
+      ? undefined
+      : await readUnbornBranch(repo, options);
     return {
       status: 200,
       body: redacted(deps, {
@@ -849,7 +877,8 @@ export async function handleGitBranches(
         repositoryRoot: repo.repositoryRoot,
         available: true,
         state: "available",
-        branches: parseBranches(result.stdout),
+        branches,
+        ...(unbornBranch === undefined ? {} : { unbornBranch }),
         truncated: result.truncated,
       } satisfies GitBranchListResponse),
     };

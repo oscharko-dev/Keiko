@@ -1245,6 +1245,8 @@ const BRANCH_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "Keiko creates a task branch only in a Local checkout that stands on its base branch. This run's workspace is not one, so keep working here and report the result to the operator.",
   "executable-filters":
     "This checkout has executable Git filters, so Keiko will not switch its branch. Report to the operator that a task branch must be created outside Keiko.",
+  "unborn-head":
+    "This repository has no commit yet, so there is no commit to branch from. Keiko makes no task branch here: keep working on the current branch, stage, verify and make the first commit there.",
   "authority-denied":
     "The run's authority no longer covers this step. Report this blocker; do not retry or route around it.",
   "policy-block":

@@ -2188,6 +2188,8 @@ export interface GitBranchListResponse {
   readonly reason?: string;
   readonly message?: string;
   readonly branches: readonly GitBranchListEntry[];
+  /** The branch HEAD names while it has no commit yet (a fresh `git init`); not in `branches`. */
+  readonly unbornBranch?: string;
   readonly truncated: boolean;
 }
 

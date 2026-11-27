@@ -30,7 +30,7 @@ import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 
 /** What the run's workspace says about a task branch being created in it. */
 export type RuntimeGitTaskBranchAdmission =
-  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters";
+  "admitted" | "not-local-checkout" | "not-on-base" | "executable-filters" | "unborn-head";
 
 export interface RuntimeGitTaskBranchAdoption {
   readonly runId: string;

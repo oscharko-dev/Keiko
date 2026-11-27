@@ -489,7 +489,8 @@ an existing branch at another commit or the branch the run stands on (`branch-ex
 exactly the current commit is only switched to, which makes a retried step idempotent), a run that
 is not on its base branch (`not-on-base`), a workspace that is not a Local checkout
 (`not-local-checkout`, which includes managed worktrees and a service composed without the
-workspace port) and a checkout with executable Git filters (`executable-filters`), and it reports
+workspace port), a checkout with executable Git filters (`executable-filters`) and a repository with no
+commit yet (`unborn-head`, #4491), and it reports
 the kernel's own policy and preflight blocks (`policy-block`, `preflight-block`,
 `authority-denied`). The authority is the facade's alone: Full access creates the branch inside the
 validated envelope; Supervised workspace and Ask for approval ask the operator before the branch

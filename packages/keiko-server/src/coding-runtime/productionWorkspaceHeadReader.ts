@@ -54,7 +54,14 @@ export function readProductionWorkspaceHead(
 }
 
 export interface ProductionWorkspaceGitState {
+  /**
+   * The commit HEAD resolves to. An unborn branch (a fresh `git init`, #4491) has none: it reads as
+   * the all-zero object id of the repository's object format, Git's own "no object" value and the
+   * one the verified-commit lane already persists for an unborn parent. Never an empty string.
+   */
   readonly head: string;
+  /** `unborn` when HEAD names a branch whose ref does not exist yet. */
+  readonly headState: "born" | "unborn";
   readonly branch: string | undefined;
   readonly gitDir: string;
 }
@@ -71,14 +78,95 @@ export function readProductionWorkspaceGitState(
   if (gitDir === undefined) return undefined;
   const head = boundedText(join(gitDir, "HEAD"), HEAD_BYTES, fileSystem)?.trim();
   if (head === undefined) return undefined;
-  if (SHA.test(head)) return { head, branch: undefined, gitDir };
+  if (SHA.test(head)) return { head, headState: "born", branch: undefined, gitDir };
   const reference = head.startsWith("ref: ") ? head.slice(5) : "";
-  const resolved = safeRef(reference)
-    ? readReference(gitDir, commonRoot, reference, fileSystem)
+  return safeRef(reference)
+    ? referencedState(gitDir, commonRoot, reference, fileSystem)
     : undefined;
-  return resolved === undefined
-    ? undefined
-    : { head: resolved, branch: localBranch(reference), gitDir };
+}
+
+function referencedState(
+  gitDir: string,
+  commonRoot: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): ProductionWorkspaceGitState | undefined {
+  const branch = localBranch(reference);
+  const resolved = readReference(gitDir, commonRoot, reference, fileSystem);
+  if (resolved !== undefined) return { head: resolved, headState: "born", branch, gitDir };
+  if (branch === undefined || !referenceAbsent(gitDir, commonRoot, reference, fileSystem))
+    return undefined;
+  const zero = "0".repeat(objectIdLength(commonRoot, fileSystem));
+  return { head: zero, headState: "unborn", branch, gitDir };
+}
+
+// `refs/heads/<branch>` provably does not exist: no loose file in the worktree or common git dir
+// (a missing path, never an unreadable or non-file one) and no packed entry. Anything else (a
+// directory in its place, a symlink, an unreadable file) is not an unborn branch but a broken one.
+function referenceAbsent(
+  gitDir: string,
+  commonRoot: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const commonDir = resolveCommonDir(gitDir, commonRoot, fileSystem);
+  if (!looseReferenceMissing(gitDir, reference, fileSystem)) return false;
+  if (commonDir !== gitDir && !looseReferenceMissing(commonDir, reference, fileSystem))
+    return false;
+  return packedReferencesLackReference(commonDir, reference, fileSystem);
+}
+
+function pathMissing(path: string, fileSystem: ProductionWorkspaceHeadFileSystem): boolean {
+  try {
+    fileSystem.lstat(path);
+    return false;
+  } catch (error) {
+    // Only a path that is not there counts as missing; any other failure is not an answer.
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return true;
+    throw error;
+  }
+}
+
+function looseReferenceMissing(
+  root: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const candidate = resolve(root, reference);
+  if (!containsCanonicalPath(root, dirname(candidate))) return false;
+  let current = root;
+  for (const segment of relative(root, candidate).split(sep)) {
+    current = join(current, segment);
+    if (pathMissing(current, fileSystem)) return true;
+    if (fileSystem.lstat(current).isSymbolicLink()) return false;
+  }
+  return false;
+}
+
+function packedReferencesLackReference(
+  root: string,
+  reference: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const path = join(root, "packed-refs");
+  if (pathMissing(path, fileSystem)) return true;
+  const packed = boundedText(path, PACKED_REFS_BYTES, fileSystem);
+  if (packed === undefined) return false;
+  return !packed.split(/\r?\n/u).some((line) => {
+    const separator = line.indexOf(" ");
+    return !line.startsWith("#") && separator > 0 && line.slice(separator + 1) === reference;
+  });
+}
+
+// SHA-256 repositories record `objectformat = sha256` in the common config; anything else is
+// SHA-1. A config that cannot be read keeps the default, which only affects the stand-in's length.
+function objectIdLength(
+  commonRoot: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): 40 | 64 {
+  const config = boundedText(join(commonRoot, "config"), HEAD_BYTES * 16, fileSystem);
+  return config !== undefined && /^\s*objectformat\s*=\s*sha256\s*$/imu.test(config) ? 64 : 40;
 }
 
 function localBranch(reference: string): string | undefined {

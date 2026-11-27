@@ -48,6 +48,15 @@ it("drops a previous read-surface refusal once another repository is read", asyn
   expect(result.current.denied).toBe(false);
 });
 
+// #4491: a fresh `git init` lists no branch, yet HEAD names one. The chip shows that unborn branch.
+it("reads the unborn branch of a repository with no commit as its current branch", async () => {
+  listBranches.mockResolvedValueOnce({ available: true, branches: [], unbornBranch: "main" });
+  const { result } = renderHook(useRepositoryBranchState, { initialProps: "/repository" });
+  await waitFor(() => expect(result.current.currentBranch).toBe("main"));
+  expect(result.current.branches).toEqual([]);
+  expect(result.current.ordinaryFolder).toBe(false);
+});
+
 it("marks the new repository loading in its first render before effects run", async () => {
   listBranches.mockResolvedValue({ available: true, branches: [{ name: "main", current: true }] });
   const renders: { loading: boolean; error: string | null; currentBranch: string | null }[] = [];

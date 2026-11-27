@@ -130,6 +130,12 @@ The active pointer and workspace instance identify that same root for the runtim
 editor, file tools, and Git delivery. A local checkout is re-proved on each active
 read; managed worktree reconciliation remains scoped to managed instances. Opening
 the Coding Workbench with a registered repository requires no separate Code setup.
+A repository with no commit yet (a fresh `git init`: HEAD names a branch whose ref does not exist) is
+selectable on that unborn branch only (#4491): nothing is switched or hydrated, the verified head is the
+all-zero object id of the repository's object format (never an empty string), the lifecycle lines carry
+`headState: "unborn"`, and a commit made outside is read as the checkout moving, as for a born
+repository, not as drift. `keiko_git_branch` refuses it as `unborn-head` because a branch cannot start
+from no commit; the run commits on the unborn branch itself.
 The selected root is the native real path the route resolved; it matches a registration by its
 exact spelling or by the same device and file id, because Windows keeps the spelling a person typed
 or a dialog returned (drive-letter case, 8.3 names, mapped drives, junctions). Only that resolved

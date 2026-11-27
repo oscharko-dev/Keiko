@@ -981,6 +981,37 @@ describe("GET /api/git/branches", () => {
       expect.arrayContaining(["for-each-ref", "refs/heads"]),
     );
   });
+
+  it("names the unborn branch of a repository with no commit, apart from the branch list", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok("main\n"));
+
+    const result = await handleGitBranches(
+      ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.body).toMatchObject({ available: true, branches: [], unbornBranch: "main" });
+    expect(runner.mock.calls[2]?.[0]).toEqual(expect.arrayContaining(["symbolic-ref", "HEAD"]));
+  });
+
+  it("reports no unborn branch for a detached HEAD", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce({ ...ok(""), exitCode: 1 });
+
+    const result = await handleGitBranches(
+      ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.body).not.toHaveProperty("unbornBranch");
+  });
 });
 
 // The one translation from a selected-root prefix to git arguments. Both branches matter: an empty

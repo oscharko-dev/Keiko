@@ -338,7 +338,7 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     expect(localBranches()).not.toContain("feature/x");
   });
 
-  it.each(["not-local-checkout", "not-on-base", "executable-filters"] as const)(
+  it.each(["not-local-checkout", "not-on-base", "executable-filters", "unborn-head"] as const)(
     "refuses when the workspace says %s",
     async (reason) => {
       admission = reason;

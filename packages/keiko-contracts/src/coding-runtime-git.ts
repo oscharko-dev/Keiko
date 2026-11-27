@@ -101,6 +101,7 @@ export const CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS = {
     "not-on-base",
     "not-local-checkout",
     "executable-filters",
+    "unborn-head",
     "authority-denied",
     "policy-block",
     "preflight-block",

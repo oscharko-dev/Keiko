@@ -129,6 +129,7 @@ const RUNTIME_GIT_REASON_FIELD = {
     "not-on-base",
     "not-local-checkout",
     "executable-filters",
+    "unborn-head",
     "rebind-failed",
   ],
 } as const;

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 
 import { gitEnv, GIT_BASE_ARGS, resolveGitExecutable } from "@oscharko-dev/keiko-git";
+import { isGitZeroObjectId } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   LOCAL_CHECKOUT_WORKSPACE_ID_PREFIX,
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -231,6 +232,13 @@ function localHead(root: string): string | undefined {
   return readProductionWorkspaceHead(root, root);
 }
 
+// The unborn current branch of the checkout (a fresh `git init`, #4491): HEAD names `branch` and
+// that ref does not exist yet. The only branch an unborn repository can be opened on.
+function isUnbornCurrentBranch(root: string, branch: string): boolean {
+  const state = readProductionWorkspaceGitState(root, root);
+  return state?.headState === "unborn" && state.branch === branch;
+}
+
 function localView(
   store: UiStore,
   instances: WorkspaceInstanceStore,
@@ -298,6 +306,7 @@ function requireLocalBranch(root: string, branch: string): void {
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "The local branch is unavailable.");
   try {
     git(root, "check-ref-format", "--branch", branch);
+    if (isUnbornCurrentBranch(root, branch)) return;
     git(root, "show-ref", "--verify", `refs/heads/${branch}`);
   } catch (error) {
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "Select an existing local branch.", [], {
@@ -393,11 +402,16 @@ function localInstance(
   };
 }
 
+// The log marks only an unborn head; a born one stays unmarked so its lines are unchanged.
+function unbornMarker(head: string | undefined): "unborn" | undefined {
+  return head !== undefined && isGitZeroObjectId(head) ? "unborn" : undefined;
+}
+
 function recordLocalSelection(
   deps: LocalCheckoutEvidenceDeps,
   request: LocalSelectionRequest,
   identity: string,
-  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error">,
+  outcome: Pick<WorkspaceSelectionOutcome, "startedAt" | "fromState" | "error" | "headState">,
 ): void {
   recordWorkspaceSelection(deps, {
     ...outcome,
@@ -415,8 +429,12 @@ function activateLocalCheckout(
   pointerStore: ActiveWorkspacePointerStore,
   getActive: () => ActiveWorkspaceView | undefined,
 ): ActiveWorkspaceView {
-  requireAvailableBranchObjects(request.root, request.branch);
-  switchLocalBranch(request.root, request.branch);
+  // An unborn branch has no tree to hydrate and nothing to switch to: the checkout already stands
+  // on it and its first commit is made through the verified-commit lane (#4491).
+  if (!isUnbornCurrentBranch(request.root, request.branch)) {
+    requireAvailableBranchObjects(request.root, request.branch);
+    switchLocalBranch(request.root, request.branch);
+  }
   const head = verifiedLocalHead(request.root, identity);
   const atIso = new Date().toISOString();
   const workspaceId = `${LOCAL_PREFIX}${identity}`;
@@ -445,7 +463,11 @@ function selectLocalCheckout(
     fromState = instances.getById(`${LOCAL_PREFIX}${identity}`)?.lifecycleState;
     requireLocalBranch(request.root, request.branch);
     const active = activateLocalCheckout(request, identity, instances, pointerStore, getActive);
-    recordLocalSelection(deps, request, identity, { startedAt, fromState });
+    recordLocalSelection(deps, request, identity, {
+      startedAt,
+      fromState,
+      headState: unbornMarker(active.instance.lastVerifiedHead),
+    });
     return active;
   } catch (cause) {
     const error =
@@ -479,6 +501,9 @@ function admitLocalTaskBranch(
   const instance = localCheckoutInstance(instances, workspaceId);
   if (instance === undefined) return "not-local-checkout";
   if (instance.taskBranch !== instance.baseBranch) return "not-on-base";
+  // A branch cannot be created from a commit that does not exist: the run works on the unborn
+  // branch itself and makes its first commit there (#4491).
+  if (isUnbornCurrentBranch(instance.repositoryRoot, instance.taskBranch)) return "unborn-head";
   return hasExecutableFilters(instance.repositoryRoot) ? "executable-filters" : "admitted";
 }
 

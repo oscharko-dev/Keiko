@@ -148,6 +148,14 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["folder"],
     },
+    // Present only when the selected repository has no commit yet (a fresh `git init`, #4491): the
+    // checkout opens on its unborn branch for the first commit. Absent on every born repository.
+    headState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unborn"],
+    },
     driftMarker: {
       type: "string",
       dataClass: "closed-enum",
@@ -288,6 +296,7 @@ export interface WorkspaceLifecycleLogInput {
   // The branch a provisioned workspace was cut from. Only its digest reaches `extra`.
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -310,6 +319,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -438,6 +448,7 @@ export function logWorkspaceLifecycle(
         ? {}
         : { baseBranchDigest: baseBranchDigest(input.baseBranch) }),
       ...(input.workspaceKind === undefined ? {} : { workspaceKind: input.workspaceKind }),
+      ...(input.headState === undefined ? {} : { headState: input.headState }),
       ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
@@ -507,6 +518,7 @@ export function recordWorkspaceLifecycle(
     driftMarker: input.driftMarker,
     baseBranch: input.baseBranch,
     workspaceKind: input.workspaceKind,
+    headState: input.headState,
   });
 }
 
@@ -520,6 +532,7 @@ export interface WorkspaceSelectionOutcome {
   readonly error?: TaskWorkspaceError | undefined;
   readonly baseBranch?: string | undefined;
   readonly workspaceKind?: "folder" | undefined;
+  readonly headState?: "unborn" | undefined;
 }
 
 export function recordWorkspaceSelection(
@@ -553,6 +566,7 @@ export function recordWorkspaceSelection(
     },
     baseBranch: input.baseBranch,
     workspaceKind: input.workspaceKind,
+    headState: input.headState,
     errorCode: error?.code,
     error,
   });
