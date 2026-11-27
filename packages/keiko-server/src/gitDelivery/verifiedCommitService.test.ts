@@ -2774,6 +2774,8 @@ describe("a converted file staged without stat data", () => {
       extra: { convertible: 3, batches: 1, settledClean: 0 },
     });
     expect(failed[0]?.errorKind).toEqual(expect.any(String));
+    expect(failed[0]?.extra).toMatchObject({ errorClass: "Error" });
+    expect(failed[0]?.extra?.frames).toEqual(expect.any(Array));
     const persisted = expectActivityLogProof(
       "git.raw-status.conversion-failed.emitted-line",
       formatActivityLogProofLine(failed[0] ?? {}),

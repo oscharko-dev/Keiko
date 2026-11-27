@@ -42,6 +42,7 @@ import {
 } from "./lineDiff.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   gitDeliveryActivityErrorKind,
@@ -107,6 +108,21 @@ const STAGED_CONVERSION_FAILED_OPERATION = defineActivityLogOperation({
     convertible: { type: "integer", dataClass: "count", required: true },
     batches: { type: "integer", dataClass: "count", required: true },
     settledClean: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -196,9 +212,19 @@ function searchLoggedLineChanges(
   }
   return search.blocks;
 }
+// The structured failure path (AGENTS.md section 8): the closed error class and the bounded frames and
+// cause chain of the failure, never its message.
+function failureFields(error: unknown): Record<string, unknown> {
+  const described = describeError(error);
+  return {
+    errorClass: described.errorClass,
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+  };
+}
 /**
  * One line per raw scan that offered stat-dirty files to the staged-conversion port (#4491): how many,
- * how many settled clean, how many exceeded the per-scan cap, and whether the port answered, could
+ * in how many batches, how many settled clean, and whether the port answered, could
  * not decide or failed. A scan whose files all stayed "modified" is reconstructable from it alone.
  */
 export function logStagedConversion(
@@ -222,7 +248,7 @@ export function logStagedConversion(
           level: "warn",
           errorKind: gitDeliveryActivityErrorKind(errorKindOf(evidence.error)),
         },
-        counts,
+        { ...counts, ...failureFields(evidence.error) },
       ),
     );
     return;

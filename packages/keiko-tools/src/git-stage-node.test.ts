@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -450,6 +451,45 @@ describe("exact-file staging under the effective core.autocrlf", () => {
           },
         }),
       ).rejects.toMatchObject({ code: "git-raw-read-cancelled" });
+    });
+
+    it("keeps a file modified when it is deleted between the hash and the re-read", async () => {
+      const repo = stagedCrlfRepository();
+      const real = factoryPort(repo).stagedObjectIds;
+      const flags = await rawFlags(repo, {
+        stagedObjectIds: async (files) => {
+          const ids = await real?.(files);
+          rmSync(join(repo, "a.txt"));
+          return ids;
+        },
+      });
+      expect(flags).toEqual([["a.txt", true, true]]);
+    });
+
+    it("keeps a file modified, without rejecting the read, when its re-read fails", async () => {
+      const repo = plainRepository("v1\n");
+      git(repo, ["config", "core.autocrlf", "true"]);
+      mkdirSync(join(repo, "d"));
+      writeFileSync(join(repo, "d", "b.txt"), "p\r\nq\r\n");
+      git(repo, ["add", "d/b.txt"]);
+      touchLater(repo, "d/b.txt");
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-outside-")));
+      dirs.push(outside);
+      writeFileSync(join(outside, "b.txt"), "p\r\nq\r\n");
+      const real = factoryPort(repo).stagedObjectIds;
+      const evidence: { outcome: string; settledClean: number }[] = [];
+      const flags = await rawFlags(repo, {
+        // The parent directory becomes a link out of the repository after the hash.
+        stagedObjectIds: async (files) => {
+          const ids = await real?.(files);
+          renameSync(join(repo, "d"), join(repo, "d-moved"));
+          symlinkSync(outside, join(repo, "d"));
+          return ids;
+        },
+        onStagedConversion: (e) => evidence.push(e),
+      });
+      expect(flags).toContainEqual(["d/b.txt", true, true]);
+      expect(evidence).toMatchObject([{ outcome: "error", settledClean: 0 }]);
     });
 
     it("reports the settlement of an answering port", async () => {

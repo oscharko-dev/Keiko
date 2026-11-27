@@ -300,32 +300,61 @@ async function askStagedObjectPort(
   }
 }
 // The hash read the file from disk after the reader had read it: a file that changed in between is
-// not judged by it (the bytes read now must be the bytes the reader first saw).
-async function unchangedSinceRead(scan: ScanInputs, file: GitStageFile): Promise<boolean> {
-  const again = await readGitStageFile(scan.deps.workspace.root, file.path, {
-    maxBytes: MAX_CONTENT_BYTES,
-    fs: workspaceFsOf(scan.deps),
-    symlinks: "read-only",
-  });
-  return again.mode === file.mode && Buffer.compare(again.bytes, file.bytes) === 0;
+// not judged by it (the bytes read now must be the bytes the reader first saw). A re-read that cannot
+// be completed (a deleted, truncated, denied or re-parented file) is not an error of the whole scan:
+// the file stays modified and the failure is handed to the observer; a cancellation ends the read.
+type Recheck = { readonly unchanged: boolean } | { readonly error: unknown };
+async function unchangedSinceRead(scan: ScanInputs, file: GitStageFile): Promise<Recheck> {
+  try {
+    const again = await readGitStageFile(scan.deps.workspace.root, file.path, {
+      maxBytes: MAX_CONTENT_BYTES,
+      fs: workspaceFsOf(scan.deps),
+      symlinks: "read-only",
+    });
+    return { unchanged: again.mode === file.mode && Buffer.compare(again.bytes, file.bytes) === 0 };
+  } catch (error) {
+    if (scan.deps.signal?.aborted === true || error instanceof CommandCancelledError)
+      throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+    return { error };
+  }
 }
 async function settledCleanPaths(
   scan: ScanInputs,
   answer: PortAnswer,
   batch: readonly GitStageFile[],
-): Promise<readonly string[]> {
-  if (answer.outcome !== "answered") return [];
+): Promise<{ readonly clean: readonly string[]; readonly error?: unknown }> {
+  if (answer.outcome !== "answered") return { clean: [] };
   const clean: string[] = [];
+  let error: unknown;
   for (const file of batch) {
     const stagedAs = answer.ids.get(file.path);
     if (stagedAs === undefined || stagedAs !== scan.index.get(file.path)?.objectId) continue;
-    if (await unchangedSinceRead(scan, file)) clean.push(file.path); // NOSONAR typescript:S9382 -- sequential re-reads stay inside the scan's content budget
+    const recheck = await unchangedSinceRead(scan, file); // NOSONAR typescript:S9382 -- sequential re-reads stay inside the scan's content budget
+    if ("error" in recheck) error ??= recheck.error;
+    else if (recheck.unchanged) clean.push(file.path);
   }
-  return clean;
+  return error === undefined ? { clean } : { clean, error };
 }
 function worseOutcome(current: PortAnswer["outcome"], next: PortAnswer): PortAnswer["outcome"] {
   if (current === "error" || next.outcome === "error") return "error";
   return current === "undecidable" || next.outcome === "undecidable" ? "undecidable" : "answered";
+}
+interface SettlementTally {
+  readonly clean: Set<string>;
+  outcome: PortAnswer["outcome"];
+  error: unknown;
+}
+async function settleBatch(
+  scan: ScanInputs,
+  port: GitStagedObjectIdPort,
+  batch: readonly GitStageFile[],
+  tally: SettlementTally,
+): Promise<void> {
+  const answer = await askStagedObjectPort(scan, port, batch);
+  const settled = await settledCleanPaths(scan, answer, batch);
+  for (const path of settled.clean) tally.clean.add(path);
+  tally.outcome = settled.error === undefined ? worseOutcome(tally.outcome, answer) : "error";
+  tally.error ??= answer.outcome === "error" ? answer.error : settled.error;
 }
 // A stat-dirty file whose bytes Git's conversion maps to exactly the index object is clean in the
 // working tree, as `git status` says; the judgement hashes them under Git's own conversion with every
@@ -339,27 +368,21 @@ async function settleConvertedFiles(
   const port = scan.deps.stagedObjectIds;
   if (port === undefined || pending.size === 0) return changes;
   const files = [...pending.values()];
-  const clean = new Set<string>();
-  let outcome: PortAnswer["outcome"] = "answered";
-  let error: unknown;
+  const tally: SettlementTally = { clean: new Set(), outcome: "answered", error: undefined };
   let batches = 0;
   for (let at = 0; at < files.length; at += CONVERTIBLE_BATCH_SIZE) {
-    const batch = files.slice(at, at + CONVERTIBLE_BATCH_SIZE);
-    const answer = await askStagedObjectPort(scan, port, batch); // NOSONAR typescript:S9382 -- sequential batches keep the process count and memory bounded
-    for (const path of await settledCleanPaths(scan, answer, batch)) clean.add(path); // NOSONAR typescript:S9382 -- see above
-    outcome = worseOutcome(outcome, answer);
-    if (answer.outcome === "error") error ??= answer.error;
+    await settleBatch(scan, port, files.slice(at, at + CONVERTIBLE_BATCH_SIZE), tally); // NOSONAR typescript:S9382 -- sequential batches keep the process count and memory bounded
     batches += 1;
   }
   scan.deps.onStagedConversion?.({
     convertible: files.length,
     batches,
-    settledClean: clean.size,
-    outcome,
-    ...(outcome === "error" ? { error } : {}),
+    settledClean: tally.clean.size,
+    outcome: tally.outcome,
+    ...(tally.outcome === "error" ? { error: tally.error } : {}),
   });
   return changes.flatMap((change) => {
-    if (!clean.has(change.path)) return [change];
+    if (!tally.clean.has(change.path)) return [change];
     return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
   });
 }
