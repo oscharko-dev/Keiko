@@ -1433,8 +1433,9 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
 
 // #3591 (1.1.7): a probe the gateway never answered (timed out, aborted, unreachable) is
 // INCONCLUSIVE — it proves nothing about the model and must not be held against it the way an
-// answered failure is. The two sentences are this module's own closed vocabulary; the Workbench
-// re-probe policy reads them back through `probeInconclusive`.
+// answered failure is. The three warning sentences (timed out, unreachable, busy) are a closed
+// vocabulary defined in keiko-contracts; the Workbench re-probe policy reads them back through
+// `probeInconclusive`.
 // The warnings and the predicate that reads them back live in keiko-contracts, shared with the
 // browser's activation, so neither side can drift.
 export { PROBE_GATEWAY_BUSY_WARNING };
