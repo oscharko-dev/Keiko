@@ -2717,6 +2717,21 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     expect(codingToolGitPresentation(completedWith("git", git))).toEqual({ gitOutcome });
   });
 
+  // Lab 2026-11-27 (Full access): the policy authorized the commit proposal, no decision was ever
+  // asked, and the card still read "Waiting for approval". A proposal answered ready needs none.
+  it("presents a commit proposal answered ready as prepared, never as waiting for a decision", () => {
+    const proposal = { status: "approval-required", reason: "approval-required" };
+    expect(
+      codingToolGitPresentation({
+        ...completedWith("verifiedCommit", proposal),
+        approvalDisposition: "ready",
+      } as CodingToolResult),
+    ).toEqual({ gitOutcome: "prepared" });
+    expect(codingToolGitPresentation(completedWith("verifiedCommit", proposal))).toEqual({
+      gitOutcome: "waiting-for-approval",
+    });
+  });
+
   it("fails closed to not done for a Git or commit status it does not know", () => {
     expect(
       codingToolGitPresentation(completedWith("git", { kind: "stage", status: "unexpected" })),

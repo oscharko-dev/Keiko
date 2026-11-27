@@ -18375,6 +18375,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "completed",
           "waiting-for-approval",
+          "prepared",
           "verification-failed",
           "verification-missing",
           "not-staged",

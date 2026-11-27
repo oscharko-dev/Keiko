@@ -234,6 +234,8 @@ export interface CodingWorkbenchTimelineProps {
 const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 // The call a pending approval holds back reaches the tool rows through a context for the same reason.
 const AwaitingApprovalCallIdContext = createContext<string | undefined>(undefined);
+// Whether the run is over, so no row can still be waiting for a decision.
+const RunEndedContext = createContext(false);
 
 // The complete answers read beside the bounded feed reach each message row the same way.
 // The complete model texts read beside the bounded feed reach each message row the same way, with
@@ -293,29 +295,56 @@ export function Timeline({
   if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
+    <TimelineContexts
+      onRunCheck={onRunCheck}
+      awaitingApprovalCallId={awaitingApprovalCallId}
+      runEnded={!active}
+      modelTexts={modelTexts}
+    >
+      <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+        <TimelineHeading titleRef={titleRef} t={t} />
+        <ActivityStatus activity={activity} attention={attention} t={t} />
+        <RunDetailsToggle
+          visible={events.length > 0}
+          expanded={showEvents}
+          onToggle={() => setShowEvents(!showEvents)}
+          t={t}
+        />
+        <QuestionSummary questions={questions} />
+        <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
+        <TimelineContent
+          items={items}
+          timeline={timeline}
+          questions={questions}
+          restoreFocusRef={titleRef}
+          t={t}
+        />
+      </section>
+    </TimelineContexts>
+  );
+}
+
+// What the rows below read from the run instead of from their own props: the person's action on a
+// failure card, the call a pending approval holds back, whether the run is over, and the model texts.
+function TimelineContexts({
+  onRunCheck,
+  awaitingApprovalCallId,
+  runEnded,
+  modelTexts,
+  children,
+}: {
+  readonly onRunCheck: (() => void) | undefined;
+  readonly awaitingApprovalCallId: string | undefined;
+  readonly runEnded: boolean;
+  readonly modelTexts: ModelTextsView;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
     <RunCheckContext.Provider value={onRunCheck}>
       <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
-        <ModelTextsContext.Provider value={modelTexts}>
-          <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-            <TimelineHeading titleRef={titleRef} t={t} />
-            <ActivityStatus activity={activity} attention={attention} t={t} />
-            <RunDetailsToggle
-              visible={events.length > 0}
-              expanded={showEvents}
-              onToggle={() => setShowEvents(!showEvents)}
-              t={t}
-            />
-            <QuestionSummary questions={questions} />
-            <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
-            <TimelineContent
-              items={items}
-              timeline={timeline}
-              questions={questions}
-              restoreFocusRef={titleRef}
-              t={t}
-            />
-          </section>
-        </ModelTextsContext.Provider>
+        <RunEndedContext.Provider value={runEnded}>
+          <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
+        </RunEndedContext.Provider>
       </AwaitingApprovalCallIdContext.Provider>
     </RunCheckContext.Provider>
   );
@@ -1516,8 +1545,7 @@ function ToolRow({
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
   const { tool } = item;
-  const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
-  const shownState = shownToolState(tool, item.superseded === true, awaitingCallId);
+  const shownState = useShownToolState(tool, item.superseded === true);
   const origin = toolFailureOrigin(tool);
   return (
     <li
@@ -1732,7 +1760,7 @@ function unfinishedGitState(
   outcome: CodingSafeActivityGitOutcome | undefined,
 ): UnfinishedGitState | undefined {
   if (outcome === undefined || outcome === "completed") return undefined;
-  return outcome === "waiting-for-approval" ? outcome : "not-done";
+  return outcome === "waiting-for-approval" || outcome === "prepared" ? outcome : "not-done";
 }
 
 function isUnrunVerificationOutcome(
@@ -1742,10 +1770,18 @@ function isUnrunVerificationOutcome(
 }
 
 // A succeeded call's badge: how its Git step really ended, a proposal a later step took up, or done.
-function succeededToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
+// A finished run cannot be waiting for a decision: with no ask open any more, a proposal still
+// reading "waiting" is a step that was never carried out.
+function succeededToolState(
+  tool: CodingSafeActivityTool,
+  superseded: boolean,
+  runEnded: boolean,
+): ShownToolState {
   const git = unfinishedGitState(tool.presentation?.gitOutcome);
   if (git === undefined) return "succeeded";
-  return superseded && git === "waiting-for-approval" ? "prepared" : git;
+  if (git !== "waiting-for-approval") return git;
+  if (superseded) return "prepared";
+  return runEnded ? "not-done" : git;
 }
 
 // A call that has not finished while the person's decision on it is pending is blocked on the
@@ -1761,14 +1797,24 @@ function isHeldForApproval(
   );
 }
 
+function useShownToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
+  const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
+  const runEnded = useContext(RunEndedContext);
+  return shownToolState(tool, superseded, awaitingCallId, runEnded);
+}
+
 function shownToolState(
   tool: CodingSafeActivityTool,
   superseded = false,
   awaitingCallId?: string,
+  runEnded = false,
 ): ShownToolState {
   if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
-  if (tool.state === "succeeded") return succeededToolState(tool, superseded);
-  if (tool.state !== "failed") return tool.state;
+  if (tool.state === "succeeded") return succeededToolState(tool, superseded, runEnded);
+  return tool.state === "failed" ? failedToolState(tool) : tool.state;
+}
+
+function failedToolState(tool: CodingSafeActivityTool): ShownToolState {
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined && exitCode !== 0) return "exited";
   const outcome = tool.presentation?.verificationOutcome;

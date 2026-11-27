@@ -1570,7 +1570,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.dependencies-unavailable":
     "Die Verifizierung ist nicht gelaufen: Keiko konnte die Abhängigkeiten des Projekts nicht installieren, deshalb lief keine Prüfung. Das ist keine fehlgeschlagene Prüfung. Installiere die Abhängigkeiten selbst im Projektordner und verifiziere dann erneut.",
   "codingWorkbench.activity.git.prepared":
-    "Hier vorbereitet; ein späterer Schritt hat ihn übernommen.",
+    "Hier vorbereitet; es ist keine weitere Entscheidung nötig.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
   "codingWorkbench.activity.git.verification-failed":

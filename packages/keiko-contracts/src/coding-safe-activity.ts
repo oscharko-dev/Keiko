@@ -123,7 +123,9 @@ export type CodingSafeActivityVerificationOutcome =
  * commit) really ended, in closed words. The governed facade answers a refused step as a completed
  * tool call that carries the refusal, so the call state alone reads "Succeeded" although nothing was
  * committed or staged. `completed` is a step Keiko carried out; every other word names why it did
- * not: `waiting-for-approval` the human decision still open, `verification-failed` and
+ * not: `waiting-for-approval` the human decision still open, `prepared` a proposal that needs no
+ * further decision (policy authorized it, or the person already approved it) and waits only for its
+ * execute step, `verification-failed` and
  * `verification-missing` a commit that no passing verification of the staged change covers,
  * `not-staged` a commit whose change is only partly staged, `unsaved-changes` a commit that open
  * editor files with unsaved changes hold back, `blocked` a policy or authority refusal, `changed` a candidate or repository that moved since the
@@ -132,6 +134,7 @@ export type CodingSafeActivityVerificationOutcome =
 export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
   "completed",
   "waiting-for-approval",
+  "prepared",
   "verification-failed",
   "verification-missing",
   "not-staged",

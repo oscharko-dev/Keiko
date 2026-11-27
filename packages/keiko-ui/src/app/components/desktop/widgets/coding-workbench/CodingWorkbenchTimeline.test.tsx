@@ -532,7 +532,7 @@ describe("CodingWorkbenchTimeline", () => {
   it("shows a refused Git step as not done instead of succeeded", () => {
     const { container } = render(
       <Timeline
-        active={false}
+        active
         events={[]}
         activity={activityLike(feedWithGitOutcomes())}
         questions={IDLE_QUESTIONS}
@@ -613,8 +613,62 @@ describe("CodingWorkbenchTimeline", () => {
     const prepared = container.querySelector<HTMLDetailsElement>('[data-tool-state="prepared"]');
     expect(prepared?.open).toBe(false);
     expect(prepared).toHaveTextContent("Prepared");
-    expect(prepared).toHaveTextContent("Prepared here; a later step took it up.");
+    expect(prepared).toHaveTextContent("Prepared here; no further decision is needed.");
     expect(prepared).not.toHaveTextContent("Succeeded");
+  });
+
+  // Lab 2026-11-27 (Full access): a proposal the policy authorized needs no decision, and a run that
+  // is over cannot be waiting for one. Neither may read "Waiting for approval".
+  it("shows a proposal that needs no decision as prepared, in a live and a finished run", () => {
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "prepared", bridgeDurationMs: 9 },
+    } as const;
+    for (const active of [true, false]) {
+      const { container, unmount } = render(
+        <Timeline
+          active={active}
+          events={[]}
+          activity={activityLike({
+            ...feedWithRepeatedTools(),
+            turns: [{ turnId: "turn-commit", messages: [], tools: [proposal], truncated: false }],
+          })}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+      expect(container.querySelector('[data-tool-state="prepared"]')).toHaveTextContent("Prepared");
+      unmount();
+    }
+  });
+
+  it("never leaves a Git proposal waiting for approval once the run is over", () => {
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const view = (active: boolean): ReactElement => (
+      <Timeline
+        active={active}
+        events={[]}
+        activity={activityLike({
+          ...feedWithRepeatedTools(),
+          turns: [{ turnId: "turn-commit", messages: [], tools: [proposal], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />
+    );
+    const { container, rerender } = render(view(true));
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).not.toBeNull();
+    rerender(view(false));
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="not-done"]')).not.toBeNull();
   });
 
   // Audit of 72be7da6f: only a completed execute takes a proposal up. A proposal still waiting while
@@ -660,7 +714,7 @@ describe("CodingWorkbenchTimeline", () => {
     } as const;
     const { container } = render(
       <Timeline
-        active={false}
+        active
         events={[]}
         activity={activityLike({
           ...feed,
@@ -697,7 +751,7 @@ describe("CodingWorkbenchTimeline", () => {
     const renderTools = (tools: readonly CodingSafeActivityTool[]): HTMLElement =>
       render(
         <Timeline
-          active={false}
+          active
           events={[]}
           activity={activityLike({
             ...feed,
@@ -769,7 +823,7 @@ describe("CodingWorkbenchTimeline", () => {
       const { container } = render(
         <I18nProvider>
           <Timeline
-            active={false}
+            active
             events={[]}
             activity={activityLike(feedWithGitOutcomes())}
             questions={IDLE_QUESTIONS}

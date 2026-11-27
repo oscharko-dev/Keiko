@@ -503,8 +503,14 @@ export function codingToolGitPresentation(
 ): CodingSafeActivityToolPresentation {
   if (result.status !== "completed") return {};
   let gitOutcome: CodingSafeActivityGitOutcome | undefined;
-  if ("verifiedCommit" in result) gitOutcome = commitOutcome(result.verifiedCommit);
-  else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
+  if ("verifiedCommit" in result) {
+    gitOutcome = commitOutcome(result.verifiedCommit);
+    // A proposal answered with `approvalDisposition: "ready"` needs no decision: policy authorized
+    // it or the person already approved it, and only its execute step is left. It must not claim
+    // to wait for a human (lab 2026-11-27, Full access).
+    if (gitOutcome === "waiting-for-approval" && result.approvalDisposition === "ready")
+      gitOutcome = "prepared";
+  } else if ("git" in result) gitOutcome = gitResultOutcome(result.git);
   return gitOutcome === undefined ? {} : Object.freeze({ gitOutcome });
 }
 

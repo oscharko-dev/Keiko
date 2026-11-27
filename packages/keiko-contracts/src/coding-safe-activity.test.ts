@@ -134,6 +134,7 @@ describe("coding safe-activity contract", () => {
     expect([...CODING_SAFE_ACTIVITY_GIT_OUTCOMES]).toEqual([
       "completed",
       "waiting-for-approval",
+      "prepared",
       "verification-failed",
       "verification-missing",
       "not-staged",
