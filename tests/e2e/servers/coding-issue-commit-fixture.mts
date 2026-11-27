@@ -317,9 +317,7 @@ class CommitFixture implements CodingIssueCommitFixture {
     const staged = await this.stageTool("execute", proposed.git.proposalId);
     if (!("git" in staged) || staged.git.kind !== "stage" || staged.git.status !== "succeeded") {
       const git = "git" in staged ? staged.git : undefined;
-      throw new Error(
-        `commit-fixture-stage-failed:${String(staged.status)}:${JSON.stringify(git)}`,
-      );
+      throw new Error(`commit-fixture-stage-failed:${staged.status}:${JSON.stringify(git)}`);
     }
     this.write("candidate-staged", staged);
   }

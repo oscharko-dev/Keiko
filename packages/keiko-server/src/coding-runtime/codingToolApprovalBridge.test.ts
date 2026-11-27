@@ -541,10 +541,10 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     const bridge = createCodingToolApprovalBridge();
     expect(approve(bridge, "call-1", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
     expect(bridge.consume({ runId: RUN_ID, request: call("call-1"), nowMs: NOW_MS })).toBe(true);
-    expect(bridge.takeApprovedPlan?.({ runId: RUN_ID, request: call("call-1") })).toBe(
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBe(
       "d".repeat(64),
     );
-    expect(bridge.takeApprovedPlan?.({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-1") })).toBeUndefined();
   });
 
   it("an ask under another actionId cannot get a call past the check: no approval, no digest", () => {
@@ -552,7 +552,7 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     expect(approve(bridge, "asked-as", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
     // The call that actually runs has a different identity: it spends nothing and receives nothing.
     expect(bridge.consume({ runId: RUN_ID, request: call("runs-as"), nowMs: NOW_MS })).toBe(false);
-    expect(bridge.takeApprovedPlan?.({ runId: RUN_ID, request: call("runs-as") })).toBeUndefined();
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("runs-as") })).toBeUndefined();
   });
 
   it("fails closed when an approval showed commands but holds no digest", () => {
@@ -565,7 +565,7 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     const bridge = createCodingToolApprovalBridge();
     expect(approve(bridge, "call-3", {})).toBe(true);
     expect(bridge.consume({ runId: RUN_ID, request: call("call-3"), nowMs: NOW_MS })).toBe(true);
-    expect(bridge.takeApprovedPlan?.({ runId: RUN_ID, request: call("call-3") })).toBeUndefined();
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-3") })).toBeUndefined();
   });
 
   it("refuses a digest that is not a digest", () => {
@@ -591,6 +591,6 @@ describe("verification plan bound to the approval that is spent (ADR-0124 D6)", 
     expect(approve(bridge, "call-5", { planShown: true, planDigest: "d".repeat(64) })).toBe(true);
     expect(bridge.consume({ runId: RUN_ID, request: call("call-5"), nowMs: NOW_MS })).toBe(true);
     bridge.invalidateRun(RUN_ID);
-    expect(bridge.takeApprovedPlan?.({ runId: RUN_ID, request: call("call-5") })).toBeUndefined();
+    expect(bridge.takeApprovedPlan({ runId: RUN_ID, request: call("call-5") })).toBeUndefined();
   });
 });

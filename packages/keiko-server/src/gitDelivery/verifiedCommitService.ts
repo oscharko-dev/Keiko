@@ -837,39 +837,9 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (!verification.passed && !this.admitsFailedVerification(verification))
       return this.record(context, binding, "verification-failed", "verification-failed");
     const proofAgeMs = this.now() - verification.startedAtMs;
-    if (!contextMatches(context, verification.context))
-      return this.record(
-        context,
-        binding,
-        "drift",
-        "verification-stale",
-        undefined,
-        {},
-        {},
-        proofAgeMs,
-      );
-    if (!this.candidateCurrent(context, verification.facts, facts))
-      return this.record(
-        context,
-        binding,
-        "drift",
-        "candidate-drift",
-        undefined,
-        {},
-        {},
-        proofAgeMs,
-      );
-    if (proofAgeExpired(verification.startedAtMs, this.now()))
-      return this.record(
-        context,
-        binding,
-        "drift",
-        "verification-stale",
-        undefined,
-        {},
-        {},
-        proofAgeMs,
-      );
+    const driftReason = this.proofDriftReason(context, verification, facts);
+    if (driftReason !== undefined)
+      return this.record(context, binding, "drift", driftReason, undefined, {}, {}, proofAgeMs);
     const messagePolicy = await this.options.messageAllowed(message, context.workspace);
     if (!messagePolicyAllowed(messagePolicy))
       return this.record(
@@ -884,6 +854,19 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
     return this.prepareProposal(context, facts, binding, message, !verification.passed);
+  }
+
+  // Why a passing proof no longer describes this candidate, or undefined while it still does: the
+  // run context moved, the staged candidate moved, or the proof outlived its backstop.
+  private proofDriftReason(
+    context: VerifiedCommitRunContext,
+    verification: VerificationProof,
+    facts: VerifiedCommitFacts,
+  ): "verification-stale" | "candidate-drift" | undefined {
+    if (!contextMatches(context, verification.context)) return "verification-stale";
+    if (!this.candidateCurrent(context, verification.facts, facts)) return "candidate-drift";
+    if (proofAgeExpired(verification.startedAtMs, this.now())) return "verification-stale";
+    return undefined;
   }
 
   // Full access commits what the human asked for even when the candidate's checks ran red (owner
