@@ -330,3 +330,151 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(git(repo, ["show", ":a.txt"])).toBe("v1\r\nv2\r\n");
   });
 });
+
+// #4491 (night audit 2026-11-27): any `text` or `eol` attribute refused every verified staging, so
+// a repository with `* text=auto` (GitHub's default `.gitattributes`) could never commit from the
+// Workbench. Git's own `git add` and checkout are the oracle: a staging that succeeds stores exactly
+// the object `git add` stores, and that object either is the verified bytes or checks out as them.
+describe("exact-file staging under text and eol attributes", () => {
+  const MODES = [
+    ["false", "exact"],
+    ["true", "autocrlf-true"],
+    ["input", "autocrlf-input"],
+  ] as const;
+  const CONTENTS = {
+    lf: "v1\nv2\n",
+    crlf: "v1\r\nv2\r\n",
+    mixed: "v1\r\nv2\n",
+    binary: "a\r\n\0b\r\n",
+  } as const;
+
+  function attributedRepository(attributes: string, committed: string): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-attr-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    git(base, ["config", "core.safecrlf", "false"]);
+    writeFileSync(join(base, "a.txt"), committed);
+    git(base, ["update-index", "--add", "--cacheinfo", `100644,${blob(base, committed)},a.txt`]);
+    git(base, ["-c", "commit.gpgsign=false", "commit", "-qm", "base"]);
+    if (attributes !== "")
+      writeFileSync(join(base, ".git", "info", "attributes"), `${attributes}\n`);
+    return base;
+  }
+
+  function blob(repo: string, bytes: string): string {
+    return git(repo, ["hash-object", "-w", "--no-filters", "--stdin"], bytes).trim();
+  }
+
+  function oracleObject(repo: string, autocrlf: string): string {
+    const oracleIndex = join(repo, ".git", "oracle-index");
+    copyFileSync(join(repo, ".git", "index"), oracleIndex);
+    git(repo, ["-c", `core.autocrlf=${autocrlf}`, "add", "a.txt"], undefined, oracleIndex);
+    return git(repo, ["rev-parse", ":a.txt"], undefined, oracleIndex).trim();
+  }
+
+  function checkout(repo: string, autocrlf: string, oid: string): string {
+    return git(repo, [
+      "-c",
+      `core.autocrlf=${autocrlf}`,
+      "cat-file",
+      "--filters",
+      "--path=a.txt",
+      oid,
+    ]);
+  }
+
+  async function stageUnder(
+    repo: string,
+    autocrlf: string,
+    lineEndings: Parameters<typeof stageExactFiles>[2],
+    worktree: string,
+  ): Promise<{ readonly staged: boolean; readonly oracle: string; readonly raw: string }> {
+    git(repo, ["read-tree", "HEAD"]);
+    git(repo, ["config", "core.autocrlf", autocrlf]);
+    writeFileSync(join(repo, "a.txt"), worktree);
+    const oracle = oracleObject(repo, autocrlf);
+    const raw = git(repo, ["hash-object", "--no-filters", "--stdin"], worktree).trim();
+    const staged = await stageExactFiles(context(repo), request(repo), lineEndings);
+    return { staged, oracle, raw };
+  }
+
+  it.each([
+    ["* text=auto"],
+    ["* text"],
+    ["* -text"],
+    ["* text eol=lf"],
+    ["* text eol=crlf"],
+    ["* eol=crlf"],
+    ["* eol=lf"],
+    ["* text=auto eol=crlf"],
+    ["* text=auto eol=lf"],
+    [""],
+  ])(
+    "never stores an object git add would not, nor one that checks out differently: %j",
+    async (attributes) => {
+      for (const committed of [CONTENTS.lf, CONTENTS.crlf]) {
+        const repo = attributedRepository(attributes, committed);
+        for (const [autocrlf, lineEndings] of MODES) {
+          for (const worktree of Object.values(CONTENTS)) {
+            const { staged, oracle, raw } = await stageUnder(repo, autocrlf, lineEndings, worktree); // NOSONAR typescript:S9382 -- one repository state at a time
+            if (!staged) {
+              expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+              continue;
+            }
+            expect(git(repo, ["rev-parse", ":a.txt"]).trim()).toBe(oracle);
+            if (oracle !== raw) expect(checkout(repo, autocrlf, oracle)).toBe(worktree);
+          }
+        }
+      }
+    },
+  );
+
+  it.each([
+    ["* text=auto", "false", "exact", "lf"],
+    ["* text=auto", "true", "autocrlf-true", "lf"],
+    ["* text=auto", "true", "autocrlf-true", "crlf"],
+    ["* text=auto", "input", "autocrlf-input", "lf"],
+    ["* text", "false", "exact", "lf"],
+    ["* text eol=crlf", "false", "exact", "crlf"],
+    ["* eol=crlf", "input", "autocrlf-input", "crlf"],
+    ["* -text", "true", "autocrlf-true", "mixed"],
+  ] as const)(
+    "stages under %j with core.autocrlf=%s (%s) a verified %s file",
+    async (attributes, autocrlf, lineEndings, content) => {
+      const repo = attributedRepository(attributes, CONTENTS.lf);
+      const { staged, oracle } = await stageUnder(repo, autocrlf, lineEndings, CONTENTS[content]);
+      expect(staged).toBe(true);
+      expect(git(repo, ["rev-parse", ":a.txt"]).trim()).toBe(oracle);
+    },
+  );
+
+  it.each([
+    ["* text eol=lf", "false", "exact", "crlf"],
+    ["* text", "false", "exact", "crlf"],
+    ["* text=auto", "input", "autocrlf-input", "crlf"],
+  ] as const)(
+    "refuses under %j with core.autocrlf=%s (%s) a %s file Git would check out differently",
+    async (attributes, autocrlf, lineEndings, content) => {
+      const repo = attributedRepository(attributes, CONTENTS.lf);
+      const { staged } = await stageUnder(repo, autocrlf, lineEndings, CONTENTS[content]);
+      expect(staged).toBe(false);
+      expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+    },
+  );
+
+  it.each([
+    ["* filter=lfs"],
+    ["* ident"],
+    ["* working-tree-encoding=UTF-16"],
+    ["* crlf=input"],
+    ["* text=bogus"],
+    ["* eol=bogus"],
+  ])("still refuses %j", async (attributes) => {
+    const repo = attributedRepository(attributes, CONTENTS.lf);
+    writeFileSync(join(repo, "a.txt"), CONTENTS.lf);
+    await expect(stageExactFiles(context(repo), request(repo))).resolves.toBe(false);
+    expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+  });
+});

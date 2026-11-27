@@ -2320,15 +2320,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   just before the reviewed index replaces the live one, with the run's authority at the swap; a
   change that lands after the review or an approval is never accepted as the effect's new snapshot
   (PR #4064 review). Staging writes objects from the verified bytes and never runs a filter
-  driver; the effective `core.safecrlf` must be `false` and the paths may carry no `text`, `eol`,
-  `crlf`, `filter`, `ident` or `working-tree-encoding` attribute. Under the effective
-  `core.autocrlf` `false` the verified bytes are staged as they are. Under `true` or `input` the
-  staged object is the one Git's own `git add` stores, admitted only when it checks the verified
-  bytes out again byte for byte: a file Git leaves unchanged, or whose index entry already stores a
-  CR (Git then keeps the new bytes), is staged as its exact bytes; with `true`, a text file whose
-  every line break is CRLF and that holds no other CR is staged as its LF form. Everything else
-  (mixed line breaks over an index entry without CR, CRLF under `input`, a conversion over a binary
-  index entry) stays `unsupported-transformation`. Git for Windows sets `core.autocrlf=true`
+  driver; the effective `core.safecrlf` must be `false` and the paths may carry no legacy `crlf`,
+  `filter`, `ident` or `working-tree-encoding` attribute. Where neither a `text` or `eol` attribute
+  nor the effective `core.autocrlf` asks for a conversion, the verified bytes are staged as they
+  are. Otherwise the staged object is the one Git's own `git add` stores, admitted only when it
+  checks the verified bytes out again byte for byte: a file Git leaves unchanged, or (under
+  `text=auto` or `core.autocrlf` without an attribute) whose index entry already stores a CR (Git
+  then keeps the new bytes), is staged as its exact bytes; a text file whose every line break is
+  CRLF and that holds no other CR is staged as its LF form when the path checks out as CRLF
+  (`eol=crlf`, or `core.autocrlf=true` without an `eol` attribute). Everything else (mixed line
+  breaks over an index entry without CR, CRLF that checks out as LF, a conversion over a binary
+  index entry, a conversion whose checkout depends on `core.eol`) stays
+  `unsupported-transformation`. Before the night audit of 2026-11-27 any `text` or `eol` attribute
+  refused the staging, so a repository with `* text=auto`, GitHub's default `.gitattributes`, could
+  never commit (#4491). Git for Windows sets `core.autocrlf=true`
   system-wide, so before this every governed commit in an ordinary Windows checkout was refused
   (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
   neutralization; an unreadable configuration refuses), and the check before the index is promoted

@@ -636,7 +636,8 @@ describe("node git mutation adapter — stage normalization follows the effectiv
   });
 
   // Git still honours the legacy `crlf` attribute (`crlf=input` acts as `eol=lf`): a raw stage of a
-  // CRLF file there would differ from what Git checks against, so it is refused like `text`/`eol`.
+  // CRLF file there would differ from what Git checks against, so it stays refused. `text` and `eol`
+  // are admitted since #4491 and judged by their round trip (git-stage-node.test.ts).
   it("refuses exact staging when the legacy crlf attribute asks for a conversion", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
     writeFileSync(join(root, ".gitattributes"), "*.txt crlf=input\n", "utf8");

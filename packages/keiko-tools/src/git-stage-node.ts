@@ -147,7 +147,7 @@ async function hashObject(
   return objectId(await ctx.run(argv, bytes));
 }
 interface StageConversion {
-  readonly autocrlf: "true" | "input";
+  readonly autocrlf: "true" | "input" | "false";
   readonly path: string;
 }
 // Index line-break classes whose blob holds no CR, so Git applies its conversion (an absent entry
@@ -157,20 +157,67 @@ interface StageConversion {
 const INDEX_WITHOUT_CR = new Set(["lf", "none"]);
 const INDEX_WITH_CR = new Set(["crlf", "mixed"]);
 /**
- * Which object Git's own staging stores for bytes it would convert: `raw` when the index entry
- * already holds a CR, `converted` when the conversion is the exact LF form of an all-CRLF file under
- * `autocrlf=true` (which checkout reverses byte for byte), otherwise `undefined` (refused).
+ * How Git converts one path's line breaks, as `convert.c` decides it from the path's `text` and
+ * `eol` attributes and the effective `core.autocrlf` (#4491: a repository with `* text=auto`, the
+ * common GitHub default, refused every staging before this). `none`: Git stores and checks out the
+ * bytes as they are. Otherwise Git normalizes CRLF to LF while staging; `auto` (`text=auto`, or no
+ * attribute under `core.autocrlf`) keeps the bytes of a path whose index entry already holds a CR,
+ * and `checkout` is the line break Git writes back: `crlf`, `lf`, or `unknown` when it depends on
+ * `core.eol`, which this path does not read, so a conversion there is refused.
+ */
+type StagePlan =
+  | { readonly kind: "none" }
+  | { readonly kind: "convert"; readonly auto: boolean; readonly checkout: StageCheckout };
+type StageCheckout = "crlf" | "lf" | "unknown";
+export interface GitStageLineEndingAttributes {
+  readonly text: string;
+  readonly eol: string;
+}
+const NO_CONVERSION: StagePlan = { kind: "none" };
+const AUTOCRLF_OF: Readonly<Record<GitStageLineEndings, StageConversion["autocrlf"]>> = {
+  exact: "false",
+  "autocrlf-true": "true",
+  "autocrlf-input": "input",
+};
+function attributeEol(eol: string): StageCheckout | undefined {
+  return eol === "lf" || eol === "crlf" ? eol : undefined;
+}
+function configuredCheckout(lineEndings: GitStageLineEndings): StageCheckout {
+  if (lineEndings === "autocrlf-true") return "crlf";
+  return lineEndings === "autocrlf-input" ? "lf" : "unknown";
+}
+function stagePlan(
+  lineEndings: GitStageLineEndings,
+  attributes: GitStageLineEndingAttributes,
+): StagePlan {
+  if (attributes.text === "unset") return NO_CONVERSION;
+  const eol = attributeEol(attributes.eol);
+  if (attributes.text === "set" || attributes.text === "auto")
+    return {
+      kind: "convert",
+      auto: attributes.text === "auto",
+      checkout: eol ?? configuredCheckout(lineEndings),
+    };
+  if (eol !== undefined) return { kind: "convert", auto: false, checkout: eol };
+  if (lineEndings === "exact") return NO_CONVERSION;
+  return { kind: "convert", auto: true, checkout: configuredCheckout(lineEndings) };
+}
+/**
+ * Which object Git's own staging stores for bytes it would convert: `raw` when an `auto` path's
+ * index entry already holds a CR, `converted` when the conversion is the exact LF form of an
+ * all-CRLF file that checks out as CRLF again (so checkout reverses it byte for byte), otherwise
+ * `undefined` (refused).
  */
 async function convertedChoice(
   ctx: GitStageEffectContext,
   file: GitStageFile,
-  conversion: StageConversion,
+  plan: Extract<StagePlan, { kind: "convert" }>,
   converted: string,
   indexClass: string | undefined,
 ): Promise<"raw" | "converted" | undefined> {
-  if (indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
-  if (indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
-  if (conversion.autocrlf !== "true" || !allLineBreaksCrlf(file.bytes)) return undefined;
+  if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
+  if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
+  if (plan.checkout !== "crlf" || !allLineBreaksCrlf(file.bytes)) return undefined;
   return (await hashObject(ctx, withoutCrlf(file.bytes), false)) === converted
     ? "converted"
     : undefined;
@@ -178,37 +225,76 @@ async function convertedChoice(
 /**
  * The object a verified file is staged as, or `undefined` when Git would store bytes whose checkout
  * differs from the verified ones. The attribute check has already ruled out every filter driver,
- * `ident`, a working-tree encoding and `text`/`eol`/`crlf` attributes, so the only conversion left
- * is Git's built-in line-ending one, pinned here to the effective `core.autocrlf`. Only the object
- * that is staged is written.
+ * `ident`, a working-tree encoding and the legacy `crlf` attribute, so the only conversion left is
+ * Git's built-in line-ending one, pinned here to the effective `core.autocrlf` and the path's `text`
+ * and `eol` attributes. Only the object that is staged is written.
  */
 async function stagedObjectId(
   ctx: GitStageEffectContext,
   file: GitStageFile,
-  lineEndings: GitStageLineEndings,
-  indexClass: string | undefined,
+  stage: FileStage,
   write: boolean,
 ): Promise<string | undefined> {
-  if (lineEndings === "exact" || file.mode === "120000") return hashObject(ctx, file.bytes, write);
+  const { plan, lineEndings, indexClass } = stage;
+  if (plan.kind === "none" || file.mode === "120000") return hashObject(ctx, file.bytes, write);
   const raw = await hashObject(ctx, file.bytes, false);
-  const conversion: StageConversion = {
-    autocrlf: lineEndings === "autocrlf-true" ? "true" : "input",
-    path: file.path,
-  };
+  const conversion: StageConversion = { autocrlf: AUTOCRLF_OF[lineEndings], path: file.path };
   const converted = await hashObject(ctx, file.bytes, false, conversion);
   const choice =
-    converted === raw ? "raw" : await convertedChoice(ctx, file, conversion, converted, indexClass);
+    converted === raw ? "raw" : await convertedChoice(ctx, file, plan, converted, indexClass);
   if (choice === undefined) return undefined;
   if (!write) return choice === "raw" ? raw : converted;
   return hashObject(ctx, file.bytes, true, choice === "raw" ? undefined : conversion);
 }
-function stageIndexClasses(
+interface FileStage {
+  readonly plan: StagePlan;
+  readonly lineEndings: GitStageLineEndings;
+  readonly indexClass: string | undefined;
+}
+// `git check-attr -z` answers one `path NUL attribute NUL value NUL` record per path and attribute,
+// in the order asked. A failed, cut-short or misordered answer proves nothing: `undefined`.
+async function readAttributeValues(
+  ctx: GitStageEffectContext,
+  attributes: readonly string[],
+  paths: readonly string[],
+): Promise<readonly (readonly string[])[] | undefined> {
+  const result = await ctx.run(["check-attr", "-z", ...attributes, "--", ...paths]);
+  if (result.exitCode !== 0 || result.truncated || !result.stdout.endsWith("\0")) return undefined;
+  const fields = result.stdout.slice(0, -1).split("\0");
+  if (fields.length !== paths.length * attributes.length * 3) return undefined;
+  const rows: string[][] = [];
+  for (const [pathIndex, path] of paths.entries()) {
+    const row: string[] = [];
+    for (const [attributeIndex, attribute] of attributes.entries()) {
+      const at = (pathIndex * attributes.length + attributeIndex) * 3;
+      const value = fields[at + 2];
+      if (fields[at] !== path || fields[at + 1] !== attribute || value === undefined)
+        return undefined;
+      row.push(value);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+// Each path's conversion under `lineEndings` and its `text`/`eol` attributes, plus the index
+// line-break class an `auto` conversion depends on; `undefined` when the attributes cannot be read.
+async function fileStages(
   ctx: GitStageEffectContext,
   files: readonly GitStageFile[],
   lineEndings: GitStageLineEndings,
-): Promise<ReadonlyMap<string, string>> {
-  if (lineEndings === "exact") return Promise.resolve(new Map());
-  return ctx.indexLineBreaks(files.map((file) => file.path));
+): Promise<ReadonlyMap<string, FileStage> | undefined> {
+  const paths = files.map((file) => file.path);
+  const values = paths.length === 0 ? [] : await readAttributeValues(ctx, ["text", "eol"], paths);
+  if (values === undefined) return undefined;
+  const plans = paths.map((path, index) => {
+    const [text = "unspecified", eol = "unspecified"] = values[index] ?? [];
+    return [path, stagePlan(lineEndings, { text, eol })] as const;
+  });
+  const indexed = plans.some(([, plan]) => plan.kind === "convert" && plan.auto);
+  const classes = indexed ? await ctx.indexLineBreaks(paths) : new Map<string, string>();
+  return new Map(
+    plans.map(([path, plan]) => [path, { plan, lineEndings, indexClass: classes.get(path) }]),
+  );
 }
 async function indexEntries(
   ctx: GitStageEffectContext,
@@ -216,13 +302,17 @@ async function indexEntries(
   hashLength: number,
   lineEndings: GitStageLineEndings,
 ): Promise<string | undefined> {
-  const classes = await stageIndexClasses(ctx, files, lineEndings);
+  const stages = await fileStages(ctx, files, lineEndings);
+  if (stages === undefined) return undefined;
   const lines: string[] = [];
   for (const file of files) {
+    const stage = stages.get(file.path);
     const sha =
       file.mode === "0"
         ? "0".repeat(hashLength)
-        : await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
+        : stage === undefined
+          ? undefined
+          : await stagedObjectId(ctx, file, stage, true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
@@ -235,35 +325,39 @@ export async function gitStageFilesSupported(
   lineEndings: GitStageLineEndings,
 ): Promise<boolean> {
   const files = await readFiles(ctx.workspaceRoot, paths, ctx.fs);
-  const classes = await stageIndexClasses(ctx, files, lineEndings);
+  const stages = await fileStages(ctx, files, lineEndings);
+  if (stages === undefined) return false;
   for (const file of files) {
+    const stage = stages.get(file.path);
     if (file.mode === "0") continue;
-    const sha = await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
+    if (stage === undefined) return false;
+    const sha = await stagedObjectId(ctx, file, stage, false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
     if (sha === undefined) return false;
   }
   return true;
 }
+// Attribute values a verified staging admits: a filter driver, `ident`, a working-tree encoding and
+// the legacy `crlf` attribute stay refused; `text` and `eol` may take any value Git's built-in
+// conversion knows, because `stagedObjectId` admits a converted file only when it round-trips.
+const STAGE_ATTRIBUTES = ["filter", "working-tree-encoding", "ident", "crlf", "text", "eol"];
+const UNSET_VALUES: ReadonlySet<string> = new Set(["unspecified", "unset"]);
+const ADMITTED_VALUES: readonly ReadonlySet<string>[] = [
+  UNSET_VALUES,
+  UNSET_VALUES,
+  UNSET_VALUES,
+  UNSET_VALUES,
+  new Set(["unspecified", "unset", "set", "auto"]),
+  new Set(["unspecified", "unset", "lf", "crlf"]),
+];
 export async function gitStageAttributesSupported(
   ctx: GitStageEffectContext,
   paths: readonly string[],
 ): Promise<boolean> {
-  const result = await ctx.run([
-    "check-attr",
-    "-z",
-    "filter",
-    "working-tree-encoding",
-    "ident",
-    "text",
-    "eol",
-    "crlf",
-    "--",
-    ...paths,
-  ]);
-  if (result.exitCode !== 0 || result.truncated || !result.stdout.endsWith("\0")) return false;
-  const fields = result.stdout.slice(0, -1).split("\0");
+  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
   return (
-    fields.length === paths.length * 18 &&
-    fields.every((value, index) => index % 3 !== 2 || value === "unspecified" || value === "unset")
+    values?.every((row) =>
+      row.every((value, index) => ADMITTED_VALUES[index]?.has(value) === true),
+    ) ?? false
   );
 }
 /**
