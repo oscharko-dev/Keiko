@@ -6465,6 +6465,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "run-identity-observed",
           "delivery-step-shown",
           "repository-resolved",
+          "workspace-activation-requested",
         ],
       },
       section: {
@@ -6616,6 +6617,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["window", "shell", "none"],
+      },
+      activationTrigger: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["window-selection", "window-pinned", "shell-seed", "active-follow"],
       },
     },
     causal: "correlation",
@@ -19317,6 +19324,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["recovered", "exhausted-again", "empty-again", "failed"],
       },
+      textualToolCallRecovery: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["retried-native", "retry-exhausted", "retry-skipped", "retry-interrupted"],
+      },
+      textualToolCallRetries: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       readinessRenewal: {
         type: "string",
         dataClass: "closed-enum",
@@ -25854,7 +25872,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["calibrated", "fallback-estimated", "gateway-reported", "retained-measurement"],
+        values: [
+          "calibrated",
+          "fallback-estimated",
+          "gateway-reported",
+          "retained-measurement",
+          "usage-calibrated",
+        ],
       },
       counterStatus: {
         type: "string",
@@ -25915,6 +25939,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       retainedPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      calibratedPromptTokens: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -32326,6 +32355,36 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      attributeSplitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hashBudgetExhaustedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      listingMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      scanMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      settleMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      gitSpawnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       errorClass: {
         type: "string",
         dataClass: "error-kind",
@@ -32386,6 +32445,36 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      attributeSplitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      hashBudgetExhaustedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      listingMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      scanMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      settleMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      gitSpawnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       outcome: {
         type: "string",
@@ -32566,6 +32655,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "authority-revoked",
           "proposal-unknown",
           "signal-aborted",
+          "deadline-exceeded",
           "run-not-live",
           "guard-rejected",
           "mode-unavailable",
@@ -33125,7 +33215,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["status", "summary", "sync-preview", "sync-post-state"],
+        values: ["status", "summary", "sync-preview", "sync-post-state", "history"],
       },
       shownRecordCount: {
         type: "integer",
@@ -33141,6 +33231,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      unreadableRecordCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -49570,6 +49665,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "blocked",
           "failed",
           "retry-required",
+          "unchanged",
           "reconciled",
           "repaired",
           "operator-required",

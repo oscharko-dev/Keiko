@@ -7838,6 +7838,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "activationTrigger",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "agent",
               "type": "string",
               "dataClass": "closed-enum",
@@ -20528,6 +20534,18 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "textualToolCallRecovery",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "textualToolCallRetries",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [
@@ -30135,6 +30153,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "calibratedPromptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
@@ -38298,6 +38322,12 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "attributeSplitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "batches",
               "type": "integer",
               "dataClass": "count",
@@ -38328,6 +38358,36 @@
               "required": false
             },
             {
+              "name": "gitSpawnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "hashBudgetExhaustedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "listingMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "scanMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "settleMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "settledClean",
               "type": "integer",
               "dataClass": "count",
@@ -38337,6 +38397,7 @@
           "evidenceClasses": [
             "completeness-state",
             "count",
+            "duration",
             "error-kind",
             "loss-state",
             "safe-platform-class"
@@ -38358,6 +38419,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "attributeSplitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "batches",
               "type": "integer",
               "dataClass": "count",
@@ -38368,6 +38435,24 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "gitSpawnCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "hashBudgetExhaustedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "listingMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
             },
             {
               "name": "outcome",
@@ -38382,13 +38467,31 @@
               "required": false
             },
             {
+              "name": "scanMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "settleMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "settledClean",
               "type": "integer",
               "dataClass": "count",
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state"
+          ],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -39077,6 +39180,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "unreadableRecordCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
