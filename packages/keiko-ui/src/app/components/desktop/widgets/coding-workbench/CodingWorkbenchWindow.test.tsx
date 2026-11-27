@@ -72,6 +72,7 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import { PROBE_TIMED_OUT_WARNING } from "@oscharko-dev/keiko-contracts/bff-wire";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { ConnectorWindowsProvider } from "../../connector-windows-context";
 import {
@@ -6211,6 +6212,33 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         .click(screen.getByRole("button", { name: "Details in Settings > Models" }));
       expect(onOpenSettings).toHaveBeenCalledOnce();
       expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    // The server reports a timed-out, overloaded or unreachable probe as `failed` with a closed
+    // warning, never as `skipped`; it is no verdict on the model (keiko-contracts/bff-wire).
+    it("keeps Activate offered after an activation that timed out", async () => {
+      const timedOut: GatewayReadinessReport = {
+        ...report("failed"),
+        probes: [
+          {
+            name: "chat",
+            status: "failed",
+            latencyMs: 30_000,
+            evidence: "chat probe",
+            warning: PROBE_TIMED_OUT_WARNING,
+          },
+        ],
+      };
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(timedOut)));
+      renderNotReady(NOT_ACTIVATED);
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+
+      expect(await screen.findByRole("button", { name: "Activate model-a" })).toBeEnabled();
+      expect(
+        screen.queryByText("model-a did not pass its readiness check."),
+      ).not.toBeInTheDocument();
+      expect(readinessCalls(fetchMock)).toHaveLength(1);
     });
 
     it("keeps Activate offered when the chat probe reached no verdict", async () => {

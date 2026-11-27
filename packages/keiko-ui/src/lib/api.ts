@@ -4,6 +4,7 @@
  * Never logs response bodies.
  */
 
+import { isInconclusiveReadinessProbe } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { reinspectSessionAfterMutationRefusal } from "./bff-session-reinspection";
 
 import type {
@@ -902,7 +903,8 @@ export async function runGatewayReadiness(
  * Activates one chat model from a surface other than the Settings list. It is the same route and
  * the same basic-chat readiness check Settings > Models runs (ADR-0171 D2); the surface only tells
  * the Activity Log where the person asked for it. Resolves to the chat probe's verdict; a probe that
- * reached none (a timeout, a transient overload) is "inconclusive", never a failure (the contract
+ * reached none (a timeout, a transient overload, an unreachable gateway; the server reports those as
+ * `failed` with a closed warning) is "inconclusive", never a failure (the contract
  * leaves `conversationReady` absent for it).
  */
 export async function activateChatModelFromSurface(
@@ -910,8 +912,9 @@ export async function activateChatModelFromSurface(
   surface: GatewayReadinessSurface,
 ): Promise<"passed" | "failed" | "inconclusive"> {
   const report = await runGatewayReadiness(modelId, { surface });
-  const chat = report.probes.find((probe) => probe.name === "chat")?.status;
-  return chat === "passed" || chat === "failed" ? chat : "inconclusive";
+  const chat = report.probes.find((probe) => probe.name === "chat");
+  if (chat === undefined || isInconclusiveReadinessProbe(chat)) return "inconclusive";
+  return chat.status === "passed" || chat.status === "failed" ? chat.status : "inconclusive";
 }
 
 export interface ChatModelDeactivation {

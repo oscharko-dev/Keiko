@@ -3011,6 +3011,33 @@ export type GatewayReadinessProbeName =
 
 export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
 
+// A probe the gateway could not answer (it timed out, was overloaded or could not be reached) says
+// nothing about the model: it is reported as `failed` with one of these closed warnings, and no
+// surface may read it as a refusal. The server writes them; the server's re-probe policy and the
+// browser's activation read them back through `isInconclusiveReadinessProbe`, so neither can drift.
+export const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
+export const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
+// 408 and every other 5xx but 501 (not implemented) count the same way (#3591 review).
+export const PROBE_GATEWAY_BUSY_WARNING =
+  "The gateway answered with a transient overload or timeout status.";
+
+const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+  PROBE_GATEWAY_BUSY_WARNING,
+]);
+
+/** Whether a failed probe only could not be answered, which is no verdict on the model. */
+export function isInconclusiveReadinessProbe(
+  probe: Pick<GatewayReadinessProbeResult, "status" | "warning">,
+): boolean {
+  return (
+    probe.status === "failed" &&
+    probe.warning !== undefined &&
+    INCONCLUSIVE_PROBE_WARNINGS.has(probe.warning)
+  );
+}
+
 /**
  * How a tool-calling check ended (#4351). The check first offers the tool the way production does, with
  * no forced `tool_choice`; only a model that called none gets a second attempt with the forced named call.

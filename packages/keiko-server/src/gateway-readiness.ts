@@ -19,6 +19,12 @@ import {
   GATEWAY_SILENCE_FLOOR_MS,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  isInconclusiveReadinessProbe,
+  PROBE_GATEWAY_BUSY_WARNING,
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   GatewayReadinessOptions,
   GatewayReadinessProbeName,
@@ -1429,17 +1435,9 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
 // INCONCLUSIVE — it proves nothing about the model and must not be held against it the way an
 // answered failure is. The two sentences are this module's own closed vocabulary; the Workbench
 // re-probe policy reads them back through `probeInconclusive`.
-const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
-const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
-// A gateway at peak load answers 429/503 for a while; that is no verdict on the model either
-// (#3591 review). 408 and every other 5xx but 501 (not implemented) count the same way.
-export const PROBE_GATEWAY_BUSY_WARNING =
-  "The gateway answered with a transient overload or timeout status.";
-const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
-  PROBE_TIMED_OUT_WARNING,
-  PROBE_UNREACHABLE_WARNING,
-  PROBE_GATEWAY_BUSY_WARNING,
-]);
+// The warnings and the predicate that reads them back live in keiko-contracts, shared with the
+// browser's activation, so neither side can drift.
+export { PROBE_GATEWAY_BUSY_WARNING };
 
 function transientStatusWarning(response: Response): string | undefined {
   return transientGatewayStatus(response.status) ? PROBE_GATEWAY_BUSY_WARNING : undefined;
@@ -1473,11 +1471,7 @@ function busySignal(
 }
 
 export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
-  return (
-    probe.status === "failed" &&
-    probe.warning !== undefined &&
-    INCONCLUSIVE_PROBE_WARNINGS.has(probe.warning)
-  );
+  return isInconclusiveReadinessProbe(probe);
 }
 
 function providerWarning(errorValue: unknown): string {

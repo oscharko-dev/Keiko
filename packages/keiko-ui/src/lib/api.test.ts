@@ -3,6 +3,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  PROBE_GATEWAY_BUSY_WARNING,
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
   askGrounded,
   cancelDesktopChatTurn,
   updateChatConnectedScopes,
@@ -2617,6 +2622,26 @@ describe("runGatewayReadiness", () => {
           }),
         }),
       );
+    },
+  );
+
+  it.each([PROBE_TIMED_OUT_WARNING, PROBE_UNREACHABLE_WARNING, PROBE_GATEWAY_BUSY_WARNING])(
+    "reads a chat probe that failed only with %j as inconclusive, not as a failed check",
+    async (warning) => {
+      const report = {
+        modelId: "test-chat-model",
+        checkedAt: "2026-11-27T09:00:00.000Z",
+        overallStatus: "failed",
+        probes: [
+          { name: "chat", status: "failed", latencyMs: 30_000, evidence: "chat probe", warning },
+        ],
+        verifiedCapabilities: {},
+      };
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(report)));
+
+      await expect(
+        activateChatModelFromSurface("test-chat-model", "coding-workbench"),
+      ).resolves.toBe("inconclusive");
     },
   );
 
