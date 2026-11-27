@@ -226,3 +226,73 @@ describe("AddRepositoryDialog — settlement after the dialog has closed", () =>
     expect(JSON.stringify(diagnostics)).not.toContain("boom");
   });
 });
+
+describe("AddRepositoryDialog — Enter submits like the primary button (#4491)", () => {
+  it("registers a typed local path once on Enter", async () => {
+    const user = userEvent.setup();
+    const registerRepository = vi.fn(() => Promise.resolve({ project: PROJECT_FIXTURE }));
+    const onAdded = vi.fn();
+    render(
+      <AddRepositoryDialog
+        client={makeClient({ registerRepository })}
+        onAdded={onAdded}
+        onClose={vi.fn()}
+        initialMode="open"
+      />,
+    );
+    await user.type(screen.getByLabelText("Local repository path"), "/repos/alpha{Enter}");
+    await waitFor(() => expect(onAdded).toHaveBeenCalledTimes(1));
+    expect(registerRepository).toHaveBeenCalledTimes(1);
+    expect(registerRepository).toHaveBeenCalledWith({ path: "/repos/alpha" }, expect.any(String));
+  });
+
+  it("clones once on Enter from the destination field", async () => {
+    const user = userEvent.setup();
+    const cloneRepository = vi.fn(() => Promise.resolve({ project: PROJECT_FIXTURE }));
+    render(
+      <AddRepositoryDialog
+        client={makeClient({ cloneRepository })}
+        onAdded={vi.fn()}
+        onClose={vi.fn()}
+        initialMode="clone"
+      />,
+    );
+    await user.type(screen.getByLabelText("Repository URL"), "https://example.test/o/r.git");
+    await user.type(screen.getByLabelText("Clone to folder"), "/work/r{Enter}");
+    await waitFor(() => expect(cloneRepository).toHaveBeenCalledTimes(1));
+  });
+
+  it("does nothing on Enter with an empty path", async () => {
+    const user = userEvent.setup();
+    const registerRepository = vi.fn(() => Promise.resolve({ project: PROJECT_FIXTURE }));
+    render(
+      <AddRepositoryDialog
+        client={makeClient({ registerRepository })}
+        onAdded={vi.fn()}
+        onClose={vi.fn()}
+        initialMode="open"
+      />,
+    );
+    await user.type(screen.getByLabelText("Local repository path"), "   {Enter}");
+    expect(registerRepository).not.toHaveBeenCalled();
+  });
+
+  it("never submits twice on Enter while a request is in flight", async () => {
+    const user = userEvent.setup();
+    const registerRepository = vi.fn(
+      () => new Promise<{ project: ProjectWithAvailability }>(() => undefined),
+    );
+    render(
+      <AddRepositoryDialog
+        client={makeClient({ registerRepository })}
+        onAdded={vi.fn()}
+        onClose={vi.fn()}
+        initialMode="open"
+      />,
+    );
+    const field = screen.getByLabelText("Local repository path");
+    await user.type(field, "/repos/alpha{Enter}");
+    await user.type(field, "{Enter}");
+    expect(registerRepository).toHaveBeenCalledTimes(1);
+  });
+});
