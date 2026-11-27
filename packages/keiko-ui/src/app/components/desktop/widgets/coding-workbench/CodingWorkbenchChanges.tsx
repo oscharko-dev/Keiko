@@ -21,7 +21,8 @@ const OVERSCAN_ROWS = 6;
 const ROW_HEIGHT = 54;
 
 // #3610 (W11): "1 changed file", never "1 changed files".
-function changedFilesText(count: number, t: CodingWorkbenchTranslate): string {
+function changedFilesText(count: number, t: CodingWorkbenchTranslate, total = count): string {
+  if (total > count) return t("codingWorkbench.changes.changedFilesShowing", { count, total });
   return count === 1
     ? t("codingWorkbench.changes.changedFiles.one")
     : t("codingWorkbench.changes.changedFiles", { count });
@@ -52,7 +53,7 @@ export function CodingWorkbenchChangesView({
     >
       <summary className={styles.cmpActivitySummary}>
         {changes.status === "ready"
-          ? changedFilesText(changes.files.length, t)
+          ? changedFilesText(changes.files.length, t, changes.totalFiles)
           : t("codingWorkbench.changes.title")}
       </summary>
       <div className={styles.cmpChangesContent}>
@@ -172,6 +173,11 @@ function ReadyChanges({
       <p className={styles.changesRevision} role="status" aria-live="polite">
         {t("codingWorkbench.changes.asOf", { head: changes.head ?? "HEAD" })}
       </p>
+      {changes.truncated && changes.totalFiles <= changes.files.length ? (
+        <output className={styles.changesNotice}>
+          {t("codingWorkbench.changes.filesTruncated")}
+        </output>
+      ) : null}
       {changes.files.length === 0 ? (
         <ChangesMessage text={t("codingWorkbench.changes.empty")} />
       ) : (
@@ -180,11 +186,6 @@ function ReadyChanges({
           <SelectedDiff changes={changes} t={t} />
         </div>
       )}
-      {changes.truncated ? (
-        <output className={styles.changesNotice}>
-          {t("codingWorkbench.changes.filesTruncated")}
-        </output>
-      ) : null}
     </>
   );
 }
@@ -221,7 +222,7 @@ function ChangedFileList({
   return (
     <div className={styles.changesFiles}>
       <p className={styles.changesPaneTitle} id="coding-workbench-changed-files-title">
-        {changedFilesText(changes.files.length, t)}
+        {changedFilesText(changes.files.length, t, changes.totalFiles)}
       </p>
       {window.virtual ? (
         <p className={styles.helpText} id="coding-workbench-changes-list-help">

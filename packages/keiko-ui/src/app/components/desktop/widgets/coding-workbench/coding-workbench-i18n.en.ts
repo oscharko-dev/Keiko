@@ -108,7 +108,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The ready-for-review approval path is not available yet.",
   "codingWorkbench.journey.changedFiles": "{count} changed files",
   "codingWorkbench.journey.changedFiles.one": "1 changed file",
-  "codingWorkbench.journey.changedFilesTruncated": "(list truncated)",
+  "codingWorkbench.journey.changedFilesTruncated": "(more files changed than can be listed)",
   "codingWorkbench.journey.busy": "Updating handoff status…",
   "codingWorkbench.journey.actionError.refresh":
     "Status refresh failed ({reason}). The saved observations remain visible.",
@@ -712,10 +712,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
   "codingWorkbench.changes.changedFiles": "{count} changed files",
   "codingWorkbench.changes.changedFiles.one": "1 changed file",
+  "codingWorkbench.changes.changedFilesShowing":
+    "Showing the first {count} of {total} changed files",
   "codingWorkbench.changes.virtualInstructions":
     "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.changes.filesTruncated":
-    "The changed-file list reached its server limit. Only the bounded prefix is shown.",
+    "More files changed than can be listed here. Only the first ones are shown.",
   "codingWorkbench.changes.fileState.conflicted": "Conflicted",
   "codingWorkbench.changes.fileState.untracked": "Untracked",
   "codingWorkbench.changes.fileState.stagedAndUnstaged": "Staged and unstaged",

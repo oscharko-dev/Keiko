@@ -167,6 +167,12 @@ export interface GitRepositoryStatusResponse {
   readonly stagedDigest?: string | undefined;
   readonly truncated: boolean;
   readonly maxChanges: number;
+  /**
+   * The exact number of changed files Git listed, counted past `maxChanges`, so a bounded list can
+   * say how many it left out. When the Git run itself was cut short (`truncated` with a listing no
+   * longer than `maxChanges`) it is only a lower bound. Absent on responses from older servers.
+   */
+  readonly totalChanges?: number | undefined;
 }
 
 export type GitDiffScope = "all" | "worktree" | "staged";
@@ -298,6 +304,12 @@ function validateChangesArray(input: Readonly<Record<string, unknown>>, reasons:
   });
   if (isNonNegativeInteger(input.maxChanges) && input.changes.length > input.maxChanges) {
     reasons.push("changes.length must not exceed maxChanges");
+  }
+  if (
+    input.totalChanges !== undefined &&
+    (!isNonNegativeInteger(input.totalChanges) || input.totalChanges < input.changes.length)
+  ) {
+    reasons.push("totalChanges must be a non-negative integer not below changes.length");
   }
 }
 

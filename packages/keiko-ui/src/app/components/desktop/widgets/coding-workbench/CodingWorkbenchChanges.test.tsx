@@ -61,6 +61,11 @@ function status(
   };
 }
 
+function boundedStatus(shown: number, total: number): GitRepositoryStatusResponse {
+  const files = Array.from({ length: shown }, (_, index) => changedFile(index));
+  return { ...status(files), truncated: true, totalChanges: total };
+}
+
 function history(available = true): GitHistoryResponse {
   return {
     schemaVersion: "1",
@@ -138,9 +143,12 @@ function renderChanges(
 }
 
 async function expandChanges(): Promise<void> {
-  const summary = await screen.findByText(/^(?:\d+ changed files?|Changes)$/u, {
-    selector: "summary",
-  });
+  const summary = await screen.findByText(
+    /^(?:\d+ changed files?|Showing the first .*|Changes)$/u,
+    {
+      selector: "summary",
+    },
+  );
   fireEvent.click(summary);
 }
 
@@ -150,6 +158,18 @@ afterEach(() => {
 });
 
 describe("CodingWorkbenchChanges", () => {
+  it("shows the true total next to the header when the list is bounded (#4491 U-7)", async () => {
+    const changesClient = client({ getStatus: vi.fn().mockResolvedValue(boundedStatus(3, 7)) });
+    renderChanges(changesClient);
+    await expandChanges();
+
+    expect(
+      screen.getAllByText("Showing the first 3 of 7 changed files").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/^3 changed files$/u)).toBeNull();
+    expect(screen.queryByText(/server limit/u)).toBeNull();
+  });
+
   it("renders the bound run's real per-file diff with an honest head and escaped text", async () => {
     const changesClient = client();
     const view = renderChanges(changesClient);

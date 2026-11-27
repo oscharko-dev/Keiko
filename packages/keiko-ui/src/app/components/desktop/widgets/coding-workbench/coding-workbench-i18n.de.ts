@@ -120,7 +120,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Freigabepfad für die Review-Bereitschaft ist noch nicht verfügbar.",
   "codingWorkbench.journey.changedFiles": "{count} geänderte Dateien",
   "codingWorkbench.journey.changedFiles.one": "1 geänderte Datei",
-  "codingWorkbench.journey.changedFilesTruncated": "(Liste gekürzt)",
+  "codingWorkbench.journey.changedFilesTruncated":
+    "(mehr Dateien geändert, als aufgelistet werden können)",
   "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
   "codingWorkbench.journey.actionError.refresh":
     "Statusaktualisierung fehlgeschlagen ({reason}). Die gespeicherten Beobachtungen bleiben sichtbar.",
@@ -744,10 +745,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
   "codingWorkbench.changes.changedFiles": "{count} geänderte Dateien",
   "codingWorkbench.changes.changedFiles.one": "1 geänderte Datei",
+  "codingWorkbench.changes.changedFilesShowing":
+    "Die ersten {count} von {total} geänderten Dateien werden angezeigt",
   "codingWorkbench.changes.virtualInstructions":
     "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.changes.filesTruncated":
-    "Die Liste der geänderten Dateien hat das Serverlimit erreicht. Nur das begrenzte Präfix wird angezeigt.",
+    "Es wurden mehr Dateien geändert, als hier aufgelistet werden können. Es werden nur die ersten angezeigt.",
   "codingWorkbench.changes.fileState.conflicted": "Mit Konflikt",
   "codingWorkbench.changes.fileState.untracked": "Nicht versioniert",
   "codingWorkbench.changes.fileState.stagedAndUnstaged": "Vorgemerkt und nicht vorgemerkt",

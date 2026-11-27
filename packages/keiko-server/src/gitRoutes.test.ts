@@ -42,6 +42,8 @@ import {
   rethrowSnapshotPathError,
   rethrowSnapshotRaceError,
   optionsWithDefaults,
+  DEFAULT_MAX_CHANGES,
+  parseStatus,
   selectedRootPathspecArgs,
   type GitProcessRunner,
 } from "./gitRoutes.js";
@@ -2535,5 +2537,32 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
 
     expect(normalized.runnerIdentity).toBe(raw);
     expect(normalized.runner).not.toBe(raw);
+  });
+});
+
+describe("status total change count (#4491 U-7)", () => {
+  it("reports the exact total beyond the list bound instead of the bound", () => {
+    const total = DEFAULT_MAX_CHANGES + 100;
+    const records = [
+      "## main",
+      ...Array.from({ length: total }, (_, index) => `?? src/file-${String(index)}.ts`),
+    ];
+    const status = parseStatus(
+      `${records.join("\0")}\0`,
+      "/repo",
+      "/repo",
+      "",
+      DEFAULT_MAX_CHANGES,
+      false,
+    );
+    expect(status.changes).toHaveLength(DEFAULT_MAX_CHANGES);
+    expect(status.truncated).toBe(true);
+    expect(status.totalChanges).toBe(total);
+  });
+
+  it("reports the listed count as the total when nothing is cut", () => {
+    const status = parseStatus("## main\0 M a.ts\0?? b.ts\0", "/repo", "/repo", "", 10, false);
+    expect(status.truncated).toBe(false);
+    expect(status.totalChanges).toBe(2);
   });
 });

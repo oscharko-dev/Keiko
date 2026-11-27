@@ -297,10 +297,16 @@ function changedFilesSummary(
   changes: ReturnType<typeof useCodingWorkbenchChanges>,
 ): CodingWorkbenchJourneyChangedFilesSummary {
   if (changes.status === "ready") {
-    return { status: "ready", fileCount: changes.files.length, truncated: changes.truncated };
+    return {
+      status: "ready",
+      fileCount: changes.files.length,
+      totalCount: changes.totalFiles,
+      truncated: changes.truncated,
+    };
   }
-  if (changes.status === "loading") return { status: "loading", fileCount: 0, truncated: false };
-  return { status: "unavailable", fileCount: 0, truncated: false };
+  if (changes.status === "loading")
+    return { status: "loading", fileCount: 0, totalCount: 0, truncated: false };
+  return { status: "unavailable", fileCount: 0, totalCount: 0, truncated: false };
 }
 
 interface CodingWorkbenchJourneyState {

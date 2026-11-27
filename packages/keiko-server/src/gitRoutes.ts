@@ -95,7 +95,7 @@ export type {
 
 const DEFAULT_STATUS_MAX_BYTES = 512 * 1024;
 const DEFAULT_DIFF_MAX_BYTES = 128 * 1024;
-const DEFAULT_MAX_CHANGES = 500;
+export const DEFAULT_MAX_CHANGES = 500;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
 export interface GitRouteOptions {
@@ -665,6 +665,7 @@ export function parseStatus(
       collected.scopedChangeCount,
     ),
     maxChanges,
+    totalChanges: collected.scopedChangeCount,
   };
 }
 
