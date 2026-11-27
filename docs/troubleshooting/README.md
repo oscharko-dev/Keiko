@@ -84,6 +84,11 @@ repository are covered in
 [Coding Workbench run cannot resolve dependencies from an internal repository](coding-workbench-repository-dependencies.md),
 including the closed reasons of the repository credential relay.
 
+Coding Workbench turns that are slow on the first prompt, slow again in the middle of a run, slow
+after Stop or slow after a very large tool result on a self-hosted local model behind LiteLLM and
+Ollama are covered in
+[Coding Workbench turns are slow or stall on a self-hosted local model](coding-workbench-local-model-slow-turns.md).
+
 Scheduled continuations that wait or were paused after missed wakes are covered in
 [Coding Workbench scheduled continuation does not run](coding-workbench-scheduled-continuation.md).
 
