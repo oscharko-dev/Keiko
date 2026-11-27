@@ -195,7 +195,7 @@ describe("GET /api/git/status", () => {
 
   it("parses staged, unstaged, untracked, branch, and detached porcelain states", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(
         ok("## HEAD (no branch)\0M  src/staged.ts\0 M src/dirty.ts\0?? src/new.ts\0"),
@@ -229,7 +229,7 @@ describe("GET /api/git/status", () => {
     await mkdir(selectedRoot);
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       // rev-parse --show-toplevel --show-prefix: git reports the prefix with a trailing slash.
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
@@ -286,7 +286,7 @@ describe("GET /api/git/status", () => {
 
   it("marks process-truncated status output as truncated even when change count is below cap", async () => {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce({
         ...ok("## main\0M  src/app.ts\0"),
@@ -311,7 +311,7 @@ describe("GET /api/git/status", () => {
     // field; failing to skip it used to surface the old path as a phantom change record. T
     // (typechange) is not part of the wire vocabulary and must degrade to M, not to clean.
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(
         ok(
@@ -350,7 +350,7 @@ describe("GET /api/git/status", () => {
     await mkdir(selectedRoot);
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
@@ -398,6 +398,33 @@ describe("GET /api/git/status", () => {
         },
       ],
     });
+  });
+
+  // PR #4568 review: the Git window binds a generated commit draft to what is staged; the same path
+  // staged again with other content keeps its path and index status, so the status names a digest
+  // of the staged object ids, never their content.
+  it("names a digest of the staged object ids that moves when the same path is staged again", async () => {
+    const read = async (): Promise<Record<string, unknown>> =>
+      (
+        await handleGitStatus(
+          ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+          deps(defaultGitProcessRunner),
+        )
+      ).body as Record<string, unknown>;
+    await runRealGit(["init", "--quiet"]);
+    expect((await read()).stagedDigest).toBeUndefined();
+    await writeFile(join(root, "a.md"), "first");
+    await runRealGit(["add", "a.md"]);
+    const first = await read();
+    expect(first.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(await read()).toMatchObject({ stagedDigest: first.stagedDigest });
+    await writeFile(join(root, "a.md"), "second");
+    await runRealGit(["add", "a.md"]);
+    const second = await read();
+    expect(second).toMatchObject({ stagedCount: 1, changes: first.changes });
+    expect(second.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).not.toBe(first.stagedDigest);
+    expect(JSON.stringify(second)).not.toContain("second");
   });
 
   it("reports selected ignored roots and derives untracked folders from real Git records", async () => {
@@ -677,7 +704,7 @@ describe("GET /api/git/status — byte-cap cut (large untracked tree)", () => {
     activityLog?: ServerLogSink,
   ): Promise<Awaited<ReturnType<typeof handleGitStatus>>> {
     const runner = vi
-      .fn<GitProcessRunner>()
+      .fn<GitProcessRunner>(() => Promise.resolve(ok("")))
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(statusRun);
     const base = deps(runner);

@@ -159,6 +159,12 @@ export interface GitRepositoryStatusResponse {
   readonly selectedRootIgnored?: boolean | undefined;
   /** Fully untracked directories, omitted when either source listing is incomplete. */
   readonly untrackedDirectories?: readonly string[] | undefined;
+  /**
+   * SHA-256 over Git's raw listing of the staged changes (modes, object ids and paths, never their
+   * content), so the same path staged again with other content is told apart. Omitted when nothing
+   * is staged or the listing is unavailable.
+   */
+  readonly stagedDigest?: string | undefined;
   readonly truncated: boolean;
   readonly maxChanges: number;
 }
@@ -310,6 +316,14 @@ function validateStatusPresentation(
         input.untrackedDirectories.length > input.maxChanges))
   ) {
     reasons.push("untrackedDirectories must be a bounded string array when present");
+  }
+  validateStagedDigest(input, reasons);
+}
+
+function validateStagedDigest(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
+  if (input.stagedDigest === undefined) return;
+  if (!isString(input.stagedDigest) || !/^[a-f0-9]{64}$/u.test(input.stagedDigest)) {
+    reasons.push("stagedDigest must be a SHA-256 hex digest when present");
   }
 }
 

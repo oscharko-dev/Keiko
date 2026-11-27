@@ -2,10 +2,14 @@ import { useState } from "react";
 import type { GitRepositoryStatusResponse } from "@oscharko-dev/keiko-contracts";
 import type { GitBranchListEntry } from "@/lib/api";
 
+const UNKNOWN_HEAD = "unknown-head";
+
 /**
  * The commit the staged changes would be committed on: the tip of the current branch, or a constant
- * for a detached HEAD. `null` while the branch list does not name the current branch yet (a branch
- * just created is read after the status).
+ * for a detached HEAD. An empty branch list (an unborn HEAD has no ref, and a list not read yet looks
+ * the same) yields an explicit unknown-head marker, so the staged selection still binds the draft.
+ * `null` while a non-empty branch list does not name the current branch yet (a branch just created is
+ * read after the status).
  */
 function headCommitOf(
   status: GitRepositoryStatusResponse,
@@ -13,7 +17,8 @@ function headCommitOf(
 ): string | null {
   if (status.detached) return "detached";
   const current = branches.find((branch) => branch.name === status.branch);
-  return current === undefined ? null : current.headRefHash;
+  if (current !== undefined) return current.headRefHash;
+  return branches.length === 0 ? UNKNOWN_HEAD : null;
 }
 
 /**
@@ -22,9 +27,10 @@ function headCommitOf(
  * is never logged or sent.
  *
  * A new branch from the current commit keeps it, as does any status read that changes nothing
- * staged. Its known limits, both outside this window: the same path staged again with other content
- * under the same index status keeps it, and so does another commit checked out on a detached HEAD
- * with the same staged selection (the status names no detached commit).
+ * staged. The same path staged again with other content moves it through the status's digest of the
+ * staged object ids (PR #4568 review); a status without that digest binds the selection alone. Its
+ * known limit, outside this window: another commit checked out on a detached HEAD with the same
+ * staged selection keeps it (the status names no detached commit).
  */
 export function stagedSelectionSignature(
   status: GitRepositoryStatusResponse | null | undefined,
@@ -37,7 +43,7 @@ export function stagedSelectionSignature(
     .filter((change) => change.staged)
     .map((change) => `${change.indexStatus}\u0000${change.oldPath ?? ""}\u0000${change.path}`)
     .sort((left, right) => left.localeCompare(right));
-  return [head, status.truncated ? "t" : "c", ...staged].join("\u0001");
+  return [head, status.truncated ? "t" : "c", status.stagedDigest ?? "", ...staged].join("\u0001");
 }
 
 interface LastSignature {

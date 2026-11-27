@@ -57,6 +57,17 @@ describe("stagedSelectionSignature", () => {
     expect(stagedSelectionSignature(status([staged], { branch: "feature/x" }), MAIN)).toBeNull();
   });
 
+  // PR #4568 review: another surface staging the same path again with other content keeps the path
+  // and its index status; only the staged object ids tell the two apart.
+  it("moves when the same path is staged again with other content", () => {
+    const before = status([staged], { stagedDigest: "a".repeat(64) });
+    const after = status([staged], { stagedDigest: "b".repeat(64) });
+    expect(stagedSelectionSignature(after, MAIN)).not.toBe(stagedSelectionSignature(before, MAIN));
+    expect(stagedSelectionSignature(status([staged], { stagedDigest: "a".repeat(64) }), MAIN)).toBe(
+      stagedSelectionSignature(before, MAIN),
+    );
+  });
+
   it("stays the same across a new branch from the current commit and unstaged edits", () => {
     const before = stagedSelectionSignature(status([staged]), MAIN);
     const onBranch = stagedSelectionSignature(
@@ -97,6 +108,16 @@ describe("stagedSelectionSignature", () => {
     expect(stagedSelectionSignature(status([staged], { truncated: true }), MAIN)).not.toBe(before);
   });
 
+  it("still binds the staged selection on an unborn HEAD, where the branch list is empty", () => {
+    const unborn = stagedSelectionSignature(status([staged]), []);
+    expect(unborn).not.toBeNull();
+    expect(stagedSelectionSignature(status([]), [])).not.toBe(unborn);
+    const added = file("src/b.ts", { indexStatus: "A", staged: true });
+    expect(stagedSelectionSignature(status([staged, added]), [])).not.toBe(unborn);
+    expect(stagedSelectionSignature(status([staged], { truncated: true }), [])).not.toBe(unborn);
+    expect(stagedSelectionSignature(status([staged]), MAIN)).not.toBe(unborn);
+  });
+
   it("does not depend on the order Git lists the changes in", () => {
     const b = file("src/b.ts", { indexStatus: "A", staged: true });
     expect(stagedSelectionSignature(status([staged, b]), MAIN)).toBe(
@@ -107,6 +128,20 @@ describe("stagedSelectionSignature", () => {
 
 describe("useCommitDraftRevision", () => {
   const staged = file("src/a.ts", { indexStatus: "M", staged: true });
+
+  it("moves when another surface stages a path on an unborn HEAD", () => {
+    const added = file("src/b.ts", { indexStatus: "A", staged: true });
+    const view = renderHook(
+      (input: GitRepositoryStatusResponse) =>
+        useCommitDraftRevision("/repos/alpha", input, [], { staging: 0, redemptions: 0 }),
+      { initialProps: status([staged]) },
+    );
+    const before = view.result.current;
+    view.rerender(status([staged]));
+    expect(view.result.current).toBe(before);
+    view.rerender(status([staged, added]));
+    expect(view.result.current).not.toBe(before);
+  });
   type Input = {
     readonly repository: string | null;
     readonly status: GitRepositoryStatusResponse | null;
