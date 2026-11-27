@@ -16,14 +16,29 @@ export function launchedFromProgramFolder(
   return env[PROGRAM_FOLDER_LAUNCH_ENV] === "1";
 }
 
+type SystemName =
+  | { readonly kind: "named"; readonly name: string }
+  | { readonly kind: "missing" }
+  | { readonly kind: "failed" };
+
 // How the operating system itself names a path that exists: links followed and, on Windows, a
-// short 8.3 name written out, which the JavaScript resolution leaves as it is.
-function systemName(path: string): string | undefined {
+// short 8.3 name written out, which the JavaScript resolution leaves as it is. A path that does not
+// exist has no other name (`missing`); any other failure (access denied, a link loop, ...) is
+// `failed`, which the denying checks read as "cannot be shown to be outside". This pure predicate
+// has no diagnostic port; the denial it causes is recorded by its callers on the existing
+// body-free workspace-root denial line.
+function resolveSystemName(path: string): SystemName {
   try {
-    return realpathSync.native(path);
-  } catch {
-    return undefined;
+    return { kind: "named", name: realpathSync.native(path) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "failed" };
   }
+}
+
+function systemName(path: string): string | undefined {
+  const resolved = resolveSystemName(path);
+  return resolved.kind === "named" ? resolved.name : undefined;
 }
 
 // The system's name of a launch directory, kept per directory: the working directory of a running
@@ -61,8 +76,9 @@ export function insideProgramFolder(
   if (!launchedFromProgramFolder(env) || !isAbsolute(path)) return false;
   const folder = launchDirectoryName(launchDirectory);
   if (containsPath(launchDirectory, path) || containsPath(folder, path)) return true;
-  const named = systemName(path);
-  return named !== undefined && containsPath(folder, named);
+  const resolved = resolveSystemName(path);
+  if (resolved.kind === "failed") return true;
+  return resolved.kind === "named" && containsPath(folder, resolved.name);
 }
 
 // The entries of an installation's payload folder `system/Keiko` (keiko-cli `portable-shared.ts`
@@ -109,11 +125,13 @@ function layoutNamesPayload(path: string): boolean {
  * separators are read; letter case is ignored only for a Windows-shaped path (drive letter,
  * backslash, UNC share) and on a Windows host, so a lower-case POSIX folder is never mistaken for a
  * payload. A path that exists is also judged by the name the operating system gives it, so a link to
- * a payload is caught. A relative path is not judged.
+ * a payload is caught, and a path whose name cannot be resolved for another reason than not existing is
+ * refused. A relative path is not judged.
  */
 export function insideInstallationPayload(path: string): boolean {
   if (layoutNamesPayload(path)) return true;
   if (!isAbsolute(path)) return false;
-  const named = systemName(path);
-  return named !== undefined && named !== path && layoutNamesPayload(named);
+  const resolved = resolveSystemName(path);
+  if (resolved.kind === "failed") return true;
+  return resolved.kind === "named" && resolved.name !== path && layoutNamesPayload(resolved.name);
 }

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -195,5 +195,21 @@ describe("insideInstallationPayload on a POSIX host", () => {
     symlinkSync(payload, alias, "dir");
     expect(insideInstallationPayload(alias)).toBe(true);
     expect(insideInstallationPayload(join(root, "Keiko-projects"))).toBe(false);
+  });
+
+  it("refuses a path it cannot resolve for a reason other than not existing", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const { root } = folders();
+    const locked = join(root, "locked");
+    mkdirSync(join(locked, "inner"), { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      expect(insideInstallationPayload(join(locked, "inner"))).toBe(true);
+      expect(pathIsDenied(join(locked, "inner"))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+    // A path that simply does not exist is another folder, not a refusal.
+    expect(insideInstallationPayload(join(root, "no-such-folder"))).toBe(false);
   });
 });

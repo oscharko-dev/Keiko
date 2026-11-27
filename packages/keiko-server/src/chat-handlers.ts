@@ -441,7 +441,8 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   if (supplied !== undefined) {
     return validateProjectPath(supplied, { mustExist: true });
   }
-  const projects = deps.store.listProjects();
+  // A program-files row is only ever kept as a fallback for a folderless Chat, never a default pick.
+  const projects = deps.store.listProjects().filter((project) => projectReadable(project));
   const preferred = projects.find(
     (project) => project.path === deps.preferredProjectPath && isProjectAvailable(project),
   );

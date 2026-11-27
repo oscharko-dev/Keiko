@@ -444,6 +444,24 @@ describe("desktop chat production gateway reuse", () => {
     }
   });
 
+  it("never picks a payload folder as the default project of a new Chat", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const payloadApp = join(fixture.root, "Keiko159", "system", "Keiko", "app");
+    mkdirSync(payloadApp, { recursive: true });
+    try {
+      fixture.deps.store.deleteProject(fixture.projectPath);
+      fixture.deps.store.createProject(payloadApp);
+      fixture.deps.store.createProject(fixture.projectPath);
+      const result = await handleCreateDesktopChat(requestContext({}), fixture.deps);
+      expect(result).toMatchObject({
+        status: 201,
+        body: { project: { path: fixture.projectPath, readable: true } },
+      });
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("still requires a configured chat model to open a Chat", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {
