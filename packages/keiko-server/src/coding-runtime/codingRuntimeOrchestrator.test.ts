@@ -2088,6 +2088,96 @@ describe("CodingRuntimeOrchestrator", () => {
     },
   );
 
+  async function startUnboundRun() {
+    const captured = captureActivityLog();
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      undefined,
+      verifiedCommits,
+    );
+    let finish: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      finish = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    await f.orchestrator.start(start);
+    const row = f.rows.get("run-1");
+    if (row === undefined) throw new Error("expected the started run row");
+    const { issueBindingDigest: _issue, ...refused } = historicalVerifiedCommit(row);
+    const { headSha: _head, committedTreeDigest: _tree, ...uncommitted } = refused;
+    f.rows.set("run-1", {
+      ...row,
+      verifiedCommitResult: {
+        ...uncommitted,
+        status: "approval-required",
+        reason: "approval-required",
+      },
+    });
+    return { f, captured, verifiedCommits, finish: () => finish?.("succeeded") };
+  }
+
+  it("asks for recovery when the delivery evidence of a run without an issue is unreadable", async () => {
+    const { f, verifiedCommits, finish } = await startUnboundRun();
+    vi.spyOn(verifiedCommits, "get").mockImplementation(() => {
+      throw new Error("verified-commit record does not bind this runtime");
+    });
+
+    finish();
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+  });
+
+  it("keeps a run succeeded when the person denied its commit proposal", async () => {
+    const { f, finish } = await startUnboundRun();
+    const asked = await f.orchestrator.ingest(deliveryPermission("commit-denied", "commit"));
+    expect(successfulSnapshot(asked).state).toBe("awaiting-approval");
+    expect(
+      (
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "commit-denied",
+          decision: "denied",
+          expectedRevision: successfulSnapshot(asked).revision,
+        })
+      ).ok,
+    ).toBe(true);
+
+    finish();
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBeUndefined();
+  });
+
+  it("logs the unevidenced delivery of a run without an issue without an issue number", async () => {
+    const { f, captured, finish } = await startUnboundRun();
+
+    finish();
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    });
+    const line = requireLoggedEvent(
+      captured.records.find((event) => event.op === "coding-runtime.run.delivery-unevidenced"),
+      "expected the delivery-unevidenced line",
+    );
+    expect(line).toMatchObject({
+      level: "warn",
+      errorKind: "validation-failed",
+      extra: { runId: "run-1", hasVerifiedCommit: false, hasDraftDelivery: false },
+    });
+    expect(line.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(line.extra).not.toHaveProperty("issueNumber");
+  });
+
   // F66 (Coding Workbench run 22, 2026-09-11): under Full access the operator authorized the run to
   // deliver without per-action approval, and run 22's model ended a turn one step short — build
   // verification passed, its own result named stage-then-verify — so the run settled
@@ -4695,6 +4785,14 @@ describe("CodingRuntimeOrchestrator", () => {
 
       expect(f.orchestrator.status().pendingPermission?.requestId).toBe("permission-3");
       expect(f.manager.stop).not.toHaveBeenCalled();
+      // The live ask that took the card is still decidable.
+      expect(
+        await f.orchestrator.decideApproval("run-1", {
+          requestId: "permission-3",
+          decision: "approved",
+          expectedRevision: f.orchestrator.status().revision,
+        }),
+      ).toMatchObject({ ok: true });
       expect(
         captured.records.find(
           (event) =>

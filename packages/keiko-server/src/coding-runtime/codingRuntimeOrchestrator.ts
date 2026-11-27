@@ -2235,6 +2235,9 @@ export class CodingRuntimeOrchestrator {
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
+  // Runs whose person explicitly denied a commit proposal: a deliberate "no" is not an unfinished
+  // delivery.
+  private readonly deniedCommitRuns = new Set<string>();
   private readonly verificationContinuations = new Map<string, number>();
   // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
   // settles.
@@ -2915,6 +2918,7 @@ export class CodingRuntimeOrchestrator {
     if (actionKind === "verification-command") {
       this.effort.verificationBlocked(runId, "verification-command-denied");
     }
+    if (actionKind === "commit") this.deniedCommitRuns.add(runId);
   }
 
   private finishApprovalDecision(
@@ -4186,9 +4190,11 @@ export class CodingRuntimeOrchestrator {
    * something and says so through its own facts. Neither means the terminal state is
    * `delivery-not-evidenced`, and the operator sees a truthful failure instead of a false success.
    *
-   * Deliberately scoped to issue-bound runs: an ad-hoc task ("explain this module") legitimately
-   * ends with no commit, and inferring delivery intent from free text would turn honest successes
-   * into false failures.
+   * An issue-bound run needs delivery evidence to succeed. Any other run is held to it only once its
+   * own recorded commit proposal ended without a commit (`unfinishedCommitOutcome`), unless the
+   * person denied that proposal: an ad-hoc task ("explain this module") legitimately ends with no
+   * commit, and inferring delivery intent from free text would turn honest successes into false
+   * failures.
    */
   private deliveryTruthfulOutcome(
     live: CodingRuntimeSnapshot,
@@ -4239,19 +4245,25 @@ export class CodingRuntimeOrchestrator {
     return { state: "failed", failureCode: "delivery-not-evidenced" };
   }
 
+  // A person's explicit denial of the commit proposal is a decision, not a failure: the commit is
+  // not made and the run stays what it reported. Evidence that cannot be read settles nothing on a
+  // guess, exactly as for an issue-bound run: it asks for recovery.
   private unfinishedCommitOutcome(
     live: CodingRuntimeSnapshot,
     target: TaskOutcomeTarget,
-  ): {
-    readonly state: "cancelled" | "failed" | "succeeded";
-    readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
-  } {
+  ):
+    | {
+        readonly state: "cancelled" | "failed" | "succeeded";
+        readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      }
+    | undefined {
     const attempt = live.verifiedCommitResult;
     if (attempt === undefined || attempt.status === "succeeded") return target;
+    if (this.deniedCommitRuns.has(live.runId)) return target;
     const evidence = this.deliveryEvidence(live);
     if (!evidence.readable) {
       this.recordDeliveryEvidenceUnreadable(live, evidence.error);
-      return target;
+      return undefined;
     }
     if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return target;
     this.deps.activityLog?.write(
@@ -5894,6 +5906,7 @@ export class CodingRuntimeOrchestrator {
     // Every settlement ends a run's continuation budget, not only the task-settlement path: a
     // continued run that is stopped, taken over or moved to recovery must not keep its entry.
     this.deliveryContinuations.delete(next.runId);
+    this.deniedCommitRuns.delete(next.runId);
     this.verificationContinuations.delete(next.runId);
     // Likewise its edit refusal streak and any escalation that has not settled it (F5).
     this.editRefusals.clear(next.runId);
