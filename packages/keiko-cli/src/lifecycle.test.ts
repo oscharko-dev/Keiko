@@ -777,6 +777,46 @@ describe("runLifecycleCli", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  // PR #4568 review: a stale UI is stopped only for its replacement, so a replacement the placement
+  // refuses leaves the stale UI running instead of leaving Keiko stopped.
+  it("refuses a stale-version replacement inside the start folder before stopping Keiko", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, "lab-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycle(
+      "start",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn,
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { status: "ok", version: "0.0.1", launchId: TEST_LAUNCH_ID },
+              { status: 200 },
+            ),
+          ),
+        isProcessAlive: () => true,
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("inside the folder Keiko starts from");
+    expect(c.out()).not.toContain("restarting pid");
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("refuses a restart into a state directory inside the start folder before stopping Keiko", async () => {
     const root = makeRoot();
     const stateDir = join(root, "lab-state");

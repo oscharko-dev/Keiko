@@ -1237,6 +1237,7 @@ async function handleStaleRunning(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   running: PidRecord,
+  refusesReplacement: () => boolean,
 ): Promise<number | "start"> {
   // Health, the "already running" report and the browser handoff address the tracked instance's
   // own endpoint, never the port this invocation asked for (L1).
@@ -1260,7 +1261,7 @@ async function handleStaleRunning(
     );
     return startFailed(deps, "identity-mismatch");
   }
-  return actOnTrackedHealth(options, io, deps, running, { health, retries });
+  return actOnTrackedHealth(options, io, deps, running, { health, retries, refusesReplacement });
 }
 
 /** What a second start does with its tracked UI's settled health (#4504): keep, wait out or restart. */
@@ -1269,7 +1270,16 @@ async function actOnTrackedHealth(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   running: PidRecord,
-  { health, retries }: { readonly health: HealthProbeResult; readonly retries: number },
+  {
+    health,
+    retries,
+    refusesReplacement,
+  }: {
+    readonly health: HealthProbeResult;
+    readonly retries: number;
+    /** Whether the replacement may not start; asked before the stale UI is stopped. */
+    readonly refusesReplacement: () => boolean;
+  },
 ): Promise<number | "start"> {
   const launchBound = running.launchId !== undefined;
   const record = (outcome: LifecycleHealthOutcome): void => {
@@ -1290,6 +1300,8 @@ async function actOnTrackedHealth(
     );
     return startFailed(deps, "health-timeout");
   }
+  // A replacement the placement refuses would leave Keiko stopped, so it is refused first.
+  if (refusesReplacement()) return 1;
   record(health.reachable ? "stale-version" : "stale-unreachable");
   io.out(
     `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running.pid)}.\n`,
@@ -1528,16 +1540,17 @@ async function startOrReuseUi(
   deps: LifecycleRuntimeDeps,
   cwd: string,
 ): Promise<number> {
+  const refusesPlacement = (): boolean => stateDirPlacementRefused(options, io, env, cwd);
   const running = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (running !== undefined) {
-    const nextAction = await handleStaleRunning(options, io, deps, running);
+    const nextAction = await handleStaleRunning(options, io, deps, running, refusesPlacement);
     if (nextAction !== "start") {
       await applyProvisionedConfig(options, io, env, deps, true);
       return nextAction;
     }
   }
 
-  if (stateDirPlacementRefused(options, io, env, cwd)) return 1;
+  if (refusesPlacement()) return 1;
   if (!(await ensureStartPortAvailable(options, io, deps))) return startFailed(deps, "port-in-use");
   if (!clearStaleShutdownRequest(options.stateDir, io)) {
     return startFailed(deps, "stale-shutdown-request");
