@@ -1368,6 +1368,54 @@ describe("CodingWorkbenchWindow", () => {
     });
   });
 
+  // #4491: a continued local task whose checkout moved to another branch was refused by the server
+  // with an opaque "Review the live state and retry"; the Workbench now names both branches first.
+  it("names both branches instead of starting a local task whose checkout moved", async () => {
+    const actual =
+      await vi.importActual<typeof import("./useCodingTaskSession")>("./useCodingTaskSession");
+    vi.spyOn(codingHistoryApi, "fetchCodingTask").mockResolvedValue({
+      task: {
+        id: "chat-one",
+        title: "Previous task",
+        projectPath: "/repo",
+        modelId: "coding",
+        branch: "fix/sum",
+        workspaceId: "local:/repo",
+        taskId: "task-1",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        latestRunId: "run-one",
+      },
+      messages: [],
+      truncated: false,
+    });
+    taskSessionHookMock.mockImplementation(actual.useCodingTaskSession);
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: {
+          status: "ready",
+          value: snapshot({ state: "succeeded", runId: "run-one", conversationId: "chat-one" }),
+          error: null,
+        },
+      }),
+      actions: liveActions,
+    });
+    render(<CodingWorkbenchWindow selectedRoot="/repo" selectedLocation="local" />);
+
+    const notice =
+      "This task works on the branch fix/sum, but the next run would use dev. Choose fix/sum in " +
+      "the branch control to continue here, or start a new task.";
+    expect((await screen.findAllByText(notice)).length).toBeGreaterThan(0);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Task instructions"), "Continue");
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    expect(start).toHaveAttribute("aria-disabled", "true");
+    await user.click(start);
+    expect(liveActions.start).not.toHaveBeenCalled();
+  });
+
   // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable
   // from an unsent draft, and re-submittable as a brand-new follow-up by mistake if the operator
   // later paused and clicked Send instead of Resume. `actions.start`'s own returned promise always

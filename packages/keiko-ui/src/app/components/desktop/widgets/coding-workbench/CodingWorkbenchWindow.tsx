@@ -170,6 +170,7 @@ import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
 import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
+import { movedTaskBranch, type TaskBranchMove } from "./codingWorkbenchTaskBranch";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
 import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
@@ -1107,6 +1108,12 @@ export function CodingWorkbenchWindow({
     repositoryRoot === null && !runIsActive,
     authority.errorMessage,
   );
+  const taskBranchMove = movedTaskBranch(history.detail, {
+    repositoryRoot,
+    checkoutBranch: branchInventory.currentBranch,
+    selectedBranch,
+    runIsActive,
+  });
 
   useEffect(() => {
     // A failed decision leaves the request open; a later disappearance has another cause.
@@ -1152,6 +1159,7 @@ export function CodingWorkbenchWindow({
       runWorkspace={runWorkspace}
       repositoryRoot={repositoryRoot}
       runIsActive={runIsActive}
+      taskBranchMove={taskBranchMove}
     />
   );
 }
@@ -1436,6 +1444,8 @@ interface WorkbenchContentProps {
   /** One repository projection shared by the information panel and composer. */
   readonly repositoryRoot: string | null;
   readonly runIsActive: boolean;
+  /** An open local task whose branch is not the one its next message would run on (#4491). */
+  readonly taskBranchMove: TaskBranchMove | null;
 }
 
 function WorkbenchAlert({
@@ -1483,6 +1493,17 @@ function workbenchFailureReport(failure: CodingWorkbenchClientError | null): Rea
  * panel reports a lost binding and why nothing the operator does in the other workspace reaches
  * this run. Stating it is what turns two silent inert panels into one actionable fact.
  */
+// #4491: the next message of this local task would be refused on the branch the checkout moved to.
+function TaskBranchMovedNotice({ move }: { readonly move: TaskBranchMove | null }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (move === null) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.composer.taskBranchMoved", { ...move })}
+    </output>
+  );
+}
+
 function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   if (!visible) return null;
@@ -1625,9 +1646,12 @@ function workbenchStartBlocker(
   showSetup: boolean,
   authorityError: string | null,
   locationState: WorkbenchExecutionLocationState,
+  taskBranchMove: TaskBranchMove | null,
 ): string | null {
-  if (locationState.ready) return startBlockedReason(state, t, showSetup, authorityError);
-  return t(locationBlockerKey(locationState));
+  if (!locationState.ready) return t(locationBlockerKey(locationState));
+  if (taskBranchMove !== null)
+    return t("codingWorkbench.composer.taskBranchMoved", { ...taskBranchMove });
+  return startBlockedReason(state, t, showSetup, authorityError);
 }
 
 // The repository catalog reloads when the selected folder's workspace is found lost or back (#4491).
@@ -1646,8 +1670,9 @@ function locationMutationPending(
 function canStartAtLocation(
   state: CodingWorkbenchRuntimeState,
   locationState: WorkbenchExecutionLocationState,
+  taskBranchMove: TaskBranchMove | null,
 ): boolean {
-  return state.canStart && locationState.ready;
+  return state.canStart && locationState.ready && taskBranchMove === null;
 }
 
 function WorkbenchColumns({
@@ -1675,6 +1700,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
+  taskBranchMove,
 }: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
@@ -1692,6 +1718,7 @@ function WorkbenchColumns({
     showSetup,
     authority.errorMessage,
     locationState,
+    taskBranchMove,
   );
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -1812,7 +1839,7 @@ function WorkbenchColumns({
       runId={runId}
       continuesConversation={history.conversationId !== undefined || history.fork !== null}
       deliveryNotice={promptDelivery.notice}
-      canStart={canStartAtLocation(state, locationState)}
+      canStart={canStartAtLocation(state, locationState, taskBranchMove)}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
@@ -2026,7 +2053,8 @@ function WorkbenchColumns({
                 questions={questions}
                 focusRef={focusRef}
                 onRunCheck={
-                  canStartAtLocation(state, locationState) && state.mutation.status !== "pending"
+                  canStartAtLocation(state, locationState, taskBranchMove) &&
+                  state.mutation.status !== "pending"
                     ? (): void => {
                         taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
                       }
@@ -2068,6 +2096,7 @@ function WorkbenchColumns({
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <TaskBranchMovedNotice move={taskBranchMove} />
         <DeploymentCeilingNotice state={state} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <div className={styles.cmpRunActions}>

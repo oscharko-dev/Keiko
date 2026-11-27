@@ -3222,6 +3222,7 @@
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchRestoredRun",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchRunFacts",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchSlashCommands",
+    "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchTaskBranch",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchTaskSubmission",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingTaskSession",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors",

@@ -375,6 +375,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.task.starting": "Wird gestartet…",
   "codingWorkbench.task.start": "Coding-Lauf starten",
   "codingWorkbench.composer.pause": "Lauf pausieren",
+  "codingWorkbench.composer.taskBranchMoved":
+    "Diese Aufgabe arbeitet auf dem Branch {taskBranch}, der nächste Lauf würde aber {nextBranch} verwenden. Wähle {taskBranch} in der Branch-Auswahl, um hier weiterzuarbeiten, oder starte eine neue Aufgabe.",
   "codingWorkbench.composer.resume": "Lauf fortsetzen",
   "codingWorkbench.composer.send": "Rückfrage senden",
   "codingWorkbench.composer.sendNow": "Jetzt senden",
