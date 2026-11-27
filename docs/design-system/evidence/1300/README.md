@@ -11,6 +11,19 @@ regression tests verify their committed proofs against the declared source input
 regenerate the original producers before claiming those tests pass. Their non-zero assertions remain active;
 these fixture proofs do not replace applicable product journeys or qualify capabilities they do not exercise.
 
+One exception allows rebinding digests without a rerun. It applies when the only lines that change in the
+declared manifests (`package.json`, `package-lock.json`, `packages/keiko-ui/package.json`) are metadata that
+no stylesheet, fixture, capture or producer reads:
+
+- Keiko's own release version: the `version` fields and the internal `@oscharko-dev/*` version
+  specifiers;
+- the optional coding-runtime packages: their `optionalDependencies` version specifiers and their
+  lockfile version, resolved and integrity fields.
+
+In that case, the proofs may rebind those manifest digests without a rerun. The dated note for the change
+says so, and states that the diff of those files was checked to contain no other line. Any other change to a
+declared input requires the rerun, including any change to a dependency the UI or a producer loads.
+
 ## How to reproduce
 
 From the repo root, after `npm ci` and `npx playwright install chromium`:
@@ -541,7 +554,9 @@ and no producer was rerun.
 ## Release 1.5.10 input metadata — 2026-11-27
 
 The release changes the version fields of `package.json`, `package-lock.json` and
-`packages/keiko-ui/package.json` (#4491). No stylesheet or capture reads them. Only those three
+`packages/keiko-ui/package.json` (#4491). No stylesheet or capture reads them. The diff of the three
+files against `dev` was checked: every changed line is a `version` field or an internal
+`@oscharko-dev/*` version specifier, so the version-only exception above applies. Only those three
 input digests were updated in the four proofs; the other digests, the Linux captures, the rendered
 CSS digest, the measurements, the tolerances and the accessibility records are unchanged, and no
 producer was rerun.
