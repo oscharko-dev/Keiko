@@ -6,7 +6,6 @@ import {
   gitCommitMessageDigest,
   gitHeadStateObjectId,
   sameGitHeadState,
-  type GitHeadState,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
@@ -118,9 +117,4 @@ export function verifiedHeadObjectId(facts: Pick<VerifiedCommitFacts, "head">): 
 }
 export function verifiedBaseObjectId(facts: Pick<VerifiedCommitFacts, "base">): string {
   return gitHeadStateObjectId(facts.base);
-}
-/** The commit of a born head; an unborn head fails closed for callers that need a commit. */
-export function requireBornHead(head: GitHeadState): string {
-  if (head.kind === "unborn") throw new GitRawWorktreeReadError("git-raw-unborn-head");
-  return head.sha;
 }

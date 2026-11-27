@@ -900,6 +900,21 @@ describe("protected-branch constraint", () => {
     },
   );
 
+  // A case-insensitive filesystem (macOS, Windows) makes `Main` the same ref file as `main`, so the
+  // denial folds case on every platform, for exact and prefix patterns alike.
+  it.each(["Main", "MAIN", "DEV", "Dev", "RELEASE/1", "Release/0.3.0"])(
+    "protects %s regardless of letter case",
+    (branch) => {
+      expect(gitDeliveryTargetIsProtectedBranch(branch, PROTECTED)).toBe(true);
+    },
+  );
+
+  it("keeps an allow match exact: only the protection folds case", () => {
+    expect(gitDeliveryBranchNameMatchesAny("Main", [{ matchKind: "exact", value: "main" }])).toBe(
+      false,
+    );
+  });
+
   it("fails closed for an unknown target: a target that cannot be read is treated as protected", () => {
     expect(gitDeliveryTargetIsProtectedBranch(undefined, PROTECTED)).toBe(true);
     expect(gitDeliveryTargetIsProtectedBranch(undefined, [])).toBe(true);

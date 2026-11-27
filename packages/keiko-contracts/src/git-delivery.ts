@@ -982,21 +982,30 @@ export function gitDeliveryRiskClassForInputs(
 
 // ─── Branch matchers ─────────────────────────────────────────────────────────────
 
+// `foldCase` compares without regard to letter case. A DENY decision must fold on every platform:
+// on a case-insensitive filesystem (macOS, Windows) `Main` and `main` are the same ref file, so a
+// case-sensitive denial is bypassed by a name that differs only in case. An ALLOW stays exact.
 export function gitDeliveryBranchNameMatchesPattern(
   branchName: string,
   pattern: GitDeliveryBranchPattern,
+  foldCase = false,
 ): boolean {
+  const name = foldCase ? branchName.toLowerCase() : branchName;
+  const value = foldCase ? pattern.value.toLowerCase() : pattern.value;
   if (pattern.matchKind === "exact") {
-    return branchName === pattern.value;
+    return name === value;
   }
-  return branchName.startsWith(pattern.value);
+  return name.startsWith(value);
 }
 
 export function gitDeliveryBranchNameMatchesAny(
   branchName: string,
   patterns: readonly GitDeliveryBranchPattern[],
+  foldCase = false,
 ): boolean {
-  return patterns.some((pattern) => gitDeliveryBranchNameMatchesPattern(branchName, pattern));
+  return patterns.some((pattern) =>
+    gitDeliveryBranchNameMatchesPattern(branchName, pattern, foldCase),
+  );
 }
 
 // Evaluates a `protected-branch` DENY constraint for one policy target. Every gateway calls this
@@ -1007,6 +1016,7 @@ export function gitDeliveryTargetIsProtectedBranch(
   patterns: readonly GitDeliveryBranchPattern[],
 ): boolean {
   return (
-    targetBranchName === undefined || gitDeliveryBranchNameMatchesAny(targetBranchName, patterns)
+    targetBranchName === undefined ||
+    gitDeliveryBranchNameMatchesAny(targetBranchName, patterns, true)
   );
 }

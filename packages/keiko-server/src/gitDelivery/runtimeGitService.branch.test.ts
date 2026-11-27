@@ -208,6 +208,8 @@ describe("the name checks of a governed task branch", () => {
     ["", "invalid-name"],
     ["main", "protected-name"],
     ["dev", "protected-name"],
+    ["Main", "protected-name"],
+    ["DEV", "protected-name"],
   ] as const)("judges %j as %s", (name, refusal) => {
     expect(taskBranchNameRefusal(name)).toBe(refusal);
   });
@@ -274,6 +276,8 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     ["a b", "invalid-name"],
     ["main", "protected-name"],
     ["dev", "protected-name"],
+    ["Main", "protected-name"],
+    ["DEV", "protected-name"],
   ] as const)("refuses %j as %s and creates nothing", async (name, reason) => {
     await expect(branch(service(), name)).resolves.toMatchObject({
       kind: "branch",
@@ -372,6 +376,35 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
     ]);
     const lines = branchLines();
     expect(lines.at(-1)).toMatchObject({ extra: { state: "succeeded" } });
+  });
+
+  it.each(["main", "Main", "DEV"])(
+    "refuses the protected name %s from an unborn HEAD",
+    async (name) => {
+      git(root, ["checkout", "-q", "--orphan", "main2"]);
+      runHead = "main2";
+      runBase = "main2";
+      await expect(branch(service(), name)).resolves.toMatchObject({
+        status: "blocked",
+        reason: "protected-name",
+      });
+      expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main2");
+      expect(adoptions).toEqual([]);
+    },
+  );
+
+  // The rollback re-points HEAD at the unborn base through branch-create; a protected rule on
+  // branch-create must never make that rollback fail.
+  it("puts an unborn base back when the run cannot adopt the branch", async () => {
+    git(root, ["checkout", "-q", "--orphan", "fresh"]);
+    runHead = "fresh";
+    runBase = "fresh";
+    adoptResult = false;
+    await expect(branch(service(), "feature/x")).resolves.toMatchObject({
+      status: "failed",
+      reason: "rebind-failed",
+    });
+    expect(git(root, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
   });
 
   it("still refuses a name that already exists from an unborn HEAD", async () => {

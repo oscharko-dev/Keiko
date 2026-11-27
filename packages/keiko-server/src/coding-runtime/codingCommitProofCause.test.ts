@@ -3,27 +3,8 @@ import {
   classifyCommitProofFailure,
   isPermanentCommitProofCause,
 } from "./codingCommitProofCause.js";
-import { requireBornHead } from "../gitDelivery/verifiedCommitFacts.js";
 
 const coded = (code: string): Error => Object.assign(new Error("PRIVATE_TEXT"), { code });
-
-// #4491: an ordinary unborn branch is a committable state, so only a caller that needs an existing
-// commit (a branch start point, a push) still meets the closed unborn-head cause.
-describe("the unborn-head cause", () => {
-  it("is produced only for a caller that requires a commit", () => {
-    const unborn = { kind: "unborn", branch: "main", objectIdLength: 40 } as const;
-    const failure = ((): unknown => {
-      try {
-        requireBornHead(unborn);
-        return undefined;
-      } catch (error) {
-        return error;
-      }
-    })();
-    expect(classifyCommitProofFailure(failure)).toBe("unborn-head");
-    expect(requireBornHead({ kind: "born", sha: "a".repeat(40) })).toBe("a".repeat(40));
-  });
-});
 
 describe("classifyCommitProofFailure", () => {
   it.each([
