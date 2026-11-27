@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -755,9 +755,25 @@ describe("quiet coding task chrome", () => {
 });
 
 // #4491: the activated button is disabled or unmounted by the action, so the keyboard focus fell to
-// the page. It moves to the composer, where the person types next.
+// the page. After a success it moves to the composer, where the person types next; after a failure
+// it stays on a visible control, because Finish and Try again are still there.
 describe("keyboard focus after Complete task and New task", () => {
-  function Harness({ current }: { readonly current: CodingTaskSession }): ReactNode {
+  function Harness({ fails }: { readonly fails: boolean }): ReactNode {
+    const [state, setState] = useState({ pending: false, error: false });
+    const base = sessionWith([]);
+    const run = async (): Promise<void> => {
+      setState({ pending: true, error: false });
+      await Promise.resolve();
+      setState({ pending: false, error: fails });
+    };
+    const current = {
+      ...base,
+      pending: state.pending,
+      error: state.error,
+      newTask: run,
+      finish: run,
+      retry: vi.fn(),
+    };
     return (
       <>
         <CodingTaskSessionBar session={current} active={false} onHistory={vi.fn()} />
@@ -767,13 +783,23 @@ describe("keyboard focus after Complete task and New task", () => {
   }
 
   it.each(["Complete task", "New task"])("moves focus to the composer after %s", async (name) => {
-    render(<Harness current={sessionWith([])} />);
+    render(<Harness fails={false} />);
     const button = screen.getByRole("button", { name });
     button.focus();
     fireEvent.click(button);
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByLabelText("Task"));
     });
+  });
+
+  it("keeps focus on a visible control when Complete task failed", async () => {
+    render(<Harness fails />);
+    fireEvent.click(screen.getByRole("button", { name: "Complete task" }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Task"));
   });
 });
 
@@ -792,5 +818,15 @@ describe("a failed task read", () => {
     expect(failed.retry).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Fork task" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Complete task" })).toBeNull();
+  });
+});
+
+describe("a failed task read without an operation to repeat", () => {
+  it("offers no Try again that would do nothing", () => {
+    const failed = { ...session(), error: true, retry: undefined };
+    render(<CodingTaskSessionBar session={failed} active={false} onHistory={vi.fn()} />);
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New task" })).toBeEnabled();
   });
 });

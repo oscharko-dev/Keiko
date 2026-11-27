@@ -488,7 +488,7 @@ describe("coding task selection", () => {
     await waitFor(() => expect(result.current.error).toBe(true));
     const reads = read.mock.calls.length;
     act(() => {
-      result.current.retry();
+      result.current.retry?.();
     });
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads));
   });

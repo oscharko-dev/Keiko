@@ -122,7 +122,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      // `interrupted`: an explicit Stop or takeover settled the calls still open as cancelled and kept
+      // `interrupted`: a run's end (Stop, takeover or any other terminal state) settled the calls still open as cancelled and kept
       // the feed, as OpenCode keeps an aborted session's tool steps (owner decision 2026-10-30, #3907).
       // `answer-retained` / `reasoning-retained`: an assistant answer or the model's reasoning grew
       // longer than the bounded feed carries; the feed names it and its complete text is streamed as
@@ -588,7 +588,7 @@ interface ProjectionEntry {
   /** The run's failed tool calls: repeated-failure counts and which failures were logged. */
   readonly toolFailures: ToolFailureLedger;
   feed: StoredFeed;
-  /** An explicit Stop or takeover settled the open calls; no new open call is admitted after it. */
+  /** The run ended and its open calls were settled; no new open call is admitted after it. */
   interrupted: boolean;
 }
 
@@ -928,7 +928,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   }
 
   /**
-   * An explicit Stop or takeover ends the run the way OpenCode aborts a session: the feed and its
+   * A run's end (Stop, takeover or any other terminal state) ends the run the way OpenCode aborts a session: the feed and its
    * tool rows stay, and every call that had not settled is shown as cancelled. The calls the run
    * made remain readable after it ended (owner decision 2026-10-30, #3907).
    */
@@ -1651,7 +1651,7 @@ function withFailureCount(
 }
 
 /**
- * A delayed tool signal that arrives after Stop or takeover cannot add an open call to the retained
+ * A delayed tool signal that arrives after the run ended cannot add an open call to the retained
  * feed: the run ended, so nothing it shows may still look pending or running (#3907).
  */
 function opensAfterInterrupt(

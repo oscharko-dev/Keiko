@@ -705,9 +705,10 @@ run's messages from the newest end and only as far as the feed can still hold th
 older is named for the transcript by position and never examined. `cutCount` counts timeline
 messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
-truncated.". Counts only — never a message, path or run name. An explicit Stop or takeover keeps the
-run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
-with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
+truncated.". Counts only — never a message, path or run name. A run that ends keeps its live tool rows, as OpenCode does: `coding-runtime.safe-activity` records
+`event=interrupted` with the closed `reason` (`stop`, `takeover`, or `run-ended` for every other
+terminal state: failed, succeeded, budget or time exhausted) and the number of open calls it settled
+as `cancelled` (#3907, #4491).
 
 A model's answer is never cut to fit the bounded safe-activity feed (owner decision "Work-ending
 limits"). The projection keeps the complete text of every assistant answer the feed lists beside the

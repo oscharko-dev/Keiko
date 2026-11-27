@@ -1,5 +1,5 @@
 "use client";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -60,7 +60,7 @@ function finishActions(
     {
       label: t("codingWorkbench.history.finish"),
       icon: Icons.check,
-      run: thenFocusComposer(() => session.finish()),
+      run: (): void => void session.finish(),
       disabled: locked || session.detail === null,
     },
   ];
@@ -70,16 +70,26 @@ function finishActions(
 // dropped the keyboard focus to the page. The composer is where the person types next.
 const COMPOSER_ID = "coding-workbench-task-intent";
 
-function focusComposer(): void {
-  window.requestAnimationFrame(() => {
+// Focus moves once the action has settled and the page shows its outcome: to the composer after a
+// success, to the Try again control after a failure, where Finish and Try again are still offered.
+function useFocusAfterAction(
+  session: CodingTaskSession,
+  retryRef: { readonly current: HTMLButtonElement | null },
+): () => void {
+  const awaiting = useRef(false);
+  const { pending, error } = session;
+  useEffect(() => {
+    if (!awaiting.current || pending) return;
+    awaiting.current = false;
+    if (error) {
+      retryRef.current?.focus();
+      return;
+    }
     const composer = document.getElementById(COMPOSER_ID);
     if (composer instanceof HTMLElement && !composer.hasAttribute("disabled")) composer.focus();
-  });
-}
-
-function thenFocusComposer(action: () => Promise<void>): () => void {
+  }, [pending, error, retryRef]);
   return (): void => {
-    void action().finally(focusComposer);
+    awaiting.current = true;
   };
 }
 
@@ -99,7 +109,7 @@ function sessionActions(
   const created = {
     label: t("codingWorkbench.history.new"),
     icon: Icons.plus,
-    run: thenFocusComposer(() => session.newTask()),
+    run: (): void => void session.newTask(),
     disabled: locked,
   };
   // A task that could not be read has nothing to fork, continue or complete: the way out is Coding
@@ -143,13 +153,47 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
   );
 }
 
+function RetryButton({
+  retry,
+  buttonRef,
+}: {
+  readonly retry: (() => void) | undefined;
+  readonly buttonRef: { readonly current: HTMLButtonElement | null };
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (retry === undefined) return null;
+  return (
+    <button
+      ref={buttonRef as React.RefObject<HTMLButtonElement>}
+      type="button"
+      className={styles.cmpMessageFork}
+      onClick={retry}
+    >
+      {t("codingWorkbench.history.retry")}
+    </button>
+  );
+}
+
 export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   const { session } = props;
   const t = useCodingWorkbenchTranslate();
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const awaitFocus = useFocusAfterAction(session, retryRef);
   // #3880: an unpaired window cannot read its task; the run status sentence says why.
   const errorHeld = useHeldNotice("task-session", session.error);
   const error = session.error && !errorHeld;
   if (session.detail === null && !session.pending && !error) return null;
+  const marked: CodingTaskSession = {
+    ...session,
+    finish: () => {
+      awaitFocus();
+      return session.finish();
+    },
+    newTask: () => {
+      awaitFocus();
+      return session.newTask();
+    },
+  };
   return (
     <div className={styles.cmpSessionBar}>
       {session.detail !== null ? (
@@ -157,13 +201,11 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
           {session.detail.task.title}
         </span>
       ) : null}
-      {session.detail !== null || error ? <TaskSessionActions {...props} /> : null}
+      {session.detail !== null || error ? <TaskSessionActions {...props} session={marked} /> : null}
       {error ? (
         <>
           <p role="alert">{t("codingWorkbench.history.error")}</p>
-          <button type="button" className={styles.cmpMessageFork} onClick={session.retry}>
-            {t("codingWorkbench.history.retry")}
-          </button>
+          <RetryButton retry={session.retry} buttonRef={retryRef} />
         </>
       ) : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}

@@ -60,8 +60,8 @@ export interface CodingTaskSession {
   readonly error: boolean;
   readonly newTask: () => Promise<void>;
   readonly finish: () => Promise<void>;
-  /** Repeats the read or update that failed and raised `error`. */
-  readonly retry: () => void;
+  /** Repeats the read or update that failed and raised `error`; absent when nothing can be repeated. */
+  readonly retry: (() => void) | undefined;
   /**
    * The fork the person asked for (S03): the next start begins a new task from it instead of
    * continuing the loaded one. It ends with that start, a new task, another selection or a run.
@@ -198,7 +198,7 @@ function useFinishAndRetry(
     setError(false);
     operation?.();
   };
-  return { finish, retry };
+  return { finish, retry: retryOperation.current === undefined ? undefined : retry };
 }
 
 /**
@@ -736,6 +736,20 @@ function inRepository(
   return taskId;
 }
 
+// What leaving the displayed task records: a discarded draft and a recovery left behind.
+function reportTaskLeft(current: SessionInput): void {
+  if (current.onDraftReset !== undefined) {
+    current.onDraftReset();
+    reportClientDiagnostic("[keiko] coding task draft reset", {
+      correlationId: newClientCorrelationId(),
+      composerActivity: "coding-task-reset",
+    });
+  }
+  if (current.snapshot?.state === "recovery-required") {
+    reportCodingWorkbenchInteraction({ interaction: "recovery-left" }, newClientCorrelationId());
+  }
+}
+
 function useNewTask(
   latest: { current: SessionInput },
   ignoredRun: { current: string | undefined },
@@ -743,25 +757,17 @@ function useNewTask(
   controller: TaskLoader,
   scopeTasks: ScopeTasks,
 ): () => Promise<void> {
-  const { sequence, setDetail, setError, setPending } = controller;
+  const { sequence, setDetail, setError, setPending, retryOperation } = controller;
   const newTask = useCallback(async (): Promise<void> => {
     const current = latest.current;
     if (current.active) return;
-    if (current.onDraftReset !== undefined) {
-      current.onDraftReset();
-      reportClientDiagnostic("[keiko] coding task draft reset", {
-        correlationId: newClientCorrelationId(),
-        composerActivity: "coding-task-reset",
-      });
-    }
-    if (current.snapshot?.state === "recovery-required") {
-      reportCodingWorkbenchInteraction({ interaction: "recovery-left" }, newClientCorrelationId());
-    }
+    reportTaskLeft(current);
     ignoredRun.current = current.snapshot?.runId;
     current.onLeftRun?.(ignoredRun.current);
     if (current.root !== undefined) scopeTasks.current.delete(current.root);
     awaitingRun.current = current.snapshot === null ? {} : undefined;
     sequence.current += 1;
+    retryOperation.current = undefined;
     setDetail(null);
     setError(false);
     setPending(true);
@@ -775,7 +781,17 @@ function useNewTask(
     } finally {
       setPending(false);
     }
-  }, [latest, ignoredRun, awaitingRun, sequence, setDetail, setError, setPending, scopeTasks]);
+  }, [
+    latest,
+    ignoredRun,
+    awaitingRun,
+    sequence,
+    setDetail,
+    setError,
+    setPending,
+    retryOperation,
+    scopeTasks,
+  ]);
   return newTask;
 }
 
