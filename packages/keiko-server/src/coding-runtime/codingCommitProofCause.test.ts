@@ -17,7 +17,8 @@ describe("classifyCommitProofFailure", () => {
     [new Error("git-stage-path-denied"), "path-denied", true],
     [new Error("git-stage-link-denied"), "link-denied", true],
     [new Error("workspace-descriptor-read-not-regular"), "entry-unreadable", true],
-    [new Error("git-stage-file-incomplete"), "entry-unreadable", true],
+    [new Error("git-stage-file-changed"), "snapshot-drift", false],
+    [new Error("git-stage-file-too-large"), "entry-unreadable", true],
     [new Error("git rev-parse exited 128"), "read-failed", false],
     ["not an error", "read-failed", false],
   ] as const)("maps %s to %s without reading free text", (error, cause, permanent) => {

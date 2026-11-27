@@ -37,6 +37,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -2288,7 +2289,7 @@ describe("productive runtime status/diff/stage lane", () => {
   });
 
   it("reports a thrown Git failure as execution-failed on a body-free failure line", async () => {
-    writeFileSync(join(root, "large.bin"), Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 1, 0x78));
+    symlinkSync("/etc/hosts", join(root, "escaping-link"));
     const gitService = new RuntimeGitService({
       ...options,
       mode: (): "supervised-coding" => "supervised-coding",
@@ -2301,11 +2302,11 @@ describe("productive runtime status/diff/stage lane", () => {
       await gitService.execute(
         {
           action: "git",
-          actionId: "too-large",
-          idempotencyKey: "too-large",
+          actionId: "escaping-link",
+          idempotencyKey: "escaping-link",
           operation: "stage",
           phase: "propose",
-          paths: ["large.bin"],
+          paths: ["escaping-link"],
         },
         { check: () => true },
       ),
@@ -2319,7 +2320,36 @@ describe("productive runtime status/diff/stage lane", () => {
       correlationId: "verified-commit-test",
       extra: expect.objectContaining({ phase: "stage-propose", runId: "run-1" }) as unknown,
     });
-    expect(JSON.stringify(events)).not.toContain("xxxx");
+    expect(failed?.extra).toMatchObject({ code: "git-stage-link-denied" });
+    expect(JSON.stringify(events)).not.toContain("/etc/hosts");
+  });
+
+  // Owner decision 2026-11-24: a file's size never ends healthy work. A generated file above the
+  // old 8 MiB read bound proposes for review like any other, with its size and kind shown.
+  it("proposes staging a file above the old read bound instead of failing", async () => {
+    writeFileSync(join(root, "large.bin"), Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 1, 0x78));
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    const result = await gitService.execute(
+      {
+        action: "git",
+        actionId: "large",
+        idempotencyKey: "large",
+        operation: "stage",
+        phase: "propose",
+        paths: ["large.bin"],
+      },
+      { check: () => true },
+    );
+    expect(result).not.toEqual({ kind: "refused", reason: "execution-failed" });
+    expect(
+      events.some((event) => event.op === "git.runtime-action" && event.extra?.state === "failed"),
+    ).toBe(false);
   });
 
   // Authority that closes UNDER a dispatch makes the facts or review read throw

@@ -17,12 +17,16 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { boundWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import {
+  inspectGitStageFile,
+  isGitStageLargeFile,
+} from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
   readGitHeadState,
   sameGitHeadState,
   readGitIndexTreeDigest,
   gitBlobObjectId,
+  blobIdOfLargeFile,
   readGitRawChangesAtHead,
   createGitStagedObjectIdPort,
   createGitReadSession,
@@ -513,9 +517,19 @@ async function workingSide(
   hashLength: number,
   conversions: WorkingConversions,
 ): Promise<FileSide> {
-  const file = await readGitStageFile(context.workspace.root, path, {
-    fs: runtimeWorkspaceFs(context),
+  const fs = runtimeWorkspaceFs(context);
+  const file = await inspectGitStageFile(context.workspace.root, path, {
+    fs,
+    inlineMaxBytes: RUNTIME_GIT_SIDE_MAX_BYTES,
   });
+  // A file above the side bound is never read whole: it is streamed for its object id and a NUL
+  // probe, and the side is reported `tooLarge` (its text is not rendered), never as a failure.
+  if (isGitStageLargeFile(file)) {
+    const { objectId, hasNul } = await blobIdOfLargeFile(context.workspace.root, file, hashLength, {
+      fs,
+    });
+    return { tooLarge: true, objectId, mode: file.mode, text: "", missing: false, binary: hasNul };
+  }
   const tooLarge = file.bytes.length > RUNTIME_GIT_SIDE_MAX_BYTES;
   const raw: FileSide = {
     tooLarge,

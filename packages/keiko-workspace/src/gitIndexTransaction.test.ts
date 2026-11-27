@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,11 @@ import { PathDeniedError } from "./errors.js";
 import { nodeWorkspaceFs } from "./fs.js";
 import {
   GIT_STAGE_FILE_MAX_BYTES,
+  assertGitStageFileUnchanged,
+  inspectGitStageFile,
+  isGitStageLargeFile,
   readGitStageFile,
+  streamGitStageFile,
   withGitIndexTransaction,
 } from "./gitIndexTransaction.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
@@ -50,7 +55,52 @@ describe("existing workspace Git metadata index owner", () => {
     const file = await readGitStageFile(root, "lock.json");
     expect(file.bytes.byteLength).toBe(100 * 1024);
     writeFileSync(join(root, "huge.bin"), Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 1, 0x00));
-    await expect(readGitStageFile(root, "huge.bin")).rejects.toThrow();
+    await expect(readGitStageFile(root, "huge.bin")).rejects.toThrow("git-stage-file-too-large");
+  });
+
+  // A file's size never fails an inspection: above the inline bound it is a handle (size and
+  // identity) that is streamed in bounded chunks, whatever its size, and a change fails closed.
+  it("inspects a file above the inline bound as a streamable handle, not an in-memory read", async () => {
+    const bytes = Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 5 * 1024 * 1024, 0x61);
+    writeFileSync(join(root, "huge.bin"), bytes);
+    writeFileSync(join(root, "small.txt"), "small\n");
+    const small = await inspectGitStageFile(root, "small.txt");
+    expect(isGitStageLargeFile(small)).toBe(false);
+    const large = await inspectGitStageFile(root, "huge.bin");
+    if (!isGitStageLargeFile(large)) throw new Error("expected a large handle");
+    expect(large).toMatchObject({ path: "huge.bin", mode: "100644", size: bytes.length });
+    let streamed = 0;
+    let chunks = 0;
+    await streamGitStageFile(root, large, {}, (chunk) => {
+      streamed += chunk.byteLength;
+      chunks += 1;
+      expect(chunk.byteLength).toBeLessThanOrEqual(1024 * 1024);
+    });
+    expect(streamed).toBe(bytes.length);
+    expect(chunks).toBeGreaterThan(1);
+    expect(() => {
+      assertGitStageFileUnchanged(root, large);
+    }).not.toThrow();
+  });
+
+  it("fails closed with git-stage-file-changed when a large file changes or is swapped", async () => {
+    writeFileSync(join(root, "huge.bin"), Buffer.alloc(200 * 1024, 0x61));
+    const large = await inspectGitStageFile(root, "huge.bin");
+    if (!isGitStageLargeFile(large)) throw new Error("expected a large handle");
+    appendFileSync(join(root, "huge.bin"), "x");
+    expect(() => {
+      assertGitStageFileUnchanged(root, large);
+    }).toThrow("git-stage-file-changed");
+    await expect(streamGitStageFile(root, large, {}, () => undefined)).rejects.toThrow(
+      "git-stage-file-changed",
+    );
+    const fresh = await inspectGitStageFile(root, "huge.bin");
+    if (!isGitStageLargeFile(fresh)) throw new Error("expected a large handle");
+    rmSync(join(root, "huge.bin"));
+    symlinkSync("/etc/hosts", join(root, "huge.bin"));
+    expect(() => {
+      assertGitStageFileUnchanged(root, fresh);
+    }).toThrow("git-stage-file-changed");
   });
 
   // The staging write path keeps refusing a link that leaves the workspace; only the status read

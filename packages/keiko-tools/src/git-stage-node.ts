@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import {
-  GIT_STAGE_CANDIDATE_MAX_BYTES,
+  assertGitStageFileUnchanged,
+  inspectGitStageFile,
+  isGitStageLargeFile,
   withGitIndexTransaction,
-  readGitStageFile,
+  type GitStageContent,
   type GitStageFile,
+  type GitStageLargeFile,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import { lfFormBlobIdOfLargeFile, sha256OfLargeFile } from "./git-stage-stream.js";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { gitHeadObjectIdLength } from "./git-head-state.js";
@@ -30,39 +34,38 @@ export interface GitStageEffectContext {
   // staged blob already holds a CR, so the conversion depends on it.
   readonly indexLineBreaks: (paths: readonly string[]) => Promise<ReadonlyMap<string, string>>;
 }
-function contentDigest(files: readonly GitStageFile[]): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify(
-        files.map((file) => [
-          file.path,
-          file.mode,
-          createHash("sha256").update(file.bytes).digest("hex"),
-        ]),
-      ),
-    )
-    .digest("hex");
+async function contentDigest(
+  root: string,
+  files: readonly GitStageContent[],
+  fs: WorkspaceFs | undefined,
+): Promise<string> {
+  const entries: (readonly [string, string, string])[] = [];
+  for (const file of files)
+    entries.push([
+      file.path,
+      file.mode,
+      isGitStageLargeFile(file)
+        ? await sha256OfLargeFile(root, file, { fs }) // NOSONAR typescript:S9382 -- one streamed file at a time, one chunk in memory
+        : createHash("sha256").update(file.bytes).digest("hex"),
+    ]);
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 export async function readGitStageCandidate(
   root: string,
   paths: readonly string[],
   fs?: WorkspaceFs,
 ): Promise<string> {
-  return contentDigest(await readFiles(root, paths, fs));
+  return contentDigest(root, await readFiles(root, paths, fs), fs);
 }
+// A file above the governed stdin contract is returned as a large handle (size and identity), never
+// read whole: no selection size ends a staging, and memory holds at most the small files' bytes.
 async function readFiles(
   root: string,
   paths: readonly string[],
   fs: WorkspaceFs | undefined,
-): Promise<readonly GitStageFile[]> {
-  const files: GitStageFile[] = [];
-  let size = 0;
-  for (const path of paths) {
-    const file = await readGitStageFile(root, path, { fs }); // NOSONAR typescript:S9382 -- the selection's byte bound is checked before the next file is read
-    size += file.bytes.length;
-    if (size > GIT_STAGE_CANDIDATE_MAX_BYTES) throw new Error("git-stage-candidate-too-large");
-    files.push(file);
-  }
+): Promise<readonly GitStageContent[]> {
+  const files: GitStageContent[] = [];
+  for (const path of paths) files.push(await inspectGitStageFile(root, path, { fs })); // NOSONAR typescript:S9382 -- files are inspected one after the other
   return files;
 }
 function objectId(result: CommandResult): string {
@@ -264,6 +267,75 @@ async function stagedObjectId(
   if (!write) return choice === "raw" ? raw : converted;
   return hashObject(ctx, file.bytes, true, choice === "raw" ? undefined : conversion);
 }
+// Git reads a large file by path (`hash-object -- <path>`, run in the workspace root), so its bytes
+// never pass the bounded stdin and are never held in memory. The attributes, the filter-driver
+// overrides and the line-ending pins are exactly the ones `hashObject` applies to stdin bytes.
+async function hashLargeObject(
+  ctx: GitStageEffectContext,
+  file: GitStageLargeFile,
+  write: boolean,
+  conversion?: StageConversion,
+): Promise<string> {
+  const head =
+    conversion === undefined
+      ? ["hash-object", "--no-filters"]
+      : [
+          ...(await filterNeutralizingArgs(ctx)),
+          "-c",
+          `core.autocrlf=${conversion.autocrlf}`,
+          "-c",
+          "core.safecrlf=false",
+          "hash-object",
+        ];
+  return objectId(await ctx.run([...head, ...(write ? ["-w"] : []), "--", file.path]));
+}
+// The streaming counterpart of `convertedChoice`: the LF form's blob id is hashed while the file is
+// streamed, so a large all-CRLF text file is admitted exactly when the in-memory one would be.
+async function convertedLargeChoice(
+  ctx: GitStageEffectContext,
+  file: GitStageLargeFile,
+  plan: Extract<StagePlan, { kind: "convert" }>,
+  converted: string,
+  indexClass: string | undefined,
+): Promise<"raw" | "converted" | undefined> {
+  if (plan.auto && indexClass !== undefined && INDEX_WITH_CR.has(indexClass)) return "raw";
+  if (plan.auto && indexClass !== undefined && !INDEX_WITHOUT_CR.has(indexClass)) return undefined;
+  if (plan.checkout !== "crlf") return undefined;
+  const lfForm = await lfFormBlobIdOfLargeFile(ctx.workspaceRoot, file, converted.length, {
+    fs: ctx.fs,
+  });
+  return lfForm === converted ? "converted" : undefined;
+}
+async function stagedLargeObjectId(
+  ctx: GitStageEffectContext,
+  file: GitStageLargeFile,
+  stage: FileStage,
+  write: boolean,
+): Promise<string | undefined> {
+  const { plan, lineEndings, indexClass } = stage;
+  if (plan.kind === "none") return hashLargeObject(ctx, file, write);
+  const raw = await hashLargeObject(ctx, file, false);
+  const conversion: StageConversion = { autocrlf: AUTOCRLF_OF[lineEndings], path: file.path };
+  const converted = await hashLargeObject(ctx, file, false, conversion);
+  const choice =
+    converted === raw ? "raw" : await convertedLargeChoice(ctx, file, plan, converted, indexClass);
+  if (choice === undefined) return undefined;
+  if (!write) return choice === "raw" ? raw : converted;
+  return hashLargeObject(ctx, file, true, choice === "raw" ? undefined : conversion);
+}
+// Git read the file by path: its object is accepted only if the file is exactly the one that was
+// inspected and digested, so a swap or an edit meanwhile fails closed (`git-stage-file-changed`).
+async function stagedContentObjectId(
+  ctx: GitStageEffectContext,
+  file: GitStageContent,
+  stage: FileStage,
+  write: boolean,
+): Promise<string | undefined> {
+  if (!isGitStageLargeFile(file)) return stagedObjectId(ctx, file, stage, write);
+  const id = await stagedLargeObjectId(ctx, file, stage, write);
+  assertGitStageFileUnchanged(ctx.workspaceRoot, file, { fs: ctx.fs });
+  return id;
+}
 interface FileStage {
   readonly plan: StagePlan;
   readonly lineEndings: GitStageLineEndings;
@@ -420,7 +492,7 @@ function recordValue(
 // line-break class an `auto` conversion depends on; `undefined` when the attributes cannot be read.
 async function fileStages(
   ctx: GitStageEffectContext,
-  files: readonly GitStageFile[],
+  files: readonly Pick<GitStageContent, "path">[],
   lineEndings: GitStageLineEndings,
 ): Promise<ReadonlyMap<string, FileStage> | undefined> {
   const paths = files.map((file) => file.path);
@@ -446,7 +518,7 @@ async function stagesOfValues(
 }
 async function indexEntries(
   ctx: GitStageEffectContext,
-  files: readonly GitStageFile[],
+  files: readonly GitStageContent[],
   hashLength: number,
   lineEndings: GitStageLineEndings,
 ): Promise<string | undefined> {
@@ -460,7 +532,7 @@ async function indexEntries(
         ? "0".repeat(hashLength)
         : stage === undefined
           ? undefined
-          : await stagedObjectId(ctx, file, stage, true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
+          : await stagedContentObjectId(ctx, file, stage, true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
@@ -479,7 +551,7 @@ export async function gitStageFilesSupported(
     const stage = stages.get(file.path);
     if (file.mode === "0") continue;
     if (stage === undefined) return false;
-    const sha = await stagedObjectId(ctx, file, stage, false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
+    const sha = await stagedContentObjectId(ctx, file, stage, false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
     if (sha === undefined) return false;
   }
   return true;
@@ -627,7 +699,7 @@ async function hashPathsUnderConversion(
 // decided). Unlike staging, a conversion that does not check out byte for byte is still judged: the
 // question is only whether Git would store the index object, as `git status` asks it.
 function conversionCanSettle(
-  file: GitStageFile,
+  file: Pick<GitStageFile, "path" | "mode">,
   row: readonly string[] | undefined,
   stage: FileStage | undefined,
 ): boolean {
@@ -670,7 +742,7 @@ function indexKeepsBytes(indexClass: string | undefined): boolean {
 export async function gitStagedObjectIdOf(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
-  files: readonly GitStageFile[],
+  files: readonly Pick<GitStageFile, "path" | "mode">[],
   stats?: GitStagedConversionStats,
 ): Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason> {
   if (files.length === 0) return new Map();
@@ -731,7 +803,10 @@ export async function stageExactFiles(
       if (!(await ctx.check()) || !(await gitStageAttributesSupported(ctx, request.pathspecs)))
         return false;
       const files = await readFiles(ctx.workspaceRoot, request.pathspecs, ctx.fs);
-      if (request.worktreeDigest !== undefined && contentDigest(files) !== request.worktreeDigest)
+      if (
+        request.worktreeDigest !== undefined &&
+        (await contentDigest(ctx.workspaceRoot, files, ctx.fs)) !== request.worktreeDigest
+      )
         return false;
       const entries = await indexEntries(
         ctx,

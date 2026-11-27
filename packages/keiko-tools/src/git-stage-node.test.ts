@@ -22,7 +22,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
-import { GIT_STAGE_CANDIDATE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
@@ -153,11 +152,10 @@ afterEach(() => {
 
 describe("exact-file staging inside a root below an always-denied segment", () => {
   // Owner review of PR #3452 (2026-09-10): the candidate digest summed raw bytes across the whole
-  // selection and threw `git-stage-candidate-too-large` above 64 KiB, so a legitimate selection was
-  // refused whole for its size — the failure class the stage-admission repair had just removed one
-  // helper away. The bound is now a per-proposal ceiling far above any lockfile or asset set, and a
-  // selection beyond it is still refused as a whole.
-  it("digests a candidate far above the old 64 KiB aggregate and still bounds the selection", async () => {
+  // selection and threw above 64 KiB, so a legitimate selection was refused whole for its size.
+  // Owner decision 2026-11-24: a fixed bound that ends healthy work is a defect. Files above the
+  // governed stdin contract are streamed, never held, so no selection size refuses the digest.
+  it("digests a candidate of any size by streaming the large files", async () => {
     const managed = deniedRepository();
     const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, managed);
     writeFileSync(join(managed, "one.bin"), Buffer.alloc(120 * 1024, 0x61));
@@ -165,12 +163,10 @@ describe("exact-file staging inside a root below an always-denied segment", () =
     await expect(readGitStageCandidate(managed, ["one.bin", "two.bin"], fs)).resolves.toMatch(
       /^[a-f0-9]{64}$/u,
     );
-    const slice = Math.ceil(GIT_STAGE_CANDIDATE_MAX_BYTES / 5) + 1;
     const paths = ["a", "b", "c", "d", "e"].map((name) => `${name}.bin`);
-    for (const path of paths) writeFileSync(join(managed, path), Buffer.alloc(slice, 0x63));
-    await expect(readGitStageCandidate(managed, paths, fs)).rejects.toThrow(
-      "git-stage-candidate-too-large",
-    );
+    for (const path of paths)
+      writeFileSync(join(managed, path), Buffer.alloc(7 * 1024 * 1024, 0x63));
+    await expect(readGitStageCandidate(managed, paths, fs)).resolves.toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("refuses the candidate digest and the staging through the plain port", async () => {

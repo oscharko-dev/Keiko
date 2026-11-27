@@ -14,9 +14,14 @@ import {
 } from "./git-index-stat.js";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
+  assertGitStageFileUnchanged,
+  inspectGitStageFile,
+  isGitStageLargeFile,
   readGitStageFile,
-  type GitStageFile,
+  type GitStageContent,
+  type GitStageLargeFile,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import { blobIdOfLargeFile } from "./git-stage-stream.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { GitChangedFile, GitStatusCode } from "@oscharko-dev/keiko-contracts";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
@@ -43,6 +48,10 @@ import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
 const MAX_CONTENT_BYTES = 8_388_608;
+// A regular file up to this size is read whole (and counted against the content budget); a larger
+// one is never read whole: its blob id is streamed chunk by chunk, so no file size can fail a status
+// read and the budget only counts bytes that are actually held (owner decision 2026-11-24).
+const INLINE_FILE_BYTES = 1_048_576;
 export type GitRawWorktreeReadCode =
   | "git-raw-snapshot-incomplete"
   | "git-raw-snapshot-drift"
@@ -128,7 +137,7 @@ interface WorkingInspection {
   // A regular file whose raw bytes differ from the index object while the modes agree: Git's staging
   // may still store exactly this index object after a line-ending conversion, so the scan asks the
   // staged-object port before it keeps the "M" (#4491).
-  readonly convertible?: GitStageFile;
+  readonly convertible?: GitStageContent;
 }
 // Regular files differ by the execute bit only when `core.fileMode` is on; a link never matches a file.
 function sameMode(fileMode: string, indexMode: string, honourExecuteBit: boolean): boolean {
@@ -141,11 +150,12 @@ async function inspectWorkingFile(
   index: IndexEntry | undefined,
   remainingBytes: number,
 ): Promise<WorkingInspection> {
-  const file = await readGitStageFile(scan.deps.workspace.root, path, {
-    maxBytes: remainingBytes,
+  const file = await inspectGitStageFile(scan.deps.workspace.root, path, {
+    inlineMaxBytes: Math.min(INLINE_FILE_BYTES, remainingBytes),
     fs: workspaceFsOf(scan.deps),
     symlinks: "read-only",
   });
+  if (isGitStageLargeFile(file)) return inspectLargeWorkingFile(scan, file, index);
   if (index === undefined)
     return { status: " ", bytes: file.bytes.length, untracked: file.mode !== "0" };
   if (file.mode === "0") return { status: "D", bytes: 0, untracked: false };
@@ -160,6 +170,27 @@ async function inspectWorkingFile(
     untracked: false,
     ...(regular ? { convertible: file } : {}),
   };
+}
+// A file too large to read whole: untracked and mode-changed files need no content at all, and a
+// tracked one is compared by the blob id of its streamed raw bytes. Git's line-ending conversion is
+// settled for it by the staged-object port, which hashes by path, exactly as for a small file.
+async function inspectLargeWorkingFile(
+  scan: ScanInputs,
+  file: GitStageLargeFile,
+  index: IndexEntry | undefined,
+): Promise<WorkingInspection> {
+  if (index === undefined) return { status: " ", bytes: 0, untracked: true };
+  if (!sameMode(file.mode, index.mode, await scan.fileMode()))
+    return { status: "M", bytes: 0, untracked: false };
+  const { objectId } = await blobIdOfLargeFile(
+    scan.deps.workspace.root,
+    file,
+    index.objectId.length,
+    { fs: workspaceFsOf(scan.deps) },
+  );
+  if (objectId === index.objectId) return { status: " ", bytes: 0, untracked: false };
+  const regular = index.mode !== "120000";
+  return { status: "M", bytes: 0, untracked: false, ...(regular ? { convertible: file } : {}) };
 }
 /** Reads the changes of a born HEAD; an unborn HEAD fails closed with `git-raw-unborn-head`. */
 export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promise<GitRawChanges> {
@@ -242,7 +273,7 @@ async function scanPaths(
   paths: readonly string[],
 ): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
-  const pending = new Map<string, GitStageFile>();
+  const pending = new Map<string, GitStageContent>();
   let total = 0;
   let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
@@ -279,7 +310,7 @@ async function scanPaths(
 // scan's own bounds: the content budget and the path limit.
 const CONVERTIBLE_BATCH_SIZE = 1000;
 function collectConvertible(
-  pending: Map<string, GitStageFile>,
+  pending: Map<string, GitStageContent>,
   path: string,
   working: WorkingInspection,
 ): void {
@@ -295,7 +326,7 @@ type PortAnswer =
 async function askStagedObjectPort(
   scan: ScanInputs,
   port: GitStagedObjectIdPort,
-  files: readonly GitStageFile[],
+  files: readonly GitStageContent[],
   stats: GitStagedConversionStats,
 ): Promise<PortAnswer> {
   try {
@@ -315,8 +346,12 @@ async function askStagedObjectPort(
 // be completed (a deleted, truncated, denied or re-parented file) is not an error of the whole scan:
 // the file stays modified and the failure is handed to the observer; a cancellation ends the read.
 type Recheck = { readonly unchanged: boolean } | { readonly error: unknown };
-async function unchangedSinceRead(scan: ScanInputs, file: GitStageFile): Promise<Recheck> {
+async function unchangedSinceRead(scan: ScanInputs, file: GitStageContent): Promise<Recheck> {
   try {
+    if (isGitStageLargeFile(file)) {
+      assertGitStageFileUnchanged(scan.deps.workspace.root, file, { fs: workspaceFsOf(scan.deps) });
+      return { unchanged: true };
+    }
     const again = await readGitStageFile(scan.deps.workspace.root, file.path, {
       maxBytes: MAX_CONTENT_BYTES,
       fs: workspaceFsOf(scan.deps),
@@ -336,7 +371,7 @@ function throwIfCancelled(scan: ScanInputs): void {
 async function settledCleanPaths(
   scan: ScanInputs,
   answer: PortAnswer,
-  batch: readonly GitStageFile[],
+  batch: readonly GitStageContent[],
 ): Promise<{ readonly clean: readonly string[]; readonly error?: unknown }> {
   if (answer.outcome !== "answered") return { clean: [] };
   const clean: string[] = [];
@@ -365,7 +400,7 @@ interface SettlementTally {
 async function settleBatch(
   scan: ScanInputs,
   port: GitStagedObjectIdPort,
-  batch: readonly GitStageFile[],
+  batch: readonly GitStageContent[],
   tally: SettlementTally,
 ): Promise<void> {
   const stats = { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 };
@@ -385,7 +420,7 @@ async function settleBatch(
 async function settleConvertedFiles(
   scan: ScanInputs,
   changes: readonly GitChangedFile[],
-  pending: ReadonlyMap<string, GitStageFile>,
+  pending: ReadonlyMap<string, GitStageContent>,
 ): Promise<readonly GitChangedFile[]> {
   const port = scan.deps.stagedObjectIds;
   if (port === undefined || pending.size === 0) return changes;

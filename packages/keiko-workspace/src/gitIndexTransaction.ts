@@ -1,6 +1,7 @@
 import {
   constants,
   closeSync,
+  type Stats,
   fstatSync,
   lstatSync,
   openSync,
@@ -11,7 +12,12 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, relative, resolve } from "node:path";
-import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+  type WorkspaceFileReader,
+  type WorkspaceFs,
+} from "./fs.js";
 import { resolveGitdir } from "./gitHistory.js";
 import { assertContainedRealPath, resolveExistingAllowedWorkspaceRealRoot } from "./realpath.js";
 import { isDenied } from "./ignore.js";
@@ -136,6 +142,36 @@ export interface GitStageFile {
   readonly mode: "100644" | "100755" | "120000" | "0";
   readonly bytes: Uint8Array;
 }
+/**
+ * The identity of a regular file as the one lstat saw it. A streamed or Git-side read is accepted
+ * only while the file still has exactly this identity, so a file that changes (or is swapped for a
+ * link) while it is read fails closed instead of being staged as a mix of two states.
+ */
+export interface GitStageFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
+/**
+ * A regular file whose bytes are never held in memory: the status and staging paths stream it
+ * (`streamGitStageFile`) or hand its path to Git, and verify its identity afterwards. Only its size
+ * and identity are known up front.
+ */
+export interface GitStageLargeFile {
+  readonly path: string;
+  readonly mode: "100644" | "100755";
+  readonly size: number;
+  readonly identity: GitStageFileIdentity;
+}
+export type GitStageContent = GitStageFile | GitStageLargeFile;
+export function isGitStageLargeFile(content: GitStageContent): content is GitStageLargeFile {
+  return !("bytes" in content);
+}
+/** Closed failure codes a stage-file read throws (the `Error` message is the code). */
+export const GIT_STAGE_FILE_TOO_LARGE = "git-stage-file-too-large";
+export const GIT_STAGE_FILE_CHANGED = "git-stage-file-changed";
 export interface GitStageReadOptions {
   readonly maxBytes?: number | undefined;
   // The port containment resolves through; the owned-root port admits a managed worktree below the
@@ -150,17 +186,22 @@ export interface GitStageReadOptions {
    */
   readonly symlinks?: "contained" | "read-only" | undefined;
 }
+export interface GitStageInspectOptions extends GitStageReadOptions {
+  /**
+   * A regular file above this size is returned as a `GitStageLargeFile` instead of being read into
+   * memory. The default is the governed Git stdin contract (a file's bytes travel on stdin only up
+   * to 64 KiB); a caller that only compares content raises it to what it is willing to hold.
+   */
+  readonly inlineMaxBytes?: number | undefined;
+}
 /**
- * The most bytes one staged file may carry, and the most a whole stage candidate may sum to. Until
- * 2026-09-10 both were 64 KiB: a lockfile, a bundled asset or eight ordinary source files together
- * could not be staged by a governed run at all, and the refusal surfaced as a failed Git effect
- * (Coding Workbench run 13, owner review of PR #3452). The per-file bound equals the raw worktree
- * scan's content budget — a file the scan cannot read is never listed as a change, so nothing
- * admitted for staging can exceed it — and the candidate bound keeps a fifty-path selection's
- * resident bytes to what one local process can hold while it digests and writes them.
+ * The most bytes one in-memory stage read may carry. A file above it is never read whole by the
+ * status and staging paths (`inspectGitStageFile` streams it); the bound only protects the memory
+ * of a caller that explicitly needs every byte at once through `readGitStageFile`.
  */
 export const GIT_STAGE_FILE_MAX_BYTES = 8 * 1024 * 1024;
-export const GIT_STAGE_CANDIDATE_MAX_BYTES = 32 * 1024 * 1024;
+export const GIT_STAGE_INLINE_MAX_BYTES = 64 * 1024;
+const STREAM_CHUNK_BYTES = 1024 * 1024;
 function stageReadSettings(options: GitStageReadOptions): {
   readonly fs: WorkspaceFs;
   readonly maxBytes: number;
@@ -170,6 +211,46 @@ function stageReadSettings(options: GitStageReadOptions): {
     maxBytes: options.maxBytes ?? GIT_STAGE_FILE_MAX_BYTES,
   };
 }
+interface StageTarget {
+  readonly fs: WorkspaceFs;
+  readonly canonical: string;
+  readonly absolute: string;
+  readonly before: Stats | undefined;
+}
+function stageTarget(root: string, path: string, fs: WorkspaceFs): StageTarget {
+  const canonical = resolveExistingAllowedWorkspaceRealRoot(fs, root);
+  const absolute = resolveWithinWorkspace(canonical, path);
+  if (isDenied(path) || relative(canonical, absolute).replaceAll("\\", "/") !== path)
+    throw new Error("git-stage-path-denied");
+  assertStageParent(fs, canonical, absolute);
+  return { fs, canonical, absolute, before: lstatSync(absolute, { throwIfNoEntry: false }) };
+}
+function stageFileMode(before: Stats): "100644" | "100755" {
+  return (before.mode & 0o111) === 0 ? "100644" : "100755";
+}
+function stageIdentity(path: string): GitStageFileIdentity {
+  const stat = lstatSync(path, { bigint: true });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+function assertSameIdentity(absolute: string, file: GitStageLargeFile): void {
+  const stat = lstatSync(absolute, { bigint: true, throwIfNoEntry: false });
+  const expected = file.identity;
+  if (
+    stat?.isFile() !== true ||
+    stat.dev !== expected.dev ||
+    stat.ino !== expected.ino ||
+    stat.size !== expected.size ||
+    stat.mtimeNs !== expected.mtimeNs ||
+    stat.ctimeNs !== expected.ctimeNs
+  )
+    throw new Error(GIT_STAGE_FILE_CHANGED);
+}
 /** Stable no-follow content read. A symlink contributes only its contained relative target bytes. */
 export async function readGitStageFile(
   root: string,
@@ -177,19 +258,143 @@ export async function readGitStageFile(
   options: GitStageReadOptions = {},
 ): Promise<GitStageFile> {
   const { fs, maxBytes } = stageReadSettings(options);
-  const canonical = resolveExistingAllowedWorkspaceRealRoot(fs, root);
-  const absolute = resolveWithinWorkspace(canonical, path);
-  if (isDenied(path) || relative(canonical, absolute).replaceAll("\\", "/") !== path)
-    throw new Error("git-stage-path-denied");
-  assertStageParent(fs, canonical, absolute);
-  const before = lstatSync(absolute, { throwIfNoEntry: false });
+  const target = stageTarget(root, path, fs);
+  const early = nonRegularStageFile(target, path, options);
+  if (early !== undefined) return early;
+  const { before, absolute, canonical } = target;
+  if (before === undefined || before.size > maxBytes) throw new Error(GIT_STAGE_FILE_TOO_LARGE);
+  const bytes = await readRegularBytes(target, maxBytes);
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+  return { path, mode: stageFileMode(before), bytes };
+}
+async function readRegularBytes(target: StageTarget, maxBytes: number): Promise<Uint8Array> {
+  const { fs, absolute, before } = target;
+  const expected = fs.stat(absolute);
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await fs.readFileBytes?.(absolute, maxBytes, "reject", expected);
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+  if (bytes === undefined || bytes.byteLength !== before?.size)
+    throw new Error(GIT_STAGE_FILE_CHANGED);
+  return bytes;
+}
+// A missing path (`mode: "0"`) or a symlink; `undefined` for a regular file.
+function nonRegularStageFile(
+  target: StageTarget,
+  path: string,
+  options: GitStageReadOptions,
+): GitStageFile | undefined {
+  const { before, fs, canonical, absolute } = target;
   if (before === undefined) return { path, mode: "0", bytes: new Uint8Array() };
   if (before.isSymbolicLink()) return stageLink(options, fs, canonical, path, absolute, before);
-  const expected = fs.stat(absolute);
-  const bytes = await fs.readFileBytes?.(absolute, maxBytes, "reject", expected);
-  if (bytes?.byteLength !== before.size) throw new Error("git-stage-file-incomplete");
+  return undefined;
+}
+/**
+ * The same checks as `readGitStageFile`, but a regular file above `inlineMaxBytes` is returned as a
+ * `GitStageLargeFile` (size and identity only) instead of being read, so no file size ever makes
+ * the read fail and no large file is ever held whole in memory.
+ */
+export async function inspectGitStageFile(
+  root: string,
+  path: string,
+  options: GitStageInspectOptions = {},
+): Promise<GitStageContent> {
+  const { fs, maxBytes } = stageReadSettings(options);
+  const inlineMax = Math.min(options.inlineMaxBytes ?? GIT_STAGE_INLINE_MAX_BYTES, maxBytes);
+  const target = stageTarget(root, path, fs);
+  const early = nonRegularStageFile(target, path, options);
+  if (early !== undefined) return early;
+  const { before, absolute, canonical } = target;
+  if (before === undefined) throw new Error(GIT_STAGE_FILE_CHANGED);
+  if (before.size > inlineMax) {
+    assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+    const identity = stageIdentity(absolute);
+    if (!before.isFile() || identity.size !== BigInt(before.size))
+      throw new Error(GIT_STAGE_FILE_CHANGED);
+    return { path, mode: stageFileMode(before), size: before.size, identity };
+  }
+  const bytes = await readRegularBytes(target, inlineMax);
   assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
-  return { path, mode: (before.mode & 0o111) === 0 ? "100644" : "100755", bytes };
+  return { path, mode: stageFileMode(before), bytes };
+}
+/**
+ * Streams a large file's bytes to `visit` in bounded chunks through the workspace port's validated
+ * descriptor reader (no-follow, hard-link policy, descriptor snapshot checked around every range),
+ * so memory holds one chunk, never the file. The file must still have the identity `inspect` saw,
+ * both before the first and after the last chunk, or the read fails closed as
+ * `git-stage-file-changed`.
+ */
+export async function streamGitStageFile(
+  root: string,
+  file: GitStageLargeFile,
+  options: GitStageReadOptions,
+  visit: (chunk: Uint8Array) => void,
+): Promise<void> {
+  const { fs } = stageReadSettings(options);
+  const { canonical, absolute } = stageTarget(root, file.path, fs);
+  assertSameIdentity(absolute, file);
+  const openReader = fs.openFileReader;
+  if (openReader === undefined) throw new Error("git-stage-file-unreadable");
+  const reader = await readerOrChanged(openReader, fs, absolute);
+  try {
+    let offset = 0;
+    while (offset < file.size) {
+      const length = Math.min(STREAM_CHUNK_BYTES, file.size - offset);
+      const chunk = await rangeOrChanged(reader, offset, length); // NOSONAR typescript:S9382 -- chunks are read in order, one in memory at a time
+      if (chunk.byteLength === 0) break;
+      visit(chunk);
+      offset += chunk.byteLength;
+    }
+    if (offset !== file.size) throw new Error(GIT_STAGE_FILE_CHANGED);
+  } finally {
+    await reader.close();
+  }
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+  assertSameIdentity(absolute, file);
+}
+async function readerOrChanged(
+  open: NonNullable<WorkspaceFs["openFileReader"]>,
+  fs: WorkspaceFs,
+  absolute: string,
+): Promise<WorkspaceFileReader> {
+  try {
+    return await open.call(fs, absolute, "reject", fs.stat(absolute));
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+}
+async function rangeOrChanged(
+  reader: WorkspaceFileReader,
+  offset: number,
+  length: number,
+): Promise<Uint8Array> {
+  try {
+    return await reader.readRange(offset, length);
+  } catch (error) {
+    throw changedOrOriginal(error);
+  }
+}
+function changedOrOriginal(error: unknown): unknown {
+  return error instanceof WorkspaceDescriptorReadError && error.reason === "changed"
+    ? new Error(GIT_STAGE_FILE_CHANGED)
+    : error;
+}
+/**
+ * Confirms that a large file is still exactly what `inspectGitStageFile` saw, after Git itself read
+ * it by path: the identity (including ctime) is unchanged and the path still resolves inside the
+ * workspace. A swap for a link or another file fails closed as `git-stage-file-changed`.
+ */
+export function assertGitStageFileUnchanged(
+  root: string,
+  file: GitStageLargeFile,
+  options: GitStageReadOptions = {},
+): void {
+  const { fs } = stageReadSettings(options);
+  const { canonical, absolute } = stageTarget(root, file.path, fs);
+  assertSameIdentity(absolute, file);
+  assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
 }
 function assertStageParent(fs: WorkspaceFs, root: string, absolute: string): void {
   let parent = dirname(absolute);

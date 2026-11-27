@@ -19,7 +19,7 @@ function property(error: unknown, name: "code" | "message"): string {
 const RULES: readonly (readonly [RegExp, CommitProofUnavailableCause])[] = [
   [/^git-raw-unborn-head$/u, "unborn-head"],
   [/^git-raw-snapshot-incomplete$/u, "snapshot-incomplete"],
-  [/^git-raw-snapshot-drift$/u, "snapshot-drift"],
+  [/^(?:git-raw-snapshot-drift|git-stage-file-changed)$/u, "snapshot-drift"],
   [/^(?:git-raw-read-cancelled|TOOL_COMMAND_CANCELLED)$/u, "read-cancelled"],
   [/^TOOL_COMMAND_TIMEOUT$/u, "read-timeout"],
   [/^git-stage-link-denied$/u, "link-denied"],

@@ -129,7 +129,7 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
  * then keeps the file as modified.
  */
 export type GitStagedObjectIdPort = (
-  files: readonly GitStageFile[],
+  files: readonly Pick<GitStageFile, "path" | "mode">[],
   stats?: GitStagedConversionStats,
 ) => Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason | undefined>;
 

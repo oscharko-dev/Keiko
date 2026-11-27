@@ -1065,6 +1065,7 @@ export {
 } from "./git-head-state.js";
 
 export { gitBlobObjectId } from "./git-index-identity.js";
+export { blobIdOfLargeFile } from "./git-stage-stream.js";
 
 export type { GitCiProviderReader, GitCiFactsResult, GitCiProviderFacts } from "./git-ci-facts.js";
 
