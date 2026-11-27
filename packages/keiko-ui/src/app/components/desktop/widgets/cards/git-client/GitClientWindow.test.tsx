@@ -5201,8 +5201,19 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const getStatus = vi.fn(async () =>
       makeStatus({ branch, clean: false, stagedCount: 1, changes: [stagedChange] }),
     );
+    const listBranches = vi.fn(async () =>
+      makeBranchList({
+        branches: [
+          { name: "dev", headRefHash: "aaa", current: branch === "dev" },
+          ...(branch === "dev"
+            ? []
+            : [{ name: "feature/keep-draft", headRefHash: "aaa", current: true }]),
+        ],
+      }),
+    );
     const client = makeClient({
       getStatus,
+      listBranches,
       commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
       commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
         makeCommitPreview(
@@ -5230,6 +5241,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
 
     await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(listBranches).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(client.commitPreview).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
     expect(screen.getByLabelText("Description")).toHaveValue("Body.");

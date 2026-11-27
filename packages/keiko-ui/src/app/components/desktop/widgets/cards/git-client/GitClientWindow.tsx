@@ -1956,7 +1956,10 @@ export function GitClientWindow({
     history,
   });
   const activeStatus = active.status;
-  const commitDraftRevision = useCommitDraftRevision(activeStatus, stagingEpoch, redemptions);
+  const commitDraftRevision = useCommitDraftRevision(selectedPath, activeStatus, active.branches, {
+    staging: stagingEpoch,
+    redemptions,
+  });
   const hasActiveConflicts = hasRepositoryConflicts(activeStatus);
   const reportedConflictRoot = useRef<string | null>(null);
   useEffect((): void => {
