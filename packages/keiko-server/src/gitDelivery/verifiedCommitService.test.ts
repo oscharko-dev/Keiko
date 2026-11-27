@@ -2786,8 +2786,8 @@ describe("a converted file staged without stat data", () => {
       convertible: 3,
       batches: 1,
       settledClean: 0,
-      attributeSplitCount: 0,
-      hashBudgetExhaustedCount: 0,
+      attributeSplitCount: 2,
+      hashBudgetExhaustedCount: 5,
       outcome: "error",
       error: Object.assign(new Error("hash failed"), { code: "ENOENT" }),
     });
@@ -2798,7 +2798,13 @@ describe("a converted file staged without stat data", () => {
       category: "diagnostic",
       level: "warn",
       correlationId: "verified-commit-test",
-      extra: { convertible: 3, batches: 1, settledClean: 0 },
+      extra: {
+        convertible: 3,
+        batches: 1,
+        settledClean: 0,
+        attributeSplitCount: 2,
+        hashBudgetExhaustedCount: 5,
+      },
     });
     expect(failed[0]?.errorKind).toEqual(expect.any(String));
     expect(failed[0]?.extra).toMatchObject({ errorClass: "Error" });
@@ -2807,7 +2813,13 @@ describe("a converted file staged without stat data", () => {
       "git.raw-status.conversion-failed.emitted-line",
       formatActivityLogProofLine(failed[0] ?? {}),
     );
-    expect(persisted).toMatchObject({ convertible: 3, batches: 1, settledClean: 0 });
+    expect(persisted).toMatchObject({
+      convertible: 3,
+      batches: 1,
+      settledClean: 0,
+      attributeSplitCount: 2,
+      hashBudgetExhaustedCount: 5,
+    });
   });
 
   it("reads as clean in the working tree and records the settlement under the run's correlation", async () => {

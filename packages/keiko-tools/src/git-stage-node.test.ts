@@ -32,6 +32,9 @@ import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
 import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
   gitStageFilesSupported,
+  ATTRIBUTE_SPLIT_BUDGET,
+  HASH_RUN_BUDGET,
+  STDIN_BUDGET_BYTES,
   gitStagedObjectPortArgvAllowed,
   readGitStageCandidate,
   stageExactFiles,
@@ -728,6 +731,30 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(argvs.filter((argv) => argv.includes("hash-object")).length).toBeLessThan(8);
   });
 
+  interface BudgetEvidence {
+    readonly convertible: number;
+    readonly settledClean: number;
+    readonly hashBudgetExhaustedCount: number;
+  }
+
+  // Each part's first run is reserved, so an exhausted budget means exactly the reserved runs plus the
+  // production budget were spent; the paths it left undecided are counted and stayed modified.
+  function expectBudgetAccounting(
+    names: readonly string[],
+    argvs: readonly string[][],
+    evidence: readonly BudgetEvidence[],
+  ): void {
+    const pathBytes = (names[0]?.length ?? 0) + 1;
+    const parts = Math.ceil(801 / Math.floor(STDIN_BUDGET_BYTES / pathBytes));
+    expect(argvs.filter((argv) => argv.includes("hash-object"))).toHaveLength(
+      parts + HASH_RUN_BUDGET,
+    );
+    const [first] = evidence;
+    const skipped = first?.hashBudgetExhaustedCount ?? 0;
+    expect(skipped).toBeGreaterThan(0);
+    expect(skipped).toBeLessThanOrEqual((first?.convertible ?? 0) - (first?.settledClean ?? 0));
+  }
+
   it("keeps a healthy last part settling when unreadable files drained the bisection budget", async () => {
     const repo = plainRepository("v1\r\n");
     git(repo, ["config", "core.autocrlf", "true"]);
@@ -742,7 +769,8 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     for (const name of names) touchLater(repo, name);
     // 20 files, spread over the first parts of the batch, are gone when Git reads them.
     const gone = new Set(Array.from({ length: 20 }, (_, at) => names[at * 30]));
-    const real = factoryPort(repo).stagedObjectIds;
+    const argvs: string[][] = [];
+    const real = factoryPort(repo, { spawn: countingSpawn(argvs) }).stagedObjectIds;
     const evidence: unknown[] = [];
     const flags = await rawFlags(repo, {
       stagedObjectIds: (files, stats) => {
@@ -761,10 +789,8 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(names.slice(0, 200).some((name) => !gone.has(name) && byName.get(name) === false)).toBe(
       true,
     );
-    // ... and the shortfall is visible: paths the budget left undecided are counted.
-    expect(
-      (evidence as { hashBudgetExhaustedCount: number }[])[0]?.hashBudgetExhaustedCount,
-    ).toBeGreaterThan(0);
+    // ... and the shortfall is visible and exactly accounted for.
+    expectBudgetAccounting(names, argvs, evidence as BudgetEvidence[]);
   });
 
   it("reads an attribute answer that a hostile value pushed over the output cap in halves", async () => {
@@ -788,6 +814,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     });
     expect(evidence).toHaveLength(1);
     expect(evidence[0]?.attributeSplitCount).toBeGreaterThan(0);
+    expect(evidence[0]?.attributeSplitCount).toBeLessThanOrEqual(ATTRIBUTE_SPLIT_BUDGET);
     expect(evidence[0]?.hashBudgetExhaustedCount).toBe(0);
     // The filtered files stay modified (staging refuses a filter); the others settle clean.
     expect(flags).toEqual([...big, ...ok].map((name) => [name, true, name.startsWith("big/")]));

@@ -116,6 +116,9 @@ const STAGED_CONVERSION_FAILED_OPERATION = defineActivityLogOperation({
     convertible: { type: "integer", dataClass: "count", required: true },
     batches: { type: "integer", dataClass: "count", required: true },
     settledClean: { type: "integer", dataClass: "count", required: true },
+    // Partial sums over the batches up to the failure.
+    attributeSplitCount: { type: "integer", dataClass: "count", required: true },
+    hashBudgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: {
       type: "string-array",
@@ -244,6 +247,8 @@ export function logStagedConversion(
     convertible: evidence.convertible,
     batches: evidence.batches,
     settledClean: evidence.settledClean,
+    attributeSplitCount: evidence.attributeSplitCount,
+    hashBudgetExhaustedCount: evidence.hashBudgetExhaustedCount,
   };
   const correlation = { correlationId: correlationIdOrUnknown(correlationId) };
   const sink = seams.activityLog ?? processServerLogSink();
@@ -264,8 +269,6 @@ export function logStagedConversion(
   sink.write(
     activityLogEvent(STAGED_CONVERSION_OPERATION, correlation, {
       ...counts,
-      attributeSplitCount: evidence.attributeSplitCount,
-      hashBudgetExhaustedCount: evidence.hashBudgetExhaustedCount,
       outcome: evidence.outcome,
       ...(evidence.reason === undefined ? {} : { reason: evidence.reason }),
     }),

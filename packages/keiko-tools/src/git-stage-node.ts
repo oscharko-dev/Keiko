@@ -274,7 +274,7 @@ interface FileStage {
 // and attribute, so the paths are read in parts whose estimated answer and whose stdin both stay well
 // below the caps, and the input travels as bytes.
 const ATTRIBUTE_ANSWER_BUDGET_BYTES = 128 * 1024;
-const STDIN_BUDGET_BYTES = 48 * 1024;
+export const STDIN_BUDGET_BYTES = 48 * 1024;
 const ATTRIBUTE_VALUE_ESTIMATE_BYTES = 16;
 const utf8 = new TextEncoder();
 // Splits `paths` so that no part's estimated answer or stdin (one `separator` byte per path) exceeds
@@ -342,7 +342,7 @@ async function readAttributeValuesOrReason(
 // A value is estimated at a few bytes, but a `.gitattributes` may give a `filter` or an encoding a
 // value of kilobytes: an answer cut short at the output cap is read again in halves, within a bounded
 // number of splits per read, before the chunk is given up.
-const ATTRIBUTE_SPLIT_BUDGET = 64;
+export const ATTRIBUTE_SPLIT_BUDGET = 64;
 interface AttributeSplits {
   remaining: number;
 }
@@ -531,7 +531,7 @@ export function gitStagedObjectPortArgvAllowed(argv: readonly string[]): boolean
 function stdinPathSafe(path: string): boolean {
   return !/[\n\r]/u.test(path) && !path.startsWith('"');
 }
-const HASH_RUN_BUDGET = 32;
+export const HASH_RUN_BUDGET = 32;
 const HASH_BATCH_PATHS = 1000;
 async function hashPathRun(
   ctx: GitStageEffectContext,
