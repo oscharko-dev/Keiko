@@ -528,7 +528,7 @@ describe("GET /api/git/summary — byte-cap cut (large untracked tree)", () => {
 });
 
 function syntheticHead(subject: string): string {
-  return ["a".repeat(40), "aaaaaaa", "", "author", "date", "", subject].join("\x1f");
+  return ["a".repeat(40), "aaaaaaa", "", "author", "date", "", subject].join("\0");
 }
 
 describe("GET /api/git/history", () => {
@@ -550,7 +550,7 @@ describe("GET /api/git/history", () => {
       fields.date,
       fields.refs,
       fields.subject,
-    ].join("\x1f");
+    ].join("\0");
     const paths = fields.paths ?? [];
     // `log --name-only -z`: a commit listing paths ends with an empty token, one listing none is
     // just its header and a NUL.
@@ -1671,6 +1671,79 @@ describe("GET /api/git/history — changed-file count without diffing contents",
     expect(
       history.entries.find((entry) => entry.subject === "hostile names")?.changedFileCount,
     ).toBe(names.length);
+  });
+
+  it("keeps every commit when the repository asks git to print signature verification", async () => {
+    await initRepository();
+    const tools = await mkdtemp(join(tmpdir(), "keiko-fake-gpg-"));
+    try {
+      const gpg = writeNodeExecutableFixture(
+        tools,
+        "fake-gpg",
+        [
+          "const args = process.argv.slice(2);",
+          'if (args.includes("--verify")) {',
+          '  process.stdout.write("[GNUPG:] GOODSIG 0123456789ABCDEF fake\\n[GNUPG:] VALIDSIG 0123456789ABCDEF 2026-01-01 1 0 4 0 1 8 00 0123456789ABCDEF\\n");',
+          '  process.stderr.write("gpg: Signature made fake\\ngpg: Good signature from fake\\n");',
+          "  process.exit(0);",
+          "}",
+          "process.stdin.resume();",
+          'process.stdin.on("end", () => {',
+          '  process.stderr.write("[GNUPG:] SIG_CREATED D 1 8 00 0 fake\\n");',
+          '  process.stdout.write("-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n");',
+          "});",
+        ].join("\n"),
+      );
+      await git(["config", "gpg.program", gpg]);
+      await git(["config", "user.signingkey", "FAKEKEY"]);
+      await git(["config", "log.showSignature", "true"]);
+      await put("one.txt", "1\n");
+      await git(["add", "--all"]);
+      await git(["commit", "--quiet", "-S", "-m", "signed one"]);
+      await put("two.txt", "2\n");
+      await git(["add", "--all"]);
+      await git(["commit", "--quiet", "-S", "-m", "signed two"]);
+      // The fixture really makes plain `git log` print verification lines, or this proves nothing.
+      expect(await git(["log", "--max-count=1"])).toContain("gpg:");
+
+      const history = await readHistory(root);
+
+      expect(history.entries.map((entry) => entry.subject)).toEqual(["signed two", "signed one"]);
+      expect(history.entries.map((entry) => entry.changedFileCount)).toEqual([1, 1]);
+    } finally {
+      await rm(tools, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fields of a commit whose author holds the old field separator", async () => {
+    await initRepository();
+    await put("one.txt", "1\n");
+    await git(["add", "--all"]);
+    await git([
+      "commit",
+      "--quiet",
+      "--author=Odd\x1fAuthor <odd@example.invalid>",
+      "-m",
+      "odd\x1fsubject",
+    ]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({
+      author: "Odd\x1fAuthor",
+      subject: "odd\x1fsubject",
+      changedFileCount: 1,
+    });
+  });
+
+  it("ends the page at an unreadable record and reports it, never skipping it", () => {
+    const good = syntheticHead("good");
+    const bad = ["not-an-object-id", "x", "", "a", "d", "", "bad"].join("\0");
+
+    const page = parseHistory(`${good}\nf\0\0${bad}\0${good}\0`);
+
+    expect(page.map((entry) => entry.subject)).toEqual(["good"]);
   });
 
   it("agrees with --shortstat inside a selected subfolder", async () => {

@@ -41,8 +41,10 @@ import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionR
 
 type UnavailableReason = GitUnavailableReason | "unsafe-repository" | "git-error";
 
-const HISTORY_FIELD_SEP = "\x1f";
-const HISTORY_PRETTY_FORMAT = `format:%H${HISTORY_FIELD_SEP}%h${HISTORY_FIELD_SEP}%P${HISTORY_FIELD_SEP}%an${HISTORY_FIELD_SEP}%aI${HISTORY_FIELD_SEP}%D${HISTORY_FIELD_SEP}%s`;
+// Header fields are NUL-separated: git never emits NUL inside an author, subject or ref, so no
+// commit metadata can shift a field, and the same delimiter is what `-z` uses for paths.
+const HISTORY_PRETTY_FORMAT = "format:%H%x00%h%x00%P%x00%an%x00%aI%x00%D%x00%s";
+const HISTORY_LEADING_FIELDS = 6;
 const HISTORY_LIMIT_DEFAULT = 50;
 const HISTORY_LIMIT_MAX = 200;
 const HISTORY_SKIP_MAX = 100_000;
@@ -485,24 +487,27 @@ function parseInteger(raw: string | null, fallback: number, min: number, max: nu
 // none), but without reading and diffing every blob to count inserted and deleted lines, which made
 // the page take seconds on a large repository.
 //
-// The `-z` stream is parsed by a grammar in which a record boundary can only be recognised where a
-// path cannot start, so file names (which may hold any byte but NUL, including the field separator
-// and newlines) can never forge or split a record. With `-z` git writes, per commit,
-//   <header> "\n" (<path> NUL)+ NUL      when the commit lists paths, or
-//   <header> NUL                         when it lists none (a merge, an empty commit).
-// Split on NUL, the tokens are: a header token (a path-listing one carries its FIRST path after the
-// header's "\n"), then one token per further path, then an empty token ending a path-listing commit.
-// A path is never empty and never holds NUL, so after a path-listing header the empty token is the
-// only possible end, and the token after it is a header again. Header fields never hold NUL or a
-// newline, so the first "\n" of a header token is always the header/path boundary.
+// ASSUMED `-z` LAYOUT, per commit (the format puts NUL between header fields, the subject last):
+//   <f1> NUL <f2> NUL ... NUL <subject> "\n" (<path> NUL)+ NUL      when the commit lists paths
+//   <f1> NUL <f2> NUL ... NUL <subject> NUL                         when it lists none (a merge, an
+//                                                                   empty commit)
+// Split on NUL, a record is exactly six leading header tokens, then a seventh token holding the
+// subject (a path-listing commit carries its FIRST path after the subject's "\n"), then one token per
+// further path, then an empty token ending a path-listing commit. Header tokens are consumed by
+// COUNT, so an empty ref or parent list is just an empty token, and a path (never empty, never
+// holding NUL) can only be read where a path-listing header has just ended. A record boundary is
+// therefore recognised only where a path cannot start: file names holding separators, newlines or a
+// forged header can never create or split a record, and no header field can shift another.
 interface HistoryRecord {
-  readonly head: string;
+  readonly fields: readonly string[];
   readonly count: number;
+  readonly tail: string;
 }
 
-function nameOnlyRecords(stdout: string): readonly HistoryRecord[] {
+function historyRecords(stdout: string): readonly HistoryRecord[] {
   const records: HistoryRecord[] = [];
-  let open: { head: string; count: number } | undefined;
+  let leading: string[] = [];
+  let open: { fields: readonly string[]; count: number; tail: string } | undefined;
   for (const token of stdout.split("\0")) {
     if (open !== undefined) {
       if (token.length === 0) {
@@ -511,14 +516,16 @@ function nameOnlyRecords(stdout: string): readonly HistoryRecord[] {
       } else {
         open.count += 1;
       }
-      continue;
-    }
-    if (token.length === 0) continue;
-    const newline = token.indexOf("\n");
-    if (newline === -1 || newline === token.length - 1) {
-      records.push({ head: newline === -1 ? token : token.slice(0, newline), count: 0 });
+    } else if (leading.length < HISTORY_LEADING_FIELDS) {
+      leading.push(token);
     } else {
-      open = { head: token.slice(0, newline), count: 1 };
+      const newline = token.indexOf("\n");
+      const subject = newline === -1 ? token : token.slice(0, newline);
+      const tail = newline === -1 ? "" : token.slice(newline + 1);
+      const fields = [...leading, subject];
+      leading = [];
+      if (tail.length === 0) records.push({ fields, count: 0, tail });
+      else open = { fields, count: 1, tail };
     }
   }
   if (open !== undefined) records.push(open);
@@ -538,17 +545,18 @@ function parseChangedFileCount(remainder: string): number {
 
 const HISTORY_SHA_PATTERN = /^[0-9a-f]{40,64}$/u;
 
-function parseHistoryEntry(head: string, changedFileCount: number): GitHistoryEntry | undefined {
-  const fields = head.split(HISTORY_FIELD_SEP);
-  const [sha, shortSha, parents, author, date, refs] = fields;
+function parseHistoryEntry(
+  fields: readonly string[],
+  changedFileCount: number,
+): GitHistoryEntry | undefined {
+  const [sha, shortSha, parents, author, date, refs, subject] = fields;
   if (sha === undefined || shortSha === undefined || !HISTORY_SHA_PATTERN.test(sha)) {
     return undefined;
   }
-  const subject = fields.slice(6).join(HISTORY_FIELD_SEP);
   return {
     sha,
     shortSha,
-    subject,
+    subject: subject ?? "",
     author: author ?? "",
     date: date ?? "",
     refs: (refs ?? "")
@@ -560,31 +568,52 @@ function parseHistoryEntry(head: string, changedFileCount: number): GitHistoryEn
   };
 }
 
-function toEntries(records: readonly HistoryRecord[]): readonly GitHistoryEntry[] {
-  return records
-    .map((record) => parseHistoryEntry(record.head, record.count))
-    .filter((entry): entry is GitHistoryEntry => entry !== undefined);
+/** The parsed entries, and whether every record in the stream could be read. */
+interface HistoryPage {
+  readonly entries: readonly GitHistoryEntry[];
+  readonly complete: boolean;
+}
+
+// Entries stop at the FIRST record that cannot be read. Skipping it and returning the later ones
+// would shorten the page without moving the continuation: the UI asks for the next page from
+// `skip + entries.length`, so a commit would be shown twice. Stopping there keeps the continuation
+// pointing exactly at the unreadable commit, and `complete: false` lets the caller say so.
+function toPage(
+  records: readonly HistoryRecord[],
+  countOf: (record: HistoryRecord) => number,
+): HistoryPage {
+  const entries: GitHistoryEntry[] = [];
+  for (const record of records) {
+    const entry = parseHistoryEntry(record.fields, countOf(record));
+    if (entry === undefined) return { entries, complete: false };
+    entries.push(entry);
+  }
+  return { entries, complete: true };
+}
+
+function parseHistoryPage(stdout: string, truncated: boolean): HistoryPage {
+  const records = [...historyRecords(stdout)];
+  // A read the byte cap ended may stop anywhere inside its last record, and a path list cut short
+  // would be counted as if it were whole. That record is never returned: the page reports
+  // `truncated` and the UI asks for the next page from the number of entries it received.
+  if (truncated) records.pop();
+  return toPage(records, (record) => record.count);
 }
 
 export function parseHistory(
   stdout: string,
   options: { readonly truncated?: boolean } = {},
 ): readonly GitHistoryEntry[] {
-  const records = [...nameOnlyRecords(stdout)];
-  // A read the byte cap ended may stop anywhere inside its last record, and a path list cut short
-  // would be counted as if it were whole. That record is never returned: the page reports
-  // `truncated` and the UI asks for the next page from the number of entries it received.
-  if (options.truncated === true) records.pop();
-  return toEntries(records);
+  return parseHistoryPage(stdout, options.truncated === true).entries;
 }
 
-// The `--shortstat` fallback reads ONE commit without `-z`: its output is a header, a blank line and
-// the summary, so the whole stream is one record.
+// The `--shortstat` fallback reads ONE commit without `-z`: its tail is the blank line and summary.
+function parseShortstatPage(stdout: string): HistoryPage {
+  return toPage(historyRecords(stdout).slice(0, 1), (record) => parseChangedFileCount(record.tail));
+}
+
 export function parseShortstatHistory(stdout: string): readonly GitHistoryEntry[] {
-  const newline = stdout.indexOf("\n");
-  const head = newline === -1 ? stdout : stdout.slice(0, newline);
-  const remainder = newline === -1 ? "" : stdout.slice(newline + 1);
-  return toEntries([{ head, count: parseChangedFileCount(remainder) }]);
+  return parseShortstatPage(stdout).entries;
 }
 
 // An empty repository (no commits yet) makes `git log` exit non-zero; treat that as empty history.
@@ -660,6 +689,8 @@ function historyArgs(
   return [
     "log",
     "--no-color",
+    // A repo-local `log.showSignature` would print verification lines ahead of each signed commit.
+    "--no-show-signature",
     `--max-count=${String(limit)}`,
     `--skip=${String(skip)}`,
     `--pretty=${HISTORY_PRETTY_FORMAT}`,
@@ -670,6 +701,7 @@ function historyArgs(
 
 type HistoryRead =
   | { readonly kind: "failed"; readonly result: GitProcessResult }
+  | { readonly kind: "unreadable" }
   | { readonly kind: "page"; readonly entries: readonly GitHistoryEntry[]; readonly cut: boolean };
 
 // The byte cap ending the read is a bounded page, not a failure: the path lists of a very large
@@ -695,13 +727,19 @@ async function readHistoryPage(
   const result = await runGit(repo, options, historyArgs(repo, limit, skip), true);
   const cut = isBoundedHistoryCut(result);
   if (result.exitCode !== 0 && !cut) return { kind: "failed", result };
-  const entries = parseHistory(result.stdout, { truncated: cut });
-  if (!cut || entries.length > 0) return { kind: "page", entries, cut };
+  const page = parseHistoryPage(result.stdout, cut);
+  // An unreadable record ends the page early: it is reported truncated, never skipped.
+  if (page.entries.length > 0)
+    return { kind: "page", entries: page.entries, cut: cut || !page.complete };
+  if (!cut)
+    return page.complete ? { kind: "page", entries: [], cut: false } : { kind: "unreadable" };
   // The first commit alone outgrew the cap. Its file count is still owed, so read just that commit
   // with `--shortstat`, whose output is one short line however many files it names.
   const single = await runGit(repo, options, historyArgs(repo, 1, skip, HISTORY_SHORTSTAT_ARGS));
   if (single.exitCode !== 0) return { kind: "failed", result: single };
-  return { kind: "page", entries: parseShortstatHistory(single.stdout), cut: true };
+  const first = parseShortstatPage(single.stdout);
+  if (!first.complete) return { kind: "unreadable" };
+  return { kind: "page", entries: first.entries, cut: true };
 }
 
 export async function handleGitHistory(
@@ -733,6 +771,10 @@ export async function handleGitHistory(
       }
       const reason = classifyFailure(read.result);
       const body = unavailableHistory(repo.root, repo.repositoryRoot, reason, limit, skip);
+      return { status: 200, body: redacted(deps, body) };
+    }
+    if (read.kind === "unreadable") {
+      const body = unavailableHistory(repo.root, repo.repositoryRoot, undefined, limit, skip);
       return { status: 200, body: redacted(deps, body) };
     }
     const truncated = read.cut || read.entries.length === limit;

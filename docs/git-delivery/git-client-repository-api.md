@@ -79,6 +79,9 @@ Repository state for the sync banner and header.
 | `lastSync`                                                          | `GitLastSyncMetadata`? | `{ lastFetchAtMs }` when `FETCH_HEAD` exists; omitted otherwise. |
 | `truncated`                                                         | boolean                | True when the bounded status read was truncated.                 |
 
+- **Unreadable record**: a record that cannot be read ends the page there and marks it `truncated`
+  (it is never skipped, so the next page starts at that commit); when the very first record is
+  unreadable the history is `available: false`.
 - **Validator**: `validateGitRepositorySummary`.
 
 ### `GET /api/git/history`
@@ -88,8 +91,8 @@ Paginated commit timeline for the History pane.
 - **Query**: `root`; `limit` (integer, default 50, clamped to 1..200); `skip` (integer, default 0,
   clamped to 0..100000). A non-integer `limit`/`skip` is rejected with HTTP 400 (`BAD_REQUEST`).
 - **Underlying read**: `log --no-color --max-count=<limit> --skip=<skip>
---pretty=format:<US-separated H/h/P/an/aI/D/s> --name-only -z`, scoped to the selected root's pathspec. The read lists changed paths instead
-  of diffing contents, so counting files never reads blobs. The NUL-separated stream is parsed so a
+--pretty=format:<NUL-separated H/h/P/an/aI/D/s> --name-only -z --no-show-signature`, scoped to the selected root's pathspec. The read lists changed paths instead
+  of diffing contents, so counting files never reads blobs. The assumed `-z` layout per commit is `six NUL-separated header fields, subject, "\n", (path NUL)+, NUL`, or `... subject NUL` for a commit listing no paths (a merge, an empty commit). The stream is parsed so a
   record boundary is only recognised where a path cannot start: file names holding separators,
   newlines or a forged header cannot create or split an entry. An empty repository (no commits) is
   detected from stderr and returned as `available: true` with `entries: []`, not an error.
