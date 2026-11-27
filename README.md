@@ -136,7 +136,7 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 - **Coding Workbench.** A repository cloned again at the same path names its real cause with Retry, the branch choice applies to the repository the window shows, a follow-up after the model created its own task branch is accepted, a stale refusal from a previous session is dropped, and the stream keeps following after an approval or a changeset review. A commit proposal no longer shows "Waiting for approval" once Full access has executed it.
 - **Git window.** A generated commit message survives "Create branch first" and a status read, Undo and Restore refresh the Changes list, and Regenerate is offered only where the server accepts it.
 - **`keiko start`** refuses a state directory inside the start folder and names the reason, instead of ending in "Keiko stopped while it was starting".
-- **Repairs.** Coding History rename keeps keyboard focus, editor language features no longer appear twice after a reload, and Windows example paths and a stranded Windows step drive letter are fixed.
+- **Repairs.** Coding History rename keeps keyboard focus, editor language features no longer appear twice after a reload, a folder of your own named Recycled and files named like ntuser.notes.md stay searchable, and Windows example paths and a stranded Windows step drive letter are fixed.
 
 ## What's new in 1.5.9
 
