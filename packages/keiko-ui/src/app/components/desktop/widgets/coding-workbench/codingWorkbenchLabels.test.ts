@@ -986,6 +986,68 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain("ui-correlation-3");
   });
 
+  // #4491: every other closed start-refusal code the server answers names its own cause and the
+  // next step instead of "review the live state and retry".
+  it.each([
+    ["CODING_RUNTIME_ACTIVE_RUN_CONFLICT", "codingWorkbench.alert.startRefusedActiveRun"],
+    ["CODING_RUNTIME_RECOVERY_REQUIRED", "codingWorkbench.alert.startRefusedRecoveryRequired"],
+    ["CODING_RUNTIME_ISSUE_CONTEXT_UNAVAILABLE", "codingWorkbench.alert.startRefusedIssueContext"],
+    ["CODING_RUNTIME_TASK_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_WORKSPACE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_PROJECT_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_BRANCH_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_SCOPE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_BUDGET_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_SOURCE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
+    ["CODING_RUNTIME_AUTHORITY_EXPIRED", "codingWorkbench.alert.startRefusedAuthorityExpired"],
+    ["CODING_RUNTIME_AUTHORITY_REPLAYED", "codingWorkbench.alert.startRefusedAuthorityReplayed"],
+    [
+      "CODING_RUNTIME_AUTHORITY_BUDGET_EXCEEDED",
+      "codingWorkbench.alert.startRefusedAuthorityBudget",
+    ],
+    [
+      "CODING_RUNTIME_APPROVAL_ACTIVATION_FAILED",
+      "codingWorkbench.alert.startRefusedApprovalActivation",
+    ],
+    ["CODING_RUNTIME_REPLAY_CAP_EXHAUSTED", "codingWorkbench.alert.startRefusedReplayCap"],
+    ["CODING_RUNTIME_EDITS_BLOCKED", "codingWorkbench.alert.startRefusedEditsBlocked"],
+    ["CODING_RUNTIME_INVALID_INTENT", "codingWorkbench.event.failure.invalid-intent"],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_ACL",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_CAPABILITY",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_CONNECT",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_ADMIT",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_NO_DESKTOP",
+      "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_IMAGE_PATH",
+      "codingWorkbench.event.failure.runtime-supervisor-image-path",
+    ],
+    [
+      "CODING_RUNTIME_RUNTIME_SUPERVISOR_REFUSED",
+      "codingWorkbench.event.failure.runtime-supervisor-refused",
+    ],
+  ])("explains a refused start with code %s through %s", (code, key) => {
+    expect(visibleAlert(failedMutationState("ui-correlation-5", code), tv, false)).toContain(key);
+  });
+
   // #3603: a model refused because its window cannot hold a coding run's prompt, or because that
   // window is still being verified, says so instead of "the model is unavailable".
   it.each([

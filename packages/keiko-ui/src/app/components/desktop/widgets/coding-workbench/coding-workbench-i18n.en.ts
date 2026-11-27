@@ -1600,6 +1600,26 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko keeps its worktrees on another drive than Windows, where the Windows sandbox cannot run a coding task ({code}). An operator must set KEIKO_STATE_DIR to a folder on the Windows drive, usually C:, and restart Keiko.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
+  "codingWorkbench.alert.startRefusedActiveRun":
+    "Another run is still active in this task, so Keiko did not start a second one ({code}). Wait until it has finished or stop it, then start again.",
+  "codingWorkbench.alert.startRefusedRecoveryRequired":
+    "A run in this task was interrupted and still needs your decision before anything new can start ({code}). Open that run and recover or close it, then start again.",
+  "codingWorkbench.alert.startRefusedIssueContext":
+    "Keiko could not read the issue this task is bound to ({code}). Check that you are still signed in to the issue tracker and that the issue still exists, then start again.",
+  "codingWorkbench.alert.startRefusedDrift":
+    "What you approved no longer matches the task, folder, branch or limits as they are now ({code}). Check the task and press Start again, so that it is approved afresh.",
+  "codingWorkbench.alert.startRefusedAuthorityExpired":
+    "Your approval for this task has expired ({code}). Press Start again to approve it afresh.",
+  "codingWorkbench.alert.startRefusedAuthorityReplayed":
+    "This approval was already used for another start and cannot be used twice ({code}). Press Start again to approve it afresh.",
+  "codingWorkbench.alert.startRefusedAuthorityBudget":
+    "The task asks for more than the approved limits allow ({code}). Make the task smaller or raise the limits in the approval, then start again.",
+  "codingWorkbench.alert.startRefusedApprovalActivation":
+    "Keiko could not activate your approval ({code}). Press Start again. If it happens again, create an error report and pass it to your support.",
+  "codingWorkbench.alert.startRefusedReplayCap":
+    "Too many repeated requests were sent for this run ({code}). Wait a moment, then start the task again.",
+  "codingWorkbench.alert.startRefusedEditsBlocked":
+    "Edits in this workspace are blocked right now ({code}). Keep the Coding Workbench open for this workspace and check that its folder is still reachable, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed": "Authentication could not be refreshed.",
   "codingWorkbench.alert.authenticationSetupRefreshFailed":

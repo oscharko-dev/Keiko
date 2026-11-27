@@ -1659,6 +1659,26 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko legt seine Worktrees auf einem anderen Laufwerk als Windows ab, auf dem die Windows-Sandbox keine Coding-Aufgabe ausführen kann ({code}). Ein Betreiber muss KEIKO_STATE_DIR auf einen Ordner auf dem Windows-Laufwerk, meist C:, setzen und Keiko neu starten.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
+  "codingWorkbench.alert.startRefusedActiveRun":
+    "In dieser Aufgabe läuft noch ein anderer Lauf, deshalb hat Keiko keinen zweiten gestartet ({code}). Warte, bis er beendet ist, oder stoppe ihn, und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedRecoveryRequired":
+    "Ein Lauf dieser Aufgabe wurde unterbrochen und braucht noch deine Entscheidung, bevor etwas Neues starten kann ({code}). Öffne diesen Lauf, stelle ihn wieder her oder schließe ihn ab, und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedIssueContext":
+    "Keiko konnte das Issue, an das diese Aufgabe gebunden ist, nicht lesen ({code}). Prüfe, ob du noch im Issue-Tracker angemeldet bist und das Issue noch existiert, und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedDrift":
+    "Das, was du freigegeben hast, passt nicht mehr zu Aufgabe, Ordner, Branch oder Limits, wie sie jetzt sind ({code}). Prüfe die Aufgabe und drücke erneut auf Start, damit sie neu freigegeben wird.",
+  "codingWorkbench.alert.startRefusedAuthorityExpired":
+    "Deine Freigabe für diese Aufgabe ist abgelaufen ({code}). Drücke erneut auf Start, um sie neu freizugeben.",
+  "codingWorkbench.alert.startRefusedAuthorityReplayed":
+    "Diese Freigabe wurde schon für einen anderen Start verwendet und gilt nicht zweimal ({code}). Drücke erneut auf Start, um sie neu freizugeben.",
+  "codingWorkbench.alert.startRefusedAuthorityBudget":
+    "Die Aufgabe verlangt mehr, als die freigegebenen Limits erlauben ({code}). Mache die Aufgabe kleiner oder erhöhe die Limits in der Freigabe und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedApprovalActivation":
+    "Keiko konnte deine Freigabe nicht aktivieren ({code}). Drücke erneut auf Start. Passiert es wieder, erstelle einen Fehlerbericht und gib ihn an deinen Support weiter.",
+  "codingWorkbench.alert.startRefusedReplayCap":
+    "Für diesen Lauf wurden zu viele wiederholte Anfragen gesendet ({code}). Warte einen Moment und starte die Aufgabe dann erneut.",
+  "codingWorkbench.alert.startRefusedEditsBlocked":
+    "Änderungen in diesem Workspace sind gerade gesperrt ({code}). Lass die Coding Workbench für diesen Workspace geöffnet und prüfe, ob sein Ordner noch erreichbar ist, und starte dann erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed":
     "Authentifizierung konnte nicht aktualisiert werden.",
