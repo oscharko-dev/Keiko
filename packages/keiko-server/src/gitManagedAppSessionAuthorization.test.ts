@@ -281,11 +281,15 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
     };
     const runner = vi.fn<GitProcessRunner>((args, options) => {
       if (args.includes("rev-parse")) {
-        const prefix = options.cwd === stateManagedSubfolder ? "packages/example/" : "";
+        // The cwd is the realpath (macOS /tmp is /private/tmp), so match the subfolder by suffix.
+        const prefix = options.cwd.endsWith(join("packages", "example")) ? "packages/example/" : "";
         return Promise.resolve(ok(`${stateManagedWorktree}\n${prefix}\n`));
       }
       if (args.includes("status")) {
         return Promise.resolve(ok("## keiko/task/managed-git-auth\0"));
+      }
+      if (args.includes("--cached") && args.includes("--raw")) {
+        return Promise.resolve(ok(""));
       }
       throw new Error(`unexpected git argv: ${args.join(" ")}`);
     });
@@ -310,7 +314,11 @@ describe("managed task-worktree Git read authorization (#2482)", () => {
         },
       });
     }
-    expect(runner).toHaveBeenCalledTimes(6);
+    // Two reads per variant, plus the staged-digest listing for the folder-scoped subfolder view.
+    expect(runner).toHaveBeenCalledTimes(7);
+    expect(
+      runner.mock.calls.filter(([args]) => args.includes("--cached") && args.includes("--raw")),
+    ).toHaveLength(1);
   });
 
   it("rejects unpaired managed-root variants before filesystem or Git access", async () => {
