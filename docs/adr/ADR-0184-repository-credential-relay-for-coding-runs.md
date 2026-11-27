@@ -184,6 +184,15 @@ to a file of the run.
   capability under the exact host spelling npm derives from the relay URL. `audit=false`, because
   the relay refuses a POST, and `update-notifier=false`, because npm's update check reads npm's own
   packument (tens of megabytes) through the relay from the person's registry on every run (#4491).
+  **Quiet npm in every run (#4491).** The user config exists only for a run with a bound npm
+  target, and a notice such as "New major version of npm available" showed in a run without one:
+  npm's update check made its own registry request outside the task and its text only spent the
+  model's context. The runtime's environment therefore carries `npm_config_update_notifier=false`,
+  `npm_config_audit=false` and `npm_config_fund=false` in every mode and on every OS, Windows
+  included, so a shell the run starts inherits them. `audit` contacts the registry with a POST: the
+  relay refuses it and, unbound, it would reach the registry around the relay, so it is off rather
+  than relayed. `fund` makes no request (it reads package metadata); it is off only for the context
+  it costs. The three are static flags, so the Activity Log gains no field.
   **Tarballs (#4491).** npm records in a lockfile the tarball URL it fetched. A packument the
   relay rewrote therefore made a lockfile the run wrote pin Keiko's relay, whose address and
   binding last one run: a later run, a colleague and CI could not install from it. A lockfile

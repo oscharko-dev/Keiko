@@ -432,13 +432,25 @@ function launchEnvironment(
  * biome, oxfmt) from the registry as standalone does (#3900 AC4), with bounded retries, so an
  * unreachable registry fails promptly too.
  */
+/**
+ * npm's own update check and registry audit contact the registry outside the task, and the notice
+ * and funding lines they print only spend the model's context, so they stay off in every profile,
+ * mode and OS, as the relay's user config does for a bound run (ADR-0184 D6). The registry audit
+ * is a POST the relay refuses and a direct one would go around it.
+ */
+export const NPM_QUIET_ENVIRONMENT: Readonly<Record<string, string>> = {
+  npm_config_update_notifier: "false",
+  npm_config_fund: "false",
+  npm_config_audit: "false",
+};
+
 function packageManagerEnvironment(
   input: OpenCodeLaunchProfileInput,
   formatter: OpenCodeNativeFormatterDisposition,
 ): Readonly<Record<string, string>> {
   return input.toolProfile === "native" && formatter === "enabled"
-    ? { npm_config_fetch_retries: "1", npm_config_fetch_timeout: "15000" }
-    : { npm_config_offline: "true" };
+    ? { ...NPM_QUIET_ENVIRONMENT, npm_config_fetch_retries: "1", npm_config_fetch_timeout: "15000" }
+    : { ...NPM_QUIET_ENVIRONMENT, npm_config_offline: "true" };
 }
 
 /** What the native binding decided for the formatters; absent on the mapped profiles. */
