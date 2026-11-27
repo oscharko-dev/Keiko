@@ -4816,6 +4816,58 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     // The repo-A outcome was invalidated on switch — no banner appears under repo B.
     expect(screen.queryByTestId("git-staging-outcome")).not.toBeInTheDocument();
   });
+
+  it("keeps repository B's generated draft when repository A's stage settles later", async () => {
+    let resolveStage!: (v: Awaited<ReturnType<GitClientSeam["stage"]>>) => void;
+    const stagePending = new Promise<Awaited<ReturnType<GitClientSeam["stage"]>>>((res) => {
+      resolveStage = res;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(() => stagePending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
+    fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await act(async () => {
+      resolveStage({ schemaVersion: "1", status: "succeeded", actionKind: "stage" });
+    });
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+  });
+
+  it("clears an unedited generated draft when staging succeeds in the active repository", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        actionKind: "stage",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+  });
 });
 
 describe("GitClientWindow — commit composer (Issue #1575)", () => {

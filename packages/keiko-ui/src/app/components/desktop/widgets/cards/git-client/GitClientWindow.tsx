@@ -1481,20 +1481,30 @@ export function GitClientWindow({
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runStaging = staging.runMutation;
+  // The repository the user is looking at now, read when a staging call settles so a call that
+  // outlives a repository switch never moves the newly selected repository's draft revision.
+  const currentRepositoryRef = useRef(selectedPath);
+  useEffect((): void => {
+    currentRepositoryRef.current = selectedPath;
+  }, [selectedPath]);
   const runStagingMutation = useCallback(
     (op: Parameters<typeof runStaging>[0]): ReturnType<typeof runStaging> => {
       // Moves the draft revision only when the index may have changed. It moves before the outcome
       // reaches the flow, which is what invalidates the repository state, so the status read that
       // follows already sees the new epoch. A refused click (blocked, approval required) staged
       // nothing and keeps an unedited generated draft.
+      const originRepository = selectedPath;
       runStaging(async () => {
         const outcome = await op();
-        if (INDEX_MAY_HAVE_CHANGED.has(outcome.status))
+        if (
+          INDEX_MAY_HAVE_CHANGED.has(outcome.status) &&
+          currentRepositoryRef.current === originRepository
+        )
           setStagingEpoch((epoch): number => epoch + 1);
         return outcome;
       });
     },
-    [runStaging],
+    [runStaging, selectedPath],
   );
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runCommitPreview = commit.runPreview;
