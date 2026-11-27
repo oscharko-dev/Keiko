@@ -3232,6 +3232,92 @@ describe("CodingWorkbenchWindow", () => {
     ).toBe("npm run build\n  && npm test");
   });
 
+  // ADR-0124 D6: in Ask for approval the person decides about the command Approve runs.
+  function verificationAskState(): CodingWorkbenchRuntimeState {
+    return liveState({
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "awaiting-approval",
+          runId: "run-1",
+          pendingPermission: {
+            requestId: "permission-verify-1",
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            policyReason: "approval-required",
+            scopeLabel: "workspace-scope",
+            risk: "low",
+            actionKind: "verification-command",
+            commandLabel: "test",
+            expiresAt: "2026-07-13T12:05:00.000Z",
+          },
+        }),
+      },
+    });
+  }
+
+  function verificationReview(
+    verificationPreview: NonNullable<
+      NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>["verificationPreview"]
+    >,
+    status: UseCodingWorkbenchApprovalReviewResult["status"] = "ready",
+  ): UseCodingWorkbenchApprovalReviewResult {
+    return {
+      status,
+      review: {
+        requestId: "permission-verify-1",
+        verificationPreview,
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult;
+  }
+
+  it("ADR-0124 D6: a governed verification card shows the command Keiko runs and passes axe", async () => {
+    approvalReviewHookMock.mockReturnValue(
+      verificationReview({ status: "commands", commands: ["mvn -B test"], truncated: true }),
+    );
+    renderWorkbench(verificationAskState());
+
+    expect(screen.getByRole("list", { name: "Commands Keiko runs" }).textContent).toBe(
+      "mvn -B test",
+    );
+    const card = screen.getByRole("group", { name: "What Approve runs" });
+    expect(card).toHaveTextContent("credentials are masked");
+    expect(card).toHaveTextContent("A very long command is cut");
+    expect(screen.queryByText(/remain hidden/u)).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it.each([
+    [
+      { status: "deferred", reason: "targeted-test" } as const,
+      "Keiko runs the tests for the changed file",
+    ],
+    [
+      { status: "deferred", reason: "package-selection" } as const,
+      "Keiko picks the package's test command",
+    ],
+    [{ status: "unavailable", reason: "preview-failed" } as const, "could not look up the command"],
+  ])(
+    "ADR-0124 D6: %j says so in a plain sentence and never blocks Approve",
+    (preview, sentence) => {
+      approvalReviewHookMock.mockReturnValue(verificationReview(preview));
+      renderWorkbench(verificationAskState());
+
+      expect(screen.getByRole("group", { name: "What Approve runs" })).toHaveTextContent(sentence);
+      expect(screen.queryByRole("list", { name: "Commands Keiko runs" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+    },
+  );
+
   it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
     approvalReviewHookMock.mockReturnValue(nativeReview("webfetch", ["https://example.test/doc"]));
     renderWorkbench(nativeAskState("webfetch"));

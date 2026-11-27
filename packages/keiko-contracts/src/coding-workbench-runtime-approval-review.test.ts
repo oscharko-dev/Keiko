@@ -464,3 +464,49 @@ describe("native action review boundaries (#3897)", () => {
     });
   });
 });
+
+describe("verification preview review (ADR-0124 D6)", () => {
+  const review = (verificationPreview: unknown, extra: Record<string, unknown> = {}): unknown =>
+    activeReview({ paths: [], fileCount: 0, verificationPreview, ...extra });
+
+  it.each([
+    ["commands", { status: "commands", commands: ["mvn -B test"], truncated: false }],
+    ["a targeted-test deferral", { status: "deferred", reason: "targeted-test" }],
+    ["a package-selection deferral", { status: "deferred", reason: "package-selection" }],
+    ["an unavailable lookup", { status: "unavailable", reason: "preview-failed" }],
+  ])("accepts %s", (_label, preview) => {
+    expect(errorsFor(review(preview))).toEqual([]);
+  });
+
+  it.each([
+    ["an empty command list", { status: "commands", commands: [], truncated: false }],
+    [
+      "too many commands",
+      {
+        status: "commands",
+        commands: Array.from({ length: 9 }, () => "npm test"),
+        truncated: true,
+      },
+    ],
+    [
+      "an over-long command",
+      { status: "commands", commands: ["x".repeat(1_025)], truncated: true },
+    ],
+    ["an unknown deferral", { status: "deferred", reason: "other" }],
+    ["an unknown status", { status: "later" }],
+    ["an inherited status name", { status: "constructor" }],
+    ["an extra key", { status: "deferred", reason: "targeted-test", command: "rm" }],
+  ])("refuses %s", (_label, preview) => {
+    expect(errorsFor(review(preview))).not.toEqual([]);
+  });
+
+  it("refuses a preview that also names paths", () => {
+    expect(
+      errorsFor(
+        activeReview({
+          verificationPreview: { status: "deferred", reason: "targeted-test" },
+        }),
+      ),
+    ).not.toEqual([]);
+  });
+});

@@ -288,6 +288,20 @@ contract. Request kinds are closed and action-class aligned, including:
 A permission request carries only ids, enums, expiry, requested connector scopes, and redacted safe
 labels. It never carries raw command logs, file contents, prompts, or credentials.
 
+What a person approves is shown on the separate, authenticated approval-review channel, never in the
+permission request. A governed verification ask (`test`, `typecheck`, `lint`, `build`) names only its
+verifier class, so the server resolves the command lines the runner would plan for it
+(`VerificationRunnerManager.previewCommands`, a strictly side-effect-free read: no trust decision,
+no isolation probe, no spawn, no evidence, no log line) and carries them as the review's
+`verificationPreview`. The lines are what a person reads, so they pass the credential floor
+(`redactContent` with `preserve`) and then the strict `redact` for flag shapes such as `--password=`;
+at most 8 lines of 1,024 characters, a cut line ending in an ellipsis. A targeted test and an
+unresolved monorepo package name no command yet and say so in a plain sentence; a failed lookup
+falls back to the class label with a closed reason (`workspace-unresolved`, `no-runnable-step`,
+`preview-failed`) logged body-free on `coding-runtime.approval`, and never blocks the decision. The
+preview never enters a runtime event, snapshot, evidence or the Activity Log. Known gap: the floor
+does not mask a Maven `-Dpassword=` system property.
+
 The V2 governed ask a generated OpenCode plugin sends (`action: "permission-request"`) also names the
 tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id). It is
 body-free. The approval registry validates the ask fail-closed with exact keys, so an ask that names

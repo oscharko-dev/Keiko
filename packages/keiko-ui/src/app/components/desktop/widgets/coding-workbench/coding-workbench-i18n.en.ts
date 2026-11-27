@@ -1175,6 +1175,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Changed files unavailable. Re-pair this window to see them before deciding.",
   "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
+  "codingWorkbench.approval.verification.title": "What Approve runs",
+  "codingWorkbench.approval.verification.commands": "Commands Keiko runs",
+  "codingWorkbench.approval.verification.help":
+    "The command is shown as Keiko will run it; credentials are masked.",
+  "codingWorkbench.approval.verification.truncated": "A very long command is cut and ends in …",
+  "codingWorkbench.approval.verification.loading": "Looking up the command…",
+  "codingWorkbench.approval.verification.deferred.targeted-test":
+    "Keiko runs the tests for the changed file after you approve.",
+  "codingWorkbench.approval.verification.deferred.package-selection":
+    "Keiko picks the package's test command after you approve.",
+  "codingWorkbench.approval.verification.unavailable":
+    "Keiko could not look up the command, so only the kind of check is shown.",
   "codingWorkbench.approval.native.title": "What the agent wants to do",
   "codingWorkbench.approval.native.help": "Allows exactly this action once.",
   "codingWorkbench.approval.native.help.shell": "Runs this command once in the task workspace.",

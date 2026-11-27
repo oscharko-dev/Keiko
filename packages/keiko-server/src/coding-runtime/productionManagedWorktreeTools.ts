@@ -584,7 +584,7 @@ export interface ProductionManagedWorktreeToolInput {
   // for the same reason `requestOperatorDecision` is: a composition that supplies neither cannot
   // wait for an operator and keeps the immediate refusal it always had. Both are needed to wait.
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport"> &
-    Partial<Pick<VerificationRunnerManager, "scriptTrustFor">>;
+    Partial<Pick<VerificationRunnerManager, "scriptTrustFor" | "previewCommands">>;
   /**
    * Announces a decision only a local human can make, and then announces how it settled. A tool
    * that meets one waits in place for it; this is how the run itself reports that it is waiting,

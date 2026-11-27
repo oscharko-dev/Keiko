@@ -984,9 +984,16 @@ function runtimeLaunchSafety(
   run: ProductionRuntimeBackendInput,
 ): Pick<
   OpenCodeRuntimeCompositionInput,
-  "resolveWorkspaceRootAccess" | "canSpawnRuntime" | "authorityLifecycle" | "codingToolApprovals"
+  | "resolveWorkspaceRootAccess"
+  | "canSpawnRuntime"
+  | "authorityLifecycle"
+  | "codingToolApprovals"
+  | "verificationPreview"
 > {
   return {
+    ...(run.verificationPreview === undefined
+      ? {}
+      : { verificationPreview: run.verificationPreview }),
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
     resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,

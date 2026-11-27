@@ -5983,6 +5983,57 @@ describe("governed-assist approval reviewability", () => {
     });
   });
 
+  it("carries what a pending governed verification would run on the review channel only (ADR-0124 D6)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const asked: unknown[] = [];
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      verificationPreview: (verifierId, correlationId) => {
+        asked.push([verifierId, correlationId]);
+        return { status: "commands", commands: ["mvn -B test"], truncated: false };
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    await manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-2802-run",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "approval-required",
+        commandLabel: "test",
+      }),
+    );
+    await settle();
+
+    expect(asked).toEqual([["test", "run-1991"]]);
+    expect(manager.pendingApprovalReview("run-1991", "perm-2802-run")).toEqual({
+      requestId: "perm-2802-run",
+      verificationPreview: { status: "commands", commands: ["mvn -B test"], truncated: false },
+      paths: [],
+      pathsTruncated: false,
+      fileCount: 0,
+      addedLines: 0,
+      deletedLines: 0,
+    });
+    // The event stream, snapshot and evidence copy stay content-free: the ask names the verifier
+    // class only, never the command line.
+    expect(JSON.stringify(events)).not.toContain("mvn");
+  });
+
   it("keeps the review facts of every queued ask, not only the latest (#3897 live lab)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();

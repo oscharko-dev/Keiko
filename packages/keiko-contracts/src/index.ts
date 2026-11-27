@@ -1575,6 +1575,7 @@ export type {
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchVerificationPreview,
 } from "./coding-workbench-runtime-approval-review.js";
 export type {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT,

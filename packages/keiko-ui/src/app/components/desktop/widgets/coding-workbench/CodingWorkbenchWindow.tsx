@@ -96,6 +96,7 @@ import {
   nativeActionNamesResource,
   nativeActionTitle,
 } from "./CodingWorkbenchNativeActionReview";
+import { CodingWorkbenchVerificationPreviewReview } from "./CodingWorkbenchVerificationPreview";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -2584,6 +2585,8 @@ function approvalReviewBound(
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
 ): boolean {
   if (approvalReviewRequestId(request) === undefined) return true;
+  // The preview only informs the decision: a failed lookup falls back to the named kind of check.
+  if (request.actionKind === "verification-command") return true;
   const review = approvalReview.status === "ready" ? approvalReview.review : null;
   if (review?.requestId !== request.requestId) return false;
   // A native ask that names no command, path or address gives the human nothing to decide on.
@@ -2711,7 +2714,9 @@ function ApprovalDetails({
   return (
     <details className={styles.cmpApprovalDetails}>
       <summary>{t("codingWorkbench.approval.details")}</summary>
-      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
+      {native || request.actionKind === "verification-command" ? null : (
+        <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
+      )}
       <ApprovalFacts request={request} t={t} />
     </details>
   );
@@ -2768,6 +2773,9 @@ function ApprovalReviewContent({
     ) : (
       <CodingWorkbenchNativeActionReview action={action} t={t} />
     );
+  }
+  if (kind === "verification-command") {
+    return <CodingWorkbenchVerificationPreviewReview state={review} t={t} />;
   }
   return (
     <>

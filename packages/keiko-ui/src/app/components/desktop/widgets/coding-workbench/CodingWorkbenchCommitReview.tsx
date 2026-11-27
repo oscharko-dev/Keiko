@@ -43,21 +43,22 @@ export function isNativeActionPermission(
   return isNativeActionPermissionRequest(request);
 }
 
+const REVIEWED_ACTION_KINDS: ReadonlySet<string> = new Set([
+  "file-edit",
+  "git-stage",
+  "git-unstage",
+  "commit",
+  "push",
+  "pull-request",
+  "verification-command",
+]);
+
 export function approvalReviewRequestId(
   request: CodingWorkbenchRuntimePendingPermission | undefined,
 ): string | undefined {
-  if (isNativeActionPermission(request)) return request?.requestId;
-  switch (request?.actionKind) {
-    case "file-edit":
-    case "git-stage":
-    case "git-unstage":
-    case "commit":
-    case "push":
-    case "pull-request":
-      return request.requestId;
-    default:
-      return undefined;
-  }
+  if (request === undefined) return undefined;
+  if (isNativeActionPermission(request)) return request.requestId;
+  return REVIEWED_ACTION_KINDS.has(request.actionKind ?? "") ? request.requestId : undefined;
 }
 
 /** The snapshot and authenticated review may advance independently; never display a foreign proposal. */

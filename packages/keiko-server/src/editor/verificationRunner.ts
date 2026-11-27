@@ -396,9 +396,35 @@ export interface VerificationRunnerManager {
     projectId: string,
     autonomyMode?: CodingWorkbenchMode,
   ) => ScriptTrustDecision | undefined;
+  /**
+   * The command lines a governed verification would run, planned from the project exactly as
+   * `execute` plans them, as a strictly side-effect-free read: no trust decision, no isolation
+   * probe, no spawn, no evidence and no log line. It exists so the approval card can show the
+   * person what Approve runs. A workspace that cannot be resolved throws the runner's own `PROJECT_NOT_FOUND`
+   * (the caller owns the one log line); a refused package folder answers `unresolved`.
+   */
+  readonly previewCommands: (input: VerificationPreviewInput) => VerificationCommandPreview;
   readonly subscribe: (listener: VerificationRunnerEventEmitter) => () => void;
   readonly inFlightCount: () => number;
 }
+
+export interface VerificationPreviewInput {
+  readonly projectId: string;
+  readonly kinds: readonly VerificationKind[];
+  readonly packageDir?: string | undefined;
+}
+
+export interface VerificationPreviewStep {
+  readonly command: string;
+  readonly args: readonly string[];
+  /** Workspace-relative folder of a nested package; absent for the workspace root. */
+  readonly cwd?: string | undefined;
+}
+
+export type VerificationCommandPreview =
+  | { readonly kind: "steps"; readonly steps: readonly VerificationPreviewStep[] }
+  | { readonly kind: "package-selection-required" }
+  | { readonly kind: "unresolved" };
 
 export interface VerificationRunnerManagerOptions {
   readonly store: UiStore;
@@ -1365,6 +1391,41 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       // path the moment verification is actually attempted, so nothing is lost from the log.
       return undefined;
     }
+  };
+
+  public readonly previewCommands = (
+    input: VerificationPreviewInput,
+  ): VerificationCommandPreview => {
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
+    const fs = resolved.access.fs;
+    const resolution = resolveVerificationPackage(workspace, fs, {
+      packageDir: input.packageDir,
+      onProbeFailure: (): void => undefined,
+    });
+    if (resolution.kind === "ambiguous") return { kind: "package-selection-required" };
+    if (resolution.kind === "refused") return { kind: "unresolved" };
+    const pkg = resolution.kind === "package" ? resolution.package : undefined;
+    const scriptKinds = input.kinds.filter(isScriptBackedKind);
+    // Maven runs on the Windows step backend only (#4492); the preview reads the host platform
+    // instead of probing isolation, because a probe spawns a process.
+    const maven =
+      pkg === undefined && process.platform === "win32" && isMavenProject(workspace, fs);
+    const steps = maven
+      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
+          cacheRepository: this.mavenCacheRepository(),
+        })
+      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    return {
+      kind: "steps",
+      steps: steps
+        .filter((step) => step.skipReason === undefined)
+        .map((step) => ({
+          command: step.command,
+          args: step.args,
+          ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+        })),
+    };
   };
 
   private scriptTrust(

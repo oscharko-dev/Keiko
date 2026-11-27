@@ -90,11 +90,55 @@ export const CODING_WORKBENCH_NATIVE_JIRA_REVIEW_MAX_NAMES = 64;
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES = 64;
 export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS = 2_048;
 
+/** Why a governed verification names no command yet; a plain sentence on the card, never empty. */
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS = [
+  "targeted-test",
+  "package-selection",
+] as const;
+export type CodingWorkbenchVerificationPreviewDeferral =
+  (typeof CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS)[number];
+
+/** Closed reasons a preview could not be produced; the card falls back to the class label. */
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS = [
+  "workspace-unresolved",
+  "no-runnable-step",
+  "preview-failed",
+] as const;
+export type CodingWorkbenchVerificationPreviewUnavailableReason =
+  (typeof CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS)[number];
+
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS = 8;
+export const CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS = 1_024;
+
+/**
+ * What a governed verification ask (`test`, `typecheck`, `lint`, `build`) would run, resolved from
+ * the project the way the runner plans it. The command lines are MODEL-INFLUENCED project content
+ * shown to the person who approves: they carry only the content (credential-floor) projection,
+ * travel only on the authenticated review channel, and never reach evidence or the Activity Log.
+ * A line longer than the cap is cut and ends in an ellipsis, and `truncated` says so.
+ */
+export type CodingWorkbenchVerificationPreview =
+  | {
+      readonly status: "commands";
+      readonly commands: readonly string[];
+      readonly truncated: boolean;
+    }
+  | {
+      readonly status: "deferred";
+      readonly reason: CodingWorkbenchVerificationPreviewDeferral;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly reason: CodingWorkbenchVerificationPreviewUnavailableReason;
+    };
+
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
   readonly requestId: string;
   /** Present only for a native OpenCode action; edits carry their paths in `paths` as well. */
   readonly nativeAction?: CodingWorkbenchNativeActionReview;
+  /** Present only for a governed verification ask; carries no paths. */
+  readonly verificationPreview?: CodingWorkbenchVerificationPreview;
   /** Workspace-relative, deduplicated, in the order the changeset declared them. */
   readonly paths: readonly string[];
   /** True when the changeset declared more files than `paths` carries. */
@@ -169,6 +213,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "verifiedCommit",
         "draftDelivery",
         "nativeAction",
+        "verificationPreview",
       ],
       "pendingApprovalReview",
     ),
@@ -180,6 +225,8 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
   if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
+  else if (value.verificationPreview !== undefined)
+    validateVerificationPreviewReview(value, errors);
   else if (value.draftDelivery === undefined)
     validateReviewPaths(value.paths, errors, value.verifiedCommit !== undefined);
   else validateDraftReview(value, errors);
@@ -213,6 +260,70 @@ function validateNativeActionReview(pending: Record<string, unknown>, errors: st
   }
   // Edit asks also carry their contained paths; other native actions carry none.
   if (pending.paths.length > 0) validateReviewPaths(pending.paths, errors);
+}
+
+function validateVerificationPreviewReview(
+  pending: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    pending.draftDelivery !== undefined ||
+    pending.verifiedCommit !== undefined ||
+    !Array.isArray(pending.paths) ||
+    pending.paths.length > 0
+  )
+    errors.push("a verification preview review carries no paths, delivery or commit authority");
+  const value = pending.verificationPreview;
+  if (!isRecord(value)) {
+    errors.push("verificationPreview must be an object");
+    return;
+  }
+  const shape =
+    typeof value.status === "string" && Object.hasOwn(PREVIEW_SHAPES, value.status)
+      ? PREVIEW_SHAPES[value.status]
+      : undefined;
+  if (shape === undefined) {
+    errors.push("verificationPreview.status is invalid");
+    return;
+  }
+  errors.push(...exactKeys(value, shape.keys, "verificationPreview"));
+  if (!shape.valid(value)) errors.push(shape.message);
+}
+
+interface PreviewShape {
+  readonly keys: readonly string[];
+  readonly valid: (value: Record<string, unknown>) => boolean;
+  readonly message: string;
+}
+
+const PREVIEW_SHAPES: Readonly<Record<string, PreviewShape | undefined>> = {
+  commands: {
+    keys: ["status", "commands", "truncated"],
+    valid: (value) => validPreviewCommands(value.commands) && typeof value.truncated === "boolean",
+    message: "verificationPreview.commands must be 1 to 8 bounded display lines",
+  },
+  deferred: {
+    keys: ["status", "reason"],
+    valid: (value) => isOneOf(value.reason, CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS),
+    message: "verificationPreview.reason is invalid",
+  },
+  unavailable: {
+    keys: ["status", "reason"],
+    valid: (value) =>
+      isOneOf(value.reason, CODING_WORKBENCH_VERIFICATION_PREVIEW_UNAVAILABLE_REASONS),
+    message: "verificationPreview.reason is invalid",
+  },
+};
+
+function validPreviewCommands(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS &&
+    value.every((line) =>
+      validateUntrustedDisplayText(line, CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS),
+    )
+  );
 }
 
 function validNativeResources(value: unknown): boolean {

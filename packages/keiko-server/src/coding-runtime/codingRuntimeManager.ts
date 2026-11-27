@@ -37,6 +37,7 @@ import type {
   CodingWorkbenchPolicyResourceScope,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchVerificationPreview,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchSupervisedActionKind,
   CodingWorkbenchSupervisedPolicyReason,
@@ -304,6 +305,12 @@ export type CodingRuntimeApprovalIssueResult =
       readonly retryable: false;
     };
 
+/** Maps a verifier id and the run's correlation id to the approval card's preview. */
+export type CodingVerificationPreviewPort = (
+  verifierId: string,
+  correlationId: string,
+) => CodingWorkbenchVerificationPreview;
+
 export interface CodingRuntimeManagerDeps {
   readonly supervisor?: RuntimeProcessSupervisor | undefined;
   readonly processEnv: NodeJS.ProcessEnv;
@@ -311,6 +318,11 @@ export interface CodingRuntimeManagerDeps {
   readonly nowIso?: (() => string) | undefined;
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
+  /**
+   * What a pending governed verification ask would run, for the approval card (ADR-0124 D6). Reads
+   * the project, never executes or logs; absent leaves the card on its class label.
+   */
+  readonly verificationPreview?: CodingVerificationPreviewPort | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly onSandboxAttestation?:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
@@ -490,6 +502,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly nowIso: () => string;
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
+  readonly verificationPreview: CodingVerificationPreviewPort | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly onSandboxAttestation:
     ((runId: string, attestation: LongLivedRuntimeSandboxAttestation) => void) | undefined;
@@ -625,6 +638,7 @@ interface ActiveRuntime {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly issuedTaskApprovalMetadata: Map<string, IssuedTaskApprovalMetadata>;
   readonly codingToolApprovals: CodingToolApprovalBridge | undefined;
+  readonly verificationPreview: CodingVerificationPreviewPort | undefined;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
   readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
@@ -791,6 +805,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     nowIso: deps.nowIso ?? ((): string => new Date().toISOString()),
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     codingToolApprovals: deps.codingToolApprovals,
+    verificationPreview: deps.verificationPreview,
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     onSandboxAttestation: deps.onSandboxAttestation,
     diagnostics: deps.diagnostics,
@@ -2623,7 +2638,12 @@ function createActiveRuntime(
   tree: RuntimeProcessTree,
   deps: Pick<
     NormalizedCodingRuntimeManagerDeps,
-    "approvalStore" | "codingToolApprovals" | "now" | "nowIso" | "resolveWorkspaceRootAccess"
+    | "approvalStore"
+    | "codingToolApprovals"
+    | "verificationPreview"
+    | "now"
+    | "nowIso"
+    | "resolveWorkspaceRootAccess"
   >,
   openCodeLifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
   codexLifecycleAdapter?: CodexLifecycleAdapter,
@@ -2636,6 +2656,7 @@ function createActiveRuntime(
     approvalStore: deps.approvalStore,
     issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: deps.codingToolApprovals,
+    verificationPreview: deps.verificationPreview,
     nowMs: deps.now,
     nowIso: deps.nowIso,
     resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
@@ -2678,6 +2699,7 @@ function createInactiveRuntime(
     approvalStore,
     issuedTaskApprovalMetadata: new Map(),
     codingToolApprovals: undefined,
+    verificationPreview: undefined,
     nowMs,
     nowIso,
     resolveWorkspaceRootAccess,
@@ -3337,7 +3359,7 @@ function sidecarRuntimeEvent(
   if (!observeCodingToolApproval(active, event, request.actionKind)) {
     return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
   }
-  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event));
+  rememberApprovalReview(active.pendingApprovalReviews, approvalReviewFacts(event, active));
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
@@ -3419,8 +3441,10 @@ function rememberApprovalReview(
 
 function approvalReviewFacts(
   event: SidecarPermissionEvent,
+  active: Pick<ActiveRuntime, "context" | "verificationPreview">,
 ): CodingWorkbenchRuntimePendingApprovalReview | undefined {
   if (event.nativeAction !== undefined) return nativeActionReviewFacts(event);
+  if (event.actionKind === "verification-command") return verificationReviewFacts(event, active);
   if (event.actionKind !== "file-edit") return undefined;
   const declared = event.allowedRelativePaths ?? [];
   const paths = declared.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -3438,6 +3462,28 @@ function approvalReviewFacts(
   }).ok
     ? pending
     : undefined;
+}
+
+/**
+ * The command lines a governed verification ask would run (ADR-0124 D6): the person decides about
+ * what Approve runs, not a bare class label. Transient review-channel state only, like the native
+ * action facts; the preview port is body-free in every log and the ask itself stays content-free.
+ */
+function verificationReviewFacts(
+  event: SidecarPermissionEvent,
+  active: Pick<ActiveRuntime, "context" | "verificationPreview">,
+): CodingWorkbenchRuntimePendingApprovalReview | undefined {
+  const port = active.verificationPreview;
+  if (port === undefined || event.commandLabel === undefined) return undefined;
+  return {
+    requestId: event.requestId,
+    verificationPreview: port(event.commandLabel, active.context.runId),
+    paths: [],
+    pathsTruncated: false,
+    fileCount: 0,
+    addedLines: 0,
+    deletedLines: 0,
+  };
 }
 
 /**

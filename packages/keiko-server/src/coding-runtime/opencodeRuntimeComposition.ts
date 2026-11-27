@@ -727,6 +727,8 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly toolFacadeOrigin: string;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
+  /** Approval-card preview of a governed verification (ADR-0124 D6); see the manager dep. */
+  readonly verificationPreview?: CodingRuntimeManagerDeps["verificationPreview"];
   readonly governedEventSink: {
     readonly execute: (
       identityKey: string,
@@ -1171,6 +1173,9 @@ function compositionManager(
     ...(input.codingToolApprovals === undefined
       ? {}
       : { codingToolApprovals: input.codingToolApprovals }),
+    ...(input.verificationPreview === undefined
+      ? {}
+      : { verificationPreview: input.verificationPreview }),
     ...input.authorityLifecycle,
   });
 }

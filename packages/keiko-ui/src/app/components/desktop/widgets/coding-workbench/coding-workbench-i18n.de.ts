@@ -1216,6 +1216,19 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.retry": "Geänderte Dateien erneut laden",
   "codingWorkbench.approval.help":
     "Unverarbeitete Befehle, Prompts, Diffs und Dateiinhalte bleiben verborgen.",
+  "codingWorkbench.approval.verification.title": "Was Freigeben ausführt",
+  "codingWorkbench.approval.verification.commands": "Befehle, die Keiko ausführt",
+  "codingWorkbench.approval.verification.help":
+    "Der Befehl wird so gezeigt, wie Keiko ihn ausführt; Zugangsdaten sind maskiert.",
+  "codingWorkbench.approval.verification.truncated":
+    "Ein sehr langer Befehl wird abgeschnitten und endet mit …",
+  "codingWorkbench.approval.verification.loading": "Der Befehl wird ermittelt …",
+  "codingWorkbench.approval.verification.deferred.targeted-test":
+    "Keiko führt nach der Freigabe die Tests für die geänderte Datei aus.",
+  "codingWorkbench.approval.verification.deferred.package-selection":
+    "Keiko wählt nach der Freigabe den Testbefehl des Pakets.",
+  "codingWorkbench.approval.verification.unavailable":
+    "Keiko konnte den Befehl nicht ermitteln, daher wird nur die Art der Prüfung gezeigt.",
   "codingWorkbench.approval.native.title": "Was der Agent ausführen möchte",
   "codingWorkbench.approval.native.help": "Erlaubt genau diese Aktion einmal.",
   "codingWorkbench.approval.native.help.shell":

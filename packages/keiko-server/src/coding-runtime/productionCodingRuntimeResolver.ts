@@ -85,6 +85,7 @@ import type {
   CodingRuntimeManager,
   CodingRuntimeManagerDeps,
 } from "./codingRuntimeManager.js";
+import { createVerificationApprovalPreview } from "./verificationApprovalPreview.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type {
   CodingRuntimeEditOutcomeObserver,
@@ -185,6 +186,8 @@ export interface ProductionRuntimeBackendInput {
   readonly minted: MintedRuntime;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals: CodingToolApprovalBridge;
+  /** What a pending governed verification would run, for its approval card (ADR-0124 D6). */
+  readonly verificationPreview?: CodingRuntimeManagerDeps["verificationPreview"];
   readonly authorityLifecycle: Pick<
     CodingRuntimeManagerDeps,
     | "abortInFlightActions"
@@ -1512,6 +1515,21 @@ interface CreateBackendRunInput {
   readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
+function verificationPreviewFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: Pick<CodingRuntimeTrustedContext, "workspaceRoot">,
+): Pick<ProductionRuntimeBackendInput, "verificationPreview"> {
+  const previewCommands = input.verificationRunner.previewCommands;
+  if (previewCommands === undefined) return {};
+  return {
+    verificationPreview: createVerificationApprovalPreview({
+      workspaceRoot: context.workspaceRoot,
+      runner: { previewCommands },
+      diagnostics: input.diagnostics,
+    }),
+  };
+}
+
 function createBackendRun({
   input,
   request,
@@ -1534,6 +1552,7 @@ function createBackendRun({
     minted,
     toolFacade,
     codingToolApprovals,
+    ...verificationPreviewFor(input, context),
     authorityLifecycle: authorityLifecycle({
       authority,
       controller,

@@ -2733,3 +2733,64 @@ describe("VerificationRunnerManager — nested packages in a repository without 
     expect(plans[0]?.steps[0]).toMatchObject({ command: "yarn", cwd: NESTED });
   });
 });
+
+describe("VerificationRunnerManager — previewCommands for the approval card (ADR-0124 D6)", () => {
+  function silent(): {
+    readonly manager: VerificationRunnerManager;
+    readonly touched: string[];
+  } {
+    const touched: string[] = [];
+    const manager = makeManager({
+      execute: ((): never => {
+        touched.push("execute");
+        throw new TypeError("preview must not execute");
+      }) as unknown as VerificationRunnerManagerOptions["execute"],
+      probeIsolation: (): never => {
+        touched.push("probeIsolation");
+        throw new TypeError("preview must not probe isolation");
+      },
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        touched.push("trust");
+        return false;
+      },
+      activityLog: { write: (): void => void touched.push("activityLog") },
+      diagnostics: { record: (): void => void touched.push("diagnostics") },
+    });
+    return { manager, touched };
+  }
+
+  it("plans the project's own typecheck command without a trust decision, probe, spawn or log line", () => {
+    const { manager, touched } = silent();
+    const preview = manager.previewCommands({ projectId: workspaceRoot, kinds: ["typecheck"] });
+    if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+    expect(preview.steps).toHaveLength(1);
+    expect(preview.steps[0]?.command).toBe("npm");
+    expect(preview.steps[0]?.args).toContain("typecheck");
+    expect(touched).toEqual([]);
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("throws the runner's own not-found for an unknown workspace, still silently", () => {
+    const { manager, touched } = silent();
+    expect(() => manager.previewCommands({ projectId: "/no/such/root", kinds: ["test"] })).toThrow(
+      VerificationRunnerError,
+    );
+    expect(touched).toEqual([]);
+  });
+
+  it("asks for a package choice when the workspace holds several and the ask names none", () => {
+    rmSync(join(workspaceRoot, "package.json"));
+    for (const name of ["a", "b"]) {
+      mkdirSync(join(workspaceRoot, name), { recursive: true });
+      writeFileSync(
+        join(workspaceRoot, name, "package.json"),
+        JSON.stringify({ name, scripts: { test: "vitest run" } }),
+      );
+    }
+    const { manager, touched } = silent();
+    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toEqual({
+      kind: "package-selection-required",
+    });
+    expect(touched).toEqual([]);
+  });
+});
