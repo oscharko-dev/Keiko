@@ -574,6 +574,86 @@ function codexRequest(
   };
 }
 
+// A Codex start on the real native tree: `attach` either delivers the supervisor's refusal 18 or
+// the helper's exit without any proof, then fails once the exit's teardown has begun. With
+// `holdReap` the teardown stays open until the attach has failed (the host's real ordering).
+function nativeTreeCodexHarness(options: {
+  readonly refusal: boolean;
+  readonly holdReap: boolean;
+}): {
+  readonly supervisor: RuntimeProcessSupervisor;
+  readonly attach: () => Promise<ExpectedCodexLifecycleAttachment>;
+} {
+  let releaseReap: () => void = () => undefined;
+  const reapGate = options.holdReap
+    ? new Promise<void>((resolve) => {
+        releaseReap = resolve;
+      })
+    : Promise.resolve();
+  const controlOutput = new PassThrough();
+  let helperExit: ((code: number | null) => void) | undefined;
+  const helper = {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    controlInput: new PassThrough(),
+    controlOutput,
+    onExit: (callback: (code: number | null) => void): void => {
+      helperExit = callback;
+    },
+    onError: (): void => undefined,
+  };
+  const refusal = Buffer.alloc(14);
+  refusal.write("KRS1", 0, "ascii");
+  refusal.writeUInt16LE(1, 4);
+  refusal.writeUInt16LE(3, 6);
+  refusal.writeUInt32LE(2, 8);
+  refusal.writeUInt16LE(18, 12);
+  const trees: NativeRuntimeTree[] = [];
+  const backend: RuntimeProcessBackend = {
+    identity: {
+      platform: TEST_QUALIFICATION.platform,
+      arch: TEST_QUALIFICATION.arch,
+      backend: TEST_QUALIFICATION.backend,
+    },
+    spawnOwnedTree: (request) => {
+      const tree = new NativeRuntimeTree(request.recoveryHandle, helper, "win32");
+      trees.push(tree);
+      return tree;
+    },
+    signalTree: (): void => undefined,
+    waitForCompleteTreeExit: async (tree, timeoutMs) => {
+      await reapGate;
+      const proved =
+        (await trees.find((candidate) => candidate === tree)?.waitForProof(timeoutMs)) === true;
+      helper.stdout.end();
+      helper.stderr.end();
+      return proved;
+    },
+    reconcileTreeExit: () => Promise.resolve(false),
+  };
+  return {
+    supervisor: createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [TEST_QUALIFICATION],
+      planSandbox: testSandboxPlanner,
+    }),
+    attach: (): Promise<ExpectedCodexLifecycleAttachment> => {
+      if (options.refusal) controlOutput.write(refusal);
+      else {
+        helperExit?.(1);
+        controlOutput.end();
+      }
+      return new Promise((_resolve, reject) => {
+        setTimeout(() => {
+          reject(new Error("attach-failed"));
+          releaseReap();
+        }, 0);
+      });
+    },
+  };
+}
+
 function qualifiedCodexAdapter(
   overrides: Partial<ExpectedCodexLifecycleAdapter> = {},
 ): ExpectedCodexLifecycleAdapter {
@@ -4929,6 +5009,53 @@ describe("coding runtime manager", () => {
       }
     },
   );
+
+  // The Codex start folds onto the exit's teardown the same way the OpenCode one does: the attach
+  // fails while the exit's own teardown is reaping the real native tree, so the start must not reap
+  // it a second time. Red before: the second reap found the tree no longer owned and the run
+  // settled `runtime-reap-unproven` instead of the supervisor refusal.
+  it.each([
+    ["the exit's teardown has finished", false],
+    ["the attach fails while the exit's teardown is still reaping", true],
+  ] as const)(
+    "settles a Codex start the supervisor refused with its closed reason when %s",
+    async (_ordering, attachFailsDuringReap) => {
+      const fixture = createManagedFixture();
+      const harness = nativeTreeCodexHarness({ refusal: true, holdReap: attachFailsDuringReap });
+      const manager = createCodexTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: harness.supervisor,
+        codexLifecycleAdapter: qualifiedCodexAdapter({ attach: harness.attach }),
+      });
+
+      await expect(
+        manager.start(
+          codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).resolves.toEqual({
+        ok: false,
+        failureCode: "runtime-supervisor-no-desktop",
+        retryable: false,
+      });
+      expect(manager.health()).toEqual({ status: "stopped" });
+    },
+  );
+
+  it("settles a Codex start whose single exit teardown genuinely fails as reap-unproven", async () => {
+    const fixture = createManagedFixture();
+    const harness = nativeTreeCodexHarness({ refusal: false, holdReap: true });
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: harness.supervisor,
+      codexLifecycleAdapter: qualifiedCodexAdapter({ attach: harness.attach }),
+    });
+
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "runtime-reap-unproven", retryable: false });
+  });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {
     vi.useFakeTimers();
