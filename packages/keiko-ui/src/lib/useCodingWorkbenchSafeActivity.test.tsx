@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor, type RenderHookResult } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contracts";
 
@@ -7,6 +7,7 @@ import {
   validateCodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { ApiError } from "./api";
+import { CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT } from "./useCodingWorkbenchEarlierRunFeeds";
 import { correlationIdOf } from "./client-error-summary";
 import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
 import type { ClientDiagnosticMeta } from "./client-diagnostics";
@@ -503,6 +504,91 @@ describe("useCodingWorkbenchSafeActivity", () => {
     });
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
     expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  type EarlierInput = UseCodingWorkbenchSafeActivityInput;
+  type EarlierView = RenderHookResult<
+    ReturnType<typeof useCodingWorkbenchSafeActivity>,
+    EarlierInput
+  >;
+
+  async function showRun(
+    view: EarlierView,
+    input: EarlierInput,
+    toolState: "running" | "succeeded" = "succeeded",
+  ): Promise<void> {
+    const runId = input.runId ?? "run-unnamed";
+    getSnapshotMock.mockImplementation(async (): Promise<CodingAppSessionChannelSnapshot> =>
+      activitySnapshot(runId, toolState),
+    );
+    view.rerender(input);
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe(runId));
+  }
+
+  function renderEarlier(initial: EarlierInput): EarlierView {
+    return renderHook((input: EarlierInput) => useCodingWorkbenchSafeActivity(input), {
+      initialProps: initial,
+    });
+  }
+
+  it("keeps a run that is still live as it was, not settled as cancelled", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "running",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first, "running");
+    await showRun(view, { ...first, runId: "run-2" });
+    const tools = view.result.current.earlierFeeds?.[0]?.turns[0]?.tools ?? [];
+    expect(tools.map((tool) => tool.state)).toEqual(["running"]);
+  });
+
+  it("drops the feeds of other tasks when the shown task changes", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "succeeded",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    await showRun(view, { ...first, runId: "run-2" });
+    expect(view.result.current.earlierFeeds?.map((feed) => feed.runId)).toEqual(["run-1"]);
+    await showRun(view, { ...first, runId: "run-3", conversationId: "task-2" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+    await showRun(view, { ...first, runId: "run-4", conversationId: "task-1" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  it("keeps nothing for a run that names no task", async () => {
+    const first: EarlierInput = { runId: "run-1", runState: "succeeded", runtimeEventSignal: 0 };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    await showRun(view, { ...first, runId: "run-2" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+    await showRun(view, { ...first, runId: "run-3", conversationId: "task-1" });
+    expect(view.result.current.earlierFeeds).toEqual([]);
+  });
+
+  it("holds at most the bound of earlier runs and evicts the oldest first", async () => {
+    const first: EarlierInput = {
+      runId: "run-1",
+      runState: "succeeded",
+      runtimeEventSignal: 0,
+      conversationId: "task-1",
+    };
+    const view = renderEarlier(first);
+    await showRun(view, first);
+    const runs = CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT + 2;
+    for (let run = 2; run <= runs; run += 1) {
+      await showRun(view, { ...first, runId: `run-${String(run)}` });
+    }
+    const held = (view.result.current.earlierFeeds ?? []).map((feed) => feed.runId);
+    expect(held).toHaveLength(CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT);
+    expect(held[0]).toBe("run-2");
+    expect(held.at(-1)).toBe(`run-${String(runs - 1)}`);
   });
 
   // Stability audit item 5: every reconnect used to blank the conversation until the snapshot read

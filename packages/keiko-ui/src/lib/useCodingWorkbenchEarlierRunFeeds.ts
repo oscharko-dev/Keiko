@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingSafeActivityTool,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
 // U-11: a continuation starts a new run in the same task, and the server's projection holds one run
@@ -21,6 +22,18 @@ export const CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT = 32;
 interface HeldFeed {
   readonly conversationId: string | undefined;
   readonly feed: AvailableCodingSafeActivityFeed;
+  /** The run's state when its feed was last seen: only a terminal run is settled. */
+  readonly runState: CodingWorkbenchRuntimeStateName | undefined;
+}
+
+/** A run in one of these states never carries on. */
+export function terminalRunState(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
+  return (
+    runState === "succeeded" ||
+    runState === "failed" ||
+    runState === "cancelled" ||
+    runState === "taken-over"
+  );
 }
 
 const NO_FEEDS: readonly AvailableCodingSafeActivityFeed[] = [];
@@ -48,26 +61,43 @@ function retained(held: readonly HeldFeed[], entry: HeldFeed): readonly HeldFeed
   return [...others, entry].slice(-CODING_WORKBENCH_EARLIER_RUN_FEED_LIMIT);
 }
 
+// A run that is not over keeps its rows as they were: nothing says its calls will not finish.
+function carried(last: HeldFeed): HeldFeed {
+  return terminalRunState(last.runState) ? { ...last, feed: settledFeed(last.feed) } : last;
+}
+
 /**
  * The feeds of the runs before the shown one in the same task (`conversationId`), oldest first.
- * A feed is taken over when the shown run changes; one of another task is never returned.
+ * A feed is taken over when the shown run changes; one of another task is never returned, and the
+ * feeds of other tasks are dropped when the shown task changes. Without a task, none is kept.
  */
 export function useCodingWorkbenchEarlierRunFeeds(input: {
   readonly runId: string | undefined;
+  readonly runState?: CodingWorkbenchRuntimeStateName | undefined;
   readonly conversationId: string | undefined;
   readonly feed: AvailableCodingSafeActivityFeed | null;
 }): readonly AvailableCodingSafeActivityFeed[] {
-  const { runId, conversationId, feed } = input;
+  const { runId, runState, conversationId, feed } = input;
   const [held, setHeld] = useState<readonly HeldFeed[]>([]);
   const lastRef = useRef<HeldFeed | null>(null);
+  const conversationRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const last = lastRef.current;
-    if (last !== null && last.feed.runId !== runId) {
-      lastRef.current = null;
-      setHeld((current) => retained(current, { ...last, feed: settledFeed(last.feed) }));
+    const leaving = last !== null && last.feed.runId !== runId ? last : null;
+    if (leaving !== null) lastRef.current = null;
+    const switched = conversationId !== undefined && conversationRef.current !== conversationId;
+    if (conversationId !== undefined) conversationRef.current = conversationId;
+    if (leaving !== null || switched) {
+      setHeld((current) => {
+        const next =
+          leaving?.conversationId === undefined ? current : retained(current, carried(leaving));
+        return conversationId === undefined
+          ? next
+          : next.filter((entry) => entry.conversationId === conversationId);
+      });
     }
-    if (feed !== null && feed.runId === runId) lastRef.current = { conversationId, feed };
-  }, [conversationId, feed, runId]);
+    if (feed !== null && feed.runId === runId) lastRef.current = { conversationId, feed, runState };
+  }, [conversationId, feed, runId, runState]);
   return useMemo(
     () =>
       conversationId === undefined

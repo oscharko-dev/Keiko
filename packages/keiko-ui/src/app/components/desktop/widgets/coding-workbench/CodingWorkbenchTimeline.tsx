@@ -560,22 +560,21 @@ function openMessageId(
 }
 
 // The rows of one feed, numbered on from `order`; the numbering keeps rows of one instant in feed
-// order. A row whose id is already `taken` by the shown feed or one listed before is left to that.
+// order; `idPrefix` keys the rows of an earlier run.
 function feedItems(
   feed: AvailableCodingSafeActivityFeed,
   liveMessageId: string | undefined,
   first: number,
-  taken: ReadonlySet<string>,
+  idPrefix: string,
   activeRunId: string | undefined,
 ): readonly TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const turn of feed.turns) {
     for (const message of turn.messages) {
-      const id = `message:${message.messageId}`;
-      if (taken.has(id) || !hasVisibleMessageContent(message)) continue;
+      if (!hasVisibleMessageContent(message)) continue;
       items.push({
         kind: "message",
-        id,
+        id: `${idPrefix}message:${message.messageId}`,
         occurredAt: message.occurredAt,
         order: first + items.length,
         message,
@@ -584,11 +583,9 @@ function feedItems(
       });
     }
     for (const tool of turn.tools) {
-      const id = `tool:${tool.callId}`;
-      if (taken.has(id)) continue;
       items.push({
         kind: "tool",
-        id,
+        id: `${idPrefix}tool:${tool.callId}`,
         occurredAt: tool.occurredAt,
         order: first + items.length,
         tool: shownTool(tool, activeRunId),
@@ -597,15 +594,6 @@ function feedItems(
     }
   }
   return items;
-}
-
-function feedRowIds(feed: AvailableCodingSafeActivityFeed | null): ReadonlySet<string> {
-  return new Set(
-    (feed?.turns ?? []).flatMap((turn) => [
-      ...turn.messages.map((message) => `message:${message.messageId}`),
-      ...turn.tools.map((tool) => `tool:${tool.callId}`),
-    ]),
-  );
 }
 
 // The earlier runs of the task come first and the shown run's feed last: their rows sort into
@@ -619,15 +607,15 @@ function timelineItems(
 ): readonly TimelineItem[] {
   const items: TimelineItem[] = timelineEventItems(events, activeRunId);
   let order = events.length;
-  const taken = new Set(feedRowIds(feed));
   for (const earlier of earlierFeeds) {
-    const rows = feedItems(earlier, undefined, order, taken, activeRunId);
-    for (const row of rows) taken.add(row.id);
+    // The ids of one run's calls and messages are not promised unique across runs, so an earlier
+    // run's rows are keyed by the run as well; none of them is dropped for sharing an id.
+    const rows = feedItems(earlier, undefined, order, `run:${earlier.runId}:`, activeRunId);
     items.push(...rows);
     order += rows.length;
   }
   if (feed !== null) {
-    const rows = feedItems(feed, liveMessageId, order, new Set(), activeRunId);
+    const rows = feedItems(feed, liveMessageId, order, "", activeRunId);
     items.push(...rows);
     order += rows.length;
   }
@@ -661,6 +649,8 @@ function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   );
 }
 
+// At one instant the rows keep `order`, which numbers the earlier runs' rows before the shown
+// run's, so an earlier run's last rows precede the continuation's prompt (U-11).
 function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
   // ISO-8601 instants of one fixed format order lexicographically; a locale-aware collation per
   // comparison is needless work on a sort that runs on every feed update.

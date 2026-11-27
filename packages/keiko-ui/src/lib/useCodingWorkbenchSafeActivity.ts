@@ -27,7 +27,10 @@ import {
 } from "./coding-app-session-channel-api";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
-import { useCodingWorkbenchEarlierRunFeeds } from "./useCodingWorkbenchEarlierRunFeeds";
+import {
+  terminalRunState,
+  useCodingWorkbenchEarlierRunFeeds,
+} from "./useCodingWorkbenchEarlierRunFeeds";
 import {
   useCodingWorkbenchModelTexts,
   type CodingWorkbenchAnswers,
@@ -113,6 +116,7 @@ export function useCodingWorkbenchSafeActivity(
   }, [runState]);
   const earlierFeeds = useCodingWorkbenchEarlierRunFeeds({
     runId,
+    runState,
     conversationId,
     feed: state.feed,
   });
@@ -338,15 +342,6 @@ function lifecycleStatus(
   if (runState === "recovery-required") return "recovery";
   if (terminalRunState(runState)) return "ended";
   return "live";
-}
-
-function terminalRunState(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
-  return (
-    runState === "succeeded" ||
-    runState === "failed" ||
-    runState === "cancelled" ||
-    runState === "taken-over"
-  );
 }
 
 /**
