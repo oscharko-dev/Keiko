@@ -1662,7 +1662,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedActiveRun":
     "In dieser Aufgabe läuft noch ein anderer Lauf, deshalb hat Keiko keinen zweiten gestartet ({code}). Warte, bis er beendet ist, oder stoppe ihn, und starte dann erneut.",
   "codingWorkbench.alert.startRefusedRecoveryRequired":
-    "Ein Lauf dieser Aufgabe wurde unterbrochen und braucht noch deine Entscheidung, bevor etwas Neues starten kann ({code}). Öffne diesen Lauf, stelle ihn wieder her oder schließe ihn ab, und starte dann erneut.",
+    "Ein Lauf dieser Aufgabe wurde unterbrochen und braucht noch deine Entscheidung, bevor etwas Neues starten kann ({code}). Öffne diesen Lauf und wähle „Wiederherstellung bestätigen“ oder starte eine neue Aufgabe, und starte dann erneut.",
   "codingWorkbench.alert.startRefusedIssueContext":
     "Keiko konnte das Issue, an das diese Aufgabe gebunden ist, nicht lesen ({code}). Prüfe, ob du noch im Issue-Tracker angemeldet bist und das Issue noch existiert, und starte dann erneut.",
   "codingWorkbench.alert.startRefusedDrift":
@@ -1672,13 +1672,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedAuthorityReplayed":
     "Diese Freigabe wurde schon für einen anderen Start verwendet und gilt nicht zweimal ({code}). Drücke erneut auf Start, um sie neu freizugeben.",
   "codingWorkbench.alert.startRefusedAuthorityBudget":
-    "Die Aufgabe verlangt mehr, als die freigegebenen Limits erlauben ({code}). Mache die Aufgabe kleiner oder erhöhe die Limits in der Freigabe und starte dann erneut.",
+    "Die Aufgabe verlangt mehr, als die freigegebenen Limits erlauben ({code}). Mache die Aufgabe kleiner oder wähle einen anderen Modus und starte dann erneut.",
   "codingWorkbench.alert.startRefusedApprovalActivation":
     "Keiko konnte deine Freigabe nicht aktivieren ({code}). Drücke erneut auf Start. Passiert es wieder, erstelle einen Fehlerbericht und gib ihn an deinen Support weiter.",
   "codingWorkbench.alert.startRefusedReplayCap":
     "Für diesen Lauf wurden zu viele wiederholte Anfragen gesendet ({code}). Warte einen Moment und starte die Aufgabe dann erneut.",
   "codingWorkbench.alert.startRefusedEditsBlocked":
-    "Änderungen in diesem Workspace sind gerade gesperrt ({code}). Lass die Coding Workbench für diesen Workspace geöffnet und prüfe, ob sein Ordner noch erreichbar ist, und starte dann erneut.",
+    "Keiko hat den Lauf gestoppt, weil die Änderungen des Agenten mehrmals hintereinander abgelehnt wurden ({code}), zum Beispiel wegen eines geschützten Pfads, einer Regel des gewählten Modus oder einer Datei, die er nicht bearbeiten kann. Die Laufdetails zeigen, was es war. Passe die Aufgabe oder den Modus an und starte dann erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed":
     "Authentifizierung konnte nicht aktualisiert werden.",

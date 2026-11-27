@@ -856,60 +856,58 @@ const START_REFUSAL_SUMMARY_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey>
   ],
   // #4351: a Start belongs to the model it was pressed for.
   ["CODING_RUNTIME_MODEL_CHANGED_DURING_CHECK", "codingWorkbench.alert.startEndedModelChanged"],
-  // #4491: every other closed start-refusal code names its cause and the next step.
-  ["CODING_RUNTIME_ACTIVE_RUN_CONFLICT", "codingWorkbench.alert.startRefusedActiveRun"],
-  ["CODING_RUNTIME_RECOVERY_REQUIRED", "codingWorkbench.alert.startRefusedRecoveryRequired"],
-  ["CODING_RUNTIME_ISSUE_CONTEXT_UNAVAILABLE", "codingWorkbench.alert.startRefusedIssueContext"],
-  ["CODING_RUNTIME_TASK_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_WORKSPACE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_PROJECT_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_BRANCH_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_SCOPE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_BUDGET_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_SOURCE_DRIFT", "codingWorkbench.alert.startRefusedDrift"],
-  ["CODING_RUNTIME_AUTHORITY_EXPIRED", "codingWorkbench.alert.startRefusedAuthorityExpired"],
-  ["CODING_RUNTIME_AUTHORITY_REPLAYED", "codingWorkbench.alert.startRefusedAuthorityReplayed"],
-  ["CODING_RUNTIME_AUTHORITY_BUDGET_EXCEEDED", "codingWorkbench.alert.startRefusedAuthorityBudget"],
-  [
-    "CODING_RUNTIME_APPROVAL_ACTIVATION_FAILED",
-    "codingWorkbench.alert.startRefusedApprovalActivation",
-  ],
-  ["CODING_RUNTIME_REPLAY_CAP_EXHAUSTED", "codingWorkbench.alert.startRefusedReplayCap"],
-  ["CODING_RUNTIME_EDITS_BLOCKED", "codingWorkbench.alert.startRefusedEditsBlocked"],
-  ["CODING_RUNTIME_INVALID_INTENT", "codingWorkbench.event.failure.invalid-intent"],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_ACL",
-    "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",
-    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_CAPABILITY",
-    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_CONNECT",
-    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_GATEWAY_ADMIT",
-    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_NO_DESKTOP",
-    "codingWorkbench.event.failure.runtime-supervisor-no-desktop",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_IMAGE_PATH",
-    "codingWorkbench.event.failure.runtime-supervisor-image-path",
-  ],
-  [
-    "CODING_RUNTIME_RUNTIME_SUPERVISOR_REFUSED",
-    "codingWorkbench.event.failure.runtime-supervisor-refused",
-  ],
 ]);
+
+// #4491: every other closed start-refusal code names its cause and the next step. The word after
+// `startRefused` in the catalog key is all that differs between them; the drift codes share one.
+type StartRefusedAlert =
+  | "ActiveRun"
+  | "RecoveryRequired"
+  | "IssueContext"
+  | "AuthorityExpired"
+  | "AuthorityReplayed"
+  | "AuthorityBudget"
+  | "ApprovalActivation"
+  | "ReplayCap"
+  | "EditsBlocked";
+
+const START_REFUSED_ALERT_OF_CODE: Readonly<Record<string, StartRefusedAlert>> = {
+  ACTIVE_RUN_CONFLICT: "ActiveRun",
+  RECOVERY_REQUIRED: "RecoveryRequired",
+  ISSUE_CONTEXT_UNAVAILABLE: "IssueContext",
+  AUTHORITY_EXPIRED: "AuthorityExpired",
+  AUTHORITY_REPLAYED: "AuthorityReplayed",
+  AUTHORITY_BUDGET_EXCEEDED: "AuthorityBudget",
+  APPROVAL_ACTIVATION_FAILED: "ApprovalActivation",
+  REPLAY_CAP_EXHAUSTED: "ReplayCap",
+  EDITS_BLOCKED: "EditsBlocked",
+};
+
+// The runtime supervisor's refusals and a refused intent already have a sentence of their own, keyed
+// by the code in lower case with dashes.
+const START_REFUSAL_EVENT_CODE = /^(INVALID_INTENT|RUNTIME_SUPERVISOR_[A-Z_]+)$/u;
+type StartRefusalEventKey =
+  | "codingWorkbench.event.failure.invalid-intent"
+  | `codingWorkbench.event.failure.runtime-supervisor-${
+      | "grants-acl"
+      | "grants-directory"
+      | "grants-capability"
+      | "gateway-connect"
+      | "gateway-admit"
+      | "no-desktop"
+      | "image-path"
+      | "refused"}`;
+
+function startRefusalDetailKey(code: string): CodingWorkbenchMessageKey | undefined {
+  const name = code.replace("CODING_RUNTIME_", "");
+  if (name.endsWith("_DRIFT")) return "codingWorkbench.alert.startRefusedDrift";
+  const alert = START_REFUSED_ALERT_OF_CODE[name];
+  if (alert !== undefined) return `codingWorkbench.alert.startRefused${alert}`;
+  if (!START_REFUSAL_EVENT_CODE.test(name)) return undefined;
+  const slug = name.toLowerCase().replaceAll("_", "-");
+  const key = `codingWorkbench.event.failure.${slug}` as StartRefusalEventKey;
+  return key;
+}
 
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
 // tells the operator what to do, not the generic "review the live state and retry". #3603: a model
@@ -925,7 +923,11 @@ function startRefusalSummaryKey(
       return "codingWorkbench.alert.startRefusedModelVerificationPending";
     return "codingWorkbench.alert.startRefusedModelUnavailable";
   }
-  return START_REFUSAL_SUMMARY_KEYS.get(code) ?? "codingWorkbench.alert.actionFailedCode";
+  return (
+    START_REFUSAL_SUMMARY_KEYS.get(code) ??
+    startRefusalDetailKey(code) ??
+    "codingWorkbench.alert.actionFailedCode"
+  );
 }
 
 export function visibleAlert(

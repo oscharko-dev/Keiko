@@ -1603,7 +1603,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedActiveRun":
     "Another run is still active in this task, so Keiko did not start a second one ({code}). Wait until it has finished or stop it, then start again.",
   "codingWorkbench.alert.startRefusedRecoveryRequired":
-    "A run in this task was interrupted and still needs your decision before anything new can start ({code}). Open that run and recover or close it, then start again.",
+    "A run in this task was interrupted and still needs your decision before anything new can start ({code}). Open that run and choose “Acknowledge recovery”, or start a new task, then start again.",
   "codingWorkbench.alert.startRefusedIssueContext":
     "Keiko could not read the issue this task is bound to ({code}). Check that you are still signed in to the issue tracker and that the issue still exists, then start again.",
   "codingWorkbench.alert.startRefusedDrift":
@@ -1613,13 +1613,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedAuthorityReplayed":
     "This approval was already used for another start and cannot be used twice ({code}). Press Start again to approve it afresh.",
   "codingWorkbench.alert.startRefusedAuthorityBudget":
-    "The task asks for more than the approved limits allow ({code}). Make the task smaller or raise the limits in the approval, then start again.",
+    "The task asks for more than the approved limits allow ({code}). Make the task smaller or choose another mode, then start again.",
   "codingWorkbench.alert.startRefusedApprovalActivation":
     "Keiko could not activate your approval ({code}). Press Start again. If it happens again, create an error report and pass it to your support.",
   "codingWorkbench.alert.startRefusedReplayCap":
     "Too many repeated requests were sent for this run ({code}). Wait a moment, then start the task again.",
   "codingWorkbench.alert.startRefusedEditsBlocked":
-    "Edits in this workspace are blocked right now ({code}). Keep the Coding Workbench open for this workspace and check that its folder is still reachable, then start again.",
+    "Keiko stopped the run because the agent's edits were refused several times in a row ({code}), for example because of a protected path, a rule of the selected mode, or a file it cannot edit. The run details show which. Adjust the task or the mode, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed": "Authentication could not be refreshed.",
   "codingWorkbench.alert.authenticationSetupRefreshFailed":

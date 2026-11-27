@@ -1048,6 +1048,44 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(visibleAlert(failedMutationState("ui-correlation-5", code), tv, false)).toContain(key);
   });
 
+  // #4491: a mapped key is no dead end: in both languages it resolves to its own sentence, never the
+  // generic fallback.
+  it.each(["en", "de"] as const)(
+    "resolves every refused-start code to its own %s text",
+    (locale) => {
+      const real: CodingWorkbenchTranslate = (key, values) =>
+        translateCodingWorkbench(locale, key, values);
+      const generic = real("codingWorkbench.alert.actionFailedCode", { code: "X" });
+      const codes = [
+        "ACTIVE_RUN_CONFLICT",
+        "RECOVERY_REQUIRED",
+        "ISSUE_CONTEXT_UNAVAILABLE",
+        "TASK_DRIFT",
+        "AUTHORITY_EXPIRED",
+        "AUTHORITY_REPLAYED",
+        "AUTHORITY_BUDGET_EXCEEDED",
+        "APPROVAL_ACTIVATION_FAILED",
+        "REPLAY_CAP_EXHAUSTED",
+        "EDITS_BLOCKED",
+        "INVALID_INTENT",
+        "RUNTIME_SUPERVISOR_GRANTS_ACL",
+        "RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",
+        "RUNTIME_SUPERVISOR_GRANTS_CAPABILITY",
+        "RUNTIME_SUPERVISOR_GATEWAY_CONNECT",
+        "RUNTIME_SUPERVISOR_GATEWAY_ADMIT",
+        "RUNTIME_SUPERVISOR_NO_DESKTOP",
+        "RUNTIME_SUPERVISOR_IMAGE_PATH",
+        "RUNTIME_SUPERVISOR_REFUSED",
+      ].map((name) => `CODING_RUNTIME_${name}`);
+      for (const code of codes) {
+        const alert = visibleAlert(failedMutationState(undefined, code), real, false);
+        expect(alert, code).not.toBe("");
+        expect(alert, code).not.toBe(generic.replace("X", code));
+        expect(alert, code).not.toContain("codingWorkbench.");
+      }
+    },
+  );
+
   // #3603: a model refused because its window cannot hold a coding run's prompt, or because that
   // window is still being verified, says so instead of "the model is unavailable".
   it.each([
