@@ -12596,6 +12596,10 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
   const QWEN_MARKUP = `<tool_call>\n{"name": "shell", "arguments": {"command": "git commit -am fix"}}\n</tool_call>`;
   const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
     events.find((event) => event.op === op);
+  const TASK_MESSAGES = [
+    { role: "system", content: "You are a coding agent." },
+    { role: "user", content: "fix the bug, run npm test, then commit" },
+  ];
   const textual = (content: string): NormalizedResponse => ({
     ...assistantResponse("azure-coding-model"),
     content,
@@ -12607,17 +12611,24 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     toolCalls: [{ id: "call-1", name: "shell", arguments: { command: "git commit -am fix" } }],
   });
 
+  const settlements = vi.fn(() => ({ ok: true }));
+
   function recoveryDeps(
     chat: (request: GatewayRequest) => Promise<NormalizedResponse>,
     stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>,
   ): UiHandlerDeps {
+    const base = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-textual-recovery" } }),
+      () => chat,
+      createOpenCodeGatewayReadinessRegistry("native"),
+      () => stream,
+    );
     return {
-      ...runtimeGatewayDeps(
-        () => ({ ok: true, binding: { runId: "run-textual-recovery" } }),
-        () => chat,
-        createOpenCodeGatewayReadinessRegistry("native"),
-        () => stream,
-      ),
+      ...base,
+      runtimeCapabilityAuthenticator: {
+        ...base.runtimeCapabilityAuthenticator,
+        settlePromptTokens: settlements,
+      } as unknown as UiHandlerDeps["runtimeCapabilityAuthenticator"],
       codingRuntimeOrchestrator: {
         getSnapshot: () => ({ state: "running", revision: 9 }),
       } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
@@ -12630,24 +12641,39 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     readonly stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>;
   }
 
-  function sequence(answers: readonly NormalizedResponse[]): Sequence {
+  // An `Error` among the answers is a request that fails (a failing retry).
+  function sequence(answers: readonly (NormalizedResponse | Error)[]): Sequence {
     const requests: GatewayRequest[] = [];
-    const next = (request: GatewayRequest): NormalizedResponse => {
+    const next = (request: GatewayRequest): NormalizedResponse | Error => {
       requests.push(request);
       return answers[Math.min(requests.length, answers.length) - 1] ?? textual("");
     };
     return {
       requests,
-      chat: (request) => Promise.resolve(next(request)),
-      stream: (request) => streamedResponse(next(request)),
+      chat: (request): Promise<NormalizedResponse> => {
+        const answer = next(request);
+        return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+      },
+      stream: (request): AsyncIterable<GatewayStreamChunk> => {
+        const answer = next(request);
+        return answer instanceof Error ? failingStream(answer) : streamedResponse(answer);
+      },
     };
   }
 
-  const hasHint = (request: GatewayRequest | undefined): boolean =>
-    request?.messages.at(-1)?.role === "system" &&
-    request.messages.at(-1)?.content.includes("native tool-calling interface") === true;
+  async function* failingStream(error: Error): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield* [];
+    throw error;
+  }
 
-  async function buffered(answers: readonly NormalizedResponse[]): Promise<{
+  // The hint rides in the leading system message, never as a late message after the tool messages.
+  const hasHint = (request: GatewayRequest | undefined): boolean =>
+    request?.messages[0]?.role === "system" &&
+    request.messages[0].content.includes("native tool-calling interface") &&
+    request.messages.at(-1)?.role !== "system";
+
+  async function buffered(answers: readonly (NormalizedResponse | Error)[]): Promise<{
     readonly result: RouteResult | typeof STREAMING;
     readonly seq: Sequence;
     readonly sink: BufferedServerLogSink;
@@ -12657,7 +12683,7 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     const result = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({
         model: "coding",
-        messages: [{ role: "user", content: "fix the bug, run npm test, then commit" }],
+        messages: TASK_MESSAGES,
         tools: NATIVE_RECOVERY_TOOLS,
       }),
       recoveryDeps(seq.chat, seq.stream),
@@ -12665,7 +12691,7 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     return { result, seq, sink };
   }
 
-  async function live(answers: readonly NormalizedResponse[]): Promise<{
+  async function live(answers: readonly (NormalizedResponse | Error)[]): Promise<{
     readonly body: string;
     readonly seq: Sequence;
     readonly sink: BufferedServerLogSink;
@@ -12678,7 +12704,7 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
         ...authenticatedContext({
           model: "coding",
           stream: true,
-          messages: [{ role: "user", content: "fix the bug, run npm test, then commit" }],
+          messages: TASK_MESSAGES,
           tools: NATIVE_RECOVERY_TOOLS,
         }),
         res: response.res,
@@ -12707,7 +12733,8 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
       expect(seq.requests).toHaveLength(2);
       expect(hasHint(seq.requests[0])).toBe(false);
       expect(hasHint(seq.requests[1])).toBe(true);
-      expect(seq.requests[1]?.messages.slice(0, -1)).toEqual(seq.requests[0]?.messages);
+      expect(seq.requests[1]?.messages).toHaveLength(seq.requests[0]?.messages.length ?? -1);
+      expect(seq.requests[1]?.messages.slice(1)).toEqual(seq.requests[0]?.messages.slice(1));
       expect(result).toMatchObject({ status: 200 });
       expect(bodyText(result)).toContain("tool_calls");
       expect(bodyText(result)).not.toContain("<shell");
@@ -12776,14 +12803,6 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     });
   });
 
-  it("streams a lead-in sentence live and holds back only the markup after it", async () => {
-    const { body, seq } = await live([textual(`Run.\n${GEMMA_MARKUP}`), nativeCall()]);
-
-    expect(seq.requests).toHaveLength(2);
-    expect(frameDeltas(body)).toContainEqual({ content: "Run.\n" });
-    expect(body).not.toContain("<shell");
-  });
-
   it.each([
     ["prose with a div", "Use a <div> wrapper and a <span> inside it."],
     ["a final answer", "All done: the tests pass."],
@@ -12807,6 +12826,106 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
       outcome: "accepted",
       textualToolCallRecovery: "retry-exhausted",
       textualToolCallRetries: 2,
+    });
+  });
+
+  it.each([
+    [
+      "a json-labelled fence showing a call",
+      '```json\n{"name":"shell","arguments":{"command":"npm test"}}\n```',
+    ],
+    [
+      "a read element shown inside a fence",
+      'The model writes:\n```xml\n<read filePath="a.ts" />\n```',
+    ],
+    [
+      "an explanation of a tool call",
+      'To read a file the model writes <read filePath="a.ts" /> and the runtime answers it.',
+    ],
+    ["a prompt template", "<task>Summarise the repository and list the open risks.</task>"],
+  ])("never re-requests a buffered or live answer that shows %s", async (_label, content) => {
+    const bufferedRun = await buffered([textual(content)]);
+    expect(bufferedRun.seq.requests).toHaveLength(1);
+    expect(
+      lineOf(bufferedRun.sink.events, "coding-sidecar.gateway.outcome")?.extra,
+    ).not.toHaveProperty("textualToolCallRecovery");
+    const liveRun = await live([textual(content)]);
+    expect(liveRun.seq.requests).toHaveLength(1);
+    expect(liveText(liveRun.body)).toBe(content);
+  });
+
+  it("passes a live turn through when prose already reached the runtime, so nothing is duplicated", async () => {
+    const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;
+    const { body, seq, sink } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(markup);
+    expect(body).not.toContain('"tool_calls"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-skipped",
+      textualToolCallRetries: 0,
+    });
+  });
+
+  it.each([
+    [
+      "a brace after prose on the same line",
+      'Result: {"name":"shell","arguments":{"command":"ls"}}',
+    ],
+    [
+      "a brace after prose at a line start",
+      'Result:\n{"name":"shell","arguments":{"command":"ls"}}',
+    ],
+    ["a fence after prose on the same line", 'Sample: ```\n<shell command="ls" />\n```'],
+  ])("delivers a live turn with %s once and does not retry", async (_label, content) => {
+    const { body, seq } = await live([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(content);
+  });
+
+  it("settles the spend of the discarded attempt when the buffered retry fails", async () => {
+    settlements.mockClear();
+    const { result, seq, sink } = await buffered([textual(GEMMA_MARKUP), new TransportError("x")]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(result).toMatchObject({ status: 503 });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      textualToolCallRecovery: "retry-interrupted",
+      textualToolCallRetries: 1,
+    });
+    const [, reserved, settled] = settlements.mock.calls[0] as unknown as [string, number, number];
+    expect(settled).toBe(reserved + 12);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.usage-settled")?.extra).toMatchObject({
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 12,
+      discardedCompletionTokens: 8,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it("settles the spend of the discarded attempt when the live retry fails", async () => {
+    settlements.mockClear();
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP), new TransportError("x")]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(body).not.toContain("<shell");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      textualToolCallRecovery: "retry-interrupted",
+      textualToolCallRetries: 1,
+    });
+    const [, reserved, settled] = settlements.mock.calls[0] as unknown as [string, number, number];
+    expect(settled).toBe(reserved + 12);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.usage-settled")?.extra).toMatchObject({
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 12,
     });
   });
 });

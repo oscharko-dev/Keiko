@@ -35,13 +35,14 @@ export type TextualToolCallForm =
   "named-element" | "wrapper-element" | "function-tag" | "json-call";
 
 /** The closed outcome a turn that needed the recovery records. */
-export type TextualToolCallRecoveryOutcome = "retried-native" | "retry-exhausted";
+export type TextualToolCallRecoveryOutcome =
+  "retried-native" | "retry-exhausted" | "retry-skipped" | "retry-interrupted";
 
 // The detector reads at most this much of an answer: a longer one is a document, not a tool call.
 const MAX_ANALYZED_CHARS = 32_768;
-// The markup must make up at least this share of the answer; prose that merely mentions a tag is
-// never a tool call.
-const MIN_MARKUP_SHARE = 0.6;
+// The markup must be at least this share of the answer's non-whitespace characters: essentially the
+// whole answer. Prose that merely shows or mentions a tag is never a tool call.
+const MIN_MARKUP_SHARE = 0.85;
 // A tag's opening angle bracket to its closing one; longer is not a tool-call tag.
 const MAX_TAG_CHARS = 4_096;
 // What a held live answer may buffer before it is released unexamined.
@@ -65,9 +66,26 @@ interface Span {
   readonly form: TextualToolCallForm;
 }
 
-/** The tool names a request advertises, lower-cased; the only names a detection may rest on. */
-export function toolNameSet(names: readonly string[]): ReadonlySet<string> {
-  return new Set(names.map((name) => name.toLowerCase()).filter((name) => name.length > 0));
+/** The advertised tools, lower-cased, each with its lower-cased parameter names. */
+export type ToolIndex = ReadonlyMap<string, ReadonlySet<string>>;
+
+/** The tools a request advertises: the only names a detection may rest on. */
+export function toolIndex(
+  tools: readonly {
+    readonly name: string;
+    readonly parameters?: Readonly<Record<string, unknown>> | undefined;
+  }[],
+): ToolIndex {
+  const index = new Map<string, ReadonlySet<string>>();
+  for (const tool of tools) {
+    const properties = tool.parameters?.properties;
+    const params =
+      typeof properties === "object" && properties !== null ? Object.keys(properties) : [];
+    if (tool.name.length > 0) {
+      index.set(tool.name.toLowerCase(), new Set(params.map((param) => param.toLowerCase())));
+    }
+  }
+  return index;
 }
 
 function isTagBoundary(char: string | undefined): boolean {
@@ -117,10 +135,33 @@ function elementSpan(
   return { start, end: closeAt >= opened ? closeAt + closing.length : opened, form };
 }
 
-function namedElementSpans(text: string, lower: string, names: ReadonlySet<string>): Span[] {
+// A named element has a tool call's shape when its opening tag carries an attribute, or its body
+// names one of the tool's parameters (or holds an element of the same name); a bare `<read>` or
+// `<task>text</task>` is a word in a sentence or a prompt template, not a call.
+function hasToolCallShape(
+  lower: string,
+  start: number,
+  opened: number,
+  tag: string,
+  params: ReadonlySet<string>,
+): boolean {
+  const opening = lower.slice(start + tag.length + 1, opened);
+  if (opening.includes("=")) return true;
+  const closeAt = lower.lastIndexOf(`</${tag}>`);
+  if (closeAt < opened) return false;
+  const body = lower.slice(opened, closeAt);
+  return (
+    body.includes(`<${tag}`) ||
+    [...params].some((param) => body.includes(`<${param}`) || body.includes(`"${param}"`))
+  );
+}
+
+function namedElementSpans(text: string, lower: string, tools: ToolIndex): Span[] {
   const spans: Span[] = [];
-  for (const name of names) {
+  for (const [name, params] of tools) {
     for (const start of openingTagIndexes(lower, name)) {
+      const opened = tagEnd(text, start);
+      if (opened === -1 || !hasToolCallShape(lower, start, opened, name, params)) continue;
       const span = elementSpan(text, lower, start, name, "named-element");
       if (span !== undefined) spans.push(span);
     }
@@ -207,95 +248,134 @@ function looksLikeJsonCall(body: string, names: ReadonlySet<string>): boolean {
   );
 }
 
-function fencedBlocks(text: string): readonly { start: number; end: number; body: string }[] {
-  const blocks: { start: number; end: number; body: string }[] = [];
+interface FencedBlock {
+  readonly start: number;
+  readonly end: number;
+  readonly label: string;
+  readonly body: string;
+}
+
+function fencedBlocks(text: string): readonly FencedBlock[] {
+  const blocks: FencedBlock[] = [];
   let open = text.indexOf("```");
   while (open !== -1) {
     const close = text.indexOf("```", open + 3);
     if (close === -1) break;
     const inner = text.slice(open + 3, close);
-    const newline = inner.indexOf("\n");
+    const label = /^[A-Za-z_]*/u.exec(inner)?.[0] ?? "";
     blocks.push({
       start: open,
       end: close + 3,
-      body: newline === -1 ? inner : inner.slice(newline),
+      label: label.toLowerCase(),
+      body: inner.slice(label.length),
     });
     open = text.indexOf("```", close + 3);
   }
   return blocks;
 }
 
-function jsonCallSpans(text: string, names: ReadonlySet<string>): Span[] {
-  const spans: Span[] = [];
-  for (const block of fencedBlocks(text)) {
-    if (looksLikeJsonCall(block.body, names)) {
-      spans.push({ start: block.start, end: block.end, form: "json-call" });
-    }
-  }
-  if (spans.length === 0 && looksLikeJsonCall(text, names)) {
-    spans.push({ start: 0, end: text.length, form: "json-call" });
-  }
-  return spans;
+// Fences that may hold a tool call: unlabelled or labelled as a tool or XML marker, and only when
+// the fence is the entire answer. Any other fence (`json`, `ts`, …) shows a sample, never a call.
+const TOOL_FENCE_LABELS: ReadonlySet<string> = new Set([
+  "",
+  "tool",
+  "tool_call",
+  "tool_code",
+  "xml",
+]);
+
+function soleToolFence(text: string, blocks: readonly FencedBlock[]): FencedBlock | undefined {
+  const [only] = blocks;
+  if (blocks.length !== 1 || only === undefined) return undefined;
+  if (only.start !== 0 || only.end !== text.length) return undefined;
+  return TOOL_FENCE_LABELS.has(only.label) ? only : undefined;
 }
 
-function coveredChars(spans: readonly Span[]): number {
-  const ordered = [...spans].sort((a, b) => a.start - b.start);
-  let covered = 0;
-  let reach = 0;
-  for (const span of ordered) {
-    const from = Math.max(span.start, reach);
-    if (span.end > from) covered += span.end - from;
-    reach = Math.max(reach, span.end);
+function jsonCallSpans(
+  text: string,
+  names: ReadonlySet<string>,
+  blocks: readonly FencedBlock[],
+): Span[] {
+  const fence = soleToolFence(text, blocks);
+  const whole = { start: 0, end: text.length, form: "json-call" } as const;
+  if (fence !== undefined) return looksLikeJsonCall(fence.body, names) ? [whole] : [];
+  return blocks.length === 0 && looksLikeJsonCall(text, names) ? [whole] : [];
+}
+
+function insideFence(span: Span, blocks: readonly FencedBlock[]): boolean {
+  return blocks.some((block) => span.start >= block.start && span.end <= block.end);
+}
+
+// The share of the answer's non-whitespace characters that the spans cover.
+function markupShare(text: string, spans: readonly Span[]): number {
+  const covered = new Uint8Array(text.length);
+  for (const span of spans) covered.fill(1, span.start, Math.min(span.end, text.length));
+  let total = 0;
+  let marked = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (/\s/u.test(text.charAt(index))) continue;
+    total += 1;
+    marked += covered[index] ?? 0;
   }
-  return covered;
+  return total === 0 ? 0 : marked / total;
 }
 
 /**
- * The form of the tool-call markup that dominates `content`, or undefined. Only a tool the request
- * advertised can make a detection: an XML element named after a tool, a wrapper element around a
- * call to one, a `<function=tool>` tag, or a JSON call (fenced or the whole answer). Prose, code
- * blocks and markup that name no advertised tool never match.
+ * The form of the tool-call markup that makes up the answer, or undefined. Only a tool the request
+ * advertised can make a detection: an XML element named after a tool that has a tool call's shape
+ * (attributes, or a body naming one of the tool's parameters), a wrapper element around a call to
+ * one, a `<function=tool>` tag, or a JSON call. The markup must be essentially the whole answer
+ * (`MIN_MARKUP_SHARE`) and outside any code fence, except an unlabelled or tool/XML-labelled fence
+ * that is the entire answer. Prose, an answer that shows markup as a sample, a prompt template and
+ * markup naming no advertised tool never match.
  */
 export function detectTextualToolCall(
   content: string,
-  toolNames: ReadonlySet<string>,
+  tools: ToolIndex,
 ): TextualToolCallForm | undefined {
   const text = content.trim();
-  if (toolNames.size === 0 || text.length === 0 || text.length > MAX_ANALYZED_CHARS) {
-    return undefined;
-  }
+  if (tools.size === 0 || text.length === 0 || text.length > MAX_ANALYZED_CHARS) return undefined;
   const lower = text.toLowerCase();
+  const names: ReadonlySet<string> = new Set(tools.keys());
+  const blocks = fencedBlocks(text);
+  const sole = soleToolFence(text, blocks);
   const spans = [
-    ...namedElementSpans(text, lower, toolNames),
-    ...functionTagSpans(text, lower, toolNames),
-    ...wrapperSpans(text, lower, toolNames),
-    ...jsonCallSpans(text, toolNames),
-  ];
+    ...namedElementSpans(text, lower, tools),
+    ...functionTagSpans(text, lower, names),
+    ...wrapperSpans(text, lower, names),
+  ].filter((span) => (sole === undefined ? !insideFence(span, blocks) : insideFence(span, [sole])));
+  spans.push(...jsonCallSpans(text, names, blocks));
   const [first] = spans;
   if (first === undefined) return undefined;
-  return coveredChars(spans) / text.length >= MIN_MARKUP_SHARE ? first.form : undefined;
+  return markupShare(text, spans) >= MIN_MARKUP_SHARE ? first.form : undefined;
 }
 
 /**
  * Whether a finished response is a turn that wrote its tool call as text: it ended normally (`stop`)
- * with no native tool call and its text is dominated by markup naming an advertised tool.
+ * with no native tool call and its text is essentially markup naming an advertised tool.
  */
 export function textualToolCallForm(
   response: Pick<NormalizedResponse, "content" | "finishReason" | "toolCalls">,
-  toolNames: ReadonlySet<string>,
+  tools: ToolIndex,
 ): TextualToolCallForm | undefined {
   if (response.finishReason !== "stop" || response.toolCalls.length > 0) return undefined;
-  return detectTextualToolCall(response.content, toolNames);
+  return detectTextualToolCall(response.content, tools);
 }
 
-/** The request of the retry: the original plus the one fixed correction, never the markup. */
+/**
+ * The request of the retry: the original with the one fixed correction merged into its leading system
+ * message (or added as one when it has none), never the markup. It is not appended as a late message
+ * after the tool messages, which chat templates behind LiteLLM (Gemma) may reject or reorder.
+ */
 export function withTextualToolCallHint<T extends { readonly messages: readonly ChatMessage[] }>(
   request: T,
 ): T {
-  return {
-    ...request,
-    messages: [...request.messages, { role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT }],
-  };
+  const [first, ...rest] = request.messages;
+  const messages: readonly ChatMessage[] =
+    first?.role === "system"
+      ? [{ ...first, content: `${first.content}\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` }, ...rest]
+      : [{ role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT }, ...request.messages];
+  return { ...request, messages };
 }
 
 /** What a turn's retries discarded, folded into the answer's own discarded-attempt usage. */
@@ -340,6 +420,8 @@ export function withDiscardedAttempts(
  */
 export class LiveTextHold {
   private held = "";
+  // A trailing `<` whose next character has not arrived: it starts a tag only if a letter or `/` follows.
+  private carry = "";
   private holding = false;
   private released = false;
   private atLineStart = true;
@@ -350,11 +432,17 @@ export class LiveTextHold {
   push(token: string): string {
     if (!this.enabled || this.released) return token;
     if (this.holding) return this.hold(token);
-    const cut = this.firstMarkupStart(token);
-    this.atLineStart = /\n\s*$/u.test(token) || (this.atLineStart && token.trim().length === 0);
-    if (cut === -1) return token;
-    this.holding = true;
-    return token.slice(0, cut) + this.hold(token.slice(cut));
+    const text = this.carry + token;
+    this.carry = "";
+    const scan = scanMarkupStart(text, this.atLineStart);
+    if (scan.cut !== -1) {
+      this.holding = true;
+      return text.slice(0, scan.cut) + this.hold(text.slice(scan.cut));
+    }
+    this.atLineStart = scan.lineStart;
+    if (!text.endsWith("<")) return text;
+    this.carry = "<";
+    return text.slice(0, -1);
   }
 
   private hold(token: string): string {
@@ -363,27 +451,15 @@ export class LiveTextHold {
     return this.release();
   }
 
-  private firstMarkupStart(token: string): number {
-    let lineStart = this.atLineStart;
-    for (let index = 0; index < token.length; index += 1) {
-      const char = token.charAt(index);
-      if (char === "<" || (lineStart && (char === "{" || char === "[" || char === "`"))) {
-        return index;
-      }
-      if (char === "\n") lineStart = true;
-      else if (char !== " " && char !== "\t") lineStart = false;
-    }
-    return -1;
-  }
-
   get isHolding(): boolean {
     return this.holding;
   }
 
   /** Stops holding and returns what was held; every later delta passes through. */
   release(): string {
-    const text = this.held;
+    const text = this.carry + this.held;
     this.held = "";
+    this.carry = "";
     this.holding = false;
     this.released = true;
     return text;
@@ -392,9 +468,37 @@ export class LiveTextHold {
   /** Drops what was held and starts over for the next attempt; `enabled` says whether it holds. */
   restart(enabled: boolean): void {
     this.held = "";
+    this.carry = "";
     this.holding = false;
     this.released = false;
     this.atLineStart = true;
     this.enabled = enabled;
   }
+}
+
+function isTagStart(next: string): boolean {
+  return /^[A-Za-z/]$/u.test(next);
+}
+
+function startsMarkup(text: string, index: number, lineStart: boolean): boolean {
+  const char = text.charAt(index);
+  if (char === "<") return isTagStart(text.charAt(index + 1));
+  return lineStart && (char === "{" || char === "[" || char === "`");
+}
+
+// Where in `text` markup may start (a `<` followed by a letter or `/`, or a line-leading code fence,
+// `{` or `[`), and whether the text ends at the start of a line. A comparison or a generic such as
+// `a < b` never starts markup.
+function scanMarkupStart(
+  text: string,
+  atLineStart: boolean,
+): { readonly cut: number; readonly lineStart: boolean } {
+  let lineStart = atLineStart;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text.charAt(index);
+    if (startsMarkup(text, index, lineStart)) return { cut: index, lineStart };
+    if (char === "\n") lineStart = true;
+    else if (char !== " " && char !== "\t") lineStart = false;
+  }
+  return { cut: -1, lineStart };
 }

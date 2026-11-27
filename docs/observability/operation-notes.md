@@ -1252,7 +1252,7 @@ roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-sett
 `discardedPromptTokens`, `discardedCompletionTokens`). A turn whose model wrote its tool call as text
 (finish `stop`, no native call, markup naming an advertised tool) is re-requested by the gateway at
 most twice with one fixed hint (ADR-0137, live defect M-1); `coding-sidecar.gateway.outcome` then
-carries `textualToolCallRecovery` (`retried-native`, `retry-exhausted`) and `textualToolCallRetries`,
+carries `textualToolCallRecovery` (`retried-native`, `retry-exhausted`, `retry-skipped`, `retry-interrupted`) and `textualToolCallRetries`,
 never the markup. The correction the model receives is one fixed
 sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant

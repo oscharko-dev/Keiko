@@ -2832,23 +2832,34 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   reads that as the end of the turn, so the run used to settle `succeeded` without the requested
   work and the user saw raw markup. The coding sidecar gateway owns the recovery because it alone
   sees the request's tool catalog and both delivery paths. A turn qualifies only when it finished
-  `stop` with no native call and its text is dominated (at least 60 % of it, at most 32 KiB) by
-  markup that names a tool the request advertised (`coding-textual-tool-call.ts`); prose, code
-  blocks and markup naming no advertised tool never qualify. The gateway then re-requests the model
-  with the original request plus one fixed system hint to use the native tool-calling interface, at
-  most twice per runtime request (a loop guard, not a work limit: once spent, the response passes
-  through unchanged, exactly as before). The text is never parsed into a tool call and nothing is
-  executed from it. A buffered answer is simply discarded. A live (streamed) turn holds back, from
-  the first character that can start markup (`<`, or a line-leading code fence, `{` or `[`), the rest of
-  the attempt until it finishes, so a discarded attempt never reaches the runtime; prose before that
-  point streams live and stays (the retry continues after it), a held text that turns out to be an
-  ordinary answer is released in one frame, and a hold past 32 KiB is released unexamined. The
-  reasoning of a retried live attempt is not forwarded (the first attempt's was shown), a discarded
-  attempt's usage is counted beside the final answer's (`discardedAttemptUsage`), and a model that
-  needs exact reasoning continuation keeps the pass-through (its discarded attempt would leave
-  continuation state behind). `coding-sidecar.gateway.outcome` records
-  `textualToolCallRecovery` (`retried-native`, `retry-exhausted`) and `textualToolCallRetries`
-  (counts and closed words only, never the markup) on a turn that needed it.
+  `stop` with no native call and its text is essentially markup (at least 85 % of its non-whitespace
+  characters, at most 32 KiB, `coding-textual-tool-call.ts`) that names a tool the request advertised
+  and has a tool call's shape: an element with attributes, or a body naming one of the tool's
+  parameters (a bare `<read>` or `<task>text</task>` is a word or a template), a wrapper element
+  around such a call, a `<function=tool>` tag, or a JSON call. Markup inside a code fence never
+  qualifies, except an unlabelled or tool/XML-labelled fence that is the entire answer (a `json`
+  fence is always a sample). Prose, explanations and samples that show markup, prompt templates and
+  markup naming no advertised tool never qualify. The gateway then re-requests the model with the
+  original request, the one fixed hint to use the native tool-calling interface merged into its
+  leading system message (not a late message after the tool messages, which chat templates behind
+  LiteLLM may reject or reorder), at most twice per runtime request (a loop guard, not a work limit:
+  once spent, the response passes through unchanged, exactly as before). The text is never parsed
+  into a tool call and nothing is executed from it. A buffered answer is simply discarded. A live
+  (streamed) turn holds back, from the first character that can start markup (a `<` followed by a
+  letter or `/`, or a line-leading code fence, `{` or `[`; never `a < b`), the rest of the attempt
+  until it finishes, so a discarded attempt never reaches the runtime; a held text that turns out to
+  be an ordinary answer is released in one frame, and a hold past 32 KiB is released unexamined. When
+  prose already reached the runtime before the markup began, a retry would deliver that prose and
+  then the retry's output, so the live turn is not retried and passes through as before
+  (`retry-skipped`): nothing is ever duplicated. The reasoning of a retried live attempt is not
+  forwarded (the first attempt's was shown), a discarded attempt's usage is counted beside the final
+  answer's (`discardedAttemptUsage`), and when a retry fails or is cancelled the discarded attempts'
+  prompt tokens still settle into the run's reservation beside the estimate of the attempt that never
+  finished, with `coding-sidecar.gateway.usage-settled` naming them. A model that needs exact
+  reasoning continuation keeps the pass-through (its discarded attempt would leave continuation state
+  behind). `coding-sidecar.gateway.outcome` records `textualToolCallRecovery` (`retried-native`,
+  `retry-exhausted`, `retry-skipped`, `retry-interrupted`) and `textualToolCallRetries` (counts and
+  closed words only, never the markup) on a turn that needed it.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's

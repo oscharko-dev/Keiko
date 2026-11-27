@@ -6,12 +6,19 @@ import {
   TEXTUAL_TOOL_CALL_HOLD_LIMIT_CHARS,
   TEXTUAL_TOOL_CALL_RETRY_HINT,
   textualToolCallForm,
-  toolNameSet,
+  toolIndex,
   withDiscardedAttempts,
   withTextualToolCallHint,
 } from "./coding-textual-tool-call.js";
 
-const TOOLS = toolNameSet(["read", "edit", "shell", "todo", "Bash"]);
+const TOOLS = toolIndex([
+  { name: "read", parameters: { properties: { filePath: {} } } },
+  { name: "edit", parameters: { properties: { filePath: {}, oldString: {} } } },
+  { name: "shell", parameters: { properties: { command: {} } } },
+  { name: "todo", parameters: { properties: { todos: {} } } },
+  { name: "task", parameters: { properties: { prompt: {} } } },
+  { name: "Bash" },
+]);
 
 describe("detectTextualToolCall", () => {
   it.each([
@@ -26,6 +33,11 @@ describe("detectTextualToolCall", () => {
       "named-element",
     ],
     [
+      "an element whose body names a parameter",
+      `<edit>\n<filePath>a.ts</filePath>\n<oldString>x</oldString>\n</edit>`,
+      "named-element",
+    ],
+    [
       "a tool_call wrapper around a JSON call",
       `<tool_call>\n{"name": "shell", "arguments": {"command": "npm test"}}\n</tool_call>`,
       "wrapper-element",
@@ -36,8 +48,8 @@ describe("detectTextualToolCall", () => {
       "function-tag",
     ],
     [
-      "a fenced JSON call",
-      '```json\n{"name":"edit","arguments":{"filePath":"a.ts"}}\n```',
+      "an unlabelled fence that is the whole answer",
+      '```\n{"name":"edit","arguments":{"filePath":"a.ts"}}\n```',
       "json-call",
     ],
     [
@@ -46,7 +58,6 @@ describe("detectTextualToolCall", () => {
       "json-call",
     ],
     ["a mixed-case tool name", `<BASH command="ls"/>`, "named-element"],
-    ["a short lead-in before the markup", `Run.\n<shell command="npm test" />`, "named-element"],
   ])("detects %s", (_label, text, form) => {
     expect(detectTextualToolCall(text, TOOLS)).toBe(form);
   });
@@ -65,19 +76,43 @@ describe("detectTextualToolCall", () => {
       "a wrapper naming an unknown tool",
       `<tool_call>{"name":"unknown","arguments":{}}</tool_call>`,
     ],
-    ["a JSON call to an unknown tool", '```json\n{"name":"unknown","arguments":{}}\n```'],
-    ["JSON that is not a call", '```json\n{"name":"shell","note":"x"}\n```'],
+    ["a JSON call to an unknown tool", '```\n{"name":"unknown","arguments":{}}\n```'],
+    ["JSON that is not a call", '```\n{"name":"shell","note":"x"}\n```'],
+    [
+      "a json-labelled fence showing a call, even as the whole answer",
+      '```json\n{"name":"shell","arguments":{"command":"ls"}}\n```',
+    ],
+    [
+      "a one-line json fence showing a call",
+      '```json {"name":"shell","arguments":{"command":"ls"}}```',
+    ],
+    [
+      "a tool element inside an xml fence among prose",
+      'Call it like this:\n```xml\n<read filePath="a.ts"/>\n```',
+    ],
+    [
+      "a tool element inside a fence that is not the whole answer",
+      '```xml\n<read filePath="a.ts"/>\n```\nThat reads the file.',
+    ],
+    [
+      "an explanation of a tool call",
+      `To read a file, the model writes <read filePath="src/a.ts" /> and the runtime answers with the content of that file, which it then reads.`,
+    ],
+    ["a prompt template", `<task>Summarise the repository</task>`],
+    ["a bare tool-named tag", `<shell>`],
+    ["an empty tool-named element", `<read/>`],
     [
       "prose that merely names a tag in a long answer",
-      `The ${"explanation goes on and on. ".repeat(20)} Remember that <shell> is the tool.`,
+      `The ${"explanation goes on and on. ".repeat(20)} Remember that <shell command="x"/> is the tool.`,
     ],
+    ["a short lead-in beside the markup", `Let me run the tests.\n<shell command="npm test" />`],
     ["empty text", "   "],
   ])("does not detect %s", (_label, text) => {
     expect(detectTextualToolCall(text, TOOLS)).toBeUndefined();
   });
 
   it("never detects without an advertised tool", () => {
-    expect(detectTextualToolCall(`<shell command="ls" />`, toolNameSet([]))).toBeUndefined();
+    expect(detectTextualToolCall(`<shell command="ls" />`, toolIndex([]))).toBeUndefined();
   });
 
   it("does not analyse an answer longer than a tool call can be", () => {
@@ -104,14 +139,32 @@ describe("textualToolCallForm", () => {
 });
 
 describe("withTextualToolCallHint", () => {
-  it("appends the fixed correction and keeps the original request", () => {
-    const original = { modelId: "m", messages: [{ role: "user" as const, content: "hi" }] };
+  it("merges the fixed correction into the leading system message", () => {
+    const original = {
+      modelId: "m",
+      messages: [
+        { role: "system" as const, content: "Be brief." },
+        { role: "user" as const, content: "hi" },
+        { role: "tool" as const, content: "result", toolCallId: "c" },
+      ],
+    };
     const hinted = withTextualToolCallHint(original);
     expect(hinted.messages).toEqual([
-      { role: "user", content: "hi" },
-      { role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT },
+      { role: "system", content: `Be brief.\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` },
+      original.messages[1],
+      original.messages[2],
     ]);
-    expect(original.messages).toHaveLength(1);
+    expect(original.messages[0]?.content).toBe("Be brief.");
+  });
+
+  it("adds a leading system message when the request has none, never a late one", () => {
+    const hinted = withTextualToolCallHint({
+      messages: [{ role: "user" as const, content: "hi" }],
+    });
+    expect(hinted.messages).toEqual([
+      { role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT },
+      { role: "user", content: "hi" },
+    ]);
   });
 });
 
@@ -144,7 +197,7 @@ describe("withDiscardedAttempts", () => {
 });
 
 describe("LiveTextHold", () => {
-  it("streams prose through and holds from the first markup start", () => {
+  it("streams prose through and holds from the first tag start", () => {
     const hold = new LiveTextHold(true);
     expect(hold.push("Running ")).toBe("Running ");
     expect(hold.push("the tests: <sh")).toBe("the tests: ");
@@ -154,7 +207,28 @@ describe("LiveTextHold", () => {
     expect(hold.push("later")).toBe("later");
   });
 
-  it("holds a line-leading JSON object and a code fence but not an inline brace", () => {
+  it("does not hold a comparison or a generic", () => {
+    const hold = new LiveTextHold(true);
+    expect(hold.push("if a < b and x<3 then ")).toBe("if a < b and x<3 then ");
+    expect(hold.push("List<string> is fine")).toBe("List");
+    expect(hold.isHolding).toBe(true);
+  });
+
+  it("carries a trailing angle bracket until its next character decides", () => {
+    const comparison = new LiveTextHold(true);
+    expect(comparison.push("a <")).toBe("a ");
+    expect(comparison.push(" b")).toBe("< b");
+    expect(comparison.isHolding).toBe(false);
+    const tag = new LiveTextHold(true);
+    expect(tag.push("go <")).toBe("go ");
+    expect(tag.push("shell />")).toBe("");
+    expect(tag.release()).toBe("<shell />");
+    const closing = new LiveTextHold(true);
+    expect(closing.push("end <")).toBe("end ");
+    expect(closing.release()).toBe("<");
+  });
+
+  it("holds a line-leading JSON object and a code fence but not an inline brace or backtick", () => {
     const braces = new LiveTextHold(true);
     expect(braces.push("a {b} c")).toBe("a {b} c");
     expect(braces.push("\n{")).toBe("\n");
@@ -162,15 +236,17 @@ describe("LiveTextHold", () => {
     expect(fence.push("```json")).toBe("");
     const inline = new LiveTextHold(true);
     expect(inline.push("Run `npm test` now")).toBe("Run `npm test` now");
+    const afterProse = new LiveTextHold(true);
+    expect(afterProse.push('Sure: {"a":1} and ```x```')).toBe('Sure: {"a":1} and ```x```');
   });
 
   it("passes everything through when disabled and after the hold is released by size", () => {
     const off = new LiveTextHold(false);
     expect(off.push("<shell />")).toBe("<shell />");
     const bounded = new LiveTextHold(true);
-    expect(bounded.push("<")).toBe("");
+    expect(bounded.push("<a")).toBe("");
     const flood = "x".repeat(TEXTUAL_TOOL_CALL_HOLD_LIMIT_CHARS);
-    expect(bounded.push(flood)).toBe(`<${flood}`);
+    expect(bounded.push(flood)).toBe(`<a${flood}`);
     expect(bounded.push("<more")).toBe("<more");
   });
 

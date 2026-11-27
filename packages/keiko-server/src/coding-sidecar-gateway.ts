@@ -4,11 +4,12 @@ import {
   LiveTextHold,
   TEXTUAL_TOOL_CALL_MAX_RETRIES,
   textualToolCallForm,
-  toolNameSet,
+  toolIndex,
   withDiscardedAttempts,
   withTextualToolCallHint,
   type DiscardedAttempts,
   type TextualToolCallRecoveryOutcome,
+  type ToolIndex,
 } from "./coding-textual-tool-call.js";
 import { redactContent } from "@oscharko-dev/keiko-security";
 import { currentRedactionSecrets } from "./deps.js";
@@ -946,13 +947,15 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     ...OUTPUT_REPAIR_FIELDS,
     // Live defect M-1: the model wrote its tool call as text and the gateway re-requested it. Present
     // only on a turn that needed the recovery: `retried-native` when a retry ended without markup,
-    // `retry-exhausted` when the retries were spent and the response passed through unchanged. The
+    // `retry-exhausted` when the retries were spent and the response passed through unchanged,
+    // `retry-skipped` when prose had already reached the runtime so a retry would have duplicated it
+    // (the response passes through), `retry-interrupted` when a retry failed or was cancelled. The
     // retry count is the number of extra model requests; the markup itself is never recorded.
     textualToolCallRecovery: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["retried-native", "retry-exhausted"],
+      values: ["retried-native", "retry-exhausted", "retry-skipped", "retry-interrupted"],
     },
     textualToolCallRetries: { type: "integer", dataClass: "count", required: false },
     // Legacy field name (#3907 AC3): an accepted answer updates same-generation serving evidence
@@ -3788,22 +3791,103 @@ interface GatewayChatDispatchContext {
   readonly runId: string;
   readonly cancellation: GatewayRequestCancellation;
   readonly promptTokenReservation: PromptTokenReservation;
-  /**
-   * The tools the request advertised, lower-cased: the only names a textual tool-call detection may
-   * rest on. Empty for a model that needs exact reasoning continuation, whose discarded attempt
-   * would leave its continuation state behind (it keeps today's pass-through).
-   */
-  readonly textualToolNames: ReadonlySet<string>;
+  /** The request's textual tool-call recovery, shared with the failure path (live defect M-1). */
+  readonly textualRecovery: TextualRecoveryState;
 }
 
-function textualToolNamesFor(
+/**
+ * What the textual tool-call recovery of one runtime request knows: the tools the request advertised
+ * (empty for a model that needs exact reasoning continuation, whose discarded attempt would leave its
+ * continuation state behind: it keeps today's pass-through), the usage of the attempts it discarded,
+ * the extra requests it made and, once known, how it ended. It lives outside the dispatch so a
+ * failing retry still settles the spend of the attempts already paid for.
+ */
+interface TextualRecoveryState {
+  readonly tools: ToolIndex;
+  readonly discarded: DiscardedAttempts;
+  retries: number;
+  outcome?: TextualToolCallRecoveryOutcome;
+}
+
+function textualRecoveryStateFor(
   config: GatewayConfig,
   modelAlias: string,
   tools: readonly ToolDefinition[] | undefined,
-): ReadonlySet<string> {
-  return requiresReasoningContinuation(config, modelAlias)
-    ? toolNameSet([])
-    : toolNameSet((tools ?? []).map((tool) => tool.name));
+): TextualRecoveryState {
+  return {
+    tools: requiresReasoningContinuation(config, modelAlias)
+      ? toolIndex([])
+      : toolIndex(tools ?? []),
+    discarded: { attemptCount: 0, promptTokens: 0, completionTokens: 0 },
+    retries: 0,
+  };
+}
+
+// What the outcome line records. A recovery that made requests and never reached a verdict was cut
+// short: a failing retry, a cancellation or an output bound.
+function textualRecoveryRecord(state: TextualRecoveryState): TextualRecoveryRecord | undefined {
+  const outcome = state.outcome ?? (state.retries > 0 ? "retry-interrupted" : undefined);
+  return outcome === undefined ? undefined : { outcome, retries: state.retries };
+}
+
+// The reservation of a call that failed or was cancelled: the attempts the recovery discarded were
+// paid for, so their prompt tokens settle with it (beside the estimate of the attempt that never
+// finished) and the usage line names them. A no-op once the reservation was settled.
+function settleReservationAfterFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  reservation: PromptTokenReservation,
+  state: TextualRecoveryState,
+): void {
+  const alreadySettled = reservation.settled;
+  const { discarded } = state;
+  const settlement = settlePromptTokenReservation(
+    deps,
+    reservation,
+    undefined,
+    discarded.promptTokens,
+  );
+  if (alreadySettled || discarded.attemptCount === 0) return;
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    {
+      completionTokens: 0,
+      outputBytes: 0,
+      contentBytes: 0,
+      reasoningBytes: 0,
+      discardedAttemptCount: discarded.attemptCount,
+      discardedPromptTokens: discarded.promptTokens,
+      discardedCompletionTokens: discarded.completionTokens,
+    },
+    "output-byte-estimate",
+    settlement,
+  );
+}
+
+function failedOutputMetrics(state: TextualRecoveryState): GatewayOutcomeMetrics {
+  const textualRecovery = textualRecoveryRecord(state);
+  return textualRecovery === undefined
+    ? NO_GATEWAY_OUTPUT
+    : { ...NO_GATEWAY_OUTPUT, textualRecovery };
+}
+
+function gatewayDispatchRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  binding: PinnedGatewayBinding,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runId: string,
+  delivery: GatewayChatDelivery,
+  gateway: { readonly signal: AbortSignal; readonly observer: GatewayRetryObserver },
+): GatewayCallRequest {
+  return {
+    ...requestForGatewayDelivery(ctx, parsed, delivery, gateway.signal, gateway.observer, runId),
+    ...(requiresReasoningContinuation(binding.config, delivery.modelAlias)
+      ? { reasoningStateSecrets: currentRedactionSecrets(deps) }
+      : {}),
+  };
 }
 
 function requestForGatewayDelivery(
@@ -3869,6 +3953,7 @@ async function dispatchGatewayChat(
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
   const retries = gatewayRetryTrace(ctx, deps, runId);
+  const textualRecovery = textualRecoveryStateFor(binding.config, modelAlias, parsed.tools);
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
   try {
     const dispatch = {
@@ -3876,23 +3961,14 @@ async function dispatchGatewayChat(
       binding,
       modelAlias,
       // Built inside the settlement: a bound skill that is already gone refuses here (#4025 AC5).
-      request: {
-        ...requestForGatewayDelivery(
-          ctx,
-          parsed,
-          delivery,
-          cancellation.signal,
-          retries.observer,
-          runId,
-        ),
-        ...(requiresReasoningContinuation(binding.config, modelAlias)
-          ? { reasoningStateSecrets: currentRedactionSecrets(deps) }
-          : {}),
-      },
+      request: gatewayDispatchRequest(ctx, deps, binding, parsed, runId, delivery, {
+        signal: cancellation.signal,
+        observer: retries.observer,
+      }),
       runId,
       cancellation,
       promptTokenReservation: delivery.promptTokenReservation,
-      textualToolNames: textualToolNamesFor(binding.config, modelAlias, parsed.tools),
+      textualRecovery,
     } satisfies GatewayChatDispatchContext;
     if (parsed.stream && upstreamStreamingSupported) {
       return await streamGatewayChat(ctx, dispatch);
@@ -3903,7 +3979,8 @@ async function dispatchGatewayChat(
     }
     return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
-    return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
+    const failed = { promptTokenReservation: delivery.promptTokenReservation, textualRecovery };
+    return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, failed, bufferedStream);
   } finally {
     // After the answer, or the failure frame, has been settled: what is still the newest frame is
     // a retrying fact nothing closed.
@@ -3960,7 +4037,9 @@ function settleFailedGatewayChat(
   runId: string,
   cancellation: GatewayRequestCancellation,
   error: unknown,
-  delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
+  delivery: Pick<GatewayChatDelivery, "promptTokenReservation"> & {
+    readonly textualRecovery: TextualRecoveryState;
+  },
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
   const cancelled = cancellation.signal.aborted;
@@ -3970,7 +4049,7 @@ function settleFailedGatewayChat(
     runId,
     cancellation,
     cancelled ? "cancelled" : "failed",
-    NO_GATEWAY_OUTPUT,
+    failedOutputMetrics(delivery.textualRecovery),
     settledRepair(outputRepairOf(error)),
   );
   const failureCode =
@@ -3982,7 +4061,13 @@ function settleFailedGatewayChat(
     ? reportGatewayAbortFailure(ctx, deps, runId, cancellation, error)
     : reportGatewayTurnFailure(ctx, deps, runId, { failureCode, runtimeRetry, error });
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded, cancellation);
-  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
+  settleReservationAfterFailure(
+    ctx,
+    deps,
+    runId,
+    delivery.promptTokenReservation,
+    delivery.textualRecovery,
+  );
   const refusal = bufferedStream === undefined ? refusalAnswer(ctx, runId, error) : undefined;
   if (refusal !== undefined) return refusal;
   const refused = !cancelled && runtimeRetry === "refused";
@@ -4059,24 +4144,22 @@ function bufferedDeliveryRefusal(
  */
 async function requestBufferedWithTextualRecovery(
   dispatch: GatewayChatDispatchContext,
-): Promise<{ readonly response: NormalizedResponse; readonly recovery?: TextualRecoveryRecord }> {
-  const { deps, binding, modelAlias, request, textualToolNames } = dispatch;
+): Promise<NormalizedResponse> {
+  const { deps, binding, modelAlias, request, textualRecovery: state } = dispatch;
   const call = chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias);
-  const discarded: DiscardedAttempts = { attemptCount: 0, promptTokens: 0, completionTokens: 0 };
-  let retries = 0;
   for (;;) {
-    const response = await call(retries === 0 ? request : withTextualToolCallHint(request));
-    const recovered = withDiscardedAttempts(response, discarded);
-    if (textualToolCallForm(response, textualToolNames) === undefined) {
-      return retries === 0
-        ? { response: recovered }
-        : { response: recovered, recovery: { outcome: "retried-native", retries } };
+    const response = await call(state.retries === 0 ? request : withTextualToolCallHint(request));
+    const recovered = withDiscardedAttempts(response, state.discarded);
+    if (textualToolCallForm(response, state.tools) === undefined) {
+      if (state.retries > 0) state.outcome = "retried-native";
+      return recovered;
     }
-    if (retries >= TEXTUAL_TOOL_CALL_MAX_RETRIES) {
-      return { response: recovered, recovery: { outcome: "retry-exhausted", retries } };
+    if (state.retries >= TEXTUAL_TOOL_CALL_MAX_RETRIES) {
+      state.outcome = "retry-exhausted";
+      return recovered;
     }
-    foldDiscardedAttempt(discarded, response.usage);
-    retries += 1;
+    foldDiscardedAttempt(state.discarded, response.usage);
+    state.retries += 1;
   }
 }
 
@@ -4086,7 +4169,8 @@ async function executeBufferedGatewayChat(
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
   const { deps, modelAlias, request, runId, promptTokenReservation } = dispatch;
-  const { response, recovery } = await requestBufferedWithTextualRecovery(dispatch);
+  const response = await requestBufferedWithTextualRecovery(dispatch);
+  const recovery = textualRecoveryRecord(dispatch.textualRecovery);
   const promptSettlement = settlePromptTokenReservation(
     deps,
     promptTokenReservation,
@@ -4283,7 +4367,13 @@ async function streamGatewayChat(
     // Every exit path above returns/throws without necessarily having observed real usage
     // (cancelled before the first chunk, mid-stream failure, or budget/cancellation cutoff).
     // Idempotent: a no-op once `streamGatewayResponse` has already settled with real usage.
-    settlePromptTokenReservation(session.deps, session.promptTokenReservation);
+    settleReservationAfterFailure(
+      session.ctx,
+      session.deps,
+      session.runId,
+      session.promptTokenReservation,
+      session.recovery.state,
+    );
   }
 }
 
@@ -4371,26 +4461,24 @@ interface GatewayStreamSession {
  * as text is discarded unseen and the stream restarts with the fixed hint, up to the retry bound.
  */
 interface StreamTextualRecovery {
-  readonly toolNames: ReadonlySet<string>;
+  readonly state: TextualRecoveryState;
   readonly hold: LiveTextHold;
   readonly restart: (request: GatewayRequest) => AsyncIterator<GatewayStreamChunk>;
-  readonly discarded: DiscardedAttempts;
-  retries: number;
-  outcome?: TextualToolCallRecoveryOutcome;
+  /** Whether text other than whitespace already reached the runtime during this attempt. */
+  proseForwarded: boolean;
 }
 
 function createStreamTextualRecovery(dispatch: GatewayChatDispatchContext): StreamTextualRecovery {
-  const { deps, binding, modelAlias, textualToolNames } = dispatch;
+  const { deps, binding, modelAlias, textualRecovery } = dispatch;
   return {
-    toolNames: textualToolNames,
-    hold: new LiveTextHold(textualToolNames.size > 0),
+    state: textualRecovery,
+    hold: new LiveTextHold(textualRecovery.tools.size > 0),
     restart: (request) =>
       chatStreamFactoryFor(deps, binding.gateway)(
         binding.config,
         modelAlias,
       )(request)[Symbol.asyncIterator](),
-    discarded: { attemptCount: 0, promptTokens: 0, completionTokens: 0 },
-    retries: 0,
+    proseForwarded: false,
   };
 }
 
@@ -4448,6 +4536,13 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
   return true;
 }
 
+function textualRecoveryMetrics(
+  state: TextualRecoveryState,
+): Pick<GatewayOutcomeMetrics, "textualRecovery"> {
+  const textualRecovery = textualRecoveryRecord(state);
+  return textualRecovery === undefined ? {} : { textualRecovery };
+}
+
 function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
@@ -4467,14 +4562,7 @@ function recordSessionOutcome(
       outputBytes: metrics.outputBytes,
       reasoningFrames: metrics.reasoningFrames,
       forwardedReasoningBytes: metrics.forwardedReasoningBytes,
-      ...(session.recovery.outcome === undefined
-        ? {}
-        : {
-            textualRecovery: {
-              outcome: session.recovery.outcome,
-              retries: session.recovery.retries,
-            },
-          }),
+      ...textualRecoveryMetrics(session.recovery.state),
       ...(limit === undefined ? {} : { limit }),
       ...(finishReason === undefined ? {} : { finishReason }),
       ...answeredReadiness(deps, session.modelId, session.answeredConfig, outcome, finishReason),
@@ -4550,25 +4638,28 @@ async function settleTerminalResponse(
   if (verdict === "deliver") {
     await streamGatewayResponse(
       session,
-      withDiscardedAttempts(response, session.recovery.discarded),
+      withDiscardedAttempts(response, session.recovery.state.discarded),
     );
   }
   await session.iterator.return?.();
   return "ended";
 }
 
+// A turn that wrote its tool call as text is asked for again, unless the retries are spent or text
+// already reached the runtime: a retry after forwarded prose would deliver that prose and then the
+// retry's output, so the response passes through instead (the safer of the two, `retry-skipped`).
 async function settleTextualRecovery(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<"retry" | "deliver" | "stop"> {
-  const { recovery } = session;
-  const textual = textualToolCallForm(response, recovery.toolNames) !== undefined;
-  if (textual && recovery.retries < TEXTUAL_TOOL_CALL_MAX_RETRIES) {
+  const { state, proseForwarded } = session.recovery;
+  const textual = textualToolCallForm(response, state.tools) !== undefined;
+  if (textual && state.retries >= TEXTUAL_TOOL_CALL_MAX_RETRIES) state.outcome = "retry-exhausted";
+  else if (textual && proseForwarded) state.outcome = "retry-skipped";
+  else if (textual) {
     await startTextualToolCallRetry(session, response);
     return "retry";
-  }
-  if (textual) recovery.outcome = "retry-exhausted";
-  else if (recovery.retries > 0) recovery.outcome = "retried-native";
+  } else if (state.retries > 0) state.outcome = "retried-native";
   return (await flushHeldText(session)) ? "deliver" : "stop";
 }
 
@@ -4586,9 +4677,11 @@ async function startTextualToolCallRetry(
   response: NormalizedResponse,
 ): Promise<void> {
   const { recovery, metrics } = session;
-  foldDiscardedAttempt(recovery.discarded, response.usage);
-  recovery.retries += 1;
-  recovery.hold.restart(recovery.retries < TEXTUAL_TOOL_CALL_MAX_RETRIES);
+  const { state } = recovery;
+  foldDiscardedAttempt(state.discarded, response.usage);
+  state.retries += 1;
+  recovery.proseForwarded = false;
+  recovery.hold.restart(state.retries < TEXTUAL_TOOL_CALL_MAX_RETRIES);
   await session.iterator.return?.();
   metrics.outputBytes = 0;
   metrics.completionTokens = 0;
@@ -4603,13 +4696,13 @@ function streamGatewayText(
 ): Promise<boolean> {
   if (chunk.type === "delta") return streamGatewayDelta(session, chunk.token);
   // The reasoning of a retried attempt is not forwarded: the first attempt's was already shown.
-  return session.recovery.retries > 0
+  return session.recovery.state.retries > 0
     ? Promise.resolve(true)
     : streamGatewayReasoning(session, chunk.token);
 }
 
 /** Returns true when the stream may continue with the next chunk. */
-function streamGatewayDelta(session: GatewayStreamSession, token: string): Promise<boolean> {
+async function streamGatewayDelta(session: GatewayStreamSession, token: string): Promise<boolean> {
   const { request, metrics } = session;
   const deltaMetrics = incrementalUtf8ByteCount(token, metrics.previousDeltaEndedWithHighSurrogate);
   metrics.outputBytes += deltaMetrics.bytes;
@@ -4619,8 +4712,14 @@ function streamGatewayDelta(session: GatewayStreamSession, token: string): Promi
   // Mid-stream only the byte backstop applies: the token count here is an estimate.
   const overBudget = exceedsOutputBudget(budget, request.maxOutputTokens ?? 1, false);
   const forwarded = overBudget ? token : session.recovery.hold.push(token);
-  if (forwarded.length === 0) return Promise.resolve(true);
-  return forwardStreamText(session, { content: forwarded }, overBudget ? "answer" : undefined);
+  if (forwarded.length === 0) return true;
+  const sent = await forwardStreamText(
+    session,
+    { content: forwarded },
+    overBudget ? "answer" : undefined,
+  );
+  if (sent && forwarded.trim().length > 0) session.recovery.proseForwarded = true;
+  return sent;
 }
 
 // The reasoning passages one turn may carry: the first attempt that forwards reasoning and the
