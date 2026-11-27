@@ -21,6 +21,9 @@ export interface GitStageEffectContext {
     stdin?: Uint8Array | string,
     indexPath?: string,
   ) => Promise<CommandResult>;
+  // Every configured `filter.<name>` driver name, or `undefined` when the configuration cannot be
+  // read. The conversion hash overrides each one, so no configured driver can run while staging.
+  readonly filterDriverNames: () => Promise<readonly string[] | undefined>;
   // The line-break class of each named path's index entry as `git ls-files --eol` reports it
   // (`lf`, `crlf`, `mixed`, `none`, `-text`; absent: no entry). Git keeps the bytes of a path whose
   // staged blob already holds a CR, so the conversion depends on it.
@@ -95,6 +98,27 @@ function allLineBreaksCrlf(bytes: Uint8Array): boolean {
 function withoutCrlf(bytes: Uint8Array): Uint8Array {
   return bytes.filter((byte, index) => byte !== CR || bytes[index + 1] !== LF);
 }
+const FILTER_DRIVER_NAME_OVERRIDABLE = /^[^=\n\r\0]+$/u;
+
+// Overrides of every configured filter driver (the read path's mechanism, keiko-git
+// `filterNeutralizingArgs`): `--no-filters` alone would also drop the `core.autocrlf` conversion
+// this path needs. A name that cannot be overridden, or an unreadable configuration, refuses.
+async function filterNeutralizingArgs(ctx: GitStageEffectContext): Promise<readonly string[]> {
+  const names = await ctx.filterDriverNames();
+  if (!names?.every((name) => FILTER_DRIVER_NAME_OVERRIDABLE.test(name)))
+    throw new Error("git-stage-filter-config-unavailable");
+  return names.flatMap((name) => [
+    "-c",
+    `filter.${name}.clean=`,
+    "-c",
+    `filter.${name}.smudge=`,
+    "-c",
+    `filter.${name}.process=`,
+    "-c",
+    `filter.${name}.required=false`,
+  ]);
+}
+
 async function hashObject(
   ctx: GitStageEffectContext,
   bytes: Uint8Array,
@@ -105,6 +129,7 @@ async function hashObject(
     conversion === undefined
       ? ["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"]
       : [
+          ...(await filterNeutralizingArgs(ctx)),
           "-c",
           `core.autocrlf=${conversion.autocrlf}`,
           "-c",

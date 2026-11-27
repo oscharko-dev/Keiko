@@ -4,7 +4,15 @@
 // resolved the root through the plain node port and were refused (run 5, 2026-09-10 -- the raw
 // status reader failed first, the staging step would have failed the same way one step later).
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +24,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
 import {
+  gitStageFilesSupported,
   readGitStageCandidate,
   stageExactFiles,
   type GitStageEffectContext,
@@ -78,6 +87,14 @@ function context(managed: string, fs?: GitStageEffectContext["fs"]): GitStageEff
         truncated: false,
       });
     },
+    filterDriverNames: () =>
+      Promise.resolve(
+        [
+          ...git(managed, ["config", "--name-only", "--list"]).matchAll(
+            /^filter\.(.+)\.(?:clean|smudge|process|required)$/gmu,
+          ),
+        ].flatMap((match) => (match[1] === undefined ? [] : [match[1]])),
+      ),
     indexLineBreaks: (paths) =>
       readGitIndexLineBreaks(
         { workspace: workspaceInfo(managed), processEnv: { PATH: process.env.PATH ?? "" } },
@@ -207,6 +224,34 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     );
     return git(repo, ["rev-parse", ":a.txt"], undefined, oracleIndex).trim();
   }
+
+  // Review finding on PR #4568: the conversion hash passes `--path`, so Git applies the
+  // attribute-selected clean driver. The attribute check runs earlier, so an attribute that lands
+  // after it must not make staging run a configured driver.
+  it("never runs a configured clean filter driver during the conversion hash", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    const marker = join(repo, "..", `${repo.split("/").pop() ?? "repo"}-driver-ran`);
+    dirs.push(marker);
+    writeFileSync(join(repo, ".gitattributes"), "a.txt filter=probe\n");
+    git(repo, ["config", "filter.probe.clean", `touch '${marker}'; cat`]);
+
+    await expect(gitStageFilesSupported(context(repo), ["a.txt"], "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("refuses the conversion hash when the filter configuration cannot be read", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    const unreadable = {
+      ...context(repo),
+      filterDriverNames: (): Promise<undefined> => Promise.resolve(undefined),
+    };
+
+    await expect(gitStageFilesSupported(unreadable, ["a.txt"], "autocrlf-true")).rejects.toThrow(
+      "git-stage-filter-config-unavailable",
+    );
+  });
 
   it("stages Git's LF form of a CRLF file under autocrlf=true, which checks out the verified bytes", async () => {
     const repo = plainRepository("v1\r\nv2\r\n");

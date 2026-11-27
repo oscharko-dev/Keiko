@@ -2330,7 +2330,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (mixed line breaks over an index entry without CR, CRLF under `input`, a conversion over a binary
   index entry) stays `unsupported-transformation`. Git for Windows sets `core.autocrlf=true`
   system-wide, so before this every governed commit in an ordinary Windows checkout was refused
-  (#4491). It is an option of the stage tool rather than a tool of its own, so the
+  (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
+  neutralization; an unreadable configuration refuses), and the check before the index is promoted
+  re-reads the effective line-ending mode and refuses when it differs from the one the objects
+  were hashed under (PR #4568 review). It is an option of the stage tool rather than a tool of its own, so the
   catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
   a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely

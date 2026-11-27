@@ -659,6 +659,51 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(await stageSupported()).toBe(false);
   });
 
+  // Review finding on PR #4568: the mode a verified staging hashed under is read once, so a change
+  // to `core.autocrlf` while it runs would have left the converted blob in an index promoted under
+  // the other mode. The check before promotion rereads it and refuses.
+  it("refuses a verified staging whose core.autocrlf changes while it runs, leaving the index alone", async () => {
+    git(["config", "core.autocrlf", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-qm", "base"]);
+    git(["branch", "base"]);
+    git(["checkout", "-qb", "work"]);
+    git(["config", "core.autocrlf", "true"]);
+    writeFileSync(join(root, "b.txt"), "one\r\ntwo\r\n", "utf8");
+    const headSha = git(["rev-parse", "HEAD"]).trim();
+    const verified: GitVerifiedCommitPrecondition = {
+      headSha,
+      stagedTreeDigest: await readGitIndexTreeDigest({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+      }),
+      branchName: "work",
+      baseRef: "base",
+      baseSha: headSha,
+    };
+    const index = git(["ls-files", "--stage"]);
+    let flipped = false;
+    const racing = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      beforeIndexUpdate: () => {
+        if (!flipped) {
+          flipped = true;
+          git(["config", "core.autocrlf", "false"]);
+        }
+        return true;
+      },
+    });
+
+    const staged = await racing.stage({ pathspecs: ["b.txt"], verified });
+
+    expect(flipped).toBe(true);
+    expect(staged.outcome).toBe("failed");
+    expect(git(["ls-files", "--stage"])).toBe(index);
+  });
+
   it("refuses exact staging when a key is set without a value, which Git reads as true", async () => {
     writeHomeGitConfig("[core]\n\tautocrlf = false\n");
     git(["config", "core.autocrlf", "false"]);
