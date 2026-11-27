@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, SnapPrev } from "../windows/types";
 import { fitInitialWindowSize } from "./workspaceActions";
@@ -84,4 +84,105 @@ export function fitAutomaticWindow(
   }
   geometries.set(window.id, geometryOf(fitted));
   return fitted;
+}
+
+/** A display-only frame for a stored window, valid while the stored frame is unchanged. */
+export interface DisplayFit {
+  readonly from: SnapPrev;
+  readonly to: SnapPrev;
+}
+
+function overlapsViewport(window: AppWindow, vp: ViewportWorld): boolean {
+  return (
+    window.x < vp.x + vp.w &&
+    window.x + window.w > vp.x &&
+    window.y < vp.y + vp.h &&
+    window.y + window.h > vp.y
+  );
+}
+
+/**
+ * Fits one floating window vertically into the visible workspace (the viewport already ends above
+ * the dock): move it up first, then shrink it, never below its type's minimum height.
+ */
+function fitWindowVertically(window: AppWindow, vp: ViewportWorld): SnapPrev | undefined {
+  const overflow = window.y + window.h - (vp.y + vp.h);
+  if (overflow <= 0) return undefined;
+  const minH = WIN_TYPES[window.type].min.h;
+  const h = window.h <= vp.h ? window.h : Math.max(minH, vp.h);
+  const y = Math.max(vp.y, Math.min(window.y, vp.y + vp.h - h));
+  return { x: window.x, y, w: window.w, h };
+}
+
+/**
+ * Computes display-only frames for restored windows that overflow the visible workspace. Stored
+ * frames are never rewritten, so a later, larger screen shows the original geometry again.
+ * Maximized and minimized windows, windows off screen, and zoomed-in views are left alone.
+ */
+export function computeDisplayFits(
+  windows: readonly AppWindow[],
+  vp: ViewportWorld,
+  zoom: number,
+): ReadonlyMap<string, DisplayFit> {
+  const fits = new Map<string, DisplayFit>();
+  if (zoom > 1 || vp.w <= 0 || vp.h <= 0) return fits;
+  for (const window of windows) {
+    if (window.max || window.minimized === true || !overlapsViewport(window, vp)) continue;
+    const to = fitWindowVertically(window, vp);
+    if (to !== undefined) fits.set(window.id, { from: geometryOf(window), to });
+  }
+  return fits;
+}
+
+/** Applies fits whose stored frame is still current; a window the person moved is shown as stored. */
+export function applyDisplayFits(
+  windows: readonly AppWindow[],
+  fits: ReadonlyMap<string, DisplayFit>,
+): readonly AppWindow[] {
+  if (fits.size === 0) return windows;
+  let changed = false;
+  const next = windows.map((window) => {
+    const fit = fits.get(window.id);
+    if (fit === undefined || !sameGeometry(window, fit.from)) return window;
+    changed = true;
+    return { ...window, ...fit.to };
+  });
+  return changed ? next : windows;
+}
+
+/** Recomputes display fits on layout restore and whenever the workspace changes size. */
+export function useDisplayFittedWindows(
+  wsRef: RefObject<HTMLElement | null>,
+  windows: readonly AppWindow[] | null,
+  view: { readonly x: number; readonly y: number; readonly zoom: number },
+): readonly AppWindow[] | null {
+  const [fits, setFits] = useState<ReadonlyMap<string, DisplayFit>>(new Map());
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const latest = useRef({ windows, view });
+  latest.current = { windows, view };
+  const restored = windows !== null;
+  useEffect(() => {
+    const el = wsRef.current;
+    if (el === null || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      setSize((prev) =>
+        prev.w === rect.width && prev.h === rect.height ? prev : { w: rect.width, h: rect.height },
+      );
+    });
+    observer.observe(el);
+    return (): void => {
+      observer.disconnect();
+    };
+  }, [wsRef]);
+  useEffect(() => {
+    const { windows: current, view: v } = latest.current;
+    if (current === null || size.w <= 0 || size.h <= 0) return;
+    const vp = { x: -v.x / v.zoom, y: -v.y / v.zoom, w: size.w / v.zoom, h: size.h / v.zoom };
+    setFits(computeDisplayFits(current, vp, v.zoom));
+  }, [size, restored]);
+  return useMemo(
+    () => (windows === null ? null : applyDisplayFits(windows, fits)),
+    [windows, fits],
+  );
 }

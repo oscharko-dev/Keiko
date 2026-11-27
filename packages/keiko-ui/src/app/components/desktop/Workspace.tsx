@@ -31,6 +31,7 @@ import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
+import { useDisplayFittedWindows } from "./hooks/workspaceWindowSizing";
 import type {
   UseWorkspaceResult,
   WorkspaceClipboardCaptureResult,
@@ -983,9 +984,10 @@ export function Workspace({
   }, [clipboardStatus]);
   const handToolRef = useRef(false);
   const settledZoom = useSettledZoom(view.zoom);
+  const displayWindows = useDisplayFittedWindows(wsRef, wins, view);
   const visibleWins = useMemo(
-    () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
-    [wins],
+    () => (displayWindows === null ? null : displayWindows.filter((w) => w.minimized !== true)),
+    [displayWindows],
   );
   const linkRevision = useLinkRevision(wins, conns);
   const top = topWindow(visibleWins);
@@ -1549,7 +1551,7 @@ export function Workspace({
           layoutLocked={layoutLocked}
           style={sceneStyle}
           snapPrev={snapPrev}
-          wins={wins}
+          wins={displayWindows}
           visibleWins={visibleWins}
           conns={conns}
           connecting={connecting}
