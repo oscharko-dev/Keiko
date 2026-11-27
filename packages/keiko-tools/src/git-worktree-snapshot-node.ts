@@ -145,7 +145,10 @@ export interface GitStagedConversionEvidence {
   // Attribute reads split after a truncated answer, and paths left undecided by the hash-run budget.
   readonly attributeSplitCount: number;
   readonly hashBudgetExhaustedCount: number;
-  readonly outcome: "answered" | "undecidable" | "error";
+  // `unavailable`: the port answered but at least one file could not be judged, so a caller that
+  // needs the staged content (a stage review's counts) reports it unavailable (#4491).
+  readonly outcome: "answered" | "undecidable" | "unavailable" | "error";
+  readonly unavailableCount?: number;
   // Why an undecidable port could not answer (the first batch that said so), when it said.
   readonly reason?: GitStagedUndecidableReason;
   readonly error?: unknown;

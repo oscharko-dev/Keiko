@@ -27,7 +27,6 @@ import {
   createGitStagedObjectIdPort,
   createGitReadSession,
   type GitStagedConversionEvidence,
-  type GitStagedObjectIdPort,
   type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
   readGitTreeEntries,
@@ -88,11 +87,13 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
     scanMs: { type: "integer", dataClass: "duration", required: false },
     settleMs: { type: "integer", dataClass: "duration", required: false },
     gitSpawnCount: { type: "integer", dataClass: "count", required: false },
+    // Files a stage review or diff could not judge, so their counts are unavailable (#4491).
+    unavailableCount: { type: "integer", dataClass: "count", required: false },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["answered", "undecidable"],
+      values: ["answered", "undecidable", "unavailable"],
     },
     reason: {
       type: "string",
@@ -280,6 +281,9 @@ export function logStagedConversion(
   sink.write(
     activityLogEvent(STAGED_CONVERSION_OPERATION, correlation, {
       ...counts,
+      ...(evidence.unavailableCount === undefined
+        ? {}
+        : { unavailableCount: evidence.unavailableCount }),
       outcome: evidence.outcome,
       ...(evidence.reason === undefined ? {} : { reason: evidence.reason }),
     }),
@@ -435,6 +439,7 @@ async function readSides(
   execution: GitDeliveryExecutionSeams,
   path: string,
   scope: GitEditorDiffScope,
+  conversions: WorkingConversions,
 ): Promise<DiffSides> {
   const deps = runtimeGitReadDeps(context, execution);
   const index = (await readGitIndexEntries(deps)).find((entry) => entry.path === path);
@@ -443,7 +448,7 @@ async function readSides(
   const after =
     scope === "staged"
       ? await objectSide(deps, index)
-      : await workingSide(context, deps, path, index?.objectId.length ?? 40);
+      : await workingSide(context, path, index?.objectId.length ?? 40, conversions);
   return {
     path,
     before: before.text,
@@ -504,9 +509,9 @@ async function objectSide(
 }
 async function workingSide(
   context: VerifiedCommitRunContext,
-  deps: ReturnType<typeof runtimeGitReadDeps>,
   path: string,
   hashLength: number,
+  conversions: WorkingConversions,
 ): Promise<FileSide> {
   const file = await readGitStageFile(context.workspace.root, path, {
     fs: runtimeWorkspaceFs(context),
@@ -521,57 +526,172 @@ async function workingSide(
     missing: file.mode === "0",
     binary: !isUtf8(file.bytes) || file.bytes.includes(0),
   };
-  // Git's staging stores CRLF as LF under `core.autocrlf`, `core.eol` or a `text`/`eol` attribute, so
-  // a CRLF worktree file is compared with its index blob as Git would store it, not byte for byte.
-  return raw.missing || raw.binary || raw.tooLarge || !raw.text.includes("\r")
-    ? raw
-    : await settledWorkingSide(context, deps, file, raw, hashLength);
+  // Staging stores CRLF as LF under `core.autocrlf`, `core.eol` or a `text`/`eol` attribute, so a
+  // CRLF worktree file is compared with its index blob as it would be stored, not byte for byte.
+  return conversionCandidate(raw) ? sideStagedAs(raw, conversions.get(path), hashLength) : raw;
 }
-// What Git's own staging would store for a worktree file that holds a CR (#4491). Git decides: the
-// staged-object port (the very conversion the verified staging and the raw reader's settlement use)
-// answers the object id Git would write, and the worktree side is whichever of its two possible
-// contents, the bytes as they are or with every CRLF turned into LF, hashes to that id. An answer
-// matching neither, or none at all, is unknown and never a guessed count. A path the port does not
-// settle (no conversion applies, or the index entry already holds a CR so Git keeps the bytes) is
-// compared as it is. The settlement is reported on the raw reader's conversion operation.
-function sideStagedAs(raw: FileSide, stagedId: string | undefined, hashLength: number): FileSide {
-  if (stagedId === undefined || stagedId === raw.objectId) return raw;
-  const text = raw.text.replaceAll("\r\n", "\n");
-  const objectId = gitBlobObjectId(Buffer.from(text, "utf8"), hashLength);
-  return objectId === stagedId ? { ...raw, text, objectId } : { ...raw, conversionUnknown: true };
+
+/**
+ * What the staging would do with one worktree file that holds a CR (#4491): store its bytes as they
+ * are, store them with every CRLF turned into LF (the object id Git answered), or something this
+ * reader could not establish, which makes its counts unavailable and never a guessed number.
+ */
+type WorkingConversion =
+  | { readonly kind: "as-is" }
+  | { readonly kind: "converted"; readonly objectId: string }
+  | { readonly kind: "unknown" };
+type WorkingConversions = ReadonlyMap<string, WorkingConversion>;
+const NO_WORKING_CONVERSIONS: WorkingConversions = new Map();
+const CONVERSION_UNKNOWN: WorkingConversion = { kind: "unknown" };
+
+// A readable, regular, in-bound UTF-8 text side that holds a CR: the only worktree content staging
+// can change, since it turns CRLF into LF and never the other way on add.
+function conversionCandidate(side: FileSide): boolean {
+  return !side.missing && !side.binary && !side.tooLarge && side.text.includes("\r");
 }
-async function settledWorkingSide(
-  context: VerifiedCommitRunContext,
-  deps: ReturnType<typeof runtimeGitReadDeps>,
-  file: Parameters<GitStagedObjectIdPort>[0][number],
+function sideStagedAs(
   raw: FileSide,
+  conversion: WorkingConversion | undefined,
   hashLength: number,
-): Promise<FileSide> {
-  const unknown: FileSide = { ...raw, conversionUnknown: true };
-  if (deps.stagedObjectIds === undefined) return unknown;
-  const stats = { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 };
+): FileSide {
+  if (conversion?.kind === "as-is") return raw;
+  if (conversion?.kind === "converted") {
+    const text = raw.text.replaceAll("\r\n", "\n");
+    const objectId = gitBlobObjectId(Buffer.from(text, "utf8"), hashLength);
+    // The file may have changed since Git answered: only the content Git hashed is counted.
+    if (objectId === conversion.objectId) return { ...raw, text, objectId };
+  }
+  return { ...raw, conversionUnknown: true };
+}
+
+interface ConversionCandidate {
+  readonly path: string;
+  readonly mode: "100644" | "100755" | "120000";
+  readonly rawObjectId: string;
+  readonly convertedObjectId: string;
+}
+// The worktree files of one review or diff call that hold a CR, each with the two object ids Git
+// could store for it. The bytes are dropped at once: the port hashes the files from the worktree.
+function crTextBytes(bytes: Uint8Array): boolean {
+  return (
+    bytes.length <= RUNTIME_GIT_SIDE_MAX_BYTES &&
+    bytes.includes(0x0d) &&
+    !bytes.includes(0) &&
+    isUtf8(bytes)
+  );
+}
+async function conversionCandidates(
+  context: VerifiedCommitRunContext,
+  paths: readonly string[],
+  hashLengths: ReadonlyMap<string, number>,
+): Promise<readonly ConversionCandidate[]> {
+  const candidates: ConversionCandidate[] = [];
+  for (const path of paths) {
+    if (!context.stillAuthorized() || context.signal?.aborted === true)
+      throw new Error("git-runtime-authority-denied");
+    const file = await readGitStageFile(context.workspace.root, path, {
+      fs: runtimeWorkspaceFs(context),
+    }); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
+    const bytes = file.bytes;
+    if (file.mode === "0" || !crTextBytes(bytes)) continue;
+    const length = hashLengths.get(path) ?? 40;
+    const converted = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
+    candidates.push({
+      path,
+      mode: file.mode,
+      rawObjectId: gitBlobObjectId(bytes, length),
+      convertedObjectId: gitBlobObjectId(Buffer.from(converted, "utf8"), length),
+    });
+  }
+  return candidates;
+}
+function conversionOf(
+  candidate: ConversionCandidate,
+  stagedId: string | undefined,
+  cannotJudge: ReadonlySet<string>,
+): WorkingConversion {
+  if (stagedId === undefined)
+    return cannotJudge.has(candidate.path) ? CONVERSION_UNKNOWN : { kind: "as-is" };
+  if (stagedId === candidate.rawObjectId) return { kind: "as-is" };
+  return stagedId === candidate.convertedObjectId
+    ? { kind: "converted", objectId: stagedId }
+    : CONVERSION_UNKNOWN;
+}
+function settlementOutcome(
+  settled: ReadonlyMap<string, WorkingConversion>,
+): Pick<GitStagedConversionEvidence, "outcome" | "unavailableCount"> {
+  const unavailableCount = [...settled.values()].filter((c) => c.kind === "unknown").length;
+  return unavailableCount === 0
+    ? { outcome: "answered" }
+    : { outcome: "unavailable", unavailableCount };
+}
+function settledConversions(
+  candidates: readonly ConversionCandidate[],
+  answer: ReadonlyMap<string, string | undefined>,
+  cannotJudge: ReadonlySet<string>,
+): ReadonlyMap<string, WorkingConversion> {
+  return new Map(
+    candidates.map((candidate) => [
+      candidate.path,
+      conversionOf(candidate, answer.get(candidate.path), cannotJudge),
+    ]),
+  );
+}
+/**
+ * One Git conversion read for all CR-bearing worktree files of a stage review or an unstaged diff
+ * (#4491). Git decides: the staged-object port (the very conversion the verified staging and the raw
+ * reader's settlement use, hashing every file in one `hash-object --stdin-paths`) answers the object
+ * id Git would write, and the file is counted as whichever of its two possible contents hashes to
+ * it. A file the port leaves unanswered because no conversion applies is counted as it is; one it
+ * cannot judge (a filter, `ident` or encoding attribute, an unknown index class, a failed hash), an
+ * answer matching neither content, or no answer at all is unknown. The settlement is one line on the
+ * raw reader's conversion operation, with the count of unknown files and no path.
+ */
+async function settleWorkingConversions(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  paths: readonly string[],
+): Promise<WorkingConversions> {
+  const deps = runtimeGitReadDeps(context, execution);
+  const entries = await readGitIndexEntries(deps);
+  const lengths = new Map(entries.map((entry) => [entry.path, entry.objectId.length]));
+  const candidates = await conversionCandidates(context, paths, lengths);
+  if (candidates.length === 0) return NO_WORKING_CONVERSIONS;
+  const stats = {
+    attributeSplitCount: 0,
+    hashBudgetExhaustedCount: 0,
+    cannotJudge: new Set<string>(),
+  };
   const report = (
-    outcome: GitStagedConversionEvidence["outcome"],
-    more: Partial<GitStagedConversionEvidence> = {},
+    more: Pick<GitStagedConversionEvidence, "outcome"> & Partial<GitStagedConversionEvidence>,
   ): void =>
     deps.onStagedConversion?.({
-      convertible: 1,
+      convertible: candidates.length,
       batches: 1,
       settledClean: 0,
-      ...stats,
-      outcome,
+      attributeSplitCount: stats.attributeSplitCount,
+      hashBudgetExhaustedCount: stats.hashBudgetExhaustedCount,
       ...more,
     });
+  const unknown = new Map(candidates.map((candidate) => [candidate.path, CONVERSION_UNKNOWN]));
   try {
-    const answer = await deps.stagedObjectIds([file], stats);
-    if (answer === undefined || typeof answer === "string") {
-      report("undecidable", typeof answer === "string" ? { reason: answer } : {});
+    const answer = await deps.stagedObjectIds?.(
+      candidates.map((candidate) => ({
+        path: candidate.path,
+        mode: candidate.mode,
+        bytes: new Uint8Array(0),
+      })),
+      stats,
+    );
+    if (!(answer instanceof Map)) {
+      report({ outcome: "undecidable", ...(typeof answer === "string" ? { reason: answer } : {}) });
       return unknown;
     }
-    report("answered");
-    return sideStagedAs(raw, answer.get(file.path), hashLength);
+    const settled = settledConversions(candidates, answer, stats.cannotJudge);
+    report(settlementOutcome(settled));
+    return settled;
   } catch (error) {
-    report("error", { error });
+    report({ outcome: "error", error });
     if (!context.stillAuthorized() || context.signal?.aborted === true) throw error;
     return unknown;
   }
@@ -619,10 +739,14 @@ async function readSelectedDiffFiles(
   const files: GitEditorDiffFile[] = [];
   let totalBytes = 0;
   let truncated = initiallyTruncated;
+  const conversions =
+    scope === "staged"
+      ? NO_WORKING_CONVERSIONS
+      : await settleWorkingConversions(context, execution, paths);
   for (const path of paths) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const file = diffFile(await readSides(context, execution, path, scope), scope, {
+    const file = diffFile(await readSides(context, execution, path, scope, conversions), scope, {
       seams: execution,
       correlationId: context.correlationId,
     });
@@ -738,10 +862,19 @@ export async function reviewStageSelection(
   let addedLines = 0;
   let deletedLines = 0;
   let countsUnavailable = false;
-  for (const change of selection.filter((entry) => entry.pending)) {
+  const pending = selection.filter((entry) => entry.pending);
+  const conversions =
+    scope === "staged"
+      ? NO_WORKING_CONVERSIONS
+      : await settleWorkingConversions(
+          context,
+          execution,
+          pending.map((entry) => entry.path),
+        );
+  for (const change of pending) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const sides = await readSides(context, execution, change.path, scope); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
+    const sides = await readSides(context, execution, change.path, scope, conversions); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
     const counts = sideCounts(sides, execution, context.correlationId);
     if (counts === "unavailable") countsUnavailable = true;
     else if (counts !== undefined) {

@@ -32608,11 +32608,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      unavailableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       outcome: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["answered", "undecidable"],
+        values: ["answered", "undecidable", "unavailable"],
       },
       reason: {
         type: "string",

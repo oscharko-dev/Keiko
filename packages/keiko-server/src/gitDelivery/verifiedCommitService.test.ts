@@ -81,6 +81,13 @@ import {
 // the propose() flow below would throw instead of returning "approval-required".
 const gitChangeSnapshotServiceSpy = vi.hoisted(() => vi.fn());
 const fixtureGitEnvironment: { value: NodeJS.ProcessEnv } = vi.hoisted(() => ({ value: {} }));
+// A staged-object port a test substitutes for the real one, and the calls the port received.
+type TestStagedPort = (
+  files: readonly { readonly path: string }[],
+  stats?: unknown,
+) => Promise<ReadonlyMap<string, string | undefined> | string | undefined>;
+const stagedPortOverride = vi.hoisted(() => ({ value: undefined as TestStagedPort | undefined }));
+const stagedPortCalls = vi.hoisted(() => ({ value: 0 }));
 vi.mock("../gitChangeSnapshotService.js", () => ({
   createGitChangeSnapshotService: (...args: unknown[]): never => {
     gitChangeSnapshotServiceSpy(...args);
@@ -107,6 +114,17 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
     ...actual,
     readGitRawChangesAtHead: vi.fn(actual.readGitRawChangesAtHead),
     readGitRawWorktreeSnapshotAtHead: vi.fn(actual.readGitRawWorktreeSnapshotAtHead),
+    createGitStagedObjectIdPort: vi.fn(
+      (deps: Parameters<typeof actual.createGitStagedObjectIdPort>[0]) => {
+        const real = actual.createGitStagedObjectIdPort(deps);
+        return (...args: Parameters<typeof real>): ReturnType<typeof real> => {
+          stagedPortCalls.value += 1;
+          return stagedPortOverride.value === undefined
+            ? real(...args)
+            : (stagedPortOverride.value(...args) as ReturnType<typeof real>);
+        };
+      },
+    ),
     readGitStageSupport: vi.fn(
       (
         deps: Parameters<typeof actual.readGitStageSupport>[0],
@@ -2562,6 +2580,158 @@ describe("productive runtime status/diff/stage lane", () => {
       const expected = numstat("attr.txt");
       expect(expected).toEqual({ added: 1, deleted: 1 });
       await expect(reviewed("attr.txt")).resolves.toMatchObject({ ...expected });
+    });
+
+    // Pins: Git's own numstat is the authority for each of these shapes (#4491 audit).
+    async function expectNumstat(path: string): Promise<void> {
+      const expected = numstat(path);
+      expect(Number.isNaN(expected.added)).toBe(false);
+      await expect(reviewed(path)).resolves.toMatchObject({ ...expected });
+    }
+
+    it("counts a file that mixes CRLF and LF lines as Git does", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("mixed.txt");
+      writeFileSync(
+        join(root, "mixed.txt"),
+        edited.map((line, index) => (index % 2 === 0 ? `${line}\r\n` : `${line}\n`)).join(""),
+      );
+      await expectNumstat("mixed.txt");
+    });
+
+    it("counts a file with a lone CR as Git does", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("lone.txt");
+      writeFileSync(join(root, "lone.txt"), `${edited.join("\r\n")}\rtail\r\n`);
+      await expectNumstat("lone.txt");
+    });
+
+    it("counts one changed CRLF line under core.autocrlf=input", async () => {
+      git(["config", "core.autocrlf", "input"]);
+      commitLf("input.txt");
+      writeCrlf("input.txt", edited);
+      await expectNumstat("input.txt");
+    });
+
+    it("counts a file whose index blob already holds CRLF as Git does", async () => {
+      git(["config", "core.autocrlf", "false"]);
+      writeCrlf("kept.txt", lines);
+      git(["add", "kept.txt"]);
+      git(["commit", "-qm", "crlf blob"]);
+      git(["config", "core.autocrlf", "true"]);
+      writeCrlf("kept.txt", edited);
+      await expectNumstat("kept.txt");
+    });
+
+    function conversionLines(): ServerLogEvent[] {
+      return events.filter(
+        (event) =>
+          event.op === "git.raw-status.conversion-settled" ||
+          event.op === "git.raw-status.conversion-failed",
+      );
+    }
+    async function reviewUnavailable(path: string): Promise<void> {
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, [path]);
+      events.length = 0;
+      await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+        fileCount: 1,
+        addedLines: 0,
+        deletedLines: 0,
+        countsUnavailable: true,
+      });
+      const diff = await runtimeGitDiff(context(), execution, "unstaged", [path]);
+      expect(diff.files).toEqual([expect.objectContaining({ path, truncated: true })]);
+    }
+
+    afterEach(() => {
+      stagedPortOverride.value = undefined;
+    });
+
+    it("says counts are unavailable for a file Git would filter, never a wrong number", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      writeFileSync(join(root, ".gitattributes"), "*.java filter=zz\n");
+      git(["add", ".gitattributes"]);
+      commitLf("Zins.java");
+      writeCrlf("Zins.java", edited);
+      expect(numstat("Zins.java")).toEqual({ added: 1, deleted: 1 });
+
+      await reviewUnavailable("Zins.java");
+
+      // The diff's own raw status scan may add its own line; the review and the diff settle once each.
+      const logged = conversionLines().filter((line) => line.extra?.outcome === "unavailable");
+      // One aggregate line per call (the review, then the diff), never one per file.
+      expect(logged).toHaveLength(2);
+      for (const line of logged)
+        expect(line).toMatchObject({
+          op: "git.raw-status.conversion-settled",
+          correlationId: "verified-commit-test",
+          extra: { convertible: 1, batches: 1, outcome: "unavailable", unavailableCount: 1 },
+        });
+      expectActivityLogProof(
+        "git.raw-status.conversion-settled.emitted-line",
+        formatActivityLogProofLine(logged[0] ?? {}),
+      );
+    });
+
+    it("says counts are unavailable when Git's answer matches neither content", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("odd.txt");
+      writeCrlf("odd.txt", edited);
+      stagedPortOverride.value = (files): ReturnType<TestStagedPort> =>
+        Promise.resolve(new Map(files.map((file) => [file.path, "f".repeat(40)])));
+      await reviewUnavailable("odd.txt");
+      expect(conversionLines()[0]).toMatchObject({
+        extra: { outcome: "unavailable", unavailableCount: 1 },
+      });
+    });
+
+    it("says counts are unavailable when the port cannot decide", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("undecided.txt");
+      writeCrlf("undecided.txt", edited);
+      stagedPortOverride.value = (): ReturnType<TestStagedPort> => Promise.resolve("hash-failed");
+      await reviewUnavailable("undecided.txt");
+      expect(conversionLines()[0]).toMatchObject({
+        extra: { outcome: "undecidable", reason: "hash-failed" },
+      });
+    });
+
+    it("says counts are unavailable and logs a failure when the port throws", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("thrown.txt");
+      writeCrlf("thrown.txt", edited);
+      stagedPortOverride.value = (): ReturnType<TestStagedPort> =>
+        Promise.reject(new Error("port failed"));
+      await reviewUnavailable("thrown.txt");
+      const failed = conversionLines()[0];
+      expect(failed).toMatchObject({
+        op: "git.raw-status.conversion-failed",
+        level: "warn",
+        correlationId: "verified-commit-test",
+        extra: { convertible: 1, errorClass: "Error" },
+      });
+      expect(failed?.errorKind).toEqual(expect.any(String));
+    });
+
+    it("settles every CR-bearing file of one review in a single Git conversion read", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      const names = ["a.txt", "b.txt", "c.txt"];
+      for (const name of names) commitLf(name);
+      for (const name of names) writeCrlf(name, edited);
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, names);
+      events.length = 0;
+      stagedPortCalls.value = 0;
+
+      const review = await reviewStageSelection(context(), execution, selection ?? []);
+
+      expect(review).toEqual({ fileCount: 3, addedLines: 3, deletedLines: 3 });
+      expect(stagedPortCalls.value).toBe(1);
+      expect(conversionLines()).toHaveLength(1);
+      expect(conversionLines()[0]).toMatchObject({
+        extra: { convertible: 3, batches: 1, outcome: "answered" },
+      });
     });
 
     it("leaves a binary file as the unconverted, uncounted representation", async () => {

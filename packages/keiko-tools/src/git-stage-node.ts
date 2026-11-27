@@ -87,6 +87,11 @@ function objectId(result: CommandResult): string {
 export interface GitStagedConversionStats {
   attributeSplitCount: number;
   hashBudgetExhaustedCount: number;
+  // Filled when present: the paths the port left unanswered because it could not JUDGE them (an
+  // attribute, an index line-break class or a path form it does not settle, or a failed hash), as
+  // opposed to paths where no conversion applies so the bytes are what staging stores. A caller
+  // that must never state a wrong number treats these as unknown (#4491).
+  cannotJudge?: Set<string>;
 }
 /** Why the staged-object port could not answer for a batch (a closed vocabulary for the log). */
 export type GitStagedUndecidableReason =
@@ -633,6 +638,24 @@ function conversionCanSettle(
     !stage.plan.auto || stage.indexClass === undefined || INDEX_WITHOUT_CR.has(stage.indexClass)
   );
 }
+// Why a file the settlement left unanswered has no object id: Git stores its bytes as they are
+// (`none`: no conversion applies, or the index entry already holds a CR), or the settlement could
+// not judge it (`cannot-judge`: an unadmitted attribute, an unknown index class, a path form
+// `hash-object --stdin-paths` cannot carry, or a hash that failed).
+function unsettledVerdict(
+  file: GitStageFile,
+  row: readonly string[] | undefined,
+  stage: FileStage | undefined,
+): "none" | "cannot-judge" {
+  if (file.mode === "0") return "none";
+  if (row === undefined || !attributeRowAdmitted(row) || stage === undefined) return "cannot-judge";
+  if (file.mode === "120000" || stage.plan.kind === "none") return "none";
+  return stage.plan.auto && indexKeepsBytes(stage.indexClass) ? "none" : "cannot-judge";
+}
+// An `auto` path whose index entry already holds a CR keeps its bytes as they are.
+function indexKeepsBytes(indexClass: string | undefined): boolean {
+  return indexClass !== undefined && INDEX_WITH_CR.has(indexClass);
+}
 /**
  * The object Git's own staging would store for each file's current bytes, without writing anything:
  * the raw reader's judgement of a regular file whose raw bytes differ from its index object while
@@ -674,6 +697,13 @@ export async function gitStagedObjectIdOf(
   // Nothing could be hashed at all: the reason is the hash, not the files.
   if (settle.length > 0 && [...answers.values()].every((id) => id === undefined))
     return "hash-failed";
+  files.forEach((file, at) => {
+    if (
+      answers.get(file.path) === undefined &&
+      unsettledVerdict(file, values[at], stages.get(file.path)) === "cannot-judge"
+    )
+      stats?.cannotJudge?.add(file.path);
+  });
   return new Map(paths.map((path) => [path, answers.get(path)]));
 }
 /**
