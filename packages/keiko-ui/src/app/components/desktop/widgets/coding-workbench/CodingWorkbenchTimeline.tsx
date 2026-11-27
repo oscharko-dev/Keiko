@@ -599,22 +599,29 @@ function insertPlan(
 
 /**
  * A governed commit (or stage, unstage, branch) first answers "approval required" with a proposal;
- * the run then carries it out in a later step, asking the person first where the mode says so. The
- * proposal's own row is no decision anyone waits on once a later step began: in Full access it read
- * "Waiting for approval" for good, beside the commit that happened (#4491).
+ * the run then carries it out with `keiko_git_execute`, asking the person first where the mode says
+ * so. Once the next execute after a proposal completed, the proposal is no decision anyone waits on:
+ * in Full access it read "Waiting for approval" for good, beside the commit that happened (#4491).
+ * Any other later step, or an execute that was refused or failed, leaves the proposal as it was.
  */
 function markSupersededGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
-  let laterTool = false;
+  let takenUp = false;
   const marked = [...items];
   for (let index = marked.length - 1; index >= 0; index -= 1) {
     const item = marked[index];
     if (item?.kind !== "tool") continue;
-    if (laterTool && item.tool.presentation?.gitOutcome === "waiting-for-approval") {
+    if (item.tool.tool === "keiko_git_execute") {
+      takenUp = executeCompleted(item.tool);
+    } else if (takenUp && item.tool.presentation?.gitOutcome === "waiting-for-approval") {
       marked[index] = { ...item, superseded: true };
+      takenUp = false;
     }
-    laterTool = true;
   }
   return marked;
+}
+
+function executeCompleted(tool: CodingSafeActivityTool): boolean {
+  return tool.state === "succeeded" && tool.presentation?.gitOutcome === "completed";
 }
 
 function compactToolItems(items: readonly TimelineItem[]): readonly TimelineItem[] {

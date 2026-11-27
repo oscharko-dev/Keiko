@@ -616,6 +616,65 @@ describe("CodingWorkbenchTimeline", () => {
     expect(prepared).not.toHaveTextContent("Succeeded");
   });
 
+  // Audit of 72be7da6f: only a completed execute takes a proposal up. A proposal still waiting while
+  // the run reads on, or one whose execute was refused or failed, keeps saying so.
+  it.each([
+    ["the proposal is the last step", []],
+    [
+      "an unrelated step follows",
+      [{ callId: "read-after", tool: "read", state: "succeeded", occurredAt: AT }],
+    ],
+    [
+      "its execute was refused",
+      [
+        {
+          callId: "git-execute-refused",
+          tool: "keiko_git_execute",
+          state: "succeeded",
+          occurredAt: AT,
+          presentation: { gitOutcome: "not-done", bridgeDurationMs: 9 },
+        },
+      ],
+    ],
+    [
+      "its execute failed",
+      [
+        {
+          callId: "git-execute-failed",
+          tool: "keiko_git_execute",
+          state: "failed",
+          occurredAt: AT,
+          failureOrigin: "tool-error",
+        },
+      ],
+    ],
+  ] as const)("keeps a Git proposal waiting for approval when %s", (_case, later) => {
+    const feed = feedWithRepeatedTools();
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [
+            { turnId: "turn-commit", messages: [], tools: [proposal, ...later], truncated: false },
+          ],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="prepared"]')).toBeNull();
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).not.toBeNull();
+  });
+
   // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
   // collapsed "N steps" group, where its reason would hide behind a success summary.
   it("keeps a refused Git step out of the group of succeeded steps", () => {
