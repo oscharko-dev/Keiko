@@ -98,6 +98,59 @@ describe("parseGitEditorUnifiedDiff", () => {
     ]);
   });
 
+  it("keeps a file whose name holds a backslash and refuses one that would climb out", () => {
+    const parsed = parseGitEditorUnifiedDiff(
+      [
+        'diff --git "a/dir/back\\\\slash.js" "b/dir/back\\\\slash.js"',
+        '--- "a/dir/back\\\\slash.js"\t',
+        '+++ "b/dir/back\\\\slash.js"\t',
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        'diff --git "a/dir/..\\\\up.js" "b/dir/..\\\\up.js"',
+        '--- "a/dir/..\\\\up.js"\t',
+        '+++ "b/dir/..\\\\up.js"\t',
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+      { scope: "staged", selectedRootPrefix: "", processTruncated: false },
+    );
+
+    expect(parsed.files.map((file) => file.path)).toEqual(["dir/back\\slash.js"]);
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it.each([
+    ["a tab", "dir/with\\ttab.js", "dir/with\ttab.js"],
+    ["a newline", "dir/line\\nbreak.js", "dir/line\nbreak.js"],
+    ["a quote", 'dir/say \\"hi\\".js', 'dir/say "hi".js'],
+  ])("decodes a quoted path holding %s on a rename and a copy", (_label, spelled, decoded) => {
+    const record = (kind: "rename" | "copy"): string =>
+      [
+        `diff --git "a/old name.js" "b/${spelled}"`,
+        "similarity index 90%",
+        `${kind} from old name.js`,
+        `${kind} to "${spelled}"`,
+        "",
+      ].join("\n");
+    const renamed = parseGitEditorUnifiedDiff(record("rename"), {
+      scope: "staged",
+      selectedRootPrefix: "",
+      processTruncated: false,
+    });
+    expect(renamed.files).toMatchObject([
+      { path: decoded, oldPath: "old name.js", status: "renamed" },
+    ]);
+    const copied = parseGitEditorUnifiedDiff(record("copy"), {
+      scope: "staged",
+      selectedRootPrefix: "",
+      processTruncated: false,
+    });
+    expect(copied.files).toMatchObject([{ path: decoded, status: "modified" }]);
+  });
+
   it("drops a file outside the selected-root prefix while keeping one inside it", () => {
     const parsed = parseGitEditorUnifiedDiff(
       [

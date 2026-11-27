@@ -1,4 +1,5 @@
 import {
+  decodeGitQuotedPath,
   parseUnifiedDiff,
   PatchParseError,
   type UnifiedDiffFileSource,
@@ -434,5 +435,49 @@ function projectUnownedText(
 }
 
 function unsafeUnownedText(text: string, ports: ProjectionPorts): boolean {
-  return (text.includes("\\") && /["'`[{]/u.test(text)) || ports.redactPlain(text) !== text;
+  const unclassified = withoutGitPathHeaderLines(text);
+  return (
+    (unclassified.includes("\\") && /["'`[{]/u.test(unclassified)) ||
+    ports.redactPlain(text) !== text
+  );
+}
+
+const GIT_PATH_HEADER = /^(?:diff --git |(?:rename|copy) (?:from|to) )/u;
+
+/**
+ * Whether the text is a string of Git path tokens: plain text without quote or backslash, or a
+ * C-quoted path that decodes to valid UTF-8. Git quotes every path holding a non-ASCII byte, a
+ * control character, a double quote or a backslash, so a quoted token is the ordinary spelling of
+ * a legitimate name and not an escaped literal that could hide a value. A malformed quote fails.
+ */
+function isGitPathTokens(text: string): boolean {
+  let from = 0;
+  while (from < text.length) {
+    const open = text.indexOf('"', from);
+    const plain = text.slice(from, open === -1 ? text.length : open);
+    if (plain.includes("\\")) return false;
+    if (open === -1) return true;
+    let close = open + 1;
+    while (close < text.length && text[close] !== '"') close += text[close] === "\\" ? 2 : 1;
+    if (close >= text.length || decodeGitQuotedPath(text.slice(open, close + 1)) === undefined)
+      return false;
+    from = close + 1;
+  }
+  return true;
+}
+
+/**
+ * The extended header lines that name paths (`diff --git`, `rename|copy from|to`) carry the path as
+ * the tool spelled it. They are classified by the closed grammar above, so only they leave the
+ * escaped-literal refusal; the credential floor still runs over the whole text.
+ */
+function withoutGitPathHeaderLines(text: string): string {
+  return text
+    .split(/(?<=\n)/u)
+    .filter((line) => {
+      const body = line.endsWith("\n") ? line.slice(0, -1) : line;
+      const match = GIT_PATH_HEADER.exec(body);
+      return match === null || !isGitPathTokens(body.slice(match[0].length));
+    })
+    .join("");
 }

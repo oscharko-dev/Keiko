@@ -180,7 +180,8 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
   if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
-  else if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
+  else if (value.draftDelivery === undefined)
+    validateReviewPaths(value.paths, errors, value.verifiedCommit !== undefined);
   else validateDraftReview(value, errors);
   if (typeof value.pathsTruncated !== "boolean") {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
@@ -307,7 +308,7 @@ function validateReviewFileCountConsistency(
   }
 }
 
-function validateReviewPaths(value: unknown, errors: string[]): void {
+function validateReviewPaths(value: unknown, errors: string[], fromRepository = false): void {
   if (!Array.isArray(value) || value.length === 0) {
     errors.push("pendingApprovalReview.paths must be a non-empty array");
     return;
@@ -320,7 +321,7 @@ function validateReviewPaths(value: unknown, errors: string[]): void {
     errors.push("pendingApprovalReview.paths must be unique");
   }
   value.forEach((path, index) => {
-    if (!isReviewablePath(path)) {
+    if (!(fromRepository ? isReviewableRepositoryPath(path) : isReviewablePath(path))) {
       errors.push(`pendingApprovalReview.paths[${String(index)}] is not a contained relative path`);
     }
   });
@@ -336,6 +337,22 @@ function isReviewablePath(value: unknown): boolean {
     validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
     !value.includes(":") &&
     isPortableWorkspaceRelativePath(value)
+  );
+}
+
+/**
+ * A staged path as the repository spells it. The commit review lists paths the person's own Git
+ * reported, never a model-selected changeset, and Git names any byte sequence a POSIX filesystem
+ * holds: a colon or a backslash is an ordinary character there, and Git itself never emits a
+ * Windows separator or drive. Those two stay legal; everything that makes a path escape does not:
+ * absolute, home- or drive-anchored, NUL, empty/dot/dot-dot segments (a backslash also splits a
+ * segment, so `..\x` is refused), invisible format characters and anything past the length bound.
+ */
+function isReviewableRepositoryPath(value: unknown): boolean {
+  return (
+    validateUntrustedDisplayText(value, CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS) &&
+    !value.split(/[/\\]/u).includes("..") &&
+    isPortableWorkspaceRelativePath(value.replaceAll("\\", "_"))
   );
 }
 

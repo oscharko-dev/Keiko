@@ -155,6 +155,44 @@ describe("transient verified commit review", () => {
       ).toBe(false);
     },
   );
+  it.each([
+    "src/größe.js",
+    "dir with spaces/项目 alpha/f (1) & g.js",
+    'dir/say "hi".js',
+    "dir/with\ttab.js",
+    "dir/line\nbreak.js",
+    "dir/back\\slash.js",
+    "dir/time 10:30.js",
+  ])("accepts the repository-spelled path %j", (path) => {
+    expect(
+      validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+        ...review,
+        pending: { ...review.pending, paths: [path] },
+      }).ok,
+    ).toBe(true);
+  });
+  it.each([
+    "/etc/passwd",
+    "../outside.js",
+    "dir/../../outside.js",
+    "dir\\..\\outside.js",
+    "..\\outside.js",
+    "~/secrets.env",
+    "C:/Windows/system32",
+    "dir//f.js",
+    "./f.js",
+    "dir/f\0.js",
+    "dir/visible\u202Espoof.js",
+    "dir/visible\u200Bspoof.js",
+    "",
+  ])("still rejects the escaping repository path %j", (path) => {
+    expect(
+      validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
+        ...review,
+        pending: { ...review.pending, paths: [path] },
+      }).ok,
+    ).toBe(false);
+  });
   it("keeps approval tokens out of both nested receipts and the transient review", () => {
     for (const verifiedCommit of [
       { ...review.pending.verifiedCommit, approvalToken: "private fixture" },

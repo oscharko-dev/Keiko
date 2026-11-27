@@ -39262,6 +39262,12 @@
               "required": false
             },
             {
+              "name": "reviewIncompleteCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",

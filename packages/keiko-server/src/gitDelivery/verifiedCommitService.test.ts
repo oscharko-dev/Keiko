@@ -385,6 +385,30 @@ describe("#3386 AC11 — readVerifiedCommitReview never consults gitChangeSnapsh
   });
 });
 
+describe("verified commit review that cannot be built", () => {
+  it("blocks with review-incomplete and logs the closed cause on the result line", async () => {
+    writeFileSync(join(root, "code.js"), `// ${"x".repeat(20_000)}\nexport const long = 1;\n`);
+    git(["add", "code.js"]);
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    const proposal = await service.propose("feat: commit the requested change");
+    expect(proposal).toMatchObject({ status: "blocked", reason: "review-incomplete" });
+    const logged = events.find(
+      (event) => event.op === "git.verified-commit" && event.extra?.reason === "review-incomplete",
+    );
+    expect(logged).toMatchObject({
+      correlationId: "verified-commit-test",
+      extra: { phase: "result", state: "blocked", reviewIncompleteCause: "file-truncated" },
+    });
+    const persisted = expectActivityLogProof(
+      "git.verified-commit.emitted-line",
+      formatActivityLogProofLine(logged ?? {}),
+    );
+    expect(persisted).toMatchObject({ reviewIncompleteCause: "file-truncated" });
+  });
+});
+
 describe("verified Code-task commit service", () => {
   it("revokes an already captured execution when verification authority is invalidated before mutation", async () => {
     service = createVerifiedCommitService({

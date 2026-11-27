@@ -4,7 +4,10 @@ import {
   sameGitHeadState,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
-import { readVerifiedCommitReview } from "./verifiedCommitReview.js";
+import {
+  readVerifiedCommitReview,
+  type VerifiedCommitReviewIncompleteCause,
+} from "./verifiedCommitReview.js";
 import { mintProposalId } from "./proposalId.js";
 import type {
   VerificationReport,
@@ -189,6 +192,12 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       ],
     },
     violationCount: { type: "integer", dataClass: "count", required: false },
+    reviewIncompleteCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["diff-truncated", "file-truncated", "payload-invalid"],
+    },
     attemptedStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -251,6 +260,7 @@ interface VerifiedCommitActivityFields {
   readonly stagedTreeDigest?: string;
   readonly violations?: NonNullable<VerifiedCommitResult["violations"]>;
   readonly violationCount?: number;
+  readonly reviewIncompleteCause?: VerifiedCommitReviewIncompleteCause;
   readonly attemptedStatus?: VerifiedCommitStatus;
   readonly attemptedReason?: VerifiedCommitReason;
   readonly effectPhase?: "pre-effect" | "post-effect";
@@ -817,13 +827,14 @@ class VerifiedCommitController implements VerifiedCommitService {
     verificationFailed: boolean,
   ): Promise<VerifiedCommitResult> {
     const awaiting = this.result(binding, "approval-required", "approval-required");
-    const review = await readVerifiedCommitReview(
+    const read = await readVerifiedCommitReview(
       context,
       awaiting,
       message,
       this.options.execution ?? {},
     );
-    if (review === undefined) return this.record(context, binding, "blocked", "review-incomplete");
+    if ("incomplete" in read) return this.reviewIncomplete(context, binding, read.incomplete);
+    const review = read.review;
     const afterReview = await this.facts(context);
     if (!this.candidateCurrent(context, facts, afterReview))
       return this.record(context, binding, "drift", "candidate-drift");
@@ -849,6 +860,15 @@ class VerifiedCommitController implements VerifiedCommitService {
     this.proposals.clear();
     this.proposals.set(binding.proposalId, proposal);
     return this.record(context, binding, "approval-required", "approval-required");
+  }
+
+  private reviewIncomplete(
+    context: VerifiedCommitRunContext,
+    binding: VerifiedCommitBinding,
+    cause: VerifiedCommitReviewIncompleteCause,
+  ): VerifiedCommitResult {
+    const activity = { reviewIncompleteCause: cause };
+    return this.record(context, binding, "blocked", "review-incomplete", undefined, {}, activity);
   }
 
   private binding(
@@ -1178,11 +1198,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     reason: VerifiedCommitReason,
     headSha?: string,
     details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
+    activity: Pick<VerifiedCommitActivityFields, "reviewIncompleteCause"> = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     if (!this.persist(context, binding, status, reason, result))
       return this.result(binding, "recovery-required", "execution-uncertain");
     this.log(context, "result", {
+      ...activity,
       state: status,
       reason,
       proposalId: binding.proposalId,

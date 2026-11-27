@@ -33314,6 +33314,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      reviewIncompleteCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["diff-truncated", "file-truncated", "payload-invalid"],
+      },
       attemptedStatus: {
         type: "string",
         dataClass: "closed-enum",

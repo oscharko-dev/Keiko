@@ -11,13 +11,21 @@ import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 
+/** Why a commit review could not be built; the closed value the activity log records. */
+export type VerifiedCommitReviewIncompleteCause =
+  "diff-truncated" | "file-truncated" | "payload-invalid";
+
+export type VerifiedCommitReviewRead =
+  | { readonly review: CodingWorkbenchRuntimePendingApprovalReview }
+  | { readonly incomplete: VerifiedCommitReviewIncompleteCause };
+
 /** The interactive staged diff owns commit review. An immutable PR snapshot cannot substitute. */
 export async function readVerifiedCommitReview(
   context: VerifiedCommitRunContext,
   result: VerifiedCommitResult,
   message: string,
   seams: GitDeliveryExecutionSeams,
-): Promise<CodingWorkbenchRuntimePendingApprovalReview | undefined> {
+): Promise<VerifiedCommitReviewRead> {
   const patch = await readGitStagedDiff({
     workspace: context.workspace,
     signal: context.signal,
@@ -28,7 +36,9 @@ export async function readVerifiedCommitReview(
     selectedRootPrefix: "",
     processTruncated: false,
   });
-  if (diff.truncated || diff.files.some((file) => file.truncated)) return undefined;
+  // A truncated file also truncates the diff, so the narrower cause is tested first.
+  if (diff.files.some((file) => file.truncated)) return { incomplete: "file-truncated" };
+  if (diff.truncated) return { incomplete: "diff-truncated" };
   const paths = diff.files
     .map((file) => file.path)
     .slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
@@ -45,6 +55,6 @@ export async function readVerifiedCommitReview(
     session: "active",
     pending: review,
   }).ok
-    ? review
-    : undefined;
+    ? { review }
+    : { incomplete: "payload-invalid" };
 }

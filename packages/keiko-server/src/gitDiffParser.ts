@@ -425,10 +425,20 @@ function relativePathUnderPrefix(path: string, normalizedPrefix: string): string
   return undefined;
 }
 
+// A path the repository reported. Git names any byte sequence a POSIX filesystem holds, so a
+// backslash is an ordinary character here (Git never prints a Windows separator); the shared
+// contained-path predicate refuses it only because the editor surfaces take a Windows separator
+// to be one. A backslash also splits a segment for the traversal test, so `..\x` stays refused.
+function isRepositoryRelativePath(path: string): boolean {
+  return (
+    !path.split(/[/\\]/u).includes("..") && isRootRelativeFileIdentifier(path.replaceAll("\\", "_"))
+  );
+}
+
 function relativeToSelectedRoot(path: string, prefix: string): string | undefined {
   const normalizedPrefix = prefix === "." ? "" : prefix.replace(/\/$/u, "");
   const relative = relativePathUnderPrefix(path, normalizedPrefix);
-  return relative !== undefined && isRootRelativeFileIdentifier(relative) ? relative : undefined;
+  return relative !== undefined && isRepositoryRelativePath(relative) ? relative : undefined;
 }
 
 // The editor's wire vocabulary has no copy or mode-only member: a copy reads as the modification
