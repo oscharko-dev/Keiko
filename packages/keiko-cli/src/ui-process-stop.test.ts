@@ -309,6 +309,48 @@ describe("terminateUiProcess", () => {
     });
   });
 
+  it("confirms the stop when the server exits while its launch identity can no longer be verified", async () => {
+    const stateDir = makeStateDir(); // the exiting server already removed ui.pid
+    const { sink, events } = recordingSink();
+    const killWindowsTree = vi.fn(() => "succeeded" as const);
+    const killProcess = vi.fn();
+    let sleeps = 0;
+    let graceChecks = 0;
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      const outcome = await terminateUiProcess({
+        pid: 5,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => {
+          sleeps += 1;
+          return Promise.resolve();
+        },
+        // Alive through the grace wait (two checks), then gone after three recheck sleeps.
+        isProcessAlive: () => {
+          graceChecks += 1;
+          return graceChecks <= 3 || sleeps < 3;
+        },
+        killProcess,
+        killWindowsTree,
+        securityLogSink: sink,
+        escalate: true,
+        verifyLaunchIdentity: () => false,
+      });
+      expect(outcome).toEqual({ confirmed: true, escalated: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(events.some(({ op }) => op === "cli.lifecycle.stop-request-failed")).toBe(false);
+    expect(events.find(({ op }) => op === "cli.lifecycle.stop-exited-unverified")).toMatchObject({
+      extra: { outcome: "exited-during-verification" },
+    });
+  });
+
   it("refuses to signal the current process", async () => {
     const stateDir = makeStateDir();
     const { sink, events } = recordingSink();

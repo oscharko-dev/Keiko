@@ -32,6 +32,11 @@ export type WindowsTreeKill = (pid: number, processEnv: NodeJS.ProcessEnv) => Wi
 const GRACEFUL_POLL_MS = 500;
 const FORCED_POLL_MS = 100;
 const FORCED_WAIT_MS = 2_000;
+// A server that acknowledged the shutdown request removes `ui.pid` and exits; on a slow host the
+// process can outlive the graceful window and the identity check, which needs that record, then
+// fails for a process that is already leaving. The recheck is a fixed poll count so it is
+// independent of the wall clock; it never widens the graceful bound.
+const EXIT_RECHECK_POLLS = 20;
 const UI_PID_FILE = "ui.pid";
 
 const STOP_REQUESTED_OPERATION = defineActivityLogOperation({
@@ -86,6 +91,29 @@ const STOP_ESCALATED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "process-lifecycle",
   failureClasses: ["ui-process-stop-escalation"],
   proofIds: ["cli.lifecycle.stop-escalated.disposition"],
+  releaseImpact: "patch",
+});
+
+const STOP_EXITED_UNVERIFIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.lifecycle.stop-exited-unverified",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui-process-stop.emitStopExitedUnverified",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["exited-during-verification"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["ui-process-stop"],
+  proofIds: ["cli.lifecycle.stop-exited-unverified.outcome"],
   releaseImpact: "patch",
 });
 
@@ -210,10 +238,36 @@ async function terminateTrackedUiProcess(
     return finishWithoutEscalation(input);
   }
   if (!targetIdentityVerified(input)) {
+    // Never kill an unverified pid; but one that is exiting is a finished stop, not a failure.
+    if (await exitedWhileUnverified(input)) {
+      emitStopExitedUnverified(input);
+      return confirmedWithoutEscalation(input.stateDir);
+    }
     emitStopRequestFailed(input, "unverified-pid");
     return { confirmed: false, escalated: false };
   }
   return forceStopAfterGrace(input);
+}
+
+async function exitedWhileUnverified(input: TerminateUiProcessInput): Promise<boolean> {
+  const recheck = async (remaining: number): Promise<boolean> => {
+    if (!input.isProcessAlive(input.pid)) return true;
+    if (remaining === 0) return false;
+    await input.sleep(FORCED_POLL_MS);
+    return recheck(remaining - 1);
+  };
+  return recheck(EXIT_RECHECK_POLLS);
+}
+
+function emitStopExitedUnverified(input: TerminateUiProcessInput): void {
+  emitSecurityLogEvent(
+    input.securityLogSink,
+    activityLogEvent(
+      STOP_EXITED_UNVERIFIED_OPERATION,
+      { level: "info" },
+      { outcome: "exited-during-verification" },
+    ),
+  );
 }
 
 function diedDuringGrace(input: TerminateUiProcessInput): Promise<boolean> {

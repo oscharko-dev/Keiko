@@ -108,6 +108,39 @@ describe("ui-process-stop activity log proofs", () => {
     expect(escalationFailedRecord).toMatchObject({ failureKind: "EPERM" });
   });
 
+  it("persists stop-exited-unverified when the server exits during identity verification", async () => {
+    const stateDir = makeStateDir();
+    const { sink, events } = recordingSink();
+    let checks = 0;
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
+    try {
+      const outcome = await terminateUiProcess({
+        pid: 424_244,
+        stateDir,
+        stopTimeoutMs: 1,
+        platform: "win32",
+        sleep: () => Promise.resolve(),
+        isProcessAlive: () => (checks += 1) <= 3,
+        killProcess: () => {
+          throw new Error("an unverified pid must never be signalled");
+        },
+        securityLogSink: sink,
+        escalate: true,
+        verifyLaunchIdentity: () => false,
+      });
+      expect(outcome).toEqual({ confirmed: true, escalated: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const event = events.find((e) => e.op === "cli.lifecycle.stop-exited-unverified");
+    const record = expectActivityLogProof(
+      "cli.lifecycle.stop-exited-unverified.outcome",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({ outcome: "exited-during-verification" });
+  });
+
   it("persists stop-request-failed when the initial POSIX SIGTERM is refused", async () => {
     const stateDir = makeStateDir();
     const pid = 424_243;
