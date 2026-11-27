@@ -788,7 +788,7 @@ export function createGitStagedObjectIdPort(
   deps: NodeGitWorktreeReaderDeps,
 ): GitStagedObjectIdPort {
   const ctx = buildRunContext({ ...deps, policy: deps.policy });
-  return async (files) => {
+  return async (files, stats) => {
     const config = await readStageConfig(ctx);
     if (config === undefined) return "config-unreadable";
     const effect: GitStageEffectContext = {
@@ -803,7 +803,7 @@ export function createGitStagedObjectIdPort(
       },
       indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
     };
-    return gitStagedObjectIdOf(effect, config.lineEndings, files);
+    return gitStagedObjectIdOf(effect, config.lineEndings, files, stats);
   };
 }
 

@@ -41,7 +41,7 @@ import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import type { GitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { GitHeadState } from "./git-head-state.js";
-import type { GitStagedUndecidableReason } from "./git-stage-node.js";
+import type { GitStagedConversionStats, GitStagedUndecidableReason } from "./git-stage-node.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
 // The dedicated READ-ONLY allowlist. Mirrors the mutation rules' defence-in-depth flag denials but
@@ -130,6 +130,7 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
  */
 export type GitStagedObjectIdPort = (
   files: readonly GitStageFile[],
+  stats?: GitStagedConversionStats,
 ) => Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason | undefined>;
 
 /**
@@ -141,6 +142,9 @@ export interface GitStagedConversionEvidence {
   readonly convertible: number;
   readonly batches: number;
   readonly settledClean: number;
+  // Attribute reads split after a truncated answer, and paths left undecided by the hash-run budget.
+  readonly attributeSplitCount: number;
+  readonly hashBudgetExhaustedCount: number;
   readonly outcome: "answered" | "undecidable" | "error";
   // Why an undecidable port could not answer (the first batch that said so), when it said.
   readonly reason?: GitStagedUndecidableReason;

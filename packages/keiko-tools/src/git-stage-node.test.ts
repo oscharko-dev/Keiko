@@ -420,7 +420,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         }),
       ).toEqual([["a.txt", true, true]]);
       expect(evidence).toEqual([
-        { convertible: 1, batches: 1, settledClean: 0, outcome: "undecidable" },
+        {
+          convertible: 1,
+          batches: 1,
+          settledClean: 0,
+          attributeSplitCount: 0,
+          hashBudgetExhaustedCount: 0,
+          outcome: "undecidable",
+        },
       ]);
     });
 
@@ -499,7 +506,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         await rawFlags(repo, { ...factoryPort(repo), onStagedConversion: (e) => evidence.push(e) }),
       ).toEqual([["a.txt", true, false]]);
       expect(evidence).toEqual([
-        { convertible: 1, batches: 1, settledClean: 1, outcome: "answered" },
+        {
+          convertible: 1,
+          batches: 1,
+          settledClean: 1,
+          attributeSplitCount: 0,
+          hashBudgetExhaustedCount: 0,
+          outcome: "answered",
+        },
       ]);
     });
   });
@@ -639,7 +653,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     // `a.txt` (CRLF over an LF index entry) is convertible too.
     expect(flags).toEqual(names.map((name) => [name, true, false]));
     expect(evidence).toEqual([
-      { convertible: 1204, batches: 2, settledClean: 1204, outcome: "answered" },
+      {
+        convertible: 1204,
+        batches: 2,
+        settledClean: 1204,
+        attributeSplitCount: 0,
+        hashBudgetExhaustedCount: 0,
+        outcome: "answered",
+      },
     ]);
     expect(argvs.filter((argv) => argv.includes("hash-object"))).toHaveLength(2);
   });
@@ -694,7 +715,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
       ["e.txt", true, false],
     ]);
     expect(evidence).toEqual([
-      { convertible: 5, batches: 1, settledClean: 4, outcome: "answered" },
+      {
+        convertible: 5,
+        batches: 1,
+        settledClean: 4,
+        attributeSplitCount: 0,
+        hashBudgetExhaustedCount: 0,
+        outcome: "answered",
+      },
     ]);
     // The failed run was halved, not repeated per file.
     expect(argvs.filter((argv) => argv.includes("hash-object")).length).toBeLessThan(8);
@@ -717,9 +745,9 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     const real = factoryPort(repo).stagedObjectIds;
     const evidence: unknown[] = [];
     const flags = await rawFlags(repo, {
-      stagedObjectIds: (files) => {
+      stagedObjectIds: (files, stats) => {
         for (const name of gone) if (name !== undefined) rmSync(join(repo, name));
-        return real?.(files) ?? Promise.resolve(undefined);
+        return real?.(files, stats) ?? Promise.resolve(undefined);
       },
       onStagedConversion: (e) => evidence.push(e),
     });
@@ -729,6 +757,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     for (const name of gone) expect(byName.get(name)).toBe(true);
     for (const name of names.slice(700)) expect(byName.get(name) ?? false).toBe(false);
     expect(evidence).toMatchObject([{ convertible: 801, batches: 1, outcome: "answered" }]);
+    // The first part's own bisection still finds healthy sub-ranges before the budget runs out ...
+    expect(names.slice(0, 200).some((name) => !gone.has(name) && byName.get(name) === false)).toBe(
+      true,
+    );
+    // ... and the shortfall is visible: paths the budget left undecided are counted.
+    expect(
+      (evidence as { hashBudgetExhaustedCount: number }[])[0]?.hashBudgetExhaustedCount,
+    ).toBeGreaterThan(0);
   });
 
   it("reads an attribute answer that a hostile value pushed over the output cap in halves", async () => {
@@ -745,7 +781,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
       `big/*.txt filter=${"d".repeat(1500)}\n`,
     );
     for (const name of [...big, ...ok]) touchLater(repo, name);
-    const flags = await rawFlags(repo, factoryPort(repo));
+    const evidence: { attributeSplitCount: number; hashBudgetExhaustedCount: number }[] = [];
+    const flags = await rawFlags(repo, {
+      ...factoryPort(repo),
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]?.attributeSplitCount).toBeGreaterThan(0);
+    expect(evidence[0]?.hashBudgetExhaustedCount).toBe(0);
     // The filtered files stay modified (staging refuses a filter); the others settle clean.
     expect(flags).toEqual([...big, ...ok].map((name) => [name, true, name.startsWith("big/")]));
   });
@@ -765,6 +808,8 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         convertible: 1,
         batches: 1,
         settledClean: 0,
+        attributeSplitCount: 0,
+        hashBudgetExhaustedCount: 0,
         outcome: "undecidable",
         reason: "attributes-truncated",
       },
@@ -810,7 +855,14 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     });
     expect(flags).toEqual([["a.txt", true, true]]);
     expect(evidence).toEqual([
-      { convertible: 1, batches: 1, settledClean: 0, outcome: "answered" },
+      {
+        convertible: 1,
+        batches: 1,
+        settledClean: 0,
+        attributeSplitCount: 0,
+        hashBudgetExhaustedCount: 0,
+        outcome: "answered",
+      },
     ]);
   });
 

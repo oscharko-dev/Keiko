@@ -38,7 +38,7 @@ import {
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { workspaceFsOf } from "./exec.js";
 import { CommandCancelledError } from "./errors.js";
-import type { GitStagedUndecidableReason } from "./git-stage-node.js";
+import type { GitStagedConversionStats, GitStagedUndecidableReason } from "./git-stage-node.js";
 import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
@@ -290,9 +290,10 @@ async function askStagedObjectPort(
   scan: ScanInputs,
   port: GitStagedObjectIdPort,
   files: readonly GitStageFile[],
+  stats: GitStagedConversionStats,
 ): Promise<PortAnswer> {
   try {
-    const ids = await port(files);
+    const ids = await port(files, stats);
     if (ids === undefined) return { outcome: "undecidable" };
     return typeof ids === "string"
       ? { outcome: "undecidable", reason: ids }
@@ -353,6 +354,7 @@ interface SettlementTally {
   outcome: PortAnswer["outcome"];
   error: unknown;
   reason: GitStagedUndecidableReason | undefined;
+  readonly stats: GitStagedConversionStats;
 }
 async function settleBatch(
   scan: ScanInputs,
@@ -360,7 +362,10 @@ async function settleBatch(
   batch: readonly GitStageFile[],
   tally: SettlementTally,
 ): Promise<void> {
-  const answer = await askStagedObjectPort(scan, port, batch);
+  const stats = { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 };
+  const answer = await askStagedObjectPort(scan, port, batch, stats);
+  tally.stats.attributeSplitCount += stats.attributeSplitCount;
+  tally.stats.hashBudgetExhaustedCount += stats.hashBudgetExhaustedCount;
   const settled = await settledCleanPaths(scan, answer, batch);
   for (const path of settled.clean) tally.clean.add(path);
   tally.outcome = settled.error === undefined ? worseOutcome(tally.outcome, answer) : "error";
@@ -384,6 +389,7 @@ async function settleConvertedFiles(
     outcome: "answered",
     error: undefined,
     reason: undefined,
+    stats: { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 },
   };
   let batches = 0;
   for (let at = 0; at < files.length; at += CONVERTIBLE_BATCH_SIZE) {
@@ -395,6 +401,8 @@ async function settleConvertedFiles(
     convertible: files.length,
     batches,
     settledClean: tally.clean.size,
+    attributeSplitCount: tally.stats.attributeSplitCount,
+    hashBudgetExhaustedCount: tally.stats.hashBudgetExhaustedCount,
     outcome: tally.outcome,
     ...(tally.outcome === "undecidable" && tally.reason !== undefined
       ? { reason: tally.reason }

@@ -2761,6 +2761,8 @@ describe("a converted file staged without stat data", () => {
       convertible: 1000,
       batches: 1,
       settledClean: 0,
+      attributeSplitCount: 0,
+      hashBudgetExhaustedCount: 0,
       outcome: "undecidable",
       reason: "attributes-truncated",
     });
@@ -2784,6 +2786,8 @@ describe("a converted file staged without stat data", () => {
       convertible: 3,
       batches: 1,
       settledClean: 0,
+      attributeSplitCount: 0,
+      hashBudgetExhaustedCount: 0,
       outcome: "error",
       error: Object.assign(new Error("hash failed"), { code: "ENOENT" }),
     });

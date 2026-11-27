@@ -80,6 +80,8 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
     convertible: { type: "integer", dataClass: "count", required: true },
     batches: { type: "integer", dataClass: "count", required: true },
     settledClean: { type: "integer", dataClass: "count", required: true },
+    attributeSplitCount: { type: "integer", dataClass: "count", required: true },
+    hashBudgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -262,6 +264,8 @@ export function logStagedConversion(
   sink.write(
     activityLogEvent(STAGED_CONVERSION_OPERATION, correlation, {
       ...counts,
+      attributeSplitCount: evidence.attributeSplitCount,
+      hashBudgetExhaustedCount: evidence.hashBudgetExhaustedCount,
       outcome: evidence.outcome,
       ...(evidence.reason === undefined ? {} : { reason: evidence.reason }),
     }),

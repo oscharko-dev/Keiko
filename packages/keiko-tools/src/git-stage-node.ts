@@ -79,6 +79,15 @@ function objectId(result: CommandResult): string {
  * that holds no other CR. Git for Windows sets `autocrlf=true` for the whole system, so before this
  * every commit in an ordinary Windows checkout was refused.
  */
+/**
+ * Body-free counts a settlement reports about its own bounds: attribute reads that were split in
+ * halves after a truncated answer, and paths a batch left undecided because the shared hash-run
+ * budget ran out. They make a partly unsettled batch distinguishable from files that are dirty.
+ */
+export interface GitStagedConversionStats {
+  attributeSplitCount: number;
+  hashBudgetExhaustedCount: number;
+}
 /** Why the staged-object port could not answer for a batch (a closed vocabulary for the log). */
 export type GitStagedUndecidableReason =
   "config-unreadable" | "attributes-unreadable" | "attributes-truncated" | "hash-failed";
@@ -314,15 +323,21 @@ async function readAttributeValuesOrReason(
   ctx: GitStageEffectContext,
   attributes: readonly string[],
   paths: readonly string[],
+  stats?: GitStagedConversionStats,
 ): Promise<readonly (readonly string[])[] | AttributeReadFailure> {
   const rows: (readonly string[])[] = [];
   const splits: AttributeSplits = { remaining: ATTRIBUTE_SPLIT_BUDGET };
+  let failure: AttributeReadFailure | undefined;
   for (const chunk of attributeChunks(attributes, paths)) {
     const part = await readAttributeChunkHalving(ctx, attributes, chunk, splits); // NOSONAR typescript:S9382 -- sequential parts keep each answer under the output cap
-    if (typeof part === "string") return part;
+    if (typeof part === "string") {
+      failure = part;
+      break;
+    }
     rows.push(...part);
   }
-  return rows;
+  if (stats !== undefined) stats.attributeSplitCount += ATTRIBUTE_SPLIT_BUDGET - splits.remaining;
+  return failure ?? rows;
 }
 // A value is estimated at a few bytes, but a `.gitattributes` may give a `filter` or an encoding a
 // value of kilobytes: an answer cut short at the output cap is read again in halves, within a bounded
@@ -544,6 +559,8 @@ async function hashPathRun(
 }
 interface HashRuns {
   remaining: number;
+  // Paths left unanswered because the budget ran out (not because their own run failed).
+  skipped: number;
 }
 // One unreadable path (deleted, replaced by a directory, denied) fails the whole `hash-object` run.
 // The failed run is halved until the offending path stands alone, within a bounded number of runs;
@@ -567,7 +584,11 @@ async function hashPathsBisecting(
   runs: HashRuns,
   reserved = false,
 ): Promise<ReadonlyMap<string, string | undefined>> {
-  if (paths.length === 0 || !takeHashRun(runs, reserved)) return unanswered(paths);
+  if (paths.length === 0) return unanswered(paths);
+  if (!takeHashRun(runs, reserved)) {
+    runs.skipped += paths.length;
+    return unanswered(paths);
+  }
   const ids = await hashPathRun(ctx, lineEndings, paths);
   if (ids !== undefined) return new Map(paths.map((path, at) => [path, ids[at]]));
   if (paths.length === 1) return unanswered(paths);
@@ -583,14 +604,16 @@ async function hashPathsUnderConversion(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
   paths: readonly string[],
+  stats?: GitStagedConversionStats,
 ): Promise<ReadonlyMap<string, string | undefined>> {
   const answers = new Map<string, string | undefined>();
-  const runs: HashRuns = { remaining: HASH_RUN_BUDGET };
+  const runs: HashRuns = { remaining: HASH_RUN_BUDGET, skipped: 0 };
   // The answer is one short line per path, so the stdin bound decides the part size.
   for (const part of boundedChunks(paths, () => 0, HASH_BATCH_PATHS))
     for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs, true))
       // NOSONAR typescript:S9382 -- sequential parts keep each run under the stdin and output caps
       answers.set(path, id);
+  if (stats !== undefined) stats.hashBudgetExhaustedCount += runs.skipped;
   return answers;
 }
 // Whether Git's conversion of this file's bytes can equal an index object it did not already match
@@ -625,12 +648,13 @@ export async function gitStagedObjectIdOf(
   ctx: GitStageEffectContext,
   lineEndings: GitStageLineEndings,
   files: readonly GitStageFile[],
+  stats?: GitStagedConversionStats,
 ): Promise<ReadonlyMap<string, string | undefined> | GitStagedUndecidableReason> {
   if (files.length === 0) return new Map();
   const names = await ctx.filterDriverNames();
   if (names === undefined || !filterDriversOverridable(names)) return "config-unreadable";
   const paths = files.map((file) => file.path);
-  const values = await readAttributeValuesOrReason(ctx, STAGE_ATTRIBUTES, paths);
+  const values = await readAttributeValuesOrReason(ctx, STAGE_ATTRIBUTES, paths, stats);
   if (typeof values === "string") return values;
   const stages = await stagesOfValues(
     ctx,
@@ -645,6 +669,7 @@ export async function gitStagedObjectIdOf(
     ctx,
     lineEndings,
     settle.map((file) => file.path),
+    stats,
   );
   // Nothing could be hashed at all: the reason is the hash, not the files.
   if (settle.length > 0 && [...answers.values()].every((id) => id === undefined))
