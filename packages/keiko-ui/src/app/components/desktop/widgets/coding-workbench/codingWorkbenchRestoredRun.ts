@@ -425,7 +425,7 @@ export interface ShownRun {
  * Coding History's message ids are its own, not the feed's, so a message the timeline shows from an
  * earlier run's feed is recognised by the run, the role and the whole text it shows.
  */
-export function earlierMessageKey(runId: string, role: ChatMessage["role"], text: string): string {
+function earlierMessageKey(runId: string, role: ChatMessage["role"], text: string): string {
   return `${runId}\u0000${role}\u0000${stripUnsafeFormatChars(text).trim()}`;
 }
 
