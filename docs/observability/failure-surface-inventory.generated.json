@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c45b54fdacc112219c7f6bbfd1d93df40544c39b6781771b9eb0fc2a2618adb9"
+    "catalogDigest": "322adbaabbf695ed5c2cf80a92fcc888c19b5da5c48d93251acffa4cd44ddc5b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 738,
-    "proofCount": 762,
-    "resolvedProofCount": 762,
+    "operationCount": 739,
+    "proofCount": 763,
+    "resolvedProofCount": 763,
     "failureClassCount": 419,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -501,6 +501,7 @@
         "coding-runtime.task-replacement",
         "coding-runtime.tool-authority.denied",
         "coding-runtime.tool-availability.failed",
+        "coding-runtime.tool-output.shortened",
         "coding-runtime.tool-result",
         "coding-runtime.tool-result-rendered",
         "coding-runtime.tool.failed",
@@ -2120,6 +2121,9 @@
     "coding-runtime.tool-availability.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.omitted-evidence.test.ts",
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
+    ],
+    "coding-runtime.tool-output.shortened.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"
     ],
     "coding-runtime.tool-result.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",

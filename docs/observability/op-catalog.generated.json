@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c45b54fdacc112219c7f6bbfd1d93df40544c39b6781771b9eb0fc2a2618adb9",
+    "catalogDigest": "322adbaabbf695ed5c2cf80a92fcc888c19b5da5c48d93251acffa4cd44ddc5b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10350,9 +10350,9 @@
         "failureClasses": ["coding-repository-search"],
         "proofIds": ["coding-repository-handler.settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:40",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:41",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:219"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:220"
         ]
       },
       {
@@ -10380,9 +10380,9 @@
         "failureClasses": ["coding-repository-search"],
         "proofIds": ["coding-repository-handler.started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:24",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:25",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:294"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:295"
         ]
       },
       {
@@ -10431,9 +10431,9 @@
         "failureClasses": ["coding-runtime-agent-selection"],
         "proofIds": ["coding-runtime.agent-models.bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2551",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2552",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2581"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2582"
         ]
       },
       {
@@ -10479,9 +10479,9 @@
         "failureClasses": ["coding-runtime-agent-selection"],
         "proofIds": ["coding-runtime.agent.selected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:501",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:502",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1675"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1676"
         ]
       },
       {
@@ -11858,9 +11858,9 @@
         "analyzerProjection": "capability",
         "failureClasses": ["coding-editor-mutation"],
         "proofIds": ["coding-runtime.editor-review.decided.emitted-line"],
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:254",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:255",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:845"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:846"
         ]
       },
       {
@@ -13835,9 +13835,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-formatter.bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:395",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:396",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2605"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2606"
         ]
       },
       {
@@ -13882,9 +13882,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-mcp-local.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:428",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:429",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2628"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2629"
         ]
       },
       {
@@ -13930,9 +13930,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-narrowing.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:365",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:366",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1230"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1231"
         ]
       },
       {
@@ -14091,8 +14091,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1756",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1986"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1870",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:2100"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14316,9 +14316,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-step.changed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4957",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4959",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4998"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5000"
         ]
       },
       {
@@ -14381,7 +14381,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:262",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1166"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1233"
         ]
       },
       {
@@ -14579,9 +14579,9 @@
         "analyzerProjection": "process-lifecycle",
         "failureClasses": ["coding-runtime-operator-decision"],
         "proofIds": ["coding-runtime.operator-decision.emitted-line"],
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:330",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:331",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2112"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2115"
         ]
       },
       {
@@ -14940,9 +14940,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.provider-policy.bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:453",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:454",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2655"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2656"
         ]
       },
       {
@@ -16280,10 +16280,10 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["coding-runtime-repository-rerank"],
         "proofIds": ["coding-runtime.repository-rerank.emitted-line"],
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:280",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:281",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1492",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1570"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1493",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1571"
         ]
       },
       {
@@ -18146,11 +18146,11 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:111",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:802",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:972",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1054",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1132",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1187"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:839",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1009",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1091",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1169",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1254"
         ]
       },
       {
@@ -18692,9 +18692,9 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.sidecar-session.bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:331",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:332",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3046"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3047"
         ]
       },
       {
@@ -18985,9 +18985,82 @@
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["coding-runtime-tool-availability"],
         "proofIds": ["coding-runtime.tool-availability.failed.emitted-line"],
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:219",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:220",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:723"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:724"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-runtime.tool-output.shortened",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.codingSafeActivityProjection.toolOutputShortened",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "tool": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "read",
+              "glob",
+              "grep",
+              "edit",
+              "write",
+              "patch",
+              "shell",
+              "webfetch",
+              "websearch",
+              "skill",
+              "subagent",
+              "question",
+              "todowrite",
+              "execute",
+              "keiko",
+              "other"
+            ]
+          },
+          "keptBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "keptLines": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "totalLines": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "occurrenceCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-safe-activity-projection"],
+        "proofIds": ["coding-runtime.tool-output.shortened.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:337",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1212"
         ]
       },
       {
@@ -19096,13 +19169,13 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:3",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:143",
+          "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:146",
           "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1426",
           "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1704",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:969",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1249",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1268",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1303"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:970",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1250",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1269",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1304"
         ]
       },
       {
@@ -19299,7 +19372,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:293",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:762"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:799"
         ]
       },
       {
@@ -19555,15 +19628,15 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["coding-runtime-verification"],
         "proofIds": ["coding-runtime.verification.emitted-line"],
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:363",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:364",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2166",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2371",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2502",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2673",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2925",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3045",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3068"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2169",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2398",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2529",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2700",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2952",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3072",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3095"
         ]
       },
       {
@@ -22399,6 +22472,21 @@
               "timed-out",
               "cancelled"
             ]
+          },
+          "outputRetainedBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "outputDiscardedBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "outputCapFired": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           },
           "reason": {
             "type": "string",
@@ -34100,7 +34188,7 @@
         "proofIds": ["git.runtime-action.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitService.ts:156",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1075"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitService.ts:1090"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34731,6 +34819,11 @@
             "dataClass": "count",
             "required": false
           },
+          "proofAgeMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
           "passed": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -34914,8 +35007,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:126",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1358"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:127",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1400"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -51947,8 +52040,8 @@
         "failureClasses": ["tool-catalog-binding"],
         "proofIds": ["tool-catalog.bind-ready.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:192",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:643"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:194",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:647"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52040,8 +52133,8 @@
         "failureClasses": ["tool-catalog-binding-unavailable"],
         "proofIds": ["tool-catalog.bind-unavailable.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:215",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:656"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:217",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:660"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52125,8 +52218,8 @@
         "failureClasses": ["tool-catalog-late-completion"],
         "proofIds": ["tool-catalog.completion-discarded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:353",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:750"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:356",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:755"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52174,7 +52267,7 @@
         "proofIds": ["tool-catalog.dispatch-unbound.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:87",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:981"]
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:985"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52311,6 +52404,11 @@
             "dataClass": "duration",
             "required": true
           },
+          "budgetMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
           "effectStarted": {
             "type": "boolean",
             "dataClass": "closed-enum",
@@ -52380,8 +52478,8 @@
         "failureClasses": ["tool-catalog-invocation-settlement"],
         "proofIds": ["tool-catalog.invocation-settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:276",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:737"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:278",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:742"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52471,8 +52569,8 @@
         "failureClasses": ["tool-catalog-invocation"],
         "proofIds": ["tool-catalog.invocation-started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:243",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:669"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:245",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:673"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52533,8 +52631,8 @@
         "failureClasses": ["tool-catalog-projection"],
         "proofIds": ["tool-catalog.projection.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:169",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:630"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:171",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:634"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -58385,6 +58483,7 @@
           "state": [
             "coding-runtime.history-projection",
             "coding-runtime.native-question.observed",
+            "coding-runtime.tool-output.shortened",
             "coding-runtime.tool.failed"
           ],
           "end": [],
@@ -58395,6 +58494,7 @@
           "coding-runtime.history-projection",
           "coding-runtime.native-question.observed",
           "coding-runtime.safe-activity",
+          "coding-runtime.tool-output.shortened",
           "coding-runtime.tool.failed"
         ],
         "requiredLossOperations": ["coding-runtime.safe-activity"],
@@ -58402,12 +58502,14 @@
           "coding-runtime.history-projection",
           "coding-runtime.native-question.observed",
           "coding-runtime.safe-activity",
+          "coding-runtime.tool-output.shortened",
           "coding-runtime.tool.failed"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "coding-runtime.history-projection",
           "coding-runtime.native-question.observed",
+          "coding-runtime.tool-output.shortened",
           "coding-runtime.tool.failed"
         ],
         "requiredEvidenceClasses": [
@@ -62285,6 +62387,7 @@
           "completeness-state",
           "count",
           "digest",
+          "duration",
           "error-kind",
           "loss-state",
           "opaque-id",
@@ -86428,6 +86531,7 @@
             "state": [
               "coding-runtime.history-projection",
               "coding-runtime.native-question.observed",
+              "coding-runtime.tool-output.shortened",
               "coding-runtime.tool.failed"
             ],
             "end": [],
@@ -86448,6 +86552,10 @@
               "mode": "correlation"
             },
             {
+              "op": "coding-runtime.tool-output.shortened",
+              "mode": "correlation"
+            },
+            {
               "op": "coding-runtime.tool.failed",
               "mode": "correlation"
             }
@@ -86456,6 +86564,7 @@
           "resourceSignals": [
             "coding-runtime.history-projection",
             "coding-runtime.native-question.observed",
+            "coding-runtime.tool-output.shortened",
             "coding-runtime.tool.failed"
           ],
           "replayReferences": [],
@@ -86715,6 +86824,54 @@
                 "causeChain": false
               },
               "proofIds": ["coding-runtime.safe-activity.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "coding-runtime.tool-output.shortened",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "keptBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "keptLines",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "occurrenceCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "tool",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "totalLines",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["coding-runtime.tool-output.shortened.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -106187,6 +106344,12 @@
                   "required": true
                 },
                 {
+                  "name": "proofAgeMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "proposalId",
                   "type": "string",
                   "dataClass": "opaque-id",
@@ -106282,6 +106445,7 @@
                 "completeness-state",
                 "count",
                 "digest",
+                "duration",
                 "error-kind",
                 "loss-state",
                 "opaque-id",
@@ -120100,6 +120264,12 @@
                   "required": true
                 },
                 {
+                  "name": "budgetMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "catalogRevision",
                   "type": "string",
                   "dataClass": "digest",
@@ -121950,6 +122120,24 @@
                   "required": false
                 },
                 {
+                  "name": "outputCapFired",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outputDiscardedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "outputRetainedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outsideStepsMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -122288,6 +122476,24 @@
                   "name": "networkEnforcement",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outputCapFired",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outputDiscardedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "outputRetainedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -127388,32 +127594,32 @@
     {
       "op": "coding-repository-handler.settled",
       "category": "search",
-      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:43",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:44",
       "package": "keiko-server"
     },
     {
       "op": "coding-repository-handler.started",
       "category": "search",
-      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:27",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:28",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.accepted-initialization",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3354",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:3381",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.agent-models.bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2554",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2555",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.agent.selected",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:504",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:505",
       "package": "keiko-server"
     },
     {
@@ -127557,7 +127763,7 @@
     {
       "op": "coding-runtime.editor-review.decided",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:256",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:257",
       "package": "keiko-server"
     },
     {
@@ -127615,7 +127821,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3684",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3685",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127628,14 +127834,14 @@
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3378",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3379",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3397",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3398",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127785,25 +127991,25 @@
     {
       "op": "coding-runtime.native-formatter.bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:398",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:399",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-mcp-local.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:431",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:432",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-narrowing.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:368",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:369",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1759",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1873",
       "package": "keiko-server"
     },
     {
@@ -127827,7 +128033,7 @@
     {
       "op": "coding-runtime.native-step.changed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4960",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4962",
       "package": "keiko-server"
     },
     {
@@ -127845,28 +128051,28 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1734",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1735",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1756",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1757",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2095",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2096",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2118",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2119",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127900,7 +128106,7 @@
     {
       "op": "coding-runtime.operator-decision",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:332",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:333",
       "package": "keiko-server"
     },
     {
@@ -127931,7 +128137,7 @@
     {
       "op": "coding-runtime.provider-policy.bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:456",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:457",
       "package": "keiko-server"
     },
     {
@@ -128023,14 +128229,14 @@
     {
       "op": "coding-runtime.repository-rerank",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1584",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1585",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.repository-rerank",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:282",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:283",
       "package": "keiko-server"
     },
     {
@@ -128151,14 +128357,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2524",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2602",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2542",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:2620",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128189,7 +128395,7 @@
     {
       "op": "coding-runtime.sidecar-session.bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:334",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:335",
       "package": "keiko-server"
     },
     {
@@ -128255,7 +128461,7 @@
     {
       "op": "coding-runtime.tool-availability.failed",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:221",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:222",
       "package": "keiko-server"
     },
     {
@@ -128268,63 +128474,63 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1148",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1149",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2865",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2866",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4417",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4418",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4563",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4565",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5075",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5077",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5108",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5110",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5550",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5552",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5619",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5621",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5674",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:5676",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128343,6 +128549,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.tool-output.shortened",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:340",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.tool-result",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:6",
@@ -128358,7 +128570,7 @@
     {
       "op": "coding-runtime.tool-result",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1319",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1320",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -128383,14 +128595,14 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2726",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2753",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:365",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:366",
       "package": "keiko-server"
     },
     {
@@ -129762,7 +129974,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:129",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:130",
       "package": "keiko-server"
     },
     {
@@ -131001,13 +131213,13 @@
     {
       "op": "tool-catalog.bind-ready",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:194",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:196",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-ready",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:640",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:644",
       "package": "keiko-server"
     },
     {
@@ -131019,19 +131231,19 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:734",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:738",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:217",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:219",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:653",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:657",
       "package": "keiko-server"
     },
     {
@@ -131058,19 +131270,19 @@
     {
       "op": "tool-catalog.completion-discarded",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:355",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:358",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.completion-discarded",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:747",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:752",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.completion-discarded",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:428",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:429",
       "package": "keiko-server"
     },
     {
@@ -131095,13 +131307,13 @@
     {
       "op": "tool-catalog.invocation-settled",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:278",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:280",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-settled",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:684",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:688",
       "package": "keiko-server"
     },
     {
@@ -131119,13 +131331,13 @@
     {
       "op": "tool-catalog.invocation-started",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:245",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:247",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-started",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:666",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:670",
       "package": "keiko-server"
     },
     {
@@ -131137,7 +131349,7 @@
     {
       "op": "tool-catalog.lifecycle-sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:810",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:815",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -131162,13 +131374,13 @@
     {
       "op": "tool-catalog.projection",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:171",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:173",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:627",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:631",
       "package": "keiko-server"
     },
     {
@@ -131181,7 +131393,7 @@
     {
       "op": "tool-catalog.settlement-emit-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:411",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:412",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -131750,6 +131962,7 @@
     "coding-runtime.tool-availability.failed",
     "coding-runtime.tool-bridge",
     "coding-runtime.tool-invocation",
+    "coding-runtime.tool-output.shortened",
     "coding-runtime.tool-result",
     "coding-runtime.tool-result-rendered",
     "coding-runtime.tool.failed",
