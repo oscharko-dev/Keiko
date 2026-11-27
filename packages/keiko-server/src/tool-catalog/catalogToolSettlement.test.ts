@@ -615,12 +615,19 @@ describe("catalog invocation settlement: which cause fired decides (#4355)", () 
       timeouts.push(controller);
       return controller.signal;
     });
-    const deadline = chatTurnDeadlineSignal(1);
-    const result = await stopped(() => {
-      timeouts[0]?.abort(new DOMException("The operation timed out", "TimeoutError"));
-    });
-    expect(deadline.aborted).toBe(true);
-    expect(result).toEqual({ status: "timeout", late: false });
+    try {
+      const deadline = chatTurnDeadlineSignal(1);
+      const result = await stopped((controller) => {
+        timeouts[0]?.abort(new DOMException("The operation timed out", "TimeoutError"));
+        // The call's own signal is the stop controller's: the turn's deadline stops it with the
+        // deadline's reason, which `isChatTurnDeadlineReason` recognises by identity.
+        controller.abort(deadline.reason);
+      });
+      expect(deadline.aborted).toBe(true);
+      expect(result).toEqual({ status: "timeout", late: false });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("settles cancelled for a TimeoutError that is not the turn's deadline", async () => {

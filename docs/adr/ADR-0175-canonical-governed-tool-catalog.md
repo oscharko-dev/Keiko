@@ -260,7 +260,9 @@ a loaded host and on Windows with slow git or antivirus scanning in a large repo
 work-ending-limits owner decision; fixed in 2026-11-27 for #4491). The default for every other tool is
 unchanged, and the bridge and client deadlines derive from this budget like any other. A call that
 does hit a budget settles `timeout`/`deadline-exceeded` and its `tool-catalog.invocation-settled`
-line carries `budgetMs`, the bound that fired.
+line carries `budgetMs`, the bound that fired. A git execute call with a budget above 30 s is counted in
+the operator lane (`openCodeToolMayAwaitOperator`) rather than the ordinary in-flight lane, like every
+tool whose budget exceeds the sandbox default; that is intended.
 A Chat write tool waits the same way: Jira and external MCP write descriptors declare their own work
 budget plus the approval lifetime (`ATLASSIAN_ACTION_APPROVAL_TTL_MS`, sixty minutes since the
 2026-11-24 owner decision, ten before) in `maxDurationMs`, and a read tool keeps its work budget (an

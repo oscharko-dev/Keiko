@@ -657,3 +657,40 @@ describe("redeeming a stage proposal reads the repository once, in the redemptio
     },
   );
 });
+
+// Positive control for the single read above: a KNOWN proposal redeemed after the worktree moved is
+// still refused through `redeem` (`indexCurrent` reads the verified facts and the candidate itself).
+describe("redeeming a known stage proposal after the worktree drifted", () => {
+  it("is refused as candidate-drift and stages nothing", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "stage-prop-1",
+        idempotencyKey: "stage-prop-1",
+        operation: "stage",
+        phase: "propose",
+        paths: ["code.js"],
+      },
+      { check: (): boolean => true },
+    );
+    if (proposed.kind !== "stage" || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    // The bytes the proposal bound are not the bytes in the worktree any more.
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    const redeemed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "stage-exec-1",
+        idempotencyKey: "stage-exec-1",
+        operation: "stage",
+        phase: "execute",
+        proposalId: proposed.proposalId,
+      },
+      { check: (): boolean => true },
+    );
+    expect(redeemed).toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
+  });
+});
