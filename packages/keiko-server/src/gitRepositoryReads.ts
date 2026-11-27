@@ -41,9 +41,8 @@ import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionR
 
 type UnavailableReason = GitUnavailableReason | "unsafe-repository" | "git-error";
 
-const HISTORY_RECORD_SEP = "\x1e";
 const HISTORY_FIELD_SEP = "\x1f";
-const HISTORY_PRETTY_FORMAT = `format:${HISTORY_RECORD_SEP}%H${HISTORY_FIELD_SEP}%h${HISTORY_FIELD_SEP}%P${HISTORY_FIELD_SEP}%an${HISTORY_FIELD_SEP}%aI${HISTORY_FIELD_SEP}%D${HISTORY_FIELD_SEP}%s`;
+const HISTORY_PRETTY_FORMAT = `format:%H${HISTORY_FIELD_SEP}%h${HISTORY_FIELD_SEP}%P${HISTORY_FIELD_SEP}%an${HISTORY_FIELD_SEP}%aI${HISTORY_FIELD_SEP}%D${HISTORY_FIELD_SEP}%s`;
 const HISTORY_LIMIT_DEFAULT = 50;
 const HISTORY_LIMIT_MAX = 200;
 const HISTORY_SKIP_MAX = 100_000;
@@ -482,16 +481,48 @@ function parseInteger(raw: string | null, fallback: number, min: number, max: nu
 }
 
 // `changedFileCount` is the number of paths `git log --name-only -z` lists for a commit: the same
-// "N files changed" figure `--shortstat` reports (a rename is listed once, a merge lists none), but
-// without reading and diffing every blob to count inserted and deleted lines, which made the page
-// take seconds on a large repository. `-z` separates paths with NUL and never quotes them, so a path
-// holding a newline or non-ASCII characters is one entry and counts once.
-function countNamedPaths(remainder: string): number {
-  let count = 0;
-  for (const path of remainder.split("\0")) {
-    if (path.length > 0) count += 1;
+// "N files changed" figure `--shortstat` reports for a commit (a rename is listed once, a merge lists
+// none), but without reading and diffing every blob to count inserted and deleted lines, which made
+// the page take seconds on a large repository.
+//
+// The `-z` stream is parsed by a grammar in which a record boundary can only be recognised where a
+// path cannot start, so file names (which may hold any byte but NUL, including the field separator
+// and newlines) can never forge or split a record. With `-z` git writes, per commit,
+//   <header> "\n" (<path> NUL)+ NUL      when the commit lists paths, or
+//   <header> NUL                         when it lists none (a merge, an empty commit).
+// Split on NUL, the tokens are: a header token (a path-listing one carries its FIRST path after the
+// header's "\n"), then one token per further path, then an empty token ending a path-listing commit.
+// A path is never empty and never holds NUL, so after a path-listing header the empty token is the
+// only possible end, and the token after it is a header again. Header fields never hold NUL or a
+// newline, so the first "\n" of a header token is always the header/path boundary.
+interface HistoryRecord {
+  readonly head: string;
+  readonly count: number;
+}
+
+function nameOnlyRecords(stdout: string): readonly HistoryRecord[] {
+  const records: HistoryRecord[] = [];
+  let open: { head: string; count: number } | undefined;
+  for (const token of stdout.split("\0")) {
+    if (open !== undefined) {
+      if (token.length === 0) {
+        records.push(open);
+        open = undefined;
+      } else {
+        open.count += 1;
+      }
+      continue;
+    }
+    if (token.length === 0) continue;
+    const newline = token.indexOf("\n");
+    if (newline === -1 || newline === token.length - 1) {
+      records.push({ head: newline === -1 ? token : token.slice(0, newline), count: 0 });
+    } else {
+      open = { head: token.slice(0, newline), count: 1 };
+    }
   }
-  return count;
+  if (open !== undefined) records.push(open);
+  return records;
 }
 
 // Only the single-commit fallback below still reads a `--shortstat` line ("N files changed"; merge
@@ -505,18 +536,14 @@ function parseChangedFileCount(remainder: string): number {
   return match?.[1] === undefined ? 0 : Number.parseInt(match[1], 10);
 }
 
-type ChangedFileCounter = (remainder: string) => number;
+const HISTORY_SHA_PATTERN = /^[0-9a-f]{40,64}$/u;
 
-function parseHistoryEntry(
-  record: string,
-  countFiles: ChangedFileCounter,
-): GitHistoryEntry | undefined {
-  const newline = record.indexOf("\n");
-  const head = newline === -1 ? record : record.slice(0, newline);
-  const remainder = newline === -1 ? "" : record.slice(newline + 1);
+function parseHistoryEntry(head: string, changedFileCount: number): GitHistoryEntry | undefined {
   const fields = head.split(HISTORY_FIELD_SEP);
   const [sha, shortSha, parents, author, date, refs] = fields;
-  if (sha === undefined || shortSha === undefined || sha.length === 0) return undefined;
+  if (sha === undefined || shortSha === undefined || !HISTORY_SHA_PATTERN.test(sha)) {
+    return undefined;
+  }
   const subject = fields.slice(6).join(HISTORY_FIELD_SEP);
   return {
     sha,
@@ -529,22 +556,13 @@ function parseHistoryEntry(
       .map((ref) => ref.trim())
       .filter((ref) => ref.length > 0),
     parentCount: (parents ?? "").split(/\s+/u).filter((entry) => entry.length > 0).length,
-    changedFileCount: countFiles(remainder),
+    changedFileCount,
   };
 }
 
-function parseHistoryRecords(
-  stdout: string,
-  countFiles: ChangedFileCounter,
-  dropLastRecord: boolean,
-): readonly GitHistoryEntry[] {
-  const records = stdout.split(HISTORY_RECORD_SEP).filter((record) => record.length > 0);
-  // A read the byte cap ended may stop anywhere inside its last record, and a path list cut short
-  // would be counted as if it were whole. That record is never returned: the page reports
-  // `truncated` and the UI asks for the next page from the number of entries it received.
-  if (dropLastRecord) records.pop();
+function toEntries(records: readonly HistoryRecord[]): readonly GitHistoryEntry[] {
   return records
-    .map((record) => parseHistoryEntry(record, countFiles))
+    .map((record) => parseHistoryEntry(record.head, record.count))
     .filter((entry): entry is GitHistoryEntry => entry !== undefined);
 }
 
@@ -552,11 +570,21 @@ export function parseHistory(
   stdout: string,
   options: { readonly truncated?: boolean } = {},
 ): readonly GitHistoryEntry[] {
-  return parseHistoryRecords(stdout, countNamedPaths, options.truncated === true);
+  const records = [...nameOnlyRecords(stdout)];
+  // A read the byte cap ended may stop anywhere inside its last record, and a path list cut short
+  // would be counted as if it were whole. That record is never returned: the page reports
+  // `truncated` and the UI asks for the next page from the number of entries it received.
+  if (options.truncated === true) records.pop();
+  return toEntries(records);
 }
 
+// The `--shortstat` fallback reads ONE commit without `-z`: its output is a header, a blank line and
+// the summary, so the whole stream is one record.
 export function parseShortstatHistory(stdout: string): readonly GitHistoryEntry[] {
-  return parseHistoryRecords(stdout, parseChangedFileCount, false);
+  const newline = stdout.indexOf("\n");
+  const head = newline === -1 ? stdout : stdout.slice(0, newline);
+  const remainder = newline === -1 ? "" : stdout.slice(newline + 1);
+  return toEntries([{ head, count: parseChangedFileCount(remainder) }]);
 }
 
 // An empty repository (no commits yet) makes `git log` exit non-zero; treat that as empty history.

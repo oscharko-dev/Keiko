@@ -88,28 +88,32 @@ Paginated commit timeline for the History pane.
 - **Query**: `root`; `limit` (integer, default 50, clamped to 1..200); `skip` (integer, default 0,
   clamped to 0..100000). A non-integer `limit`/`skip` is rejected with HTTP 400 (`BAD_REQUEST`).
 - **Underlying read**: `log --no-color --max-count=<limit> --skip=<skip>
---pretty=format:<record-separated H/h/P/an/aI/D/s> --name-only -z`, scoped to the selected root's pathspec. The read lists changed paths instead
-  of diffing contents, so counting files never reads blobs. An empty repository (no commits) is
+--pretty=format:<US-separated H/h/P/an/aI/D/s> --name-only -z`, scoped to the selected root's pathspec. The read lists changed paths instead
+  of diffing contents, so counting files never reads blobs. The NUL-separated stream is parsed so a
+  record boundary is only recognised where a path cannot start: file names holding separators,
+  newlines or a forged header cannot create or split an entry. An empty repository (no commits) is
   detected from stderr and returned as `available: true` with `entries: []`, not an error.
 - **Response** (`GitHistoryResponse`, `schemaVersion: "1"`): the availability envelope plus
   `entries`, `limit`, `skip`, `truncated`. Each `GitHistoryEntry`:
 
-| Field              | Type             | Notes                                                                    |
-| ------------------ | ---------------- | ------------------------------------------------------------------------ |
-| `sha`, `shortSha`  | string           | Full and abbreviated commit hashes.                                      |
-| `subject`          | string           | Commit subject (`%s`).                                                   |
-| `author`           | string           | Author name (`%an`).                                                     |
-| `date`             | string           | Strict ISO 8601 author date (`%aI`).                                     |
-| `refs`             | string[]         | Decoration names (`%D`), e.g. `["HEAD -> main","origin/main"]`.          |
-| `parentCount`      | non-negative int | Parent count from `%P`; a merge commit reports 2.                        |
-| `changedFileCount` | non-negative int | Paths listed for the commit (same count as `--shortstat`); 0 for merges. |
+| Field              | Type             | Notes                                                                                                                                |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `sha`, `shortSha`  | string           | Full and abbreviated commit hashes.                                                                                                  |
+| `subject`          | string           | Commit subject (`%s`).                                                                                                               |
+| `author`           | string           | Author name (`%an`).                                                                                                                 |
+| `date`             | string           | Strict ISO 8601 author date (`%aI`).                                                                                                 |
+| `refs`             | string[]         | Decoration names (`%D`), e.g. `["HEAD -> main","origin/main"]`.                                                                      |
+| `parentCount`      | non-negative int | Parent count from `%P`; a merge commit reports 2.                                                                                    |
+| `changedFileCount` | non-negative int | Number of paths the commit lists (what `--shortstat` calls files changed, without reading contents); 0 for merges and empty commits. |
 
 - **Truncation**: the history read runs under 16 times the status byte cap, since a page of path
   lists is larger than a status. `truncated` is true when the bounded read was truncated **or** when
   `entries.length === limit` (more commits may exist past the page). When the byte cap cuts the
   read, the record it cut is dropped (never returned with a short count) and the next page starts
   from the entries received; if the first commit alone exceeds the cap, only that commit is read
-  again with `--shortstat` so its count stays exact.
+  again with `--shortstat` so its count stays exact. That one read does diff contents, so on a huge
+  commit it can exceed the timeout, in which case the response is `available: false` with the
+  failure reason, like any other failed git read.
 - **Validator**: `validateGitHistoryResponse`.
 
 ### `GET /api/git/remotes`

@@ -527,6 +527,10 @@ describe("GET /api/git/summary — byte-cap cut (large untracked tree)", () => {
   });
 });
 
+function syntheticHead(subject: string): string {
+  return ["a".repeat(40), "aaaaaaa", "", "author", "date", "", subject].join("\x1f");
+}
+
 describe("GET /api/git/history", () => {
   function logRecord(fields: {
     sha: string;
@@ -547,8 +551,12 @@ describe("GET /api/git/history", () => {
       fields.refs,
       fields.subject,
     ].join("\x1f");
-    const paths = (fields.paths ?? []).map((path) => `${path}\0`).join("");
-    return `\x1e${head}\n${paths}`;
+    const paths = fields.paths ?? [];
+    // `log --name-only -z`: a commit listing paths ends with an empty token, one listing none is
+    // just its header and a NUL.
+    return paths.length === 0
+      ? `${head}\0`
+      : `${head}\n${paths.map((path) => `${path}\0`).join("")}\0`;
   }
 
   it("parses commit entries with refs, parents, and changed-file counts", async () => {
@@ -1255,11 +1263,11 @@ describe("parseRemotes / parseShortstatHistory — bounded regex safety (S8786)"
   });
 
   it("extracts the changed-file count from a pathologically long non-matching shortstat line without catastrophic backtracking", () => {
-    const head = ["sha1", "sh1", "", "author", "date", "", "subject"].join("\x1f");
+    const head = syntheticHead("subject");
     // Shape that made the previous `(\d+)\s+files?\s+changed` regex quadratic: a long digit run
     // followed by a long whitespace run, with no "files changed" text anywhere.
     const remainder = `${"1".repeat(20000)}${" ".repeat(20000)}x`;
-    const record = `\x1e${head}\n${remainder}`;
+    const record = `${head}\n${remainder}`;
 
     const start = Date.now();
     const entries = parseShortstatHistory(record);
@@ -1603,6 +1611,68 @@ describe("GET /api/git/history — changed-file count without diffing contents",
     });
   });
 
+  it("reports the exact subject, author and date of a merge, an empty commit and a normal commit", async () => {
+    await initShapedHistory();
+    await git(["commit", "--quiet", "--allow-empty", "-m", "empty commit"]);
+
+    const history = await readHistory(root);
+
+    const bySubject = new Map(history.entries.map((entry) => [entry.subject, entry]));
+    for (const subject of ["empty commit", "merge side", "main work"]) {
+      const entry = bySubject.get(subject);
+      expect(entry, subject).toBeDefined();
+      expect(entry?.author).toBe("Keiko Fixture");
+      expect(entry?.date).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:]+[+-]\d{2}:\d{2}$/u);
+      expect(entry?.subject).not.toContain("\0");
+    }
+    expect(bySubject.get("empty commit")).toMatchObject({ parentCount: 1, changedFileCount: 0 });
+    expect(bySubject.get("merge side")).toMatchObject({ parentCount: 2, changedFileCount: 0 });
+    expect(bySubject.get("main work")?.changedFileCount).toBe(1);
+  });
+
+  it("cannot be made to forge or split a record by file names holding separators or a header", async () => {
+    await initRepository();
+    await put("seed.txt", "seed\n");
+    await commitAll("seed");
+    const forgedHead = [
+      "f".repeat(40),
+      "fffffff",
+      "",
+      "Forged Author",
+      "2020-01-01T00:00:00+00:00",
+      "",
+      "forged subject",
+    ].join("\x1f");
+    const names = [
+      "record\x1esep.txt",
+      "field\x1fsep.txt",
+      forgedHead,
+      `\x1e${forgedHead}`,
+      "new\nline.txt",
+      "e".repeat(40),
+    ];
+    for (const name of names) await put(name, `${String(name.length)}\n`);
+    await commitAll("hostile names");
+    await put("after.txt", "after\n");
+    await commitAll("after hostile");
+    const expected = await shortstatCounts([]);
+
+    const history = await readHistory(root);
+
+    expect(history.entries.map((entry) => entry.subject)).toEqual([
+      "after hostile",
+      "hostile names",
+      "seed",
+    ]);
+    expect(history.entries.some((entry) => entry.author === "Forged Author")).toBe(false);
+    expect(new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]))).toEqual(
+      expected,
+    );
+    expect(
+      history.entries.find((entry) => entry.subject === "hostile names")?.changedFileCount,
+    ).toBe(names.length);
+  });
+
   it("agrees with --shortstat inside a selected subfolder", async () => {
     await initShapedHistory();
     const expected = await shortstatCounts(["--", "sub"]);
@@ -1661,9 +1731,9 @@ describe("GET /api/git/history — changed-file count without diffing contents",
   });
 
   it("drops only the last record of a cut read, and keeps every record of a whole one", () => {
-    const head = ["sha1", "sh1", "", "author", "date", "", "subject"].join("\x1f");
-    const whole = `\x1e${head}\na\0b\0\0`;
-    const cut = `${whole}\x1e${head}\nc\0d`;
+    const head = syntheticHead("subject");
+    const whole = `${head}\na\0b\0\0`;
+    const cut = `${whole}${head}\nc\0d`;
 
     expect(parseHistory(whole).map((entry) => entry.changedFileCount)).toEqual([2]);
     expect(parseHistory(cut, { truncated: true }).map((entry) => entry.changedFileCount)).toEqual([
@@ -1673,8 +1743,8 @@ describe("GET /api/git/history — changed-file count without diffing contents",
   });
 
   it("counts a path holding a newline once", () => {
-    const head = ["sha1", "sh1", "", "author", "date", "", "subject"].join("\x1f");
+    const head = syntheticHead("subject");
 
-    expect(parseHistory(`\x1e${head}\nwe\nird.txt\0plain.txt\0`)[0]?.changedFileCount).toBe(2);
+    expect(parseHistory(`${head}\nwe\nird.txt\0plain.txt\0`)[0]?.changedFileCount).toBe(2);
   });
 });
