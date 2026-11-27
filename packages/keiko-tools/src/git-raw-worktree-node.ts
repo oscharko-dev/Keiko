@@ -235,7 +235,7 @@ async function scanPaths(
   paths: readonly string[],
 ): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
-  const pending: PendingConversions = { files: new Map(), overCap: 0 };
+  const pending = new Map<string, GitStageFile>();
   let total = 0;
   let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
@@ -267,33 +267,29 @@ async function scanPaths(
     deniedPathCount,
   };
 }
-// A Windows checkout never matches the index stat data, so every tracked file can land here: one
-// scan settles at most this many, in one batch; the rest stay modified (fail closed).
-const MAX_CONVERTIBLE_FILES = 1000;
-interface PendingConversions {
-  readonly files: Map<string, GitStageFile>;
-  overCap: number;
-}
+// A Windows checkout never matches the index stat data, so every tracked text file can land here.
+// They are settled in sequential batches (a constant number of Git processes per batch) inside the
+// scan's own bounds: the content budget and the path limit.
+const CONVERTIBLE_BATCH_SIZE = 1000;
 function collectConvertible(
-  pending: PendingConversions,
+  pending: Map<string, GitStageFile>,
   path: string,
   working: WorkingInspection,
 ): void {
-  if (working.convertible === undefined) return;
-  if (pending.files.size >= MAX_CONVERTIBLE_FILES) pending.overCap += 1;
-  else pending.files.set(path, working.convertible);
+  if (working.convertible !== undefined) pending.set(path, working.convertible);
 }
+type PortAnswer =
+  | { readonly outcome: "answered"; readonly ids: ReadonlyMap<string, string | undefined> }
+  | { readonly outcome: "undecidable" }
+  | { readonly outcome: "error"; readonly error: unknown };
 // The port's answer, or why there is none: a cancellation ends the read, any other failure leaves
-// every file modified and is reported to the observer (never silent, never a rejected read).
+// every file of the batch modified and is reported to the observer (never silent, never a rejected
+// read).
 async function askStagedObjectPort(
   scan: ScanInputs,
   port: GitStagedObjectIdPort,
   files: readonly GitStageFile[],
-): Promise<
-  | { readonly outcome: "answered"; readonly ids: ReadonlyMap<string, string | undefined> }
-  | { readonly outcome: "undecidable" }
-  | { readonly outcome: "error"; readonly error: unknown }
-> {
+): Promise<PortAnswer> {
   try {
     const ids = await port(files);
     return ids === undefined ? { outcome: "undecidable" } : { outcome: "answered", ids };
@@ -303,35 +299,69 @@ async function askStagedObjectPort(
     return { outcome: "error", error };
   }
 }
+// The hash read the file from disk after the reader had read it: a file that changed in between is
+// not judged by it (the bytes read now must be the bytes the reader first saw).
+async function unchangedSinceRead(scan: ScanInputs, file: GitStageFile): Promise<boolean> {
+  const again = await readGitStageFile(scan.deps.workspace.root, file.path, {
+    maxBytes: MAX_CONTENT_BYTES,
+    fs: workspaceFsOf(scan.deps),
+    symlinks: "read-only",
+  });
+  return again.mode === file.mode && Buffer.compare(again.bytes, file.bytes) === 0;
+}
+async function settledCleanPaths(
+  scan: ScanInputs,
+  answer: PortAnswer,
+  batch: readonly GitStageFile[],
+): Promise<readonly string[]> {
+  if (answer.outcome !== "answered") return [];
+  const clean: string[] = [];
+  for (const file of batch) {
+    const stagedAs = answer.ids.get(file.path);
+    if (stagedAs === undefined || stagedAs !== scan.index.get(file.path)?.objectId) continue;
+    if (await unchangedSinceRead(scan, file)) clean.push(file.path); // NOSONAR typescript:S9382 -- sequential re-reads stay inside the scan's content budget
+  }
+  return clean;
+}
+function worseOutcome(current: PortAnswer["outcome"], next: PortAnswer): PortAnswer["outcome"] {
+  if (current === "error" || next.outcome === "error") return "error";
+  return current === "undecidable" || next.outcome === "undecidable" ? "undecidable" : "answered";
+}
 // A stat-dirty file whose bytes Git's conversion maps to exactly the index object is clean in the
 // working tree, as `git status` says; the judgement hashes them under Git's own conversion with every
 // configured filter driver overridden by the port's allowlisted keys. Without the port, or when it
-// cannot answer for a file, the file stays modified (fail closed).
+// cannot answer for a batch, its files stay modified (fail closed).
 async function settleConvertedFiles(
   scan: ScanInputs,
   changes: readonly GitChangedFile[],
-  pending: PendingConversions,
+  pending: ReadonlyMap<string, GitStageFile>,
 ): Promise<readonly GitChangedFile[]> {
   const port = scan.deps.stagedObjectIds;
-  if (port === undefined || pending.files.size === 0) return changes;
-  const answer = await askStagedObjectPort(scan, port, [...pending.files.values()]);
-  const ids = answer.outcome === "answered" ? answer.ids : new Map<string, string | undefined>();
-  let settledClean = 0;
-  const settled = changes.flatMap((change) => {
-    const objectId = pending.files.has(change.path) ? ids.get(change.path) : undefined;
-    if (objectId === undefined || objectId !== scan.index.get(change.path)?.objectId)
-      return [change];
-    settledClean += 1;
+  if (port === undefined || pending.size === 0) return changes;
+  const files = [...pending.values()];
+  const clean = new Set<string>();
+  let outcome: PortAnswer["outcome"] = "answered";
+  let error: unknown;
+  let batches = 0;
+  for (let at = 0; at < files.length; at += CONVERTIBLE_BATCH_SIZE) {
+    const batch = files.slice(at, at + CONVERTIBLE_BATCH_SIZE);
+    const answer = await askStagedObjectPort(scan, port, batch); // NOSONAR typescript:S9382 -- sequential batches keep the process count and memory bounded
+    for (const path of await settledCleanPaths(scan, answer, batch)) clean.add(path); // NOSONAR typescript:S9382 -- see above
+    outcome = worseOutcome(outcome, answer);
+    if (answer.outcome === "error") error ??= answer.error;
+    batches += 1;
+  }
+  scan.deps.onStagedConversion?.({
+    convertible: files.length,
+    batches,
+    settledClean: clean.size,
+    outcome,
+    ...(outcome === "error" ? { error } : {}),
+  });
+  return changes.flatMap((change) => {
+    if (!clean.has(change.path)) return [change];
     return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
   });
-  scan.deps.onStagedConversion?.({
-    convertible: pending.files.size,
-    overCap: pending.overCap,
-    settledClean,
-    outcome: answer.outcome,
-    ...(answer.outcome === "error" ? { error: answer.error } : {}),
-  });
-  return settled;
 }
 async function workingStatus(
   scan: ScanInputs,

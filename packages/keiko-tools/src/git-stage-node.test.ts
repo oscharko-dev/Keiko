@@ -419,7 +419,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         }),
       ).toEqual([["a.txt", true, true]]);
       expect(evidence).toEqual([
-        { convertible: 1, overCap: 0, settledClean: 0, outcome: "undecidable" },
+        { convertible: 1, batches: 1, settledClean: 0, outcome: "undecidable" },
       ]);
     });
 
@@ -459,7 +459,7 @@ describe("exact-file staging under the effective core.autocrlf", () => {
         await rawFlags(repo, { ...factoryPort(repo), onStagedConversion: (e) => evidence.push(e) }),
       ).toEqual([["a.txt", true, false]]);
       expect(evidence).toEqual([
-        { convertible: 1, overCap: 0, settledClean: 1, outcome: "answered" },
+        { convertible: 1, batches: 1, settledClean: 1, outcome: "answered" },
       ]);
     });
   });
@@ -582,22 +582,48 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(argvs.flat()).not.toContain("-w");
   });
 
-  it("settles only the capped number of files in one scan and leaves the rest modified", async () => {
+  it("settles more than one batch of convertible files, every one of them", async () => {
     const repo = plainRepository("v1\r\n");
     git(repo, ["config", "core.autocrlf", "true"]);
-    const names = Array.from({ length: 1003 }, (_, at) => `f${String(at).padStart(4, "0")}.txt`);
-    // `a.txt` (CRLF over an LF index entry) is a convertible file too: it takes the first slot.
+    const names = Array.from({ length: 1203 }, (_, at) => `f${String(at).padStart(4, "0")}.txt`);
     for (const name of names) writeFileSync(join(repo, name), "p\r\n");
     git(repo, ["add", ...names]);
     for (const name of names) touchLater(repo, name);
     const evidence: unknown[] = [];
+    const argvs: string[][] = [];
     const flags = await rawFlags(repo, {
-      ...factoryPort(repo),
+      ...factoryPort(repo, { spawn: countingSpawn(argvs) }),
       onStagedConversion: (e) => evidence.push(e),
     });
-    expect(flags).toEqual(names.map((name, at) => [name, true, at >= 999]));
+    // Every file is staged and none is modified in the working tree, past the first 1000 as well;
+    // `a.txt` (CRLF over an LF index entry) is convertible too.
+    expect(flags).toEqual(names.map((name) => [name, true, false]));
     expect(evidence).toEqual([
-      { convertible: 1000, overCap: 4, settledClean: 1000, outcome: "answered" },
+      { convertible: 1204, batches: 2, settledClean: 1204, outcome: "answered" },
+    ]);
+    expect(argvs.filter((argv) => argv.includes("hash-object"))).toHaveLength(2);
+  });
+
+  it("keeps a file modified when it was replaced between the read and the hash", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    git(repo, ["config", "core.autocrlf", "true"]);
+    git(repo, ["add", "a.txt"]);
+    // The reader sees different bytes (they convert to something else than the index entry) ...
+    writeFileSync(join(repo, "a.txt"), "v1\r\nv3\r\n");
+    touchLater(repo);
+    const real = factoryPort(repo).stagedObjectIds;
+    const evidence: unknown[] = [];
+    const flags = await rawFlags(repo, {
+      // ... and the file is swapped for the exact staged content before Git hashes it.
+      stagedObjectIds: (files) => {
+        writeFileSync(join(repo, "a.txt"), "v1\r\nv2\r\n");
+        return real?.(files) ?? Promise.resolve(undefined);
+      },
+      onStagedConversion: (e) => evidence.push(e),
+    });
+    expect(flags).toEqual([["a.txt", true, true]]);
+    expect(evidence).toEqual([
+      { convertible: 1, batches: 1, settledClean: 0, outcome: "answered" },
     ]);
   });
 

@@ -77,13 +77,13 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
   emitter: "gitDelivery/runtimeGitRead.logStagedConversion",
   fields: {
     convertible: { type: "integer", dataClass: "count", required: true },
-    overCap: { type: "integer", dataClass: "count", required: true },
+    batches: { type: "integer", dataClass: "count", required: true },
     settledClean: { type: "integer", dataClass: "count", required: true },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["answered", "undecidable", "error"],
+      values: ["answered", "undecidable"],
     },
   },
   causal: "correlation",
@@ -91,6 +91,28 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["git-raw-conversion-settlement"],
   proofIds: ["git.raw-status.conversion-settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// A port failure leaves every file of the failed batch modified; the line carries the classified
+// `errorKind` and the counts, so the refused commit proof is explainable from the log alone.
+const STAGED_CONVERSION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.raw-status.conversion-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitRead.logStagedConversion",
+  fields: {
+    convertible: { type: "integer", dataClass: "count", required: true },
+    batches: { type: "integer", dataClass: "count", required: true },
+    settledClean: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-raw-conversion-settlement"],
+  proofIds: ["git.raw-status.conversion-failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -184,22 +206,32 @@ export function logStagedConversion(
   correlationId: string | undefined,
   evidence: GitStagedConversionEvidence,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write(
-    activityLogEvent(
-      STAGED_CONVERSION_OPERATION,
-      {
-        correlationId: correlationIdOrUnknown(correlationId),
-        ...(evidence.outcome === "error"
-          ? { level: "warn", errorKind: gitDeliveryActivityErrorKind(errorKindOf(evidence.error)) }
-          : {}),
-      },
-      {
-        convertible: evidence.convertible,
-        overCap: evidence.overCap,
-        settledClean: evidence.settledClean,
-        outcome: evidence.outcome,
-      },
-    ),
+  const counts = {
+    convertible: evidence.convertible,
+    batches: evidence.batches,
+    settledClean: evidence.settledClean,
+  };
+  const correlation = { correlationId: correlationIdOrUnknown(correlationId) };
+  const sink = seams.activityLog ?? processServerLogSink();
+  if (evidence.outcome === "error") {
+    sink.write(
+      activityLogEvent(
+        STAGED_CONVERSION_FAILED_OPERATION,
+        {
+          ...correlation,
+          level: "warn",
+          errorKind: gitDeliveryActivityErrorKind(errorKindOf(evidence.error)),
+        },
+        counts,
+      ),
+    );
+    return;
+  }
+  sink.write(
+    activityLogEvent(STAGED_CONVERSION_OPERATION, correlation, {
+      ...counts,
+      outcome: evidence.outcome,
+    }),
   );
 }
 /**

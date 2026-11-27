@@ -133,13 +133,12 @@ export type GitStagedObjectIdPort = (
 
 /**
  * Body-free evidence of one raw scan's conversion settlement (#4491): how many stat-dirty regular
- * files were offered to the port, how many settled clean, how many exceeded the per-scan cap and so
- * stayed modified, and whether the port answered, could not decide, or failed (`error` carries the
+ * files were offered to the port, in how many sequential batches, how many settled clean, and whether the port answered, could not decide, or failed (`error` carries the
  * failure for the owner's classification; it is never serialised here).
  */
 export interface GitStagedConversionEvidence {
   readonly convertible: number;
-  readonly overCap: number;
+  readonly batches: number;
   readonly settledClean: number;
   readonly outcome: "answered" | "undecidable" | "error";
   readonly error?: unknown;

@@ -1,6 +1,7 @@
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import {
   admitStageSelection,
+  logStagedConversion,
   reviewStageSelection,
   runtimeGitDiff,
   runtimeGitStatus,
@@ -2752,6 +2753,34 @@ describe("deny-listed paths in the run's repository", () => {
 });
 
 describe("a converted file staged without stat data", () => {
+  it("records a failing staged-object port as a classified failure line", () => {
+    const execution = options.execution ?? {};
+    events.length = 0;
+
+    logStagedConversion(execution, "verified-commit-test", {
+      convertible: 3,
+      batches: 1,
+      settledClean: 0,
+      outcome: "error",
+      error: Object.assign(new Error("hash failed"), { code: "ENOENT" }),
+    });
+
+    const failed = events.filter((event) => event.op === "git.raw-status.conversion-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      category: "diagnostic",
+      level: "warn",
+      correlationId: "verified-commit-test",
+      extra: { convertible: 3, batches: 1, settledClean: 0 },
+    });
+    expect(failed[0]?.errorKind).toEqual(expect.any(String));
+    const persisted = expectActivityLogProof(
+      "git.raw-status.conversion-failed.emitted-line",
+      formatActivityLogProofLine(failed[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ convertible: 3, batches: 1, settledClean: 0 });
+  });
+
   it("reads as clean in the working tree and records the settlement under the run's correlation", async () => {
     git(["config", "core.autocrlf", "true"]);
     writeFileSync(join(root, "crlf.txt"), "one\r\ntwo\r\n");
@@ -2772,7 +2801,7 @@ describe("a converted file staged without stat data", () => {
     expect(settled[0]).toMatchObject({
       category: "process",
       correlationId: "verified-commit-test",
-      extra: { convertible: 1, overCap: 0, settledClean: 1, outcome: "answered" },
+      extra: { convertible: 1, batches: 1, settledClean: 1, outcome: "answered" },
     });
     const persisted = expectActivityLogProof(
       "git.raw-status.conversion-settled.emitted-line",
