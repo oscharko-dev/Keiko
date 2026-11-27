@@ -4,8 +4,24 @@ import {
   readGitCommitIdentity,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedCommitFacts, verifiedBaseObjectId } from "./verifiedCommitFacts.js";
-import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
+import type { VerifiedCommitFacts, VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
+
+// The base the receipt recorded, or the commit that has since replaced it: a branch that is its own
+// base (an unborn branch, or a local checkout of the task branch) has the new commit as its base
+// once the interrupted commit landed, so the receipt's earlier base is the parent it recorded.
+function baseReconciles(
+  facts: VerifiedCommitFacts,
+  receipt: VerifiedCommitResult,
+  context: VerifiedCommitRunContext,
+): boolean {
+  if (verifiedBaseObjectId(facts) === receipt.baseSha) return true;
+  return (
+    context.baseRef === context.headRef &&
+    facts.head.kind === "born" &&
+    receipt.baseSha === receipt.parentSha
+  );
+}
 
 /** Reconciliation reads live objects only: it never retries a mutation or restores an approval. */
 export async function reconcileVerifiedCommit(
@@ -21,7 +37,7 @@ export async function reconcileVerifiedCommit(
     return receipt;
   const facts = await readVerifiedCommitFacts(context, seams);
   if (
-    verifiedBaseObjectId(facts) !== receipt.baseSha ||
+    !baseReconciles(facts, receipt, context) ||
     facts.repositoryDigest !== receipt.repositoryDigest
   )
     return receipt;

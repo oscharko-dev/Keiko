@@ -56,6 +56,7 @@ export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.fr
       "ls-files",
       "ls-tree",
       "cat-file",
+      "show-ref",
     ]),
     valueFlags: Object.freeze([
       "-C",
@@ -801,6 +802,14 @@ export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise
   const branch = (await runRead(ctx, ["branch", "--show-current"])).trim();
   if (branch === "" || !isSafeGitRefName(branch))
     throw new GitWorktreeReadError("git head names no branch");
+  // A HEAD that did not resolve is unborn only when its branch ref is absent. A ref that exists
+  // but could not be read as a commit is damage, never a fresh repository.
+  const ref = await runReadResult(
+    ctx,
+    ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+    [0, 1],
+  );
+  if (ref.exitCode === 0) throw new GitWorktreeReadError("git-head-ref-unreadable");
   const format = (await runRead(ctx, ["rev-parse", "--show-object-format"])).trim();
   if (format !== "sha1" && format !== "sha256")
     throw new GitWorktreeReadError("git object format is unsupported");

@@ -25,6 +25,7 @@ import {
   readGitRawWorktreeSnapshotAtHead,
 } from "./git-raw-worktree-node.js";
 import { nodeSpawnFn } from "./exec.js";
+import { readGitHeadState } from "./git-worktree-snapshot-node.js";
 
 const dirs: string[] = [];
 const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -282,5 +283,26 @@ describe("an unborn HEAD", () => {
       },
     });
     await expect(read).rejects.toMatchObject({ code: "git-raw-snapshot-drift" });
+  });
+});
+
+// The unborn state is exact: HEAD names a branch whose ref is absent. A ref that exists but does not
+// resolve to a commit is damage and fails closed with its own closed cause, never as a fresh repository.
+describe("the unborn state is exact", () => {
+  it("fails closed when the branch ref exists but is not a commit", async () => {
+    const root = repository(false);
+    writeFileSync(join(root, "blob.txt"), "not a commit\n");
+    const blob = git(root, ["hash-object", "-w", "blob.txt"]);
+    writeFileSync(join(root, ".git", "refs", "heads", "master"), `${blob}\n`);
+    await expect(readGitHeadState(deps(root))).rejects.toThrow("git-head-ref-unreadable");
+    await expect(readGitRawChangesAtHead(deps(root))).rejects.toThrow("git-head-ref-unreadable");
+  });
+  it("still reads a branch with no ref as unborn", async () => {
+    const root = repository(false);
+    await expect(readGitHeadState(deps(root))).resolves.toEqual({
+      kind: "unborn",
+      branch: "master",
+      objectIdLength: 40,
+    });
   });
 });

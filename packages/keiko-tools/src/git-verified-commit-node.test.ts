@@ -24,7 +24,7 @@ import {
   readGitHeadState,
   readGitIndexTreeDigest,
 } from "./git-mutation-node.js";
-import type { GitHeadState } from "./git-head-state.js";
+import { gitZeroObjectId, type GitHeadState } from "./git-head-state.js";
 import type {
   GitCommitExecRequest,
   GitVerifiedCommitPrecondition,
@@ -447,5 +447,104 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     git(["update-ref", "refs/heads/fresh", git(["rev-parse", "dev"])]);
     const result = await adapter().stage({ pathspecs: ["code.txt"], verified });
     expect(result.outcome).toBe("failed");
+  });
+});
+
+// A repository in SHA-256 object format: the zero old value of the ref transaction is 64 characters.
+// Detected by asking the installed Git to create one, never by its version string.
+const sha256Supported = ((): boolean => {
+  const probe = mkdtempSync(join(tmpdir(), "keiko-sha256-probe-"));
+  try {
+    execFileSync("git", ["init", "-q", "--object-format=sha256", probe], {
+      env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+})();
+
+describe.skipIf(!sha256Supported)("the first commit of an unborn SHA-256 branch", () => {
+  beforeEach(() => {
+    rmSync(join(root, ".git"), { recursive: true, force: true });
+    git(["init", "-q", "-b", "fresh", "--object-format=sha256"]);
+    git(["config", "user.name", "Keiko Test"]);
+    git(["config", "user.email", "keiko@example.test"]);
+    git(["config", "core.autocrlf", "false"]);
+    rmSync(signingRoot, { recursive: true, force: true });
+    signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-sha256-signing-")));
+    configureSshCommitSigning("keiko@example.test");
+    writeFileSync(join(root, "code.txt"), "sha256\n");
+    git(["add", "code.txt"]);
+  });
+  async function precondition(): Promise<GitVerifiedCommitPrecondition> {
+    const head = await readGitHeadState({ workspace });
+    expect(head).toEqual({ kind: "unborn", branch: "fresh", objectIdLength: 64 });
+    return {
+      head,
+      stagedTreeDigest: await readGitIndexTreeDigest({ workspace }),
+      branchName: "fresh",
+      baseRef: "fresh",
+      base: head,
+    };
+  }
+  it("creates a 64-character root commit with no parent", async () => {
+    const result = await adapter().commit({
+      message: "feat: sha256 root",
+      allowEmpty: false,
+      verified: await precondition(),
+    });
+    expect(result.outcome).toBe("succeeded");
+    expect(git(["rev-parse", "HEAD"])).toMatch(/^[a-f0-9]{64}$/u);
+    expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
+  });
+  it("loses the compare-and-swap against a branch created meanwhile", async () => {
+    const verified = await precondition();
+    const other = git(["commit-tree", git(["write-tree"]), "-m", "concurrent root"]);
+    let checks = 0;
+    const result = await adapter(() => {
+      if (++checks === 3) git(["update-ref", "refs/heads/fresh", other]);
+      return true;
+    }).commit({ message: "feat: sha256 root", allowEmpty: false, verified });
+    expect(result.outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"])).toBe(other);
+    expect(gitZeroObjectId(64)).toMatch(/^0{64}$/u);
+  });
+});
+
+// Operands that contradict each other never reach Git: no process is spawned for them.
+describe("verified operands that contradict each other", () => {
+  const unborn = { kind: "unborn", branch: "fresh", objectIdLength: 40 } as const;
+  const born = { kind: "born", sha: "a".repeat(40) } as const;
+  const cases: readonly (readonly [string, Partial<GitVerifiedCommitPrecondition>])[] = [
+    ["an unborn head of another branch", { head: { ...unborn, branch: "other" }, base: unborn }],
+    ["an unborn base that is not the branch", { head: unborn, base: unborn, baseRef: "dev" }],
+    ["an unborn base under a born head", { head: born, base: unborn }],
+    ["an unborn head with a unsafe branch name", { head: { ...unborn, branch: "-x" } }],
+    ["a born head with a malformed sha", { head: { kind: "born", sha: "zz" } }],
+  ];
+  it.each(cases)("refuses %s before any Git process starts", async (_name, override) => {
+    let spawns = 0;
+    const counting = createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      spawn: (command, args, options) => {
+        spawns += 1;
+        return nodeSpawnFn(command, args, options);
+      },
+    });
+    const verified: GitVerifiedCommitPrecondition = {
+      head: unborn,
+      base: unborn,
+      stagedTreeDigest: "a".repeat(64),
+      branchName: "fresh",
+      baseRef: "fresh",
+      ...override,
+    };
+    const result = await counting.commit({ message: "feat: x", allowEmpty: false, verified });
+    expect(result.outcome).toBe("failed");
+    expect(spawns).toBe(0);
   });
 });

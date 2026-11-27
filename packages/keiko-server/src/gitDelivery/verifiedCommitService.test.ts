@@ -6,6 +6,7 @@ import {
   runtimeGitStatus,
 } from "./runtimeGitRead.js";
 import {
+  gitZeroObjectId,
   readGitRawChangesAtHead,
   readGitRawWorktreeSnapshotAtHead,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -40,13 +41,17 @@ import type {
   GitCommitMessageValidation,
   CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
-import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { runMigrations } from "../store/schema.js";
 import { createVerifiedCommitService } from "./verifiedCommitService.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { executeGovernedMutation } from "./execution.js";
+import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
 import type {
   VerifiedCommitRunContext,
   VerifiedCommitService,
@@ -2776,7 +2781,7 @@ describe("the first commit of an unborn branch through the verified flow", () =>
     const result = await service.execute(proposalId, approval);
     expect(result?.status, JSON.stringify(events)).toBe("succeeded");
     expect(isVerifiedCommitResult(result)).toBe(true);
-    expect(result?.parentSha).toBe("0".repeat(40));
+    expect(result?.parentSha).toBe(gitZeroObjectId(40));
     expect(result?.headSha).toBe(git(["rev-parse", "HEAD"]));
     expect(git(["rev-list", "--parents", "-n", "1", "HEAD"])).toBe(git(["rev-parse", "HEAD"]));
     expectLastCommitSigned();
@@ -2788,5 +2793,48 @@ describe("the first commit of an unborn branch through the verified flow", () =>
     const result = await service.execute(proposalId, approval);
     expect(result?.status).not.toBe("succeeded");
     expect(git(["rev-parse", "HEAD"])).toBe(git(["rev-parse", "dev"]));
+  });
+});
+
+// An interrupted commit is reconciled from the live objects. When the branch is its own base the new
+// commit has replaced the base the receipt recorded, which for a root commit is the zero id.
+describe("reconciling an interrupted commit on a branch that is its own base", () => {
+  async function interrupted(headRef: string, baseRef: string): Promise<VerifiedCommitResult> {
+    const own = (): VerifiedCommitRunContext => ({ ...context(), baseRef, headRef });
+    service = createVerifiedCommitService({ ...options, context: own });
+    const proposalId = await verifiedProposal();
+    const result = await service.execute(proposalId, await claim(proposalId));
+    if (result?.status !== "succeeded") throw new Error("the commit did not land");
+    const { headSha: _headSha, committedTreeDigest: _tree, ...receipt } = result;
+    return { ...receipt, status: "recovery-required", reason: "execution-uncertain" };
+  }
+  it("reconciles the root commit of an unborn branch", async () => {
+    git(["checkout", "-q", "--orphan", "fresh"]);
+    const receipt = await interrupted("fresh", "fresh");
+    expect(receipt.baseSha).toBe(gitZeroObjectId(40));
+    const own = { ...context(), baseRef: "fresh", headRef: "fresh" };
+    await expect(
+      reconcileVerifiedCommit(receipt, own, options.execution ?? {}),
+    ).resolves.toMatchObject({
+      status: "succeeded",
+      reason: "completed",
+      headSha: git(["rev-parse", "HEAD"]),
+    });
+  });
+  it("reconciles a born commit on its own base branch", async () => {
+    const receipt = await interrupted("codex/task", "codex/task");
+    const own = { ...context(), baseRef: "codex/task", headRef: "codex/task" };
+    await expect(
+      reconcileVerifiedCommit(receipt, own, options.execution ?? {}),
+    ).resolves.toMatchObject({ status: "succeeded", headSha: git(["rev-parse", "HEAD"]) });
+  });
+  it("leaves a receipt whose commit is not the branch's one unreconciled", async () => {
+    git(["checkout", "-q", "--orphan", "fresh"]);
+    const receipt = await interrupted("fresh", "fresh");
+    const own = { ...context(), baseRef: "fresh", headRef: "fresh" };
+    const wrong = { ...receipt, messageDigest: "c".repeat(64) };
+    await expect(
+      reconcileVerifiedCommit(wrong, own, options.execution ?? {}),
+    ).resolves.toMatchObject({ status: "recovery-required" });
   });
 });
