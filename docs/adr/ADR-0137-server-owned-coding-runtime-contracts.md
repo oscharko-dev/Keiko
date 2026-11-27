@@ -87,6 +87,18 @@ bound after retained answer text, tool detail, reasoning, segments and calls wer
 oldest assistant message (never the user anchor or the newest message) and reads as truncated. The
 correlation caps in the OpenCode backend (2,048 entries, 128 KiB) hold only calls that
 have not settled and remain a memory guard.
+
+Loss is explicit. A whole message or tool row the byte bounds remove (the oldest assistant message
+or call of an over-bound turn, or the contents of a turn the feed bound evicts) adds to the feed's
+`droppedEventCount` and is recorded by the existing `coding-runtime.safe-activity` `dropped` line
+with the closed reason `capacity-rejected` (designed truncation, no error diagnostic); the timeline
+shows "Activity truncated." and the omitted-update count. Trimming content inside a kept message or
+row (segments, reasoning, tool detail) only sets that item's `truncated` flag. The live feed is a
+bounded view, not the record: the whole conversation stays in Coding History, which the
+"Previous conversation" transcript renders for a task that is reopened or reloaded (Coding History
+itself keeps up to 65,536 characters per message and lists up to 200 messages per task, and says so
+when it cuts). While the run is still live in the same window, rows the byte bound evicted are not
+shown there.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
 feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.

@@ -720,8 +720,14 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       this.maxDroppedEventCount,
       signal.occurredAt,
     );
-    enforceFeedBounds(entry, this.limits);
-    const finalized = this.finalizeCapacityDrop(runId, entry, signal, { ...prior, capacityDrop });
+    const lost = enforceFeedBounds(entry, this.limits);
+    const finalized = this.finalizeCapacityDrop(runId, entry, signal, {
+      ...prior,
+      capacityDrop: mergeDropChanges(
+        capacityDrop,
+        incrementDroppedCount(entry, this.maxDroppedEventCount, signal.occurredAt, lost),
+      ),
+    });
     releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
     if (finalized) this.recordTextFacts(runId, entry, countsBefore);
     // A call that failed gets its line even when the feed dropped, displaced or refused it.
@@ -942,7 +948,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       entry.feed.updatedAt = occurredAt;
       // Each settled call gains its origin; the feed is brought back under its bounds, as after an
       // ingest, before any subscriber reads it.
-      enforceFeedBounds(entry, this.limits);
+      const lost = enforceFeedBounds(entry, this.limits);
+      const change = incrementDroppedCount(entry, this.maxDroppedEventCount, occurredAt, lost);
+      if (change !== undefined) {
+        this.emitDropMilestones(runId, "capacity-rejected", change.previous, change.next);
+      }
       releaseUnlistedTexts(entry.texts, (messageId) => entry.messageTurns.has(messageId));
       this.notify();
     }
@@ -1941,18 +1951,26 @@ function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimit
   return false;
 }
 
-function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
-  if (entry.feed.availability !== "available") return;
+// Returns the number of whole events (messages and tool rows) the byte bounds removed: a loss the
+// caller counts and logs, never a silent one (AGENTS.md §8). Trimming content inside a kept message
+// or row only sets the `truncated` flag.
+function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): number {
+  if (entry.feed.availability !== "available") return 0;
   const feed = entry.feed;
-  for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
+  let lost = 0;
+  for (const turn of feed.turns) lost += shrinkTurn(entry, turn, limits.maxTurnBytes);
   shedRetainedSegments(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   shedToolDetail(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   shedSettledReasoning(entry, feed.turns, () => bytes(feed) > limits.maxTotalBytes);
   while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
     const removed = feed.turns.shift();
-    if (removed !== undefined) releaseTurn(entry, removed);
+    if (removed !== undefined) {
+      releaseTurn(entry, removed);
+      lost += removed.messages.length + removed.tools.length;
+    }
     feed.truncated = true;
   }
+  return lost;
 }
 
 // #3878: under byte pressure the model's reasoning yields first. The reasoning of every message but
@@ -2060,8 +2078,9 @@ function shedAnswerSegments(
 // the bound does the oldest assistant message go (#4491), after everything above.
 // Retained answer text, settled tool detail and settled reasoning go first: they lose nothing a
 // page or the row's `detailOmitted` does not name.
-function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
-  if (bytes(turn) <= maxBytes) return;
+function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): number {
+  if (bytes(turn) <= maxBytes) return 0;
+  let lost = 0;
   shedRetainedSegments(entry, [turn], () => bytes(turn) > maxBytes);
   shedToolDetail([turn], () => bytes(turn) > maxBytes);
   shedSettledReasoning(entry, [turn], () => bytes(turn) > maxBytes);
@@ -2074,12 +2093,15 @@ function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number)
   while (bytes(turn) > maxBytes && turn.tools.length > 0) {
     turn.tools.shift();
     turn.truncated = true;
+    lost += 1;
   }
   // Last, a turn of many steps whose message shells alone exceed the bound gives up its oldest
   // assistant messages (the user anchor and the newest message stay, as the count cap does).
   while (bytes(turn) > maxBytes && evictOldestAssistantShell(entry, turn)) {
     turn.truncated = true;
+    lost += 1;
   }
+  return lost;
 }
 
 function evictOldestAssistantShell(entry: ProjectionEntry, turn: MutableTurn): boolean {
@@ -2343,10 +2365,11 @@ function incrementDroppedCount(
   entry: ProjectionEntry,
   maximum: number,
   updatedAt: string,
+  by = 1,
 ): DropCountChange | undefined {
-  if (entry.feed.availability !== "available") return undefined;
+  if (entry.feed.availability !== "available" || by <= 0) return undefined;
   const previous = entry.feed.droppedEventCount;
-  const next = Math.min(maximum, previous + 1);
+  const next = Math.min(maximum, previous + by);
   if (next === previous) return undefined;
   entry.feed = withDroppedCount(entry.feed, next, updatedAt);
   return { previous, next };
@@ -2355,6 +2378,14 @@ function incrementDroppedCount(
 interface DropCountChange {
   readonly previous: number;
   readonly next: number;
+}
+
+function mergeDropChanges(
+  first: DropCountChange | undefined,
+  second: DropCountChange | undefined,
+): DropCountChange | undefined {
+  if (first === undefined || second === undefined) return first ?? second;
+  return { previous: first.previous, next: second.next };
 }
 
 function capacityDropForApplication(
