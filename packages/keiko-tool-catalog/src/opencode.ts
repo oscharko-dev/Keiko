@@ -425,26 +425,28 @@ function changesetEditSpec(): OpenCodeToolSpec {
   };
 }
 
+const VERIFICATION_TOOL_DESCRIPTION =
+  "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
+  "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
+  "workspace-relative test path. verification.status passed and verification.completed " +
+  "confirm which checks ran successfully. The optional verification.commit describes " +
+  "commit eligibility separately: candidate-not-staged never means checks did not run. " +
+  "Only when the accepted task requests a commit, stage the intended changes and rerun " +
+  'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
+  "only, until its checks ran and failed: that also admits the commit, recorded as " +
+  'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
+  "untracked paths under commit.blocking stay outside it. For that workflow, " +
+  "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
+  "the intended paths or ignore generated output deliberately before verifying again. " +
+  "An unavailable commit proof names its nextAction: resolve-then-verify means the cause " +
+  "it names (an unborn HEAD, a denied path or link, an unreadable entry) must change " +
+  "first, because verifying again unchanged repeats the same answer.";
+
 function verificationSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.verification.run",
     alias: "keiko_verification",
-    description:
-      "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
-      "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
-      "workspace-relative test path. verification.status passed and verification.completed " +
-      "confirm which checks ran successfully. The optional verification.commit describes " +
-      "commit eligibility separately: candidate-not-staged never means checks did not run. " +
-      "Only when the accepted task requests a commit, stage the intended changes and rerun " +
-      'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
-      "only, until its checks ran and failed: that also admits the commit, recorded as " +
-      'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
-      "untracked paths under commit.blocking stay outside it. For that workflow, " +
-      "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
-      "the intended paths or ignore generated output deliberately before verifying again. " +
-      "An unavailable commit proof names its nextAction: resolve-then-verify means the cause " +
-      "it names (an unborn HEAD, a denied path or link, an unreadable entry) must change " +
-      "first, because verifying again unchanged repeats the same answer.",
+    description: VERIFICATION_TOOL_DESCRIPTION,
     inputSchema: managedObjectSchema(
       {
         verifierId: {
