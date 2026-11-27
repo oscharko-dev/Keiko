@@ -631,3 +631,29 @@ describe("the closed result of a stopped kernel outcome", () => {
     else expect(result).toEqual({ kind: "branch", ...expected, branch: "feature/x" });
   });
 });
+
+// The first read of a stage or unstage redemption is its own (`indexCurrent` re-reads the verified
+// facts and refuses drift), so the dispatcher reads no facts ahead of it. A second full read of every
+// Git fact doubled the cost of the redemption inside the tool's fixed 30 s budget: on a loaded host
+// it settled `timeout` / `deadline-exceeded` while the staging itself was healthy.
+describe("redeeming a stage proposal reads the repository once, in the redemption", () => {
+  it.each(["stage", "unstage"] as const)(
+    "refuses an unknown %s proposal as such, before any repository fact is read",
+    async (operation) => {
+      // A repository the run no longer matches: any facts read ahead of the redemption throws drift.
+      runHead = "not-the-checked-out-branch";
+      const result = await service("none").execute(
+        {
+          action: "git",
+          actionId: `${operation}-exec-1`,
+          idempotencyKey: `${operation}-exec-1`,
+          operation,
+          phase: "execute",
+          proposalId: `${operation}-1`,
+        },
+        { check: (): boolean => true },
+      );
+      expect(result).toEqual({ kind: "refused", reason: "proposal-unknown" });
+    },
+  );
+});

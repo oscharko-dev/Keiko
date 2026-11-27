@@ -491,6 +491,18 @@ function thrownGitCode(error: unknown): { readonly code?: string } {
     : {};
 }
 
+function isRedemption(request: RuntimeGitRequest): request is Extract<
+  RuntimeGitRequest,
+  { readonly phase: "execute" }
+> & {
+  readonly operation: "stage" | "unstage";
+} {
+  return (
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  );
+}
+
 export class RuntimeGitService {
   private generation = 0;
   private branchStep: Promise<void> = Promise.resolve();
@@ -706,6 +718,11 @@ export class RuntimeGitService {
     guard: CodingToolMutationGuard,
   ): Promise<RuntimeGitOutcome> {
     const execution = this.options.execution ?? {};
+    // A stage or unstage redemption reads the verified facts itself (`indexCurrent`, with the same
+    // authority and drift refusals), so it is not read twice: the duplicate read doubled a call that
+    // runs inside one fixed 30 s tool budget.
+    if (isRedemption(request))
+      return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
     // One scan serves the facts and the status answer: a second raw read per status action
     // doubled its Git process count (#4491, W-4).
     const { facts, raw } = await readVerifiedCommitRead(context, execution);
@@ -726,8 +743,6 @@ export class RuntimeGitService {
           request.paths,
         ),
       };
-    if (request.phase === "execute")
-      return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
     return request.operation === "stage"
       ? this.propose(context, request.paths)
       : this.proposeUnstage(context, request.paths);
