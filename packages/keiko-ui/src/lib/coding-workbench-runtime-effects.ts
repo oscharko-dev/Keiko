@@ -17,6 +17,8 @@ import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-r
 import {
   useCodingAppSessionEstablishments,
   useCodingAppSessionRedemptions,
+  settleCodingAppSessionUnpairedReport,
+  useCodingAppSessionUnpairedObservations,
 } from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
@@ -209,10 +211,13 @@ function usePostRunDescriptionRefresh(
  */
 export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void {
   const redemptions = useCodingAppSessionRedemptions();
+  // U-22: a channel read that came back unpaired (a restarted Keiko) re-confirms the pairing here.
+  const unpairedReads = useCodingAppSessionUnpairedObservations();
   useEffect(() => {
     let cancelled = false;
     void fetchWorkspaceManifestAccess().then(
       (access) => {
+        if (access.session === "paired") settleCodingAppSessionUnpairedReport();
         if (!cancelled) dispatch({ kind: "pairing-set", pairing: access.session });
       },
       (error: unknown) => {
@@ -230,7 +235,7 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
     return () => {
       cancelled = true;
     };
-  }, [dispatch, redemptions]);
+  }, [dispatch, redemptions, unpairedReads]);
 }
 
 /**

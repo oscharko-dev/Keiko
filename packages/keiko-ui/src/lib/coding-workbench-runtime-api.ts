@@ -55,7 +55,10 @@ import {
 import type { ClientCodingRuntimeCall } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { ApiError } from "./api";
 import { bffFetchJson, bffRequestErrorKind, newClientCorrelationId } from "./http";
-import { repairLocalCodingAppSessionWithEvidence } from "./coding-app-session-client";
+import {
+  repairLocalCodingAppSessionWithEvidence,
+  reportCodingAppSessionUnpairedRead,
+} from "./coding-app-session-client";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { reportCodingWorkbenchRequestTimeout } from "./coding-workbench-request-timeout";
 import { createSameOriginApiEventSource } from "./safe-event-source";
@@ -210,13 +213,23 @@ export function codingWorkbenchRuntimeActionError(message: string): Error {
   return new ApiError("CODING_RUNTIME_ACTION_UNAVAILABLE", message, 409);
 }
 
+// U-22: every run-scoped channel read answers a window without a session with the constant
+// `{ session: "unpaired" }` projection and HTTP 200. The window's one pairing owner is told, so a
+// restarted Keiko becomes one stated pairing state instead of a per-surface read failure.
+function unpairedObserved<T>(payload: T): T {
+  if (typeof payload === "object" && payload !== null && "session" in payload) {
+    if (payload.session === "unpaired") reportCodingAppSessionUnpairedRead();
+  }
+  return payload;
+}
+
 function validated<T>(
   path: string,
   value: unknown,
   validator: (candidate: unknown) => CodingWorkbenchValidationResult<T>,
 ): T {
   const result = validator(value);
-  if (result.ok) return result.value;
+  if (result.ok) return unpairedObserved(result.value);
   throw new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation.`,
@@ -225,7 +238,7 @@ function validated<T>(
 }
 
 function parsedOrRefused<T>(path: string, value: T | undefined): T {
-  if (value !== undefined) return value;
+  if (value !== undefined) return unpairedObserved(value);
   throw new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation.`,
