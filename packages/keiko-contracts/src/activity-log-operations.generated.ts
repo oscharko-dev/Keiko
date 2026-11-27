@@ -27855,6 +27855,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      finishReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["stop", "length", "tool_calls", "content_filter", "unknown"],
+      },
       reasoningBytes: {
         type: "integer",
         dataClass: "count",

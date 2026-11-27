@@ -271,7 +271,10 @@ export function normalizeChatResponse(
   const usage = buildUsage(payload, seed);
   const choice = firstChoice(payload);
   const message = firstMessage(payload);
-  const finishReason = normalizedFinishReason(choice?.finish_reason) ?? "stop";
+  const reportedFinish = normalizedFinishReason(choice?.finish_reason);
+  const finishReason = reportedFinish ?? "stop";
+  const unreported =
+    reportedFinish === undefined ? ({ finishReasonUnreported: true } as const) : {};
   assertNotRefusal(message, finishReason);
   const toolCalls = parseToolCallsOrExhaustion(message, finishReason, modelId, secrets, usage);
   const content = textFromContent(message.content);
@@ -279,12 +282,13 @@ export function normalizeChatResponse(
     expectStructured && content.length > 0 ? parseStructuredOutput(content) : null;
   const reasoning = reasoningText(message);
   if (reasoning === undefined) {
-    return { modelId, content, finishReason, toolCalls, structuredOutput, usage };
+    return { modelId, content, finishReason, ...unreported, toolCalls, structuredOutput, usage };
   }
   return {
     modelId,
     content,
     finishReason,
+    ...unreported,
     toolCalls,
     structuredOutput,
     usage: { ...usage, reasoningBytes: UTF8.encode(reasoning).byteLength },

@@ -523,6 +523,37 @@ describe("Gateway.chatStream — activity log", () => {
     expect(persisted).toMatchObject({ firstTokenKind: kind });
   });
 
+  // The provider's own finish reason rides on the stream-completed line, so an answer cut at the
+  // output limit is read off the line; a response without a reported reason is `unknown`.
+  it.each([
+    ["stop", { finishReason: "stop" }, "stop"],
+    ["length", { finishReason: "length" }, "length"],
+    ["tool_calls", { finishReason: "tool_calls" }, "tool_calls"],
+    ["content_filter", { finishReason: "content_filter" }, "content_filter"],
+    ["a missing reason", { finishReasonUnreported: true }, "unknown"],
+    ["an error finish", { finishReason: "error" }, "unknown"],
+  ] as const)("records the finish reason of a completed stream: %s", async (_name, patch, want) => {
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        yield { type: "delta", token: "a" };
+        yield {
+          type: "done",
+          response: { ...(await Promise.resolve(okResponse("example-chat-model"))), ...patch },
+        };
+      },
+    };
+    await drainStream(gatewayWith(adapter, log).chatStream(REQUEST)).catch(() => undefined);
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    expect(streamCompleted.extra?.finishReason).toBe(want);
+    const persisted = expectActivityLogProof(
+      "gateway.stream.completed.emitted-line",
+      formatActivityLogProofLine(streamCompleted),
+    );
+    expect(persisted).toMatchObject({ finishReason: want });
+  });
+
   // `keiko support analyze --correlation-id <runId>` must show the model calls of a run: the lines of
   // a call carry the enclosing run as their parent, through the real registered formatter.
   it("stamps the enclosing run as parentCorrelationId on every line of a call", async () => {

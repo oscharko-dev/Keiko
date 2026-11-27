@@ -1708,7 +1708,7 @@ function streamedPayload(acc: StreamAccumulator): Record<string, unknown> {
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };
   return {
-    choices: [{ message, finish_reason: acc.finishReason }],
+    choices: [{ message, ...(acc.sawFinishReason ? { finish_reason: acc.finishReason } : {}) }],
     ...(acc.usage === undefined ? {} : { usage: acc.usage }),
   };
 }

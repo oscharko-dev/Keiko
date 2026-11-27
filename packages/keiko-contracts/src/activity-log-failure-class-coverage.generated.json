@@ -32948,6 +32948,12 @@
               "required": true
             },
             {
+              "name": "finishReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "firstTokenKind",
               "type": "string",
               "dataClass": "closed-enum",

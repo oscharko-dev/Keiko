@@ -571,6 +571,14 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
+    // How the provider ended the answer, so a cut-off at the output limit (`length`) is read off the
+    // line instead of inferred from `completionTokens`. `unknown`: none the gateway recognizes.
+    finishReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stop", "length", "tool_calls", "content_filter", "unknown"],
+    },
     ...REASONING_COMPLETION_FIELDS,
   },
   causal: "correlation",
@@ -1362,6 +1370,16 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
   return { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
 }
 
+type StreamFinishReason = "stop" | "length" | "tool_calls" | "content_filter" | "unknown";
+
+// The finish reason the stream-completed line records: a reason the provider did not report, or an
+// error/cancelled finish (those surface as failures elsewhere), is `unknown`, never a guessed `stop`.
+function streamFinishReason(response: NormalizedResponse | undefined): StreamFinishReason {
+  if (response === undefined || response.finishReasonUnreported === true) return "unknown";
+  const { finishReason } = response;
+  return finishReason === "error" || finishReason === "cancelled" ? "unknown" : finishReason;
+}
+
 type ReasoningDisposition = "none" | "forwarded" | "discarded";
 
 interface ReasoningCompletion {
@@ -1950,6 +1968,7 @@ export class Gateway {
     this.logStreamCompleted(ids, route, chunkCount, elapsed(), {
       firstOutput,
       usage: streamUsageIfSupplied(terminalResponse?.usage),
+      finishReason: streamFinishReason(terminalResponse),
       reasoning:
         terminalResponse === undefined
           ? undefined
@@ -2198,6 +2217,7 @@ export class Gateway {
     terminal: {
       readonly firstOutput: FirstOutput | undefined;
       readonly usage: StreamTerminalUsage | undefined;
+      readonly finishReason: StreamFinishReason;
       readonly reasoning: ReasoningCompletion | undefined;
     },
   ): void {
@@ -2214,6 +2234,7 @@ export class Gateway {
             ? {}
             : { firstTokenMs: terminal.firstOutput.ms, firstTokenKind: terminal.firstOutput.kind }),
           ...terminal.usage,
+          finishReason: terminal.finishReason,
           ...terminal.reasoning,
         },
       ),

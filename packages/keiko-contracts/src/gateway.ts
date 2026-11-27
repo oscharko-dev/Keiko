@@ -946,6 +946,11 @@ export interface NormalizedResponse {
   readonly modelId: string;
   readonly content: string;
   readonly finishReason: FinishReason;
+  /**
+   * Set by the gateway when the provider reported no finish reason it recognizes, so `finishReason`
+   * above is the default `stop`, not a measurement. Absent when the provider reported one.
+   */
+  readonly finishReasonUnreported?: true | undefined;
   readonly toolCalls: readonly NormalizedToolCall[];
   readonly structuredOutput: Record<string, unknown> | null;
   readonly usage: UsageMetadata;

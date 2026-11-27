@@ -545,6 +545,24 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
     });
   });
 
+  // The provider's finish reason is what tells an answer cut at the output limit from a finished
+  // one; a frame without a recognizable reason is reported as unreported, never as a measured stop.
+  it.each([
+    ["stop", [delta("a"), finish("stop"), DONE], "stop", false],
+    ["length", [delta("a"), finish("length"), DONE], "length", false],
+    ["a missing reason", [delta("a"), DONE], "stop", true],
+    ["an unknown reason", [delta("a"), finish("function_call"), DONE], "stop", true],
+  ] as const)(
+    "reports the finish reason of a streamed answer: %s",
+    async (_name, frames, reason, unreported) => {
+      const answer = await answerOf(
+        adapterWith(() => Promise.resolve(sse([...frames]))).callStream(REQUEST, CONFIG, BOUNDS),
+      );
+      expect(answer.finishReason).toBe(reason);
+      expect(answer.finishReasonUnreported === true).toBe(unreported);
+    },
+  );
+
   it.each([
     [
       "an upstream rate limit",
