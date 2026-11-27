@@ -54,7 +54,7 @@ async function readFiles(
   const files: GitStageFile[] = [];
   let size = 0;
   for (const path of paths) {
-    const file = await readGitStageFile(root, path, { fs });
+    const file = await readGitStageFile(root, path, { fs }); // NOSONAR typescript:S9382 -- the selection's byte bound is checked before the next file is read
     size += file.bytes.length;
     if (size > GIT_STAGE_CANDIDATE_MAX_BYTES) throw new Error("git-stage-candidate-too-large");
     files.push(file);
@@ -192,7 +192,7 @@ async function indexEntries(
     const sha =
       file.mode === "0"
         ? "0".repeat(hashLength)
-        : await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), true);
+        : await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
@@ -208,7 +208,7 @@ export async function gitStageFilesSupported(
   const classes = await stageIndexClasses(ctx, files, lineEndings);
   for (const file of files) {
     if (file.mode === "0") continue;
-    const sha = await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), false);
+    const sha = await stagedObjectId(ctx, file, lineEndings, classes.get(file.path), false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
     if (sha === undefined) return false;
   }
   return true;
