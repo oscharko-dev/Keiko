@@ -125,6 +125,12 @@ describe("readVerifiedCommitReview with quoted Git paths", () => {
     });
   });
 
+  it("refuses a review whose file name holds the rename arrow", async () => {
+    const root = stagedRepo("arrow name", "dir/a \u2192 b.js");
+    const read = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
+    expect(read).toEqual({ incomplete: "diff-truncated" });
+  });
+
   it("says counts are unavailable when a count passes the contract bound", async () => {
     const root = stagedRepo("huge count", "dir/many.txt");
     writeFileSync(join(root, "dir/many.txt"), "x\n".repeat(1_000_001));

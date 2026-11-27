@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -85,6 +86,32 @@ describe("the commit message policy follows the repository (G-4)", () => {
     );
     expect(decision).toMatchObject({ mode: "keiko-conventional", source: "fallback" });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "does not open a FIFO planted as package.json, and falls back to the strict policy",
+    async () => {
+      execFileSync("mkfifo", [join(root, "package.json")]);
+      const decision = await resolveGovernedCommitMessagePolicyDecision(
+        { editorSettingsControl: controlWith("keiko-conventional", "builtInDefault") },
+        root,
+      );
+      expect(decision).toMatchObject({ mode: "keiko-conventional", source: "fallback" });
+    },
+    10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlinked commitlint config and falls back to the strict policy",
+    async () => {
+      writeFileSync(join(root, "real.js"), "export default {};\n");
+      symlinkSync(join(root, "real.js"), join(root, "commitlint.config.js"));
+      const decision = await resolveGovernedCommitMessagePolicyDecision(
+        { editorSettingsControl: controlWith("keiko-conventional", "builtInDefault") },
+        root,
+      );
+      expect(decision).toMatchObject({ mode: "keiko-conventional", source: "fallback" });
+    },
+  );
 
   it("logs the real mode of a configured policy", async () => {
     const native = gitCommitMessagePolicyForMode("repository-native");

@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { GitCommitMessagePolicy } from "@oscharko-dev/keiko-contracts";
@@ -42,12 +43,33 @@ const COMMITLINT_CONFIG_FILES: readonly string[] = [
 ];
 const PACKAGE_JSON_MAX_BYTES = 1_048_576;
 
+// Opened without following a link and without blocking, then re-checked on the open handle, so a
+// file swapped for a link or a FIFO after the first check is refused too.
+async function readRegularFile(path: string): Promise<string> {
+  const handle = await open(
+    path,
+    constants.O_RDONLY |
+      constants.O_NONBLOCK |
+      ((constants as Partial<typeof constants>).O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.size > PACKAGE_JSON_MAX_BYTES)
+      throw new Error("commit-policy-manifest-not-regular");
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readOptionalText(path: string): Promise<string | undefined> {
   try {
-    // The size is asked first: an oversize manifest is never loaded, and is never read as "none".
-    if ((await stat(path)).size > PACKAGE_JSON_MAX_BYTES)
-      throw new Error("commit-policy-manifest-too-large");
-    return await readFile(path, "utf8");
+    // Only a regular file within the bound is read; a link, a FIFO or any other special file is
+    // never opened for reading (it could stall the commit) and is never read as "none".
+    const entry = await lstat(path);
+    if (!entry.isFile()) throw new Error("commit-policy-manifest-not-regular");
+    if (entry.size > PACKAGE_JSON_MAX_BYTES) throw new Error("commit-policy-manifest-too-large");
+    return await readRegularFile(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR" || code === "EISDIR") return undefined;

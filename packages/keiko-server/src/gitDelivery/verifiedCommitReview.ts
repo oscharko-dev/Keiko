@@ -32,15 +32,23 @@ export type VerifiedCommitReviewRead =
     }
   | { readonly incomplete: VerifiedCommitReviewIncompleteCause };
 
+// The rename label joins two names with an arrow, so a name that holds one could pass for a rename.
+// Such a review is refused instead of shown ambiguously.
+const RENAME_ARROW = "\u2192";
+
 function placeable(entry: GitStagedChangeEntry): boolean {
   return [entry.path, entry.oldPath].every(
-    (path) => path === undefined || (!path.includes("�") && isRepositoryRelativePath(path)),
+    (path) =>
+      path === undefined ||
+      (!path.includes("\uFFFD") && !path.includes(RENAME_ARROW) && isRepositoryRelativePath(path)),
   );
 }
 
 // A rename lists both names, so the person sees what is removed as well as what appears.
 function reviewLabel(entry: GitStagedChangeEntry): string {
-  return entry.oldPath === undefined ? entry.path : `${entry.oldPath} \u2192 ${entry.path}`;
+  return entry.oldPath === undefined
+    ? entry.path
+    : `${entry.oldPath} ${RENAME_ARROW} ${entry.path}`;
 }
 
 /**
