@@ -603,21 +603,38 @@ function insertPlan(
  * so. Once the next execute after a proposal completed, the proposal is no decision anyone waits on:
  * in Full access it read "Waiting for approval" for good, beside the commit that happened (#4491).
  * Any other later step, or an execute that was refused or failed, leaves the proposal as it was.
+ * With several proposals open at once the row cannot tell which one an execute redeemed, so they
+ * stay waiting until as many completed executes as proposals followed.
  */
 function markSupersededGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
-  let takenUp = false;
   const marked = [...items];
-  for (let index = marked.length - 1; index >= 0; index -= 1) {
-    const item = marked[index];
-    if (item?.kind !== "tool") continue;
+  let open: number[] = [];
+  let redeemed = 0;
+  marked.forEach((item, index) => {
+    if (item.kind !== "tool") return;
     if (item.tool.tool === "keiko_git_execute") {
-      takenUp = executeCompleted(item.tool);
-    } else if (takenUp && item.tool.presentation?.gitOutcome === "waiting-for-approval") {
-      marked[index] = { ...item, superseded: true };
-      takenUp = false;
+      if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
+    } else if (item.tool.presentation?.gitOutcome === "waiting-for-approval") {
+      open.push(index);
     }
-  }
+    // The wire row carries no proposal id, so an execute cannot be paired with the one proposal it
+    // redeemed when several are open: the facade lets any of them be redeemed. Keep every open
+    // proposal waiting until the completed executes at least equal their number, so none is ever
+    // shown as prepared that may still wait for a decision.
+    if (open.length > 0 && redeemed >= open.length) {
+      markSuperseded(marked, open);
+      open = [];
+      redeemed = 0;
+    }
+  });
   return marked;
+}
+
+function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {
+  for (const at of indexes) {
+    const item = marked[at];
+    if (item?.kind === "tool") marked[at] = { ...item, superseded: true };
+  }
 }
 
 function executeCompleted(tool: CodingSafeActivityTool): boolean {

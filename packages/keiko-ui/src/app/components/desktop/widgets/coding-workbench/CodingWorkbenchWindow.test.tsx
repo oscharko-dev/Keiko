@@ -121,6 +121,22 @@ vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
 }));
 // The central MCP read is not part of what this file proves; a stable empty list keeps it hermetic.
+// A windowed timeline list scrolls by itself inside the stream; this probe lets a test report one
+// whose reader scrolled up, around the real Timeline.
+const listFollowProbe = vi.hoisted(() => ({ active: false, resume: vi.fn() }));
+vi.mock("./CodingWorkbenchSections", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./CodingWorkbenchSections")>();
+  const react = await import("react");
+  const { ListFollowContext } = await import("./CodingWorkbenchJumpToLatest");
+  const Timeline = (props: React.ComponentProps<typeof original.Timeline>): React.ReactNode => {
+    const report = react.useContext(ListFollowContext);
+    react.useEffect(() => {
+      if (listFollowProbe.active) report?.({ paused: true, resume: listFollowProbe.resume });
+    }, [report]);
+    return react.createElement(original.Timeline, props);
+  };
+  return { ...original, Timeline };
+});
 vi.mock("../../useMcpServerChoices", () => {
   const choices = { servers: [], loading: false, failed: false, reload: (): void => undefined };
   return { useMcpServerChoices: (): typeof choices => choices };
@@ -2938,6 +2954,27 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(liveActions.decideApproval).toHaveBeenCalledWith("approved");
     expect(scrollTop.value).toBe(1720);
+  });
+
+  it("resumes a windowed timeline list the reader scrolled up in once an approval is decided", async () => {
+    const user = userEvent.setup();
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    listFollowProbe.active = true;
+    listFollowProbe.resume.mockClear();
+    try {
+      renderWorkbench(deliveryApprovalState("push"));
+      expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Approve once" }));
+
+      expect(listFollowProbe.resume).toHaveBeenCalledTimes(1);
+    } finally {
+      listFollowProbe.active = false;
+    }
   });
 
   // Seen in the 1.5.9 release walk (#4491): a Full access run created its own task branch, but the

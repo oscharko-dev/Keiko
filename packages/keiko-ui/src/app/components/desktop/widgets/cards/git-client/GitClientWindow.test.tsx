@@ -4729,6 +4729,31 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     expect(outcome).toHaveTextContent("Succeeded");
   });
 
+  it("keeps an unedited generated draft when a stage click is refused", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+        blockReason: "policy-denied",
+      })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+    await screen.findByTestId("git-staging-outcome");
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
+  });
+
   it("surfaces a blocked staging outcome without refreshing", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusRich()),

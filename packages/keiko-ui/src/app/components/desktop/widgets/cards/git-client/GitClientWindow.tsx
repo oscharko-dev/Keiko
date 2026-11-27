@@ -1343,6 +1343,12 @@ function retryRepositoryFailure(
   if (retry.kind === "hand-off") actions.handOffAgain(retry.path);
 }
 
+const INDEX_MAY_HAVE_CHANGED: ReadonlySet<GitMutationOutcome["status"]> = new Set([
+  "succeeded",
+  "failed",
+  "recovery-required",
+]);
+
 function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
   return response?.available === true ? response.branches : EMPTY_BRANCHES;
 }
@@ -1476,9 +1482,17 @@ export function GitClientWindow({
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runStaging = staging.runMutation;
   const runStagingMutation = useCallback(
-    (...args: Parameters<typeof runStaging>): ReturnType<typeof runStaging> => {
-      setStagingEpoch((epoch): number => epoch + 1);
-      return runStaging(...args);
+    (op: Parameters<typeof runStaging>[0]): ReturnType<typeof runStaging> => {
+      // Moves the draft revision only when the index may have changed. It moves before the outcome
+      // reaches the flow, which is what invalidates the repository state, so the status read that
+      // follows already sees the new epoch. A refused click (blocked, approval required) staged
+      // nothing and keeps an unedited generated draft.
+      runStaging(async () => {
+        const outcome = await op();
+        if (INDEX_MAY_HAVE_CHANGED.has(outcome.status))
+          setStagingEpoch((epoch): number => epoch + 1);
+        return outcome;
+      });
     },
     [runStaging],
   );
