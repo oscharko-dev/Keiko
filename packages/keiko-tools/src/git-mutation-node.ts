@@ -277,7 +277,7 @@ async function readStageConfig(ctx: RunContext): Promise<StageConfig | undefined
   const result = await runCommand(
     {
       command: "git",
-      args: ["config", "--get-regexp", STAGE_CONFIG_KEYS],
+      args: ["config", "-z", "--get-regexp", STAGE_CONFIG_KEYS],
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
@@ -307,22 +307,30 @@ async function configuredStageLineEndings(
 // host, whose SYSTEM scope sets `core.autocrlf=true`, even after the repository opts out locally.
 // `core.safecrlf` must still resolve to `false`. `core.autocrlf` `false` stages the verified bytes
 // as they are; `true` (also a bare key) and `input` admit a file only when Git's built-in conversion
-// of it round-trips exactly (`stageExactFiles`). Any other value or unparsable line fails closed.
-const FILTER_DRIVER_LINE = /^filter\.(.+)\.(?:clean|smudge|process|required)(?: .*)?$/iu;
-const CRLF_LINE = /^(core\.(?:autocrlf|safecrlf))(?: (.*))?$/iu;
+// of it round-trips exactly (`stageExactFiles`). Any other value or unparsable record fails
+// closed. `-z` ends each record with NUL and separates its key from its value with the first
+// newline, so a value holding a newline (a filter command, say) can never pose as another key
+// (PR #4568 review); a record without a newline is a bare key.
+const FILTER_DRIVER_KEY = /^filter\.(.+)\.(?:clean|smudge|process|required)$/iu;
+const CRLF_KEY = /^core\.(?:autocrlf|safecrlf)$/iu;
 
 function effectiveStageConfig(stdout: string): StageConfig | undefined {
   const effective = new Map<string, string>();
   const drivers = new Set<string>();
-  for (const line of stdout.trim().split(/\r?\n/u)) {
-    const driver = FILTER_DRIVER_LINE.exec(line)?.[1];
+  if (!stdout.endsWith("\0")) return undefined;
+  for (const record of stdout.slice(0, -1).split("\0")) {
+    const newline = record.indexOf("\n");
+    const key = newline === -1 ? record : record.slice(0, newline);
+    const driver = FILTER_DRIVER_KEY.exec(key)?.[1];
     if (driver !== undefined) {
       drivers.add(driver);
       continue;
     }
-    const match = CRLF_LINE.exec(line);
-    if (match?.[1] === undefined) return undefined;
-    effective.set(match[1].toLowerCase(), (match[2] ?? "true").toLowerCase());
+    if (!CRLF_KEY.test(key)) return undefined;
+    effective.set(
+      key.toLowerCase(),
+      newline === -1 ? "true" : record.slice(newline + 1).toLowerCase(),
+    );
   }
   return stageConfigOf(effective, drivers);
 }

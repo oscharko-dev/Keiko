@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdtempSync,
@@ -648,6 +649,21 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
     git(["config", "core.autocrlf", "input"]);
     git(["config", "core.safecrlf", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  // PR #4568 review: a configured value may hold a newline. Read as lines, the continuation of a
+  // filter command would pose as a later `core.autocrlf` and override the effective one.
+  it("never reads a newline inside a configured value as another key", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = input\n\tsafecrlf = false\n");
+    appendFileSync(
+      join(root, ".git", "config"),
+      '[filter "lab"]\n\tclean = "cat\\ncore.autocrlf false"\n',
+      "utf8",
+    );
+    expect(git(["config", "--get", "filter.lab.clean"])).toContain("\ncore.autocrlf false");
     writeFileSync(join(root, "a.txt"), "hello\r\n", "utf8");
 
     expect(await stageSupported()).toBe(false);
