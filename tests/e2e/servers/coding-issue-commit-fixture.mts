@@ -192,7 +192,11 @@ class CommitFixture implements CodingIssueCommitFixture {
     this.write(this.latestPhase, this.latestResult);
     if (event.tool === "keiko_changeset_edit" && event.phase === "completed") {
       this.staging ??= this.stageCandidate();
-      void this.staging.catch(() => undefined);
+      // A failed staging is reported on stderr (the fixture's observation file keeps its phase), so
+      // a run that stalls at "stage-proposed" names its cause instead of timing out silently.
+      void this.staging.catch((error: unknown) => {
+        process.stderr.write(`[commit-fixture] staging failed: ${String(error)}\n`);
+      });
     }
   }
   private async invoke(control: Control): Promise<boolean> {
@@ -312,7 +316,10 @@ class CommitFixture implements CodingIssueCommitFixture {
     else if (proposed.git.status !== "ready") throw new Error("commit-fixture-stage-refused");
     const staged = await this.stageTool("execute", proposed.git.proposalId);
     if (!("git" in staged) || staged.git.kind !== "stage" || staged.git.status !== "succeeded") {
-      throw new Error("commit-fixture-stage-failed");
+      const git = "git" in staged ? staged.git : undefined;
+      throw new Error(
+        `commit-fixture-stage-failed:${String(staged.status)}:${JSON.stringify(git)}`,
+      );
     }
     this.write("candidate-staged", staged);
   }
