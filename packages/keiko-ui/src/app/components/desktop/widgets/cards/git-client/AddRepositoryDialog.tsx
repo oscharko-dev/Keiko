@@ -91,6 +91,17 @@ interface AddRepositoryDialogProps {
 // `AddMode` is a UI-only label ("open" reads as "open local repository" in the mode tabs); the
 // wire vocabulary (PR #3625 review) names the actual git-client seam method invoked instead, so a
 // reader of the activity log never has to know this component's own internal mode naming.
+// An example path in the form of the person's own operating system: a Windows browser shows a drive
+// path, every other one a POSIX path (#4491, Windows 1.5.9 lab).
+export function examplePath(
+  folder: string,
+  userAgent: string = globalThis.navigator.userAgent,
+): string {
+  return userAgent.includes("Windows")
+    ? `C:\\Users\\me\\Work\\${folder}`
+    : `/Users/me/Work/${folder}`;
+}
+
 function gitClientAddOperation(mode: AddMode): ClientGitClientOperationKind {
   return mode === "clone" ? "repository-clone" : "repository-register";
 }
@@ -311,7 +322,7 @@ export function AddRepositoryDialog({
                 value={destinationPath}
                 onChange={(event) => setDestinationPath(event.target.value)}
                 aria-label={t("gitClientWindow.addRepository.cloneDestination")}
-                placeholder="/Users/me/Work/repo"
+                placeholder={examplePath("repo")}
               />
             </label>
           </>
@@ -325,7 +336,7 @@ export function AddRepositoryDialog({
                 value={localPath}
                 onChange={(event) => setLocalPath(event.target.value)}
                 aria-label={t("gitClientWindow.addRepository.localPath")}
-                placeholder="/Users/me/Work/existing-repo"
+                placeholder={examplePath("existing-repo")}
               />
               <button
                 type="button"
