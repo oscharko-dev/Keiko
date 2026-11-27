@@ -1196,9 +1196,10 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "proposal-limit":
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
   // #4068: Git for Windows sets core.autocrlf=true for the whole system, so every stage there was
-  // refused and the model guessed at file locks and hooks.
+  // refused and the model guessed at file locks and hooks. Since #4491 a file whose conversion
+  // checks out its verified bytes again is staged; this names what is still refused.
   "unsupported-transformation":
-    "Git would change these files' bytes while staging them: the effective core.autocrlf or core.safecrlf is not false (Git for Windows sets core.autocrlf=true by default), or a .gitattributes text, eol or filter rule applies. Keiko stages only the exact bytes it verified. Do not retry. Report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
+    "Git would change these files' bytes while staging them, and the stored form would not check out as the bytes Keiko verified: a file mixes CRLF and LF line breaks while core.autocrlf is true and its staged version holds no CRLF, has CRLF line breaks while core.autocrlf is input, the effective core.safecrlf is not false, or a .gitattributes text, eol, crlf, filter, ident or working-tree-encoding rule applies. Do not retry with the same bytes. If a file you wrote mixes line breaks, rewrite it with the line breaks the file already uses (CRLF in a CRLF checkout) and propose again; otherwise report to the operator that this repository must opt out locally, for example with `git config core.autocrlf false`, before Keiko can stage and commit here.",
 };
 
 // An unstage proposal is refused for its own reasons (#3902 AC2).

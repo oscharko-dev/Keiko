@@ -839,7 +839,7 @@ export class RuntimeGitService {
       this.now(),
       proposalId,
     );
-    if (!(await readGitStageSupport(runtimeGitReadDeps(context, execution), paths)))
+    if (!(await readGitStageSupport(runtimeGitReadDeps(context, execution), paths, workspaceFs)))
       return this.result(proposal, "blocked", "unsupported-transformation");
     this.proposals.set(proposalId, proposal);
     return this.options.mode() === "governed-assist"

@@ -2319,7 +2319,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   checks them, together with the branch, inside the same index transaction as staging and again
   just before the reviewed index replaces the live one, with the run's authority at the swap; a
   change that lands after the review or an approval is never accepted as the effect's new snapshot
-  (PR #4064 review). It is an option of the stage tool rather than a tool of its own, so the
+  (PR #4064 review). Staging writes objects from the verified bytes and never runs a filter
+  driver; the effective `core.safecrlf` must be `false` and the paths may carry no `text`, `eol`,
+  `crlf`, `filter`, `ident` or `working-tree-encoding` attribute. Under the effective
+  `core.autocrlf` `false` the verified bytes are staged as they are. Under `true` or `input` the
+  staged object is the one Git's own `git add` stores, admitted only when it checks the verified
+  bytes out again byte for byte: a file Git leaves unchanged, or whose index entry already stores a
+  CR (Git then keeps the new bytes), is staged as its exact bytes; with `true`, a text file whose
+  every line break is CRLF and that holds no other CR is staged as its LF form. Everything else
+  (mixed line breaks over an index entry without CR, CRLF under `input`, a conversion over a binary
+  index entry) stays `unsupported-transformation`. Git for Windows sets `core.autocrlf=true`
+  system-wide, so before this every governed commit in an ordinary Windows checkout was refused
+  (#4491). It is an option of the stage tool rather than a tool of its own, so the
   catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
   a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely

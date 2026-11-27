@@ -4,7 +4,7 @@
 // resolved the root through the plain node port and were refused (run 5, 2026-09-10 -- the raw
 // status reader failed first, the staging step would have failed the same way one step later).
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,7 +12,9 @@ import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { GIT_STAGE_CANDIDATE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
+import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
 import {
   readGitStageCandidate,
   stageExactFiles,
@@ -76,6 +78,25 @@ function context(managed: string, fs?: GitStageEffectContext["fs"]): GitStageEff
         truncated: false,
       });
     },
+    indexLineBreaks: (paths) =>
+      readGitIndexLineBreaks(
+        { workspace: workspaceInfo(managed), processEnv: { PATH: process.env.PATH ?? "" } },
+        paths,
+      ),
+  };
+}
+
+function workspaceInfo(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: "stage",
+    version: undefined,
+    testFramework: "vitest",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
   };
 }
 
@@ -138,5 +159,129 @@ describe("exact-file staging inside a root below an always-denied segment", () =
     ).resolves.toBe(true);
     expect(git(managed, ["diff", "--cached", "--name-only"]).trim()).toBe("a.txt");
     expect(git(managed, ["show", ":a.txt"])).toBe("v2\n");
+  });
+});
+
+// #4491 (Windows 1.5.9 lab): Git for Windows sets `core.autocrlf=true` for the whole system and
+// checks text files out with CRLF, so every governed stage there was refused and no Workbench run
+// could commit. A file Git converts is now staged as Git's own built-in conversion, but only when
+// that conversion checks the verified bytes out again exactly; every other case stays refused.
+describe("exact-file staging under the effective core.autocrlf", () => {
+  function plainRepository(
+    worktree: Uint8Array | string,
+    committed: Uint8Array | string = "v1\n",
+  ): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-eol-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    writeFileSync(join(base, "a.txt"), committed);
+    git(base, ["-c", "core.autocrlf=false", "add", "a.txt"]);
+    git(base, ["-c", "commit.gpgsign=false", "commit", "-qm", "base"]);
+    writeFileSync(join(base, "a.txt"), worktree);
+    return base;
+  }
+
+  function checkedOut(repo: string): string {
+    return git(repo, [
+      "-c",
+      "core.autocrlf=true",
+      "cat-file",
+      "--filters",
+      "--path=a.txt",
+      ":a.txt",
+    ]);
+  }
+
+  // The oracle: the object Git's own `git add` stores for the same bytes under autocrlf=true, staged
+  // into a copy of the index so the repository under test is left alone.
+  function gitAddObject(repo: string): string {
+    const oracleIndex = join(repo, ".git", "oracle-index");
+    copyFileSync(join(repo, ".git", "index"), oracleIndex);
+    git(
+      repo,
+      ["-c", "core.autocrlf=true", "-c", "core.safecrlf=false", "add", "a.txt"],
+      undefined,
+      oracleIndex,
+    );
+    return git(repo, ["rev-parse", ":a.txt"], undefined, oracleIndex).trim();
+  }
+
+  it("stages Git's LF form of a CRLF file under autocrlf=true, which checks out the verified bytes", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    const expected = gitAddObject(repo);
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    expect(git(repo, ["rev-parse", ":a.txt"]).trim()).toBe(expected);
+    expect(git(repo, ["show", ":a.txt"])).toBe("v1\nv2\n");
+    expect(checkedOut(repo)).toBe("v1\r\nv2\r\n");
+    expect(git(repo, ["-c", "core.autocrlf=true", "diff", "--name-only"]).trim()).toBe("");
+  });
+
+  it("stages a file Git leaves unchanged under autocrlf=true as its exact bytes", async () => {
+    const repo = plainRepository("v1\nv3\n");
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    expect(git(repo, ["show", ":a.txt"])).toBe("v1\nv3\n");
+  });
+
+  it("stages a file with a stray carriage return as its exact bytes, which Git does not convert", async () => {
+    const repo = plainRepository("v1\r\nv\r2\r\n");
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    expect(git(repo, ["show", ":a.txt"])).toBe("v1\r\nv\r2\r\n");
+    expect(checkedOut(repo)).toBe("v1\r\nv\r2\r\n");
+  });
+
+  it("stages a binary file with CRLF bytes as its exact bytes, as Git does", async () => {
+    const bytes = Buffer.from("a\r\n\0b\r\n", "binary");
+    const repo = plainRepository(bytes);
+    await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+      true,
+    );
+    expect(git(repo, ["cat-file", "-s", ":a.txt"]).trim()).toBe(String(bytes.length));
+  });
+
+  // Audit of #4491: Git keeps the bytes of a path whose index entry already stores a CR
+  // (`has_crlf_in_index`), so a repository that stores CRLF keeps it; converting there rewrote every
+  // line of the file in the commit.
+  it.each([
+    ["an all-CRLF file", "v1\r\nv2\r\n"],
+    ["a mixed file", "v1\r\nv2\n"],
+  ])(
+    "stages %s as its exact bytes when the index entry already stores CRLF, as git add does",
+    async (_case, worktree) => {
+      const repo = plainRepository(worktree, "v1\r\n");
+      const expected = gitAddObject(repo);
+      await expect(stageExactFiles(context(repo), request(repo), "autocrlf-true")).resolves.toBe(
+        true,
+      );
+      expect(git(repo, ["rev-parse", ":a.txt"]).trim()).toBe(expected);
+      expect(git(repo, ["show", ":a.txt"])).toBe(worktree);
+      expect(git(repo, ["-c", "core.autocrlf=true", "diff", "--name-only"]).trim()).toBe("");
+    },
+  );
+
+  it.each([
+    ["mixed line breaks under autocrlf=true", "v1\r\nv2\n", "autocrlf-true", "v1\n"],
+    ["CRLF line breaks under autocrlf=input", "v1\r\nv2\r\n", "autocrlf-input", "v1\n"],
+    ["a CRLF file over a binary index entry", "v1\r\nv2\r\n", "autocrlf-true", "a\0b\n"],
+  ] as const)(
+    "refuses %s and leaves the index alone",
+    async (_case, worktree, lineEndings, committed) => {
+      const repo = plainRepository(worktree, committed);
+      await expect(stageExactFiles(context(repo), request(repo), lineEndings)).resolves.toBe(false);
+      expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+    },
+  );
+
+  it("keeps staging the raw bytes when no conversion is configured", async () => {
+    const repo = plainRepository("v1\r\nv2\r\n");
+    await expect(stageExactFiles(context(repo), request(repo))).resolves.toBe(true);
+    expect(git(repo, ["show", ":a.txt"])).toBe("v1\r\nv2\r\n");
   });
 });

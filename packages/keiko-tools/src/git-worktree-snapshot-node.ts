@@ -675,6 +675,34 @@ export async function readGitIndexEntries(
     false,
   );
 }
+const INDEX_EOL_ENTRY = /^i\/(\S*)\s+w\/\S*\s+attr\/[^\t]*\t([^\0]+)$/u;
+/**
+ * The line-break class Git reports for each named path's index entry (`git ls-files --eol`):
+ * `lf`, `crlf`, `mixed`, `none` or `-text`. A path without an index entry is absent from the map; a
+ * path listed more than once (an unresolved merge) maps to `conflict`. Unparseable output throws.
+ */
+export async function readGitIndexLineBreaks(
+  deps: NodeGitWorktreeReaderDeps,
+  paths: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  const output = await runRead(metadataReadContext(deps), [
+    "ls-files",
+    "--eol",
+    "-z",
+    "--",
+    ...paths.map((path) => `:(literal)${path}`),
+  ]);
+  const classes = new Map<string, string>();
+  if (output === "") return classes;
+  if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
+  for (const line of output.slice(0, -1).split("\0")) {
+    const match = INDEX_EOL_ENTRY.exec(line);
+    if (match?.[1] === undefined || match[2] === undefined)
+      throw new GitWorktreeReadError("git eol listing is malformed");
+    classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
+  }
+  return classes;
+}
 export async function readGitTreeEntries(
   deps: NodeGitWorktreeReaderDeps,
   sha: string,

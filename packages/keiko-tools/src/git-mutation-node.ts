@@ -11,7 +11,7 @@
 // because it carries the Node execution effect; the pure port, builders, and rules it implements are
 // re-exported from the package's main barrel.
 
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type {
   GitDeliveryExecutionErrorCode,
@@ -53,6 +53,7 @@ import {
 import {
   ensureGitLazyFetchGuardSupported,
   readGitFullRef,
+  readGitIndexLineBreaks,
   readGitIndexTreeDigest,
   readGitCommitIdentity,
   readGitRevision,
@@ -62,8 +63,10 @@ import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import {
   stageExactFiles,
   gitStageAttributesSupported,
+  gitStageFilesSupported,
   unstageExactFiles,
   type GitStageEffectContext,
+  type GitStageLineEndings,
 } from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 
@@ -260,7 +263,9 @@ async function runPlan(
   return executionResult("succeeded", totalDuration);
 }
 
-async function configuredStageNormalizationSupported(ctx: RunContext): Promise<boolean> {
+async function configuredStageLineEndings(
+  ctx: RunContext,
+): Promise<GitStageLineEndings | undefined> {
   const runDeps = {
     ...ctx.runDeps,
     commandRules: GIT_CONFIG_COMMAND_RULES,
@@ -276,27 +281,35 @@ async function configuredStageNormalizationSupported(ctx: RunContext): Promise<b
     },
     runDeps,
   );
-  if (result.truncated) return false;
-  if (result.exitCode === 1 && result.stdout.length === 0) return true;
-  return result.exitCode === 0 && effectiveNormalizationDisabled(result.stdout);
+  if (result.truncated) return undefined;
+  if (result.exitCode === 1 && result.stdout.length === 0) return "exact";
+  return result.exitCode === 0 ? effectiveStageLineEndings(result.stdout) : undefined;
 }
 
 // `--get-regexp` lists every scope that sets a key, in Git's own precedence order (system, global,
 // local, worktree, command line), and Git resolves a single-valued key to its LAST value. Only the
-// effective value decides whether `git add` would convert line endings: judging every scope refused
-// every repository on a stock Git for Windows host, whose SYSTEM scope sets `core.autocrlf=true`,
-// even after the repository opts out locally. A value Git would read as anything but `false` —
-// `true`, `input`, `warn`, or a bare key (true) — still fails closed, as does any unparsable line.
-function effectiveNormalizationDisabled(stdout: string): boolean {
+// effective value counts: judging every scope refused every repository on a stock Git for Windows
+// host, whose SYSTEM scope sets `core.autocrlf=true`, even after the repository opts out locally.
+// `core.safecrlf` must still resolve to `false`. `core.autocrlf` `false` stages the verified bytes
+// as they are; `true` (also a bare key) and `input` admit a file only when Git's built-in conversion
+// of it round-trips exactly (`stageExactFiles`). Any other value or unparsable line fails closed.
+function effectiveStageLineEndings(stdout: string): GitStageLineEndings | undefined {
   const effective = new Map<string, string>();
   for (const line of stdout.trim().split(/\r?\n/u)) {
     const match = /^(core\.(?:autocrlf|safecrlf))(?: (.*))?$/iu.exec(line);
     const key = match?.[1];
-    if (key === undefined) return false;
-    effective.set(key.toLowerCase(), match?.[2] ?? "");
+    if (key === undefined) return undefined;
+    effective.set(key.toLowerCase(), (match?.[2] ?? "true").toLowerCase());
   }
-  return [...effective.values()].every((value) => value.toLowerCase() === "false");
+  if ((effective.get("core.safecrlf") ?? "false") !== "false") return undefined;
+  return AUTOCRLF_LINE_ENDINGS.get(effective.get("core.autocrlf") ?? "false");
 }
+
+const AUTOCRLF_LINE_ENDINGS: ReadonlyMap<string, GitStageLineEndings> = new Map([
+  ["false", "exact"],
+  ["true", "autocrlf-true"],
+  ["input", "autocrlf-input"],
+]);
 
 async function execStage(
   ctx: RunContext,
@@ -304,13 +317,15 @@ async function execStage(
 ): Promise<GitDeliveryExecutionResult> {
   if (request.verified === undefined) return execPlan(ctx, () => buildStageArgv(request));
   try {
-    if (
-      !(await configuredStageNormalizationSupported(ctx)) ||
-      !(await verifiedFactsMatch(ctx, request))
-    )
+    const lineEndings = await configuredStageLineEndings(ctx);
+    if (lineEndings === undefined || !(await verifiedFactsMatch(ctx, request)))
       return failureFromExit(0, 0);
     if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
-    const succeeded = await stageExactFiles(verifiedIndexEffect(ctx, request), request);
+    const succeeded = await stageExactFiles(
+      verifiedIndexEffect(ctx, request),
+      request,
+      lineEndings,
+    );
     return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
   } catch (error) {
     return failureFromThrow(error, 0, 0);
@@ -349,6 +364,7 @@ function verifiedIndexEffect(
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     run: (argv, stdin, indexPath) =>
       runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+    indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
 }
 
@@ -618,17 +634,22 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
 export async function readGitStageSupport(
   deps: NodeGitMutationAdapterDeps,
   paths: readonly string[],
+  fs?: WorkspaceFs,
 ): Promise<boolean> {
   const ctx = buildRunContext(deps);
-  if (!(await configuredStageNormalizationSupported(ctx))) return false;
-  return gitStageAttributesSupported(
-    {
-      workspaceRoot: deps.workspace.root,
-      authorized: () => !ctx.signal.aborted,
-      check: () => Promise.resolve(!ctx.signal.aborted),
-      run: (argv, stdin) => runOne(ctx, argv, stdin),
-    },
-    paths,
+  const lineEndings = await configuredStageLineEndings(ctx);
+  if (lineEndings === undefined) return false;
+  const effect: GitStageEffectContext = {
+    workspaceRoot: deps.workspace.root,
+    fs: fs ?? workspaceFsOf(ctx.runDeps),
+    authorized: () => !ctx.signal.aborted,
+    check: () => Promise.resolve(!ctx.signal.aborted),
+    run: (argv, stdin) => runOne(ctx, argv, stdin),
+    indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
+  };
+  return (
+    (await gitStageAttributesSupported(effect, paths)) &&
+    (await gitStageFilesSupported(effect, paths, lineEndings))
   );
 }
 
