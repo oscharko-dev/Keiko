@@ -259,7 +259,38 @@ describe("verified commit at the sole mutation adapter", () => {
     const result = await adapter().commit(request);
     expect(result.outcome).toBe("failed");
     expect(result.errorCode).toBe("signature-failed");
+    expect(result.signing).toBe("configured");
     expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
+  });
+  it("signs the verified commit and reports `configured` while commit.gpgsign is on", async () => {
+    const result = await adapter().commit(await candidate());
+    expect(result.outcome).toBe("succeeded");
+    expect(result.signing).toBe("configured");
+    expectLastCommitSigned();
+  });
+  it("creates an unsigned verified commit, as Git would, when commit.gpgsign is not set", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    const request = await candidate();
+    const result = await adapter().commit(request);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.signing).toBe("not-configured");
+    expect(result.externalId).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["rev-parse", "HEAD^"])).toBe(bornSha(request.verified.head));
+    expect(git(["log", "-1", "--format=%G?"])).toBe("N");
+  });
+  it("creates an unsigned verified commit when commit.gpgsign is false", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    const result = await adapter().commit(await candidate());
+    expect(result.outcome).toBe("succeeded");
+    expect(result.signing).toBe("not-configured");
+    expect(git(["log", "-1", "--format=%G?"])).toBe("N");
+  });
+  it("still signs the verified commit when commit.gpgsign is malformed (fail closed)", async () => {
+    git(["config", "commit.gpgsign", "maybe"]);
+    const result = await adapter().commit(await candidate());
+    expect(result.signing).toBe("unknown-fail-closed");
+    expect(result.outcome).toBe("succeeded");
+    expectLastCommitSigned();
   });
   it("commits the approved tree and returns its exact SHA while preserving unrelated files", async () => {
     const request = await candidate();

@@ -268,8 +268,11 @@ export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPla
   return [["restore", "--staged", "--", ...assertPathspecs(req.pathspecs)]];
 }
 
-export function buildCommitArgv(req: GitCommitExecRequest): GitMutationArgvPlan {
-  const argv: string[] = ["commit", "--gpg-sign"];
+// `sign` is Git's effective `commit.gpgsign` for the repository (ADR-0006). A commit that is not to
+// be signed passes neither `--gpg-sign` nor `--no-gpg-sign`: Git then commits exactly as it would for
+// the person, and no hook or later configuration is overridden.
+export function buildCommitArgv(req: GitCommitExecRequest, sign: boolean): GitMutationArgvPlan {
+  const argv: string[] = sign ? ["commit", "--gpg-sign"] : ["commit"];
   if (req.allowEmpty) {
     argv.push("--allow-empty");
   }

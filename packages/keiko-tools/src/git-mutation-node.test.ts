@@ -37,6 +37,21 @@ async function continuePastLazyFetchGuardProbe(rec: SpawnRecorder): Promise<void
   await expect.poll(() => rec.calls().length).toBe(before + 1);
 }
 
+// A commit first reads Git's effective `commit.gpgsign` (a bare `git config` run, no guard probe) and
+// only then takes the lazy-fetch guard probe and its own spawn. `stdout` is the boolean Git answers.
+async function answerSigningRead(rec: SpawnRecorder, stdout: string, code = 0): Promise<void> {
+  const before = rec.calls().length;
+  expect(rec.calls()[before - 1]?.args).toEqual([
+    "config",
+    "--type=bool",
+    "--get",
+    "commit.gpgsign",
+  ]);
+  rec.child.stdout.emit("data", Buffer.from(stdout, "utf8"));
+  rec.child.emit("close", code, null);
+  await expect.poll(() => rec.calls().length).toBe(before + 1);
+}
+
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
   it("spawns exactly the governed literalized `git add -- <path>` and reports success on exit 0", async () => {
     const rec = recordingSpawn();
@@ -87,6 +102,8 @@ describe("node git mutation adapter — failure-classification branches", () => 
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    await answerSigningRead(rec, "true\n");
     await continuePastLazyFetchGuardProbe(rec);
     rec.child.stderr.emit("data", Buffer.from("error: gpg failed to sign the data\n", "utf8"));
     rec.child.emit("close", 1, null);
@@ -209,15 +226,17 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const rec = recordingSpawn();
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  await expect.poll(() => rec.calls().length).toBe(1);
+  await answerSigningRead(rec, "true\n");
   await continuePastLazyFetchGuardProbe(rec);
-  // calls: [0] lazy-fetch guard probe, [1] the real `commit` — the one
+  // calls: [0] the commit.gpgsign read, [1] lazy-fetch guard probe, [2] the real `commit` — the one
   // whose env this helper exists to inspect.
-  const commitEnv = rec.calls()[1]?.options.env ?? {};
+  const commitEnv = rec.calls()[2]?.options.env ?? {};
   rec.child.emit("close", 0, null);
   // The commit's success triggers a follow-up readGitRevision("HEAD"), which re-probes the guard
   // for itself (promisor status is deliberately never cached — see git-worktree-snapshot-node.ts)
   // before the real rev-parse: wait for that probe's OWN spawn to register before answering it.
-  await expect.poll(() => rec.calls()).toHaveLength(3);
+  await expect.poll(() => rec.calls()).toHaveLength(4);
   await continuePastLazyFetchGuardProbe(rec);
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
@@ -252,4 +271,33 @@ describe("node git mutation adapter — the user's git identity reaches the comm
     expect(env.GH_TOKEN).toBeUndefined();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
+});
+
+describe("node git mutation adapter — the signing flag follows commit.gpgsign at the argv", () => {
+  async function commitArgv(answer: string, code = 0): Promise<readonly string[]> {
+    const rec = recordingSpawn();
+    const pending = makeAdapter(rec).commit({ message: "m", allowEmpty: false });
+    await expect.poll(() => rec.calls().length).toBe(1);
+    await answerSigningRead(rec, answer, code);
+    await continuePastLazyFetchGuardProbe(rec);
+    const argv = rec.calls()[2]?.args ?? [];
+    rec.child.emit("close", 1, null);
+    await pending;
+    return argv;
+  }
+
+  it.each([
+    ["true\n", 0, true],
+    ["false\n", 0, false],
+    ["", 1, false],
+    ["", 128, true],
+    ["maybe\n", 0, true],
+  ])(
+    "answer %j / exit %i signs: %s, and never passes --no-gpg-sign",
+    async (answer, code, signs) => {
+      const argv = await commitArgv(answer, code);
+      expect(argv.includes("--gpg-sign")).toBe(signs);
+      expect(argv).not.toContain("--no-gpg-sign");
+    },
+  );
 });

@@ -1369,7 +1369,28 @@ describe("verified Code-task commit service", () => {
         (event) =>
           event.extra?.phase === "result" &&
           event.extra.state === "failed" &&
-          event.extra.reason === "signing-failed",
+          event.extra.reason === "signing-failed" &&
+          event.extra.signing === "configured",
+      ),
+    ).toBe(true);
+  });
+  // #4491: a person who never set up commit signing gets the commit Git would make, and the log line
+  // says which signing branch was taken without any configuration text.
+  it("commits unsigned and records `not-configured` when commit.gpgsign is not set", async () => {
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    git(["config", "--unset", "commit.gpgsign"]);
+    await expect(service.execute(id, approval)).resolves.toMatchObject({
+      status: "succeeded",
+      reason: "completed",
+    });
+    expect(git(["log", "-1", "--format=%G?"])).toBe("N");
+    expect(
+      events.some(
+        (event) =>
+          event.extra?.phase === "result" &&
+          event.extra.state === "succeeded" &&
+          event.extra.signing === "not-configured",
       ),
     ).toBe(true);
   });

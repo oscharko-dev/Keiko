@@ -475,6 +475,11 @@ export interface GitDeliveryPartialDetail {
   readonly succeededUnitCount: number;
 }
 
+// How a governed commit decided about signing, from Git's effective `commit.gpgsign` for the
+// repository (ADR-0006). `configured` signs; `not-configured` commits as Git itself would, unsigned;
+// `unknown-fail-closed` could not read a trustworthy value and therefore attempts to sign.
+export type GitCommitSigningDecision = "configured" | "not-configured" | "unknown-fail-closed";
+
 export interface GitDeliveryExecutionResult {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
   readonly outcome: GitDeliveryExecutionOutcome;
@@ -483,6 +488,8 @@ export interface GitDeliveryExecutionResult {
   readonly externalId?: string | undefined;
   readonly errorCode?: GitDeliveryExecutionErrorCode | undefined;
   readonly partialDetail?: GitDeliveryPartialDetail | undefined;
+  // Set by a commit execution only: which signing branch it took. Closed value, never config text.
+  readonly signing?: GitCommitSigningDecision | undefined;
 }
 
 // Content-free evidence reference. Never raw diffs, command output, or secrets. Field naming aligns
@@ -743,8 +750,13 @@ export function isGitDeliveryExecutionResult(value: unknown): value is GitDelive
     isNonNegativeInteger(value.durationMs) &&
     isUndefinedOr(isNonEmptyString)(value.externalId) &&
     isUndefinedOr(isGitDeliveryExecutionErrorCode)(value.errorCode) &&
-    isUndefinedOr(isPartialDetail)(value.partialDetail)
+    isUndefinedOr(isPartialDetail)(value.partialDetail) &&
+    isUndefinedOr(isCommitSigningDecision)(value.signing)
   );
+}
+
+function isCommitSigningDecision(value: unknown): value is GitCommitSigningDecision {
+  return value === "configured" || value === "not-configured" || value === "unknown-fail-closed";
 }
 
 function isActionPreview(value: unknown): value is GitDeliveryActionPreview {

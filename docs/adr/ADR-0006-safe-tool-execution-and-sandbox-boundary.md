@@ -39,6 +39,18 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > fall back to unsigned commits, or report success for a commit GitHub branch protection will reject.
 > Git refuses such a commit before HEAD moves, so the verified commit reports it as
 > `failed / signing-failed`, never as an uncertain outcome the model would retry (#4546).
+>
+> **Clarified by the signing-follows-configuration repair (2026-11-27, #4491).** "Git's configured
+> signing flow" means Git's effective configuration for the repository. Keiko signs when
+> `commit.gpgsign` is true, read as a Git boolean through the same identity lane the commit runs in
+> (system, global, repository and included scopes), for both the ordinary `git commit` and the
+> verified `git commit-tree`. When it is unset or false, Keiko commits unsigned exactly as Git would
+> for that person, so a machine that never set up signing can still deliver. It never passes
+> `--no-gpg-sign`, so no hook or later configuration is overridden, and it never falls back to an
+> unsigned commit after a configured signer fails: that stays `failed / signing-failed`. A
+> configuration value that cannot be read or is malformed fails closed toward signing. The decision
+> is logged as the closed `signing` field (`configured`, `not-configured`, `unknown-fail-closed`)
+> on `git.verified-commit` and `git.delivery.mutation.completed`.
 
 ## Context
 

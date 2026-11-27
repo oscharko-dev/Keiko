@@ -4037,6 +4037,7 @@ export type {
   GitDeliveryPolicyDecision,
   GitDeliveryActionPreview,
   GitDeliveryExecutionResult,
+  GitCommitSigningDecision,
   GitDeliveryEvidenceRef,
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,

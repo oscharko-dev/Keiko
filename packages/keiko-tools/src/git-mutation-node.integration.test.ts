@@ -743,3 +743,82 @@ describe("node git mutation adapter — stage normalization follows the effectiv
     expect(await stageSupported()).toBe(false);
   });
 });
+
+// ─── Signing follows Git's effective `commit.gpgsign` (ADR-0006, #4491) ─────────────────────────
+//
+// A person who never set up commit signing gets the commit Git itself would make: unsigned, with
+// neither `--gpg-sign` nor `--no-gpg-sign` on the argv. A person who did gets a signed commit, and a
+// signer that cannot sign fails visibly instead of falling back to an unsigned commit. An unreadable
+// or malformed value fails closed toward signing.
+describe("node git mutation adapter — signing follows the effective commit.gpgsign", () => {
+  function lastSignatureState(): string {
+    return git(["log", "-1", "--format=%G?"]).trim();
+  }
+
+  async function stagedCommit(): Promise<Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>> {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = adapter();
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  }
+
+  it("signs and reports `configured` when the repository enables signing", async () => {
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("commits unsigned, as Git itself would, when commit.gpgsign is not set anywhere", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+  });
+
+  it("commits unsigned when commit.gpgsign is false", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+  });
+
+  it("reads Git boolean spellings: `off` does not sign, `yes` does", async () => {
+    git(["config", "commit.gpgsign", "off"]);
+    expect((await stagedCommit()).signing).toBe("not-configured");
+    expect(lastSignatureState()).toBe("N");
+
+    git(["config", "commit.gpgsign", "yes"]);
+    const signed = await adapter().commit({ message: "feat: second", allowEmpty: true });
+    expect(signed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("never falls back to an unsigned commit when the configured signer fails", async () => {
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("signature-failed");
+    expect(committed.signing).toBe("configured");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("fails closed on a malformed value: it attempts to sign and commits nothing unsigned", async () => {
+    git(["config", "commit.gpgsign", "maybe"]);
+
+    const committed = await stagedCommit();
+
+    expect(committed.signing).toBe("unknown-fail-closed");
+    expect(committed.outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+});

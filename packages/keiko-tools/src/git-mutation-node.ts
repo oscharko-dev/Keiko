@@ -14,6 +14,7 @@
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type {
+  GitCommitSigningDecision,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -455,14 +456,54 @@ async function execCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  if (request.verified !== undefined) return execVerifiedCommit(ctx, request);
-  const result = await execPlan(ctx, () => buildCommitArgv(request));
-  if (result.outcome !== "succeeded") return result;
-  try {
-    return { ...result, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
-  } catch (error) {
-    return failureFromThrow(error, result.durationMs, 1);
+  // Contradictory verified operands are refused before any Git process starts, the signing read
+  // included.
+  if (request.verified !== undefined && !validVerifiedOperands(request))
+    return failureFromExit(0, 0);
+  const signing = await readCommitSigning(ctx);
+  const sign = signing !== "not-configured";
+  if (request.verified !== undefined) {
+    return { ...(await execVerifiedCommit(ctx, request, sign)), signing };
   }
+  const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
+  if (result.outcome !== "succeeded") return { ...result, signing };
+  try {
+    return { ...result, signing, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
+  } catch (error) {
+    return { ...failureFromThrow(error, result.durationMs, 1), signing };
+  }
+}
+
+// Git's effective `commit.gpgsign` for this repository, read as a Git boolean through the same
+// identity lane the commit itself runs in (system, global, repository and included scopes). Unset
+// or false means the person has not asked for signing, so the commit is made exactly as Git would
+// make it. A failed, cut-short or malformed read fails closed toward the strict behaviour: the
+// commit attempts to sign, so any failure stays a visible `signature-failed` (ADR-0006).
+async function readCommitSigning(ctx: RunContext): Promise<GitCommitSigningDecision> {
+  const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
+  // A read that throws (spawn failure, timeout, cancellation) is not swallowed: it becomes the
+  // closed `unknown-fail-closed` decision, which the result carries onto the activity log, and the
+  // commit that follows attempts to sign (a cancellation is reported by that commit as an abort).
+  return runCommand(
+    {
+      command: "git",
+      args: ["config", "--type=bool", "--get", "commit.gpgsign"],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    runDeps,
+  ).then(commitSigningOfConfigRead, (): GitCommitSigningDecision => "unknown-fail-closed");
+}
+
+function commitSigningOfConfigRead(result: CommandResult): GitCommitSigningDecision {
+  if (result.truncated) return "unknown-fail-closed";
+  if (result.exitCode === 1) return "not-configured";
+  if (result.exitCode !== 0) return "unknown-fail-closed";
+  const value = result.stdout.trim();
+  if (value === "true") return "configured";
+  return value === "false" ? "not-configured" : "unknown-fail-closed";
 }
 
 function commitReadDeps(
@@ -564,6 +605,7 @@ interface PreparedVerifiedCommit {
 async function prepareVerifiedCommit(
   ctx: RunContext,
   request: VerifiedCommitExecRequest,
+  sign: boolean,
 ): Promise<PreparedVerifiedCommit | undefined> {
   if (!(await verifiedFactsMatch(ctx, request))) return undefined;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
@@ -579,7 +621,7 @@ async function prepareVerifiedCommit(
   const head = await checkedObjectCommand(ctx, [
     "commit-tree",
     tree,
-    "-S",
+    ...(sign ? ["-S"] : []),
     ...parent,
     "-m",
     request.message,
@@ -642,11 +684,12 @@ function failureFromVerifiedCommitError(
 async function execVerifiedCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
+  sign: boolean,
 ): Promise<GitDeliveryExecutionResult> {
   if (!validVerifiedOperands(request)) return failureFromExit(0, 0);
   let refAttempted = false;
   try {
-    const prepared = await prepareVerifiedCommit(ctx, request);
+    const prepared = await prepareVerifiedCommit(ctx, request, sign);
     if (prepared === undefined) return failureFromExit(0, 0);
     refAttempted = true;
     return await updateVerifiedCommitRef(ctx, request, prepared);

@@ -13,6 +13,7 @@ import type {
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
   GitDeliveryBlockReason,
+  GitCommitSigningDecision,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
@@ -144,6 +145,24 @@ const UPSTREAM_TRACKING_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/** The closed signing branches a governed commit reports (ADR-0006), mirrored from the contract. */
+export const GIT_COMMIT_SIGNING_DECISIONS = [
+  "configured",
+  "not-configured",
+  "unknown-fail-closed",
+] as const satisfies readonly GitCommitSigningDecision[];
+
+/** The signing branch a finished commit took, when the outcome carries an execution result. */
+export function commitSigningOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitCommitSigningDecision | undefined {
+  return outcome.status === "succeeded" ||
+    outcome.status === "failed" ||
+    outcome.status === "recovery-required"
+    ? outcome.executionResult.signing
+    : undefined;
+}
+
 const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -271,6 +290,12 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
     stdoutBytes: { type: "integer", dataClass: "count", required: false },
     stderrBytes: { type: "integer", dataClass: "count", required: false },
     exitCode: { type: "integer", dataClass: "count", required: false },
+    signing: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...GIT_COMMIT_SIGNING_DECISIONS],
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1228,6 +1253,7 @@ export function logGitDeliveryMutation(
   const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
   const executionErrorCode = executionErrorCodeOf(outcome);
   const blockReason = policyBlockReasonOf(outcome);
+  const signing = commitSigningOf(outcome);
   log.write(
     activityLogEvent(
       MUTATION_COMPLETED_OPERATION,
@@ -1253,6 +1279,7 @@ export function logGitDeliveryMutation(
           outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
         ...(blockReason === undefined ? {} : { blockReason }),
         ...(executionErrorCode === undefined ? {} : { executionErrorCode }),
+        ...(signing === undefined ? {} : { signing }),
         ...executionFailureDetail(outcome, failureDetail),
       },
     ),

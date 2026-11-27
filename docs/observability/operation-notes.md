@@ -662,6 +662,10 @@ and `causeChain`; the other reasons emit INFO. Inspection evidence remains body-
 
 `git.status.bounded` records a git read the byte cap ended or that stopped early, with counts and a closed `surface` only: `shownRecordCount`, `partialRecordDropped` and `maxBytes`. The `history` surface (the Git window History tab) writes a line only when a page ends early, either because the cap cut its last record (dropped, never counted short) or because a record could not be read; the optional `unreadableRecordCount` then holds the records left unread, and the page is reported `truncated` so the UI continuation stays exact. A whole, readable page writes nothing.
 
+## Governed commit signing decision
+
+`git.verified-commit` (its `result` line) and `git.delivery.mutation.completed` carry the optional closed field `signing` for a commit execution, so a "why was this commit unsigned" or "why did signing fail" question is answered from the log without any configuration text. `configured` means Git's effective `commit.gpgsign` (a Git boolean, read through the commit's own identity lane across system, global, repository and included scopes) was true and the commit was signed with `--gpg-sign` or `-S`; a signer that then fails is `failed` / `signing-failed`, never an unsigned fallback. `not-configured` means the value was unset or false: the commit was made exactly as Git would make it, unsigned, with neither `--gpg-sign` nor `--no-gpg-sign`. `unknown-fail-closed` means the value could not be read (the read failed, was cut short or was malformed), so the commit attempted to sign and any failure stays visible. The field is absent on lines that are not a finished commit execution (ADR-0006, #4491).
+
 ## Commit drafts and stream recovery
 
 **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and

@@ -35973,6 +35973,12 @@
               "required": true
             },
             {
+              "name": "signing",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "status",
               "type": "string",
               "dataClass": "closed-enum",
@@ -39508,6 +39514,12 @@
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "signing",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "stagedTreeDigest",

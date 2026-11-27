@@ -13,6 +13,7 @@ import {
 import { mintProposalId } from "./proposalId.js";
 import type {
   VerificationReport,
+  GitCommitSigningDecision,
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
@@ -38,7 +39,9 @@ import {
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
 import {
+  commitSigningOf,
   executeGovernedMutation,
+  GIT_COMMIT_SIGNING_DECISIONS,
   gitDeliveryActivityCode,
   gitDeliveryActivityErrorKind,
   gitDeliveryActivityFailureKind,
@@ -239,6 +242,12 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: VERIFIED_COMMIT_FRAMES_FIELD,
     causeChain: VERIFIED_COMMIT_CAUSE_CHAIN_FIELD,
+    signing: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...GIT_COMMIT_SIGNING_DECISIONS],
+    },
   },
   causal: "correlation",
   diagnosticWhen: [{ field: "failedCheckCount", positive: true }],
@@ -293,6 +302,7 @@ interface VerifiedCommitActivityFields {
   readonly code?: string;
   readonly frames?: readonly string[];
   readonly causeChain?: readonly string[];
+  readonly signing?: GitCommitSigningDecision;
 }
 
 function verifiedCommitErrorFields(
@@ -505,6 +515,13 @@ function kernelReason(result: GitMutationLifecycleResult): VerifiedCommitReason 
     case "recovery-required":
       return "execution-uncertain";
   }
+}
+
+function signingActivity(
+  result: GitMutationLifecycleResult,
+): Pick<VerifiedCommitActivityFields, "signing"> {
+  const signing = commitSigningOf(result.outcome);
+  return signing === undefined ? {} : { signing };
 }
 
 function kernelDetails(
@@ -1243,6 +1260,7 @@ class VerifiedCommitController implements VerifiedCommitService {
         kernelReason(result),
         headSha,
         kernelDetails(result),
+        signingActivity(result),
       );
     } catch (error) {
       this.log(context, "execute", { state: "failed", ...verifiedCommitErrorFields(error) }, true);
@@ -1291,6 +1309,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       | "reviewPathsTruncated"
       | "messagePolicyMode"
       | "messagePolicySource"
+      | "signing"
     > = {},
     proofAgeMs?: number,
   ): VerifiedCommitResult {
