@@ -77,7 +77,9 @@ import {
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
   GOVERNED_ASK_DECLINED_REASON_CODE,
+  COMMIT_PROOF_UNAVAILABLE_CAUSES,
 } from "./codingToolIpc.js";
+import { isPermanentCommitProofCause } from "./codingCommitProofCause.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import {
   EDIT_PREPARE_CAUSES,
@@ -719,12 +721,25 @@ function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommi
 }
 
 function isUnavailableCommitProof(value: Record<string, unknown>): boolean {
+  if (value.reasonCode === "proof-unavailable" && value.cause !== undefined)
+    return isCausedUnavailableProof(value);
   const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
   if (nextAction === undefined || value.nextAction !== nextAction) return false;
   if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {
     return Object.keys(value).length === 3;
   }
   return Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking);
+}
+
+// A failed worktree read names its closed cause; the next action follows from whether reading
+// again can ever help.
+function isCausedUnavailableProof(value: Record<string, unknown>): boolean {
+  const cause = COMMIT_PROOF_UNAVAILABLE_CAUSES.find((candidate) => candidate === value.cause);
+  if (cause === undefined || Object.keys(value).length !== 4) return false;
+  return (
+    value.nextAction ===
+    (isPermanentCommitProofCause(cause) ? "resolve-then-verify" : "verify-again")
+  );
 }
 
 // Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary. A

@@ -3254,6 +3254,7 @@ describe("production managed worktree tools", () => {
             commitProof: "unavailable",
             reasonCode: "proof-unavailable",
             nextAction: "verify-again",
+            cause: "read-failed",
           },
         },
       });
@@ -3273,12 +3274,54 @@ describe("production managed worktree tools", () => {
         errorKind: "unavailable",
         proofStage: stage,
         commitProofReason: "proof-unavailable",
+        commitProofCause: "read-failed",
         frames: ["packages/keiko-server/dist/gitDelivery/verifiedCommitFacts.js:40:8"],
         causeChain: ["TypeError"],
       });
       expect(JSON.stringify({ records, log, result })).not.toContain("PRIVATE_");
     },
   );
+
+  it("names a permanent read failure's closed cause and stops telling the model to verify again", async () => {
+    const log: ServerLogEvent[] = [];
+    const service = verificationService();
+    service.beginVerification = vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error("git-raw-unborn-head"), { code: "git-raw-unborn-head" }),
+      ),
+    );
+    const result = await verificationFacade({
+      runToReport: vi.fn(() => Promise.resolve(verificationReport("passed"))),
+      records: [],
+      log,
+      verifiedCommitService: service,
+    }).execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "proof-permanent",
+        idempotencyKey: "proof-permanent",
+        verifierId: "test",
+      }),
+    });
+    expect(result).toMatchObject({
+      verification: {
+        commit: {
+          commitProof: "unavailable",
+          reasonCode: "proof-unavailable",
+          nextAction: "resolve-then-verify",
+          cause: "unborn-head",
+        },
+      },
+    });
+    const failed = log.find((event) => event.extra?.state === "proof-unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ commitProofCause: "unborn-head", commitProofReason: "proof-unavailable" });
+  });
 
   // `Error.name` is a writable own property; a library that assigns a message or a path to it would
   // put that text on the `[keiko-server:diagnostic]` stderr line and the activity log's `errorKind`

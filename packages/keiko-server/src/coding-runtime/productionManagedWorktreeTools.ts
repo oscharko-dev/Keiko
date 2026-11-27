@@ -107,7 +107,13 @@ import {
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
   type VerificationNotRunStep,
+  COMMIT_PROOF_UNAVAILABLE_CAUSES,
+  type CommitProofUnavailableCause,
 } from "./codingToolIpc.js";
+import {
+  classifyCommitProofFailure,
+  isPermanentCommitProofCause,
+} from "./codingCommitProofCause.js";
 import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
@@ -411,6 +417,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: ["begin", "complete", "observe"],
+    },
+    commitProofCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: COMMIT_PROOF_UNAVAILABLE_CAUSES,
     },
     ...ACTIVITY_LOG_DIAGNOSTIC_FIELDS,
   },
@@ -2384,7 +2396,8 @@ function stepFailure(
 }
 
 type CandidateVerificationStart =
-  VerificationTicketOutcome | { readonly kind: "proof-unavailable" };
+  | VerificationTicketOutcome
+  | { readonly kind: "proof-unavailable"; readonly cause: CommitProofUnavailableCause };
 
 async function beginCandidateVerification(
   input: ProductionManagedWorktreeToolInput,
@@ -2392,16 +2405,16 @@ async function beginCandidateVerification(
   try {
     return await input.verifiedCommitService?.beginVerification();
   } catch (error) {
-    recordCommitProofFailure(input, "begin", error);
-    return { kind: "proof-unavailable" };
+    return { kind: "proof-unavailable", cause: recordCommitProofFailure(input, "begin", error) };
   }
 }
 
-function unavailableCommitProof(): CodingToolCommitProofResult {
+function unavailableCommitProof(cause: CommitProofUnavailableCause): CodingToolCommitProofResult {
   return {
     commitProof: "unavailable",
     reasonCode: "proof-unavailable",
-    nextAction: "verify-again",
+    nextAction: isPermanentCommitProofCause(cause) ? "resolve-then-verify" : "verify-again",
+    cause,
   };
 }
 
@@ -2409,7 +2422,8 @@ function recordCommitProofFailure(
   input: ProductionManagedWorktreeToolInput,
   proofStage: "begin" | "complete" | "observe",
   error: unknown,
-): void {
+): CommitProofUnavailableCause {
+  const cause = classifyCommitProofFailure(error);
   input.verifiedCommitService?.invalidate();
   emitVerificationDiagnostic(
     input,
@@ -2429,11 +2443,13 @@ function recordCommitProofFailure(
         state: "proof-unavailable",
         proofStage,
         commitProofReason: "proof-unavailable",
+        commitProofCause: cause,
         frames: keikoStackFrames(error),
         causeChain: causeChain(error),
       },
     ),
   );
+  return cause;
 }
 
 async function completeCandidateVerification(
@@ -2444,7 +2460,7 @@ async function completeCandidateVerification(
   signal: AbortSignal | undefined,
 ): Promise<CodingToolCommitProofResult | undefined> {
   if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
-  if (begun.kind === "proof-unavailable") return unavailableCommitProof();
+  if (begun.kind === "proof-unavailable") return unavailableCommitProof(begun.cause);
   try {
     return await recordCandidateVerification(
       input.verifiedCommitService,
@@ -2454,8 +2470,9 @@ async function completeCandidateVerification(
       signal,
     );
   } catch (error) {
-    recordCommitProofFailure(input, begun.kind === "ticket" ? "complete" : "observe", error);
-    return unavailableCommitProof();
+    return unavailableCommitProof(
+      recordCommitProofFailure(input, begun.kind === "ticket" ? "complete" : "observe", error),
+    );
   }
 }
 

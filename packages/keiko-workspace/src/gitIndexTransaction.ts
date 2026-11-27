@@ -141,6 +141,14 @@ export interface GitStageReadOptions {
   // The port containment resolves through; the owned-root port admits a managed worktree below the
   // always-denied `.keiko` segment, the plain default keeps refusing it (2026-09-10).
   readonly fs?: WorkspaceFs | undefined;
+  /**
+   * `contained` (the default, and the only mode the staging write path uses) refuses a symlink whose
+   * target is absolute, denied or outside the workspace. `read-only` is for status comparison: the
+   * link contributes its raw `readlink` bytes, exactly what Git stores in the blob, and the target
+   * is neither resolved nor followed, so an unchanged link to `/usr/share/x` or `../shared` reads as
+   * the unchanged entry it is instead of failing the whole status read.
+   */
+  readonly symlinks?: "contained" | "read-only" | undefined;
 }
 /**
  * The most bytes one staged file may carry, and the most a whole stage candidate may sum to. Until
@@ -176,7 +184,7 @@ export async function readGitStageFile(
   assertStageParent(fs, canonical, absolute);
   const before = lstatSync(absolute, { throwIfNoEntry: false });
   if (before === undefined) return { path, mode: "0", bytes: new Uint8Array() };
-  if (before.isSymbolicLink()) return stageSymlink(fs, canonical, path, absolute, before);
+  if (before.isSymbolicLink()) return stageLink(options, fs, canonical, path, absolute, before);
   const expected = fs.stat(absolute);
   const bytes = await fs.readFileBytes?.(absolute, maxBytes, "reject", expected);
   if (bytes?.byteLength !== before.size) throw new Error("git-stage-file-incomplete");
@@ -187,6 +195,30 @@ function assertStageParent(fs: WorkspaceFs, root: string, absolute: string): voi
   let parent = dirname(absolute);
   while (parent !== root && !fs.exists(parent)) parent = dirname(parent);
   assertContainedRealPath(fs, root, parent, "git-stage-parent");
+}
+
+function stageLink(
+  options: GitStageReadOptions,
+  fs: WorkspaceFs,
+  root: string,
+  path: string,
+  absolute: string,
+  before: NonNullable<ReturnType<typeof lstatSync>>,
+): GitStageFile {
+  return options.symlinks === "read-only"
+    ? readSymlinkBytes(path, absolute, before)
+    : stageSymlink(fs, root, path, absolute, before);
+}
+function readSymlinkBytes(
+  path: string,
+  absolute: string,
+  before: NonNullable<ReturnType<typeof lstatSync>>,
+): GitStageFile {
+  const target = readlinkSync(absolute);
+  const after = lstatSync(absolute);
+  if (after.ino !== before.ino || after.ctimeMs !== before.ctimeMs)
+    throw new Error("git-stage-link-drift");
+  return { path, mode: "120000", bytes: Buffer.from(target) };
 }
 
 function stageSymlink(

@@ -18700,6 +18700,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["begin", "complete", "observe"],
       },
+      commitProofCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "unborn-head",
+          "path-denied",
+          "link-denied",
+          "entry-unreadable",
+          "snapshot-incomplete",
+          "snapshot-drift",
+          "read-cancelled",
+          "read-timeout",
+          "read-failed",
+        ],
+      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",

@@ -19519,6 +19519,12 @@
               "required": false
             },
             {
+              "name": "commitProofCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "commitProofReason",
               "type": "string",
               "dataClass": "closed-enum",

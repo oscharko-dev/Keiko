@@ -53,6 +53,19 @@ describe("existing workspace Git metadata index owner", () => {
     await expect(readGitStageFile(root, "huge.bin")).rejects.toThrow();
   });
 
+  // The staging write path keeps refusing a link that leaves the workspace; only the status read
+  // (`symlinks: "read-only"`) compares the raw link bytes without following the target (#4491).
+  it.each(["/etc/hosts", "../outside-target"])(
+    "refuses staging a link to %s but reads its raw bytes in read-only mode",
+    async (target) => {
+      symlinkSync(target, join(root, "link"));
+      await expect(readGitStageFile(root, "link")).rejects.toThrow();
+      const file = await readGitStageFile(root, "link", { symlinks: "read-only" });
+      expect(file.mode).toBe("120000");
+      expect(Buffer.from(file.bytes).toString()).toBe(target);
+    },
+  );
+
   it("holds Git's own lock until the exact index transaction ends", async () => {
     const index = readFileSync(join(root, ".git/index"));
     await withGitIndexTransaction(

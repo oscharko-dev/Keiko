@@ -486,7 +486,11 @@ async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<strin
   return result.stdout;
 }
 
-async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise<CommandResult> {
+async function runReadResult(
+  ctx: ReadContext,
+  argv: readonly string[],
+  acceptedExitCodes: readonly number[] = [0],
+): Promise<CommandResult> {
   if (!ctx.signal.aborted) {
     const guard = await detectGitLazyFetchGuardSupport(ctx);
     if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
@@ -517,7 +521,7 @@ async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`);
   }
   if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
-  if (result.exitCode !== 0) {
+  if (result.exitCode === null || !acceptedExitCodes.includes(result.exitCode)) {
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
   }
   return result;
@@ -763,6 +767,46 @@ export async function readGitRevision(
     throw new GitWorktreeReadError("git revision did not resolve uniquely");
   }
   return value;
+}
+
+/**
+ * Resolves HEAD like `readGitRevision`, but answers `undefined` for an unborn HEAD (a fresh
+ * repository: `rev-parse --verify --quiet` exits 1 with no output) so a caller can name that state
+ * instead of reporting a generic exit code. Any other failure still throws.
+ */
+export async function readGitHeadIfBorn(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<string | undefined> {
+  const result = await runReadResult(
+    machineReadContext(deps),
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"],
+    [0, 1],
+  );
+  const value = result.stdout.trim();
+  if (result.exitCode === 1 && value === "") return undefined;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
+    throw new GitWorktreeReadError("git revision did not resolve uniquely");
+  return value;
+}
+
+export type GitReadConfigKey = "core.filemode";
+/**
+ * The repository's effective value of one closed config key, `undefined` when unset. It runs through
+ * the same isolated lane as every other read (global and system scopes pinned off), so it reports
+ * what the Git this reader consults would see. Read-only; the key set is closed.
+ */
+export async function readGitConfigValue(
+  deps: NodeGitWorktreeReaderDeps,
+  key: GitReadConfigKey,
+): Promise<string | undefined> {
+  const ctx = metadataReadContext(deps);
+  const result = await runGuardProbe(ctx, ["config", "--get", key]).catch((error: unknown) => {
+    if (isCallerBoundaryFailure(error)) throw error;
+    throw new GitWorktreeReadError("git config failed to run");
+  });
+  if (result.truncated || (result.exitCode !== 0 && result.exitCode !== 1))
+    throw new GitWorktreeReadError(`git config exited ${String(result.exitCode)}`);
+  return result.exitCode === 1 ? undefined : result.stdout.trim();
 }
 
 /** Resolves the exact named ref used by a compare-and-swap ref transaction. */

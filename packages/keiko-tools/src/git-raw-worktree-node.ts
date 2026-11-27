@@ -24,6 +24,8 @@ import {
   readGitIndexEntries,
   readGitTreeEntries,
   readGitRevision,
+  readGitHeadIfBorn,
+  readGitConfigValue,
   readGitFullRef,
   readGitRemoteAliases,
   readGitUntrackedPaths,
@@ -36,7 +38,10 @@ import { workspaceFsOf } from "./exec.js";
 const MAX_INSPECTED_PATHS = 10_000;
 const MAX_CONTENT_BYTES = 8_388_608;
 export type GitRawWorktreeReadCode =
-  "git-raw-snapshot-incomplete" | "git-raw-snapshot-drift" | "git-raw-read-cancelled";
+  | "git-raw-snapshot-incomplete"
+  | "git-raw-snapshot-drift"
+  | "git-raw-read-cancelled"
+  | "git-raw-unborn-head";
 /**
  * A raw read that cannot be trusted names its closed reason as `code`, so the diagnostic a consumer
  * records carries it (the server's `describeError` reads `code`; an `Error`'s message never reaches
@@ -66,6 +71,12 @@ export interface GitRawChanges {
    * (`.idea/.gitignore`, run 6 of the Workbench engagement) could never be verified or committed.
    */
   readonly deniedPathCount: number;
+  /**
+   * Untracked nested repositories (`vendor/` holding its own `.git`): Git lists the directory, not
+   * its files. They are opaque -- counted, never read into, never listed in `changes` and so never
+   * staged -- and no longer fail the whole read (#4491).
+   */
+  readonly opaqueUntrackedCount: number;
 }
 // A path git reports that this snapshot cannot represent -- not a root-relative file identifier, or
 // carrying a replacement character from an undecodable name -- leaves the snapshot incomplete.
@@ -93,41 +104,61 @@ function changed(
     conflicted: false,
   };
 }
+const GITLINK_MODE = "160000";
+interface WorkingInspection {
+  readonly status: GitStatusCode;
+  readonly bytes: number;
+  readonly untracked: boolean;
+}
+// Regular files differ by the execute bit only when `core.fileMode` is on; a link never matches a file.
+function sameMode(fileMode: string, indexMode: string, honourExecuteBit: boolean): boolean {
+  if (fileMode === indexMode) return true;
+  return !honourExecuteBit && fileMode !== "120000" && indexMode !== "120000";
+}
 async function inspectWorkingFile(
-  deps: NodeGitWorktreeReaderDeps,
+  scan: ScanInputs,
   path: string,
   index: IndexEntry | undefined,
   remainingBytes: number,
-): Promise<{ status: GitStatusCode; bytes: number; untracked: boolean }> {
-  const file = await readGitStageFile(deps.workspace.root, path, {
+): Promise<WorkingInspection> {
+  const file = await readGitStageFile(scan.deps.workspace.root, path, {
     maxBytes: remainingBytes,
-    fs: workspaceFsOf(deps),
+    fs: workspaceFsOf(scan.deps),
+    symlinks: "read-only",
   });
   if (index === undefined)
     return { status: " ", bytes: file.bytes.length, untracked: file.mode !== "0" };
   if (file.mode === "0") return { status: "D", bytes: 0, untracked: false };
   const same =
-    file.mode === index.mode &&
+    sameMode(file.mode, index.mode, await scan.fileMode()) &&
     gitBlobObjectId(file.bytes, index.objectId.length) === index.objectId;
   return { status: same ? " " : "M", bytes: file.bytes.length, untracked: false };
 }
 export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promise<GitRawChanges> {
-  const headSha = await readGitRevision(deps, "HEAD");
+  const headSha = await readGitHeadIfBorn(deps);
+  if (headSha === undefined) throw new GitRawWorktreeReadError("git-raw-unborn-head");
   const branch = (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
   const index = new Map((await readGitIndexEntries(deps)).map((entry) => [entry.path, entry]));
   const head = new Map(
     (await readGitTreeEntries(deps, headSha)).map((entry) => [entry.path, entry]),
   );
+  // A nested repository is listed as `dir/`: an opaque untracked entry that is counted, never read
+  // into and never staged (Git itself reports `?? dir/`).
+  const untracked = await readGitUntrackedPaths(deps);
+  const opaque = untracked.filter((path) => path.endsWith("/"));
   const paths = [
-    ...new Set([...index.keys(), ...head.keys(), ...(await readGitUntrackedPaths(deps))]),
+    ...new Set([...index.keys(), ...head.keys(), ...untracked.filter((p) => !p.endsWith("/"))]),
   ].sort(compareStrings);
   const scanned = await scanPaths(
-    deps,
+    {
+      deps,
+      head,
+      index,
+      stats: parseGitIndexStat(await readGitIndexStat(deps)),
+      indexWriteTimeNs: readGitIndexWriteTimeNs(deps.workspace.root, workspaceFsOf(deps)),
+      fileMode: lazyFileMode(deps),
+    },
     paths,
-    head,
-    index,
-    parseGitIndexStat(await readGitIndexStat(deps)),
-    readGitIndexWriteTimeNs(deps.workspace.root, workspaceFsOf(deps)),
   );
   const stagedTreeDigest = gitIndexEntriesDigest([...index.values()]);
   if (
@@ -136,22 +167,36 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     (await readGitFullRef(deps, "HEAD")) !== `refs/heads/${branch}`
   )
     throw new GitRawWorktreeReadError("git-raw-snapshot-drift");
-  return { headSha, branch, stagedTreeDigest, ...scanned };
+  return { headSha, branch, stagedTreeDigest, opaqueUntrackedCount: opaque.length, ...scanned };
+}
+const FALSE_VALUES = /^(?:false|no|off|0)$/iu;
+function lazyFileMode(deps: NodeGitWorktreeReaderDeps): () => Promise<boolean> {
+  let value: Promise<boolean> | undefined;
+  return () =>
+    (value ??= readGitConfigValue(deps, "core.filemode").then(
+      (raw) => raw === undefined || !FALSE_VALUES.test(raw),
+    ));
+}
+interface ScanInputs {
+  readonly deps: NodeGitWorktreeReaderDeps;
+  readonly head: ReadonlyMap<string, IndexEntry>;
+  readonly index: ReadonlyMap<string, IndexEntry>;
+  readonly stats: ReadonlyMap<string, GitIndexStat>;
+  readonly indexWriteTimeNs: string | undefined;
+  // `core.fileMode`, read once and only when a changed regular file needs the verdict.
+  readonly fileMode: () => Promise<boolean>;
 }
 async function scanPaths(
-  deps: NodeGitWorktreeReaderDeps,
+  scan: ScanInputs,
   paths: readonly string[],
-  head: ReadonlyMap<string, IndexEntry>,
-  index: ReadonlyMap<string, IndexEntry>,
-  stats: ReadonlyMap<string, GitIndexStat>,
-  indexWriteTimeNs: string | undefined,
 ): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
   let total = 0;
   let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
   for (const path of paths.slice(0, MAX_INSPECTED_PATHS)) {
-    if (deps.signal?.aborted === true) throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+    if (scan.deps.signal?.aborted === true)
+      throw new GitRawWorktreeReadError("git-raw-read-cancelled");
     if (!representablePath(path)) {
       truncated = true;
       continue;
@@ -164,42 +209,36 @@ async function scanPaths(
       truncated = true;
       break;
     }
-    const working = await workingStatus(
-      deps,
-      path,
-      head,
-      index,
-      stats,
-      indexWriteTimeNs,
-      MAX_CONTENT_BYTES - total,
-    );
+    const working = await workingStatus(scan, path, MAX_CONTENT_BYTES - total);
     total += working.bytes;
-    const staged = indexStatus(head.get(path), index.get(path));
+    const staged = indexStatus(scan.head.get(path), scan.index.get(path));
     if (staged !== " " || working.status !== " " || working.untracked)
       changes.push(changed(path, staged, working.status, working.untracked));
   }
   return { changes, truncated, deniedPathCount };
 }
 async function workingStatus(
-  deps: NodeGitWorktreeReaderDeps,
+  scan: ScanInputs,
   path: string,
-  head: ReadonlyMap<string, IndexEntry>,
-  index: ReadonlyMap<string, IndexEntry>,
-  stats: ReadonlyMap<string, GitIndexStat>,
-  indexWriteTimeNs: string | undefined,
   remainingBytes: number,
-): Promise<{ status: GitStatusCode; bytes: number; untracked: boolean }> {
-  return index.has(path) &&
-    index.get(path)?.mode === head.get(path)?.mode &&
+): Promise<WorkingInspection> {
+  const entry = scan.index.get(path);
+  const clean: WorkingInspection = { status: " ", bytes: 0, untracked: false };
+  // A submodule is a gitlink, not a file: its directory is never read. Keiko's governed lane does not
+  // enter a submodule, so a moved or dirty submodule HEAD is not judged here (`git status` would say
+  // ` M`); the gitlink commit itself is still compared head-to-index by `indexStatus`.
+  if (entry?.mode === GITLINK_MODE || scan.head.get(path)?.mode === GITLINK_MODE) return clean;
+  return entry !== undefined &&
+    entry.mode === scan.head.get(path)?.mode &&
     indexStatMatches(
-      deps.workspace.root,
+      scan.deps.workspace.root,
       path,
-      stats.get(path),
-      indexWriteTimeNs,
-      workspaceFsOf(deps),
+      scan.stats.get(path),
+      scan.indexWriteTimeNs,
+      workspaceFsOf(scan.deps),
     )
-    ? { status: " " as const, bytes: 0, untracked: false }
-    : await inspectWorkingFile(deps, path, index.get(path), remainingBytes);
+    ? clean
+    : await inspectWorkingFile(scan, path, entry, remainingBytes);
 }
 
 /**
@@ -223,7 +262,8 @@ export async function readGitRawWorktreeSnapshot(
     headDetached: false,
     stagedFileCount: raw.changes.filter((file) => file.staged).length,
     unstagedFileCount: raw.changes.filter((file) => file.unstaged).length,
-    untrackedFileCount: raw.changes.filter((file) => file.untracked).length,
+    untrackedFileCount:
+      raw.changes.filter((file) => file.untracked).length + raw.opaqueUntrackedCount,
     deniedPathCount: raw.deniedPathCount,
     // Not probed by this reader — see the header comment and the doc comment above.
     hasUpstream: false,

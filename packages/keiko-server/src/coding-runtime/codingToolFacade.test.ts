@@ -2005,6 +2005,25 @@ describe("CodingToolFacade", () => {
       nextAction: "verify-again",
       extra: true,
     },
+    // #4491: a permanent cause never answers `verify-again`; an unknown cause is no cause.
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "verify-again",
+      cause: "unborn-head",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "resolve-then-verify",
+      cause: "read-failed",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "resolve-then-verify",
+      cause: "invented",
+    },
     { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
     // #3612: unsaved buffers are saved, never staged, and name no paths.
     { commitProof: "unavailable", reasonCode: "buffers-dirty", nextAction: "stage-then-verify" },
@@ -2069,6 +2088,26 @@ describe("CodingToolFacade", () => {
         commitProof: "unavailable",
         reasonCode: "proof-unavailable",
         nextAction: "verify-again",
+      },
+    },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "resolve-then-verify",
+        cause: "unborn-head",
+      },
+    },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "verify-again",
+        cause: "snapshot-drift",
       },
     },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },

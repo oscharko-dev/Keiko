@@ -124,6 +124,30 @@ export interface CodingToolVerificationResult {
   readonly commit?: CodingToolCommitProofResult;
 }
 
+/**
+ * Why the raw worktree read behind a commit proof failed (#4491): closed, body-free, and shared by
+ * the model answer and the activity log. The permanent causes cannot be cured by reading again.
+ */
+export const COMMIT_PROOF_UNAVAILABLE_CAUSES = [
+  "unborn-head",
+  "path-denied",
+  "link-denied",
+  "entry-unreadable",
+  "snapshot-incomplete",
+  "snapshot-drift",
+  "read-cancelled",
+  "read-timeout",
+  "read-failed",
+] as const;
+export type CommitProofUnavailableCause = (typeof COMMIT_PROOF_UNAVAILABLE_CAUSES)[number];
+export const COMMIT_PROOF_PERMANENT_CAUSES: readonly CommitProofUnavailableCause[] = [
+  "unborn-head",
+  "path-denied",
+  "link-denied",
+  "entry-unreadable",
+  "snapshot-incomplete",
+];
+
 export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
   /**
@@ -137,7 +161,13 @@ export type CodingToolCommitProofResult =
        * equalling the working tree; staging cannot resolve that (#3612). */
       readonly reasonCode:
         "candidate-not-staged" | "buffers-dirty" | "candidate-drift" | "proof-unavailable";
-      readonly nextAction: "stage-then-verify" | "save-then-verify" | "verify-again";
+      readonly nextAction:
+        "stage-then-verify" | "save-then-verify" | "verify-again" | "resolve-then-verify";
+      /**
+       * For `proof-unavailable` after a failed worktree read: the closed cause. A permanent cause
+       * answers `resolve-then-verify` (change the repository first), a transient one `verify-again`.
+       */
+      readonly cause?: CommitProofUnavailableCause | undefined;
       /**
        * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep
        * the proof from forming, bounded, with exact counts — what `stage-then-verify` has to stage

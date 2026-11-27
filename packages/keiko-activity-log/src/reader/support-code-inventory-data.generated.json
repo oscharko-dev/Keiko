@@ -1643,6 +1643,7 @@
     "keiko-server/coding-runtime/codexAppServerClient",
     "keiko-server/coding-runtime/codexAppServerProtocol",
     "keiko-server/coding-runtime/codexRuntimeComposition",
+    "keiko-server/coding-runtime/codingCommitProofCause",
     "keiko-server/coding-runtime/codingHistoryRoutes",
     "keiko-server/coding-runtime/codingHistoryTransferLog",
     "keiko-server/coding-runtime/codingJiraCatalog",
