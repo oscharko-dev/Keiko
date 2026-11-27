@@ -108,7 +108,7 @@ describe("defineWindowsStepDrives (#4496)", () => {
       fakeHost({ taken: ["Z:"] }),
       drives,
     );
-    expect(definition).toEqual({ outcome: "mapped", refusedCount: 1, stranded: [] });
+    expect(definition).toEqual({ outcome: "mapped", refusedCount: 1 });
     expect(drives).toEqual([
       { root: WORK, drive: "Y:" },
       { root: JDK, drive: "X:" },
@@ -125,13 +125,12 @@ describe("defineWindowsStepDrives (#4496)", () => {
     const skipped: WindowsStepDrive[] = [];
     expect(
       defineWindowsStepDrives([WORK], fakeHost({ refuse: TAKEN_TO_E.slice(0, 5) }), skipped),
-    ).toEqual({ outcome: "mapped", refusedCount: 5, stranded: [] });
+    ).toEqual({ outcome: "mapped", refusedCount: 5 });
     expect(skipped).toEqual([{ root: WORK, drive: "U:" }]);
     const partial: WindowsStepDrive[] = [];
     expect(defineWindowsStepDrives([WORK, JDK], fakeHost({ taken: TAKEN_TO_E }), partial)).toEqual({
       outcome: "no-free-letter",
       refusedCount: 22,
-      stranded: [],
     });
     expect(partial).toEqual([{ root: WORK, drive: "D:" }]);
   });
@@ -220,6 +219,16 @@ describe("mapWindowsStepDrives (#4496)", () => {
     expect(host.stranded.size).toBe(0);
     expect(recorded(steps.stateRoot)).toMatchObject([
       { outcome: "mapped", driveCount: 1, refusedCount: 0 },
+      { outcome: "released", driveCount: 1, refusedCount: 0 },
+    ]);
+  });
+
+  it("releases a stranded letter also when the host throws on a later letter", () => {
+    const host = fakeHost({ strand: ["Z:"], throwAt: 2 });
+    const steps = scope(host);
+    expect(() => mapWindowsStepDrives([WORK], steps)).toThrow(CommandDeniedError);
+    expect(host.stranded.size).toBe(0);
+    expect(recorded(steps.stateRoot)).toMatchObject([
       { outcome: "released", driveCount: 1, refusedCount: 0 },
     ]);
   });

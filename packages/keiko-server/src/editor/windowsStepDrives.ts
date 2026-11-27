@@ -122,26 +122,22 @@ export function removeWindowsStepDrives(
 
 /**
  * Defines a letter for each distinct granted directory into `drives`, until one cannot get a
- * letter. `drives` belongs to the caller, so a host that throws midway leaves no letter unknown.
+ * letter. `drives` and `stranded` belong to the caller, so a host that throws midway leaves no
+ * letter unknown.
  */
 export function defineWindowsStepDrives(
   roots: readonly string[],
   host: WindowsDriveHost,
   drives: WindowsStepDrive[],
-): {
-  readonly outcome: DriveOutcome;
-  readonly refusedCount: number;
-  readonly stranded: readonly string[];
-} {
-  const pool: LetterPool = { free: [...LETTERS], refused: 0, stranded: [] };
+  stranded: string[] = [],
+): { readonly outcome: DriveOutcome; readonly refusedCount: number } {
+  const pool: LetterPool = { free: [...LETTERS], refused: 0, stranded };
   for (const root of distinctRoots(roots)) {
     const drive = defineOne(root, pool, host);
-    if (drive === undefined) {
-      return { outcome: "no-free-letter", refusedCount: pool.refused, stranded: pool.stranded };
-    }
+    if (drive === undefined) return { outcome: "no-free-letter", refusedCount: pool.refused };
     drives.push({ root, drive });
   }
-  return { outcome: "mapped", refusedCount: pool.refused, stranded: pool.stranded };
+  return { outcome: "mapped", refusedCount: pool.refused };
 }
 
 // A stranded letter is released once more right away; one Windows still keeps is recorded as a
@@ -195,16 +191,18 @@ export function mapWindowsStepDrives(
   scope: WindowsStepDriveScope,
 ): readonly WindowsStepDrive[] {
   const drives: WindowsStepDrive[] = [];
+  const stranded: string[] = [];
   let definition: ReturnType<typeof defineWindowsStepDrives>;
   try {
-    definition = defineWindowsStepDrives(roots, scope.host, drives);
+    definition = defineWindowsStepDrives(roots, scope.host, drives, stranded);
   } catch (error) {
     diagnose(scope, "editor.verification.windows-step-drives.define-failed", error);
     unmapWindowsStepDrives(drives, scope);
+    releaseStranded(stranded, scope);
     throw stepRefusal();
   }
   record(scope, definition.outcome, drives.length, definition.refusedCount);
-  releaseStranded(definition.stranded, scope);
+  releaseStranded(stranded, scope);
   if (definition.outcome === "mapped") return drives;
   unmapWindowsStepDrives(drives, scope);
   throw stepRefusal();
