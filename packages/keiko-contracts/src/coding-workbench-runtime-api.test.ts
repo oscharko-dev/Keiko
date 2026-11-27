@@ -92,8 +92,10 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 
-  it("knows the selection-mismatch refusal as a closed start failure code", () => {
-    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("workspace-selection-mismatch");
+  // Refused before any run exists, so no run snapshot (whose failure_code column is a closed list)
+  // can ever carry it: it is a start-only refusal, not a run failure code.
+  it("keeps the selection-mismatch refusal out of the persisted run failure codes", () => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).not.toContain("workspace-selection-mismatch");
   });
 
   it("accepts only a bounded preview precondition attached to an issue intent", () => {

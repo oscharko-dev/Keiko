@@ -102,10 +102,6 @@ export type CodingWorkbenchRuntimeFailureCode =
   // workspace instance, repository identity unreadable).
   | "model-unavailable"
   | "workspace-unqualified"
-  // The start named a repository other than the server's active workspace (the Workbench showed one
-  // folder while the global pointer was on another). Refused before any authority or history exists,
-  // so a run never starts in a repository the person is not looking at.
-  | "workspace-selection-mismatch"
   // F9 (#3873, live Gemma qualification): a run whose last turn ended on one of its own bounds or on
   // a failed model call names that cause instead of `runtime-failed`, which the Workbench renders as
   // an internal error. `prompt-allowance-exhausted` is LEGACY and never produced any more (#4346,
@@ -164,9 +160,14 @@ export type CodingWorkbenchRuntimeFailureCode =
  * `workspace-location-unsupported`; one whose worktree lies on another volume than Windows, where
  * the AppContainer cannot resolve its path, with `workspace-volume-unsupported`. No run exists when
  * they are answered, so no run snapshot ever carries one: they are not run failure codes.
+ * `workspace-selection-mismatch` is the same kind: the start stated a repository other than the
+ * server's active workspace (the Workbench showed one folder while the global pointer was on
+ * another) and is refused before any authority, snapshot or history exists.
  */
 export type CodingWorkbenchRuntimeStartRefusalCode =
-  "workspace-location-unsupported" | "workspace-volume-unsupported";
+  | "workspace-location-unsupported"
+  | "workspace-volume-unsupported"
+  | "workspace-selection-mismatch";
 
 /** What a refused start answers with: a run failure code, or a start-only refusal (#4068). */
 export type CodingWorkbenchRuntimeStartFailureCode =
@@ -254,7 +255,6 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "verification-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
-    "workspace-selection-mismatch",
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",

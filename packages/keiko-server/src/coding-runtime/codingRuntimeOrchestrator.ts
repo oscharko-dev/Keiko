@@ -269,7 +269,6 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "verification-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
-    "workspace-selection-mismatch",
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
@@ -4513,13 +4512,16 @@ export class CodingRuntimeOrchestrator {
   private refuseStartScope(
     scope: { readonly gap: StartScopeGap; readonly detail?: string },
     correlationId: string | undefined,
-  ): CodingRuntimeOrchestratorResult {
+  ): Extract<CodingRuntimeStartResult, { readonly ok: false }> {
     recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap, scope.detail);
-    return this.fail(
-      scope.gap === "workspace-selection-mismatch"
-        ? "workspace-selection-mismatch"
-        : "authority-resolution-failed",
-    );
+    // A start-only refusal, answered before any run exists: it is never a run failure code.
+    return {
+      ok: false,
+      failureCode:
+        scope.gap === "workspace-selection-mismatch"
+          ? "workspace-selection-mismatch"
+          : "authority-resolution-failed",
+    };
   }
 
   /**
