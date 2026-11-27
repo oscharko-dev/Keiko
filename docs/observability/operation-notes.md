@@ -859,7 +859,8 @@ repository or workspace that was not activated (`history-repository-switched`,
 a new task instead of following a settled run of another task (`history-run-held`, once per pick;
 #4271), a run that needed recovery left with New task (`recovery-left`, once per departure; F30), the starting repository of a window without a stored one, decided only after the
 task-workspace state answered (`repository-seeded` from the shell's project or
-`repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371) and a refused editor
+`repository-seed-skipped` for an active task binding, once per window; #4271; `repository-returned` when the Git window hands a just-added folder back to the window that asked for it, #4371), a workspace activation the Workbench requests on its own
+(`workspace-activation-requested` with the closed `activationTrigger` `window-selection`, `shell-seed` or `active-follow`, under the request's correlation; U-3) and a refused editor
 bridge registration
 (`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
 refused request's correlation and the run as parent; #4117) and a diff that switched to the

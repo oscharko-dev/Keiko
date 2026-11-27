@@ -2,7 +2,10 @@
 
 import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { isCodingWorkbenchDraftWindowId } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientCodingWorkbenchRepositorySource,
+  ClientModelCatalogEvidence,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
 import { isActivityLogCorrelationId } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -1026,6 +1029,7 @@ export function CodingWorkbenchWindow({
   onSelectBranch = noopSelectRepository,
   onSelectLocation = (): void => undefined,
   onPinRepository,
+  repositorySource,
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
@@ -1050,6 +1054,8 @@ export function CodingWorkbenchWindow({
   readonly onSelectLocation?: ((location: WorkbenchExecutionLocation) => void) | undefined;
   /** Keeps the repository a run works in as this window's own, without any other selection reset. */
   readonly onPinRepository?: ((root: string) => void) | undefined;
+  /** Where the window took its repository from: names an automatic activation's trigger. */
+  readonly repositorySource?: ClientCodingWorkbenchRepositorySource | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -1142,6 +1148,7 @@ export function CodingWorkbenchWindow({
     workspaceError: activeWorkspace.error !== null,
     runIsActive,
     locationsPending: executionLocationsPending(state),
+    repositorySource,
     refresh: refreshCheckout,
   });
   const alert = visibleAlert(

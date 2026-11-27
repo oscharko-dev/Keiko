@@ -2429,6 +2429,10 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   // The mounted window settled where its repository came from: its own saved selection, the
   // folder the shell held, or none. The closed source only, never the path (#4068).
   "repository-resolved",
+  // The Workbench asked the server to activate a workspace on its own, after a selection or a
+  // refresh and not on a click: the closed trigger names where the repository it binds came from
+  // (U-3). Once per request.
+  "workspace-activation-requested",
 ] as const;
 export type ClientCodingWorkbenchInteractionName =
   (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
@@ -2598,6 +2602,19 @@ export const CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES = ["window", "shell", "n
 export type ClientCodingWorkbenchRepositorySource =
   (typeof CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES)[number];
 
+/**
+ * Where the repository of an automatic workspace activation came from: the window's own saved
+ * selection (the composer picker or the Git window's return), the folder the shell held when the
+ * window was seeded, or the active workspace the window follows.
+ */
+export const CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS = [
+  "window-selection",
+  "shell-seed",
+  "active-follow",
+] as const;
+export type ClientCodingWorkbenchActivationTrigger =
+  (typeof CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS)[number];
+
 /** Bounds a changeset's file count, like the restored-run counts above. */
 export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
 /** Bounds a windowed diff's total line and byte counts (16 Mi lines, 1 GiB). */
@@ -2658,6 +2675,10 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
   | {
       readonly interaction: "repository-resolved";
       readonly repositorySource: ClientCodingWorkbenchRepositorySource;
+    }
+  | {
+      readonly interaction: "workspace-activation-requested";
+      readonly activationTrigger: ClientCodingWorkbenchActivationTrigger;
     };
 
 const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
@@ -2683,6 +2704,9 @@ const CODING_WORKBENCH_DIFF_SURFACE_SET: ReadonlySet<string> = new Set(
 );
 const CODING_WORKBENCH_HELD_NOTICE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+);
+const CODING_WORKBENCH_ACTIVATION_TRIGGER_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_ACTIVATION_TRIGGERS,
 );
 const CODING_WORKBENCH_REPOSITORY_SOURCE_SET: ReadonlySet<string> = new Set(
   CLIENT_CODING_WORKBENCH_REPOSITORY_SOURCES,
@@ -2753,6 +2777,9 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   },
   "repository-resolved": {
     repositorySource: (value) => isSetMember(value, CODING_WORKBENCH_REPOSITORY_SOURCE_SET),
+  },
+  "workspace-activation-requested": {
+    activationTrigger: (value) => isSetMember(value, CODING_WORKBENCH_ACTIVATION_TRIGGER_SET),
   },
 };
 

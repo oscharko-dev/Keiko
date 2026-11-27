@@ -162,6 +162,16 @@ function useRepositorySourceReport(
   }, [source]);
 }
 
+function selectedLocationOf(
+  cfg: WindowCfgRecord,
+  restoringHistory: boolean,
+): WorkbenchExecutionLocation | undefined {
+  return !restoringHistory &&
+    (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
+    ? cfg.executionLocation
+    : undefined;
+}
+
 /** Keep feature navigation inside the Workbench's existing observed lazy-load boundary. */
 export function CodingWorkbenchWindowHost({
   cfg,
@@ -178,10 +188,7 @@ export function CodingWorkbenchWindowHost({
     typeof cfg.historySelection === "string" ? cfg.historySelection : undefined;
   const restoringHistory = isHistoryRestore(historySelection);
   const targetBranch = restoringHistory ? undefined : resolvedTargetBranch(cfg, root);
-  const selectedLocation: WorkbenchExecutionLocation | undefined =
-    !restoringHistory && (cfg.executionLocation === "local" || cfg.executionLocation === "worktree")
-      ? cfg.executionLocation
-      : undefined;
+  const selectedLocation = selectedLocationOf(cfg, restoringHistory);
   const connectorWindows = useWorkspaceConnectorWindows(context.openWindow);
   return (
     <ConnectorWindowsProvider value={connectorWindows}>
@@ -192,6 +199,7 @@ export function CodingWorkbenchWindowHost({
         onOpenHistory={() => context.openWindow("codingHistory")}
         leftRun={typeof cfg.leftRunId === "string" ? cfg.leftRunId : undefined}
         onLeftRun={(leftRunId) => context.updateCfg({ leftRunId })}
+        repositorySource={repositorySourceOf(cfgRoot, seedRoot)}
         selectedRoot={root ?? undefined}
         selectedBranch={targetBranch}
         selectedLocation={selectedLocation}

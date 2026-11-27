@@ -1741,6 +1741,10 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "repository-resolved", repositorySource: "window" },
     { interaction: "repository-resolved", repositorySource: "shell" },
     { interaction: "repository-resolved", repositorySource: "none" },
+    // U-3: where the repository of an automatic workspace activation came from.
+    { interaction: "workspace-activation-requested", activationTrigger: "window-selection" },
+    { interaction: "workspace-activation-requested", activationTrigger: "shell-seed" },
+    { interaction: "workspace-activation-requested", activationTrigger: "active-follow" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1799,6 +1803,8 @@ describe("POST /api/diagnostics/client", () => {
       agentReported: true,
       toolProfile: "direct",
     },
+    { interaction: "workspace-activation-requested" },
+    { interaction: "workspace-activation-requested", activationTrigger: "/repos/a" },
     { interaction: "repository-resolved" },
     { interaction: "repository-resolved", repositorySource: "/repos/synthetic-repository" },
     { interaction: "repository-resolved", repositorySource: "window", repositoryPath: "/repos/a" },

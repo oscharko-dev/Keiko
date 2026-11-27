@@ -12,6 +12,8 @@ import {
   type SetStateAction,
 } from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type { ClientCodingWorkbenchRepositorySource } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { reportCodingWorkbenchActivationRequested } from "@/lib/coding-workbench-interaction";
 import { ApiError, fetchGitStatus, fetchProjects } from "@/lib/api";
 import { selectFolderWorkspace, selectLocalCheckout } from "@/lib/task-workspace-api";
 import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
@@ -174,6 +176,8 @@ interface LocationInput {
    * location is known to be safe: nothing is bound and the selection stays pending.
    */
   readonly locationsPending?: boolean | undefined;
+  /** Where the window took its repository from; only names an automatic activation's trigger. */
+  readonly repositorySource?: ClientCodingWorkbenchRepositorySource | undefined;
   readonly refresh: () => Promise<boolean>;
 }
 
@@ -293,6 +297,8 @@ interface BindingAttempt {
   readonly setErrorKey: Dispatch<SetStateAction<string | null>>;
   readonly setErrorReason: Dispatch<SetStateAction<LocationFailureReason | undefined>>;
   readonly setSelectionEpoch: Dispatch<SetStateAction<number>>;
+  /** Where the window took its repository from: the closed trigger of the activation it requests. */
+  readonly repositorySource: ClientCodingWorkbenchRepositorySource | undefined;
 }
 
 async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
@@ -312,6 +318,7 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
       });
       return;
     }
+    reportCodingWorkbenchActivationRequested(attempt.repositorySource, correlationId);
     if (input.folderMode) {
       await selectFolderWorkspace({ root: input.root, requestedBy: OPERATOR, correlationId });
     } else if (input.location === "local") {
@@ -357,7 +364,7 @@ function useBindingAttempt(input: LocationInput, ready: boolean, key: string): B
   useLayoutEffect(() => {
     latest.current = stableInput;
   }, [stableInput]);
-  const { refresh, workspaceError, branchError } = input;
+  const { refresh, workspaceError, branchError, repositorySource } = input;
   useEffect(() => {
     if (ready) {
       setHandledKey(key);
@@ -381,8 +388,9 @@ function useBindingAttempt(input: LocationInput, ready: boolean, key: string): B
       setErrorKey,
       setErrorReason,
       setSelectionEpoch,
+      repositorySource,
     });
-  }, [errorKey, handledKey, stableInput, key, ready, selectionEpoch]);
+  }, [errorKey, handledKey, stableInput, key, ready, selectionEpoch, repositorySource]);
   const retry = useCallback((): void => {
     setHandledKey(null);
     setErrorKey(null);

@@ -280,6 +280,50 @@ describe("workbench execution location restoration", () => {
     });
   });
 
+  // U-3: an activation the Workbench requests on its own names, in the Activity Log, where the
+  // repository it binds came from, under the correlation of the request itself.
+  it.each([
+    ["window", "window-selection"],
+    ["shell", "shell-seed"],
+    [undefined, "active-follow"],
+  ] as const)(
+    "reports the trigger of an automatic activation (%s)",
+    async (repositorySource, activationTrigger) => {
+      mocks.fetchGitStatus.mockResolvedValue({ available: true, branch: "main", detached: false });
+      mocks.selectLocalCheckout.mockResolvedValue({});
+      renderHook(useWorkbenchExecutionLocation, {
+        initialProps: {
+          root: "/repo",
+          branch: undefined,
+          location: "local" as const,
+          activeInstance: null,
+          branchLoading: false,
+          branchError: false,
+          branchDenied: false,
+          workspaceLoading: false,
+          workspaceError: false,
+          runIsActive: false,
+          folderMode: false,
+          repositorySource,
+          refresh,
+        },
+      });
+
+      await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+      const correlationId = mocks.selectLocalCheckout.mock.calls[0]?.[0]?.correlationId as string;
+      expect(vi.mocked(reportClientDiagnostic)).toHaveBeenCalledWith(
+        "[keiko] coding workbench interaction: workspace-activation-requested",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "workspace-activation-requested",
+            activationTrigger,
+          },
+          correlationId,
+        },
+      );
+    },
+  );
+
   it("reports a failed branch discovery under its original attempt correlation", async () => {
     mocks.fetchGitStatus.mockResolvedValue({ available: false });
     renderHook(useWorkbenchExecutionLocation, {

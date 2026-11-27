@@ -6,6 +6,7 @@ import {
   CLIENT_CODING_WORKBENCH_DIFF_BYTE_COUNT_MAX,
   CLIENT_CODING_WORKBENCH_DIFF_LINE_COUNT_MAX,
   CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX,
+  type ClientCodingWorkbenchActivationTrigger,
   type ClientCodingWorkbenchAgentKind,
   type ClientCodingWorkbenchDetailSection,
   type ClientCodingWorkbenchDiffSurface,
@@ -59,6 +60,26 @@ export function reportCodingWorkbenchRepositoryResolved(
 ): void {
   reportCodingWorkbenchInteraction({ interaction: "repository-resolved", repositorySource });
 }
+
+/**
+ * The Workbench asked the server to activate a workspace on its own (U-3). The trigger is derived
+ * from where the window took its repository: its own selection, the shell's seed, or the active
+ * workspace it follows. Never the path.
+ */
+export function reportCodingWorkbenchActivationRequested(
+  source: ClientCodingWorkbenchRepositorySource | undefined,
+  correlationId: string,
+): void {
+  const activationTrigger = ACTIVATION_TRIGGER_OF_SOURCE[source ?? "none"];
+  reportCodingWorkbenchInteraction(
+    { interaction: "workspace-activation-requested", activationTrigger },
+    correlationId,
+  );
+}
+
+const ACTIVATION_TRIGGER_OF_SOURCE: Readonly<
+  Record<ClientCodingWorkbenchRepositorySource, ClientCodingWorkbenchActivationTrigger>
+> = { window: "window-selection", shell: "shell-seed", none: "active-follow" };
 
 /** The size of a diff that switched to the windowed view: counts only, never a path or text. */
 export interface CodingWorkbenchWindowedDiffSize {
