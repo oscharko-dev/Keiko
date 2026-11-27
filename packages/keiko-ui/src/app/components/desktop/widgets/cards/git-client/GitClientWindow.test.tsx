@@ -5193,6 +5193,47 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     expect(screen.getByRole("dialog", { name: "New branch" })).toBeInTheDocument();
     expect(client.commitPropose).not.toHaveBeenCalled();
   });
+
+  it("keeps a generated draft when the branch the protected branch asks for is created", async () => {
+    const user = userEvent.setup();
+    let branch = "dev";
+    const stagedChange = change("src/index.ts", { indexStatus: "M", staged: true });
+    const getStatus = vi.fn(async () =>
+      makeStatus({ branch, clean: false, stagedCount: 1, changes: [stagedChange] }),
+    );
+    const client = makeClient({
+      getStatus,
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
+        makeCommitPreview(
+          branch === "dev"
+            ? { policyOutcome: "blocked", policyBlockReason: "protected-branch" }
+            : {},
+        ),
+      ),
+      branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => {
+        branch = "feature/keep-draft";
+        return { schemaVersion: "1", status: "succeeded", actionKind: "branch-switch" };
+      }),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+    await user.click(await screen.findByRole("button", { name: "Create branch first" }));
+    const dialog = screen.getByRole("dialog", { name: "New branch" });
+    await user.type(within(dialog).getByLabelText("Branch name"), "feature/keep-draft");
+    const reads = getStatus.mock.calls.length;
+    await user.click(within(dialog).getByRole("button", { name: "Create branch" }));
+
+    await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(() => expect(client.commitPreview).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
+  });
 });
 
 describe("GitClientWindow — diff scope (Issue #1575)", () => {

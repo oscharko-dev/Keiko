@@ -96,6 +96,7 @@ import {
 import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 import { requestEditorBufferReconciliation } from "../editor-buffer-reconciliation-events";
 import { restoreModalTriggerFocus } from "../../../hooks/useModalInteractionLock";
+import { useCommitDraftRevision } from "./commitDraftRevision";
 import {
   BODY_STYLE,
   COMMIT_WORKSPACE_PANE_STYLE,
@@ -1450,6 +1451,8 @@ export function GitClientWindow({
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const redemptions = useCodingAppSessionRedemptions();
   const commitPreviewRevision = statusRevision + redemptions + commitStatusRevision;
+  // Stage and unstage clicks: the same path staged again with other content keeps its signature.
+  const [stagingEpoch, setStagingEpoch] = useState(0);
   // A settled status read also invalidates commit evidence. Manual retry or browser re-pair can
   // bring in or clear a conflict without a local Git mutation.
   const onStatusLoaded = useCallback((response: GitRepositoryStatusResponse): void => {
@@ -1471,6 +1474,14 @@ export function GitClientWindow({
   );
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
+  const runStaging = staging.runMutation;
+  const runStagingMutation = useCallback(
+    (...args: Parameters<typeof runStaging>): ReturnType<typeof runStaging> => {
+      setStagingEpoch((epoch): number => epoch + 1);
+      return runStaging(...args);
+    },
+    [runStaging],
+  );
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
   const runCommitPreview = commit.runPreview;
   const resetBranchActions = branchActions.reset;
@@ -1945,6 +1956,7 @@ export function GitClientWindow({
     history,
   });
   const activeStatus = active.status;
+  const commitDraftRevision = useCommitDraftRevision(activeStatus, stagingEpoch, redemptions);
   const hasActiveConflicts = hasRepositoryConflicts(activeStatus);
   const reportedConflictRoot = useRef<string | null>(null);
   useEffect((): void => {
@@ -2004,7 +2016,7 @@ export function GitClientWindow({
   const stageFile = useCallback(
     (change: GitChangedFile): void => {
       if (selectedPath === null || hasActiveConflicts) return;
-      staging.runMutation(() =>
+      runStagingMutation(() =>
         client.stage({
           projectId: selectedPath,
           pathspecs: [change.path],
@@ -2012,17 +2024,17 @@ export function GitClientWindow({
         }),
       );
     },
-    [client, hasActiveConflicts, selectedPath, staging],
+    [client, hasActiveConflicts, runStagingMutation, selectedPath],
   );
 
   const unstageFile = useCallback(
     (change: GitChangedFile): void => {
       if (selectedPath === null || hasActiveConflicts) return;
-      staging.runMutation(() =>
+      runStagingMutation(() =>
         client.unstage({ projectId: selectedPath, pathspecs: [change.path] }),
       );
     },
-    [client, hasActiveConflicts, selectedPath, staging],
+    [client, hasActiveConflicts, runStagingMutation, selectedPath],
   );
 
   const stageAll = useCallback((): void => {
@@ -2038,10 +2050,10 @@ export function GitClientWindow({
       .map((c) => c.path);
     if (pathspecs.length === 0) return;
     const includeUntracked = activeStatus.changes.some((c) => c.untracked);
-    staging.runMutation(() =>
+    runStagingMutation(() =>
       client.stage({ projectId: selectedPath, pathspecs, includeUntracked }),
     );
-  }, [activeStatus, client, hasActiveConflicts, selectedPath, staging]);
+  }, [activeStatus, client, hasActiveConflicts, runStagingMutation, selectedPath]);
 
   const unstageAll = useCallback((): void => {
     if (
@@ -2053,8 +2065,8 @@ export function GitClientWindow({
       return;
     const pathspecs = activeStatus.changes.filter((c) => c.staged).map((c) => c.path);
     if (pathspecs.length === 0) return;
-    staging.runMutation(() => client.unstage({ projectId: selectedPath, pathspecs }));
-  }, [activeStatus, client, hasActiveConflicts, selectedPath, staging]);
+    runStagingMutation(() => client.unstage({ projectId: selectedPath, pathspecs }));
+  }, [activeStatus, client, hasActiveConflicts, runStagingMutation, selectedPath]);
 
   const commitChanges = useCallback(
     (message: string): void => {
@@ -2299,6 +2311,7 @@ export function GitClientWindow({
       previewRequestRevision={commit.previewRequestRevision}
       previewError={commit.previewError}
       previewRevision={commitPreviewRevision}
+      draftRevision={commitDraftRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
       summaryValue={commitSummary}
       bodyValue={commitBody}
