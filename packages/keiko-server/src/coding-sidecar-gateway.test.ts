@@ -12576,3 +12576,237 @@ describe("coding-sidecar gateway route prompt calibration", () => {
     ).toMatchObject({ reason: "prompt-tokens-exceeded", promptEstimateSource: "usage-calibrated" });
   });
 });
+
+// Live defect M-1: a model that ends its turn with a tool call written as TEXT (`<shell .../>`,
+// `<tool_call>{...}</tool_call>`) and no native tool call. The runtime reads that as the end of the
+// turn, so the gateway re-requests the model once or twice with a fixed hint, never hands the markup
+// to the runtime when that succeeds, and never executes anything parsed from the text.
+describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const NATIVE_RECOVERY_TOOLS = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+    type: "function" as const,
+    function: { name, description: "", parameters: { type: "object", properties: {} } },
+  }));
+  const GEMMA_MARKUP = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> </todo>\n<shell command="npm test | tail -n 1" />`;
+  const QWEN_MARKUP = `<tool_call>\n{"name": "shell", "arguments": {"command": "git commit -am fix"}}\n</tool_call>`;
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const textual = (content: string): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    content,
+  });
+  const nativeCall = (): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    content: "",
+    finishReason: "tool_calls",
+    toolCalls: [{ id: "call-1", name: "shell", arguments: { command: "git commit -am fix" } }],
+  });
+
+  function recoveryDeps(
+    chat: (request: GatewayRequest) => Promise<NormalizedResponse>,
+    stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>,
+  ): UiHandlerDeps {
+    return {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-textual-recovery" } }),
+        () => chat,
+        createOpenCodeGatewayReadinessRegistry("native"),
+        () => stream,
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 9 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+  }
+
+  interface Sequence {
+    readonly requests: GatewayRequest[];
+    readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>;
+    readonly stream: (request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>;
+  }
+
+  function sequence(answers: readonly NormalizedResponse[]): Sequence {
+    const requests: GatewayRequest[] = [];
+    const next = (request: GatewayRequest): NormalizedResponse => {
+      requests.push(request);
+      return answers[Math.min(requests.length, answers.length) - 1] ?? textual("");
+    };
+    return {
+      requests,
+      chat: (request) => Promise.resolve(next(request)),
+      stream: (request) => streamedResponse(next(request)),
+    };
+  }
+
+  const hasHint = (request: GatewayRequest | undefined): boolean =>
+    request?.messages.at(-1)?.role === "system" &&
+    request.messages.at(-1)?.content.includes("native tool-calling interface") === true;
+
+  async function buffered(answers: readonly NormalizedResponse[]): Promise<{
+    readonly result: RouteResult | typeof STREAMING;
+    readonly seq: Sequence;
+    readonly sink: BufferedServerLogSink;
+  }> {
+    const sink = captureServerLog("info");
+    const seq = sequence(answers);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix the bug, run npm test, then commit" }],
+        tools: NATIVE_RECOVERY_TOOLS,
+      }),
+      recoveryDeps(seq.chat, seq.stream),
+    );
+    return { result, seq, sink };
+  }
+
+  async function live(answers: readonly NormalizedResponse[]): Promise<{
+    readonly body: string;
+    readonly seq: Sequence;
+    readonly sink: BufferedServerLogSink;
+  }> {
+    const sink = captureServerLog("info");
+    const seq = sequence(answers);
+    const response = mockResponse({ captureBody: true });
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "fix the bug, run npm test, then commit" }],
+          tools: NATIVE_RECOVERY_TOOLS,
+        }),
+        res: response.res,
+      },
+      recoveryDeps(seq.chat, seq.stream),
+    );
+    expect(result).toBe(STREAMING);
+    return { body: response.body(), seq, sink };
+  }
+
+  const bodyText = (result: RouteResult | typeof STREAMING): string =>
+    JSON.stringify((result as { readonly body?: unknown }).body);
+  const liveText = (body: string): string =>
+    frameDeltas(body)
+      .map((delta) => (typeof delta.content === "string" ? delta.content : ""))
+      .join("");
+
+  it.each([
+    ["Gemma-style element markup", GEMMA_MARKUP],
+    ["Qwen-style tool_call wrapper", QWEN_MARKUP],
+  ])(
+    "re-requests a buffered turn that ended with %s and delivers the native call",
+    async (_label, markup) => {
+      const { result, seq, sink } = await buffered([textual(markup), nativeCall()]);
+
+      expect(seq.requests).toHaveLength(2);
+      expect(hasHint(seq.requests[0])).toBe(false);
+      expect(hasHint(seq.requests[1])).toBe(true);
+      expect(seq.requests[1]?.messages.slice(0, -1)).toEqual(seq.requests[0]?.messages);
+      expect(result).toMatchObject({ status: 200 });
+      expect(bodyText(result)).toContain("tool_calls");
+      expect(bodyText(result)).not.toContain("<shell");
+      expect(bodyText(result)).not.toContain("tool_call>");
+      const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        outcome: "accepted",
+        textualToolCallRecovery: "retried-native",
+        textualToolCallRetries: 1,
+      });
+      expect(JSON.stringify(sink.events)).not.toContain("npm test");
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      );
+    },
+  );
+
+  it.each([
+    ["prose that mentions a div", "Use a <div> wrapper and a <span> inside it."],
+    [
+      "a code block with XML",
+      "Example:\n```xml\n<div><span>x</span></div>\n```\nThat renders a box.",
+    ],
+    ["markup that names an unknown tool", `<launch_missiles target="moon" />`],
+    ["a final answer", "All done: the tests pass and the fix is committed."],
+  ])("does not re-request a buffered turn with %s", async (_label, content) => {
+    const { result, seq, sink } = await buffered([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(result).toMatchObject({ status: 200 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).not.toHaveProperty(
+      "textualToolCallRecovery",
+    );
+  });
+
+  it("passes the markup through after two retries and records the exhaustion", async () => {
+    const { result, seq, sink } = await buffered([textual(GEMMA_MARKUP)]);
+
+    expect(seq.requests).toHaveLength(3);
+    expect(hasHint(seq.requests[2])).toBe(true);
+    expect(result).toMatchObject({ status: 200 });
+    // Nothing parsed from the text became a tool call: the runtime still gets plain text.
+    expect(bodyText(result)).not.toContain('"tool_calls"');
+    expect(bodyText(result)).toContain("<shell command");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-exhausted",
+      textualToolCallRetries: 2,
+    });
+  });
+
+  it("recovers a live turn without the runtime ever receiving the markup", async () => {
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(hasHint(seq.requests[1])).toBe(true);
+    expect(body).not.toContain("<shell");
+    expect(body).not.toContain("<todo");
+    expect(body).toContain('"tool_calls"');
+    expect(body.trim().endsWith("data: [DONE]")).toBe(true);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retried-native",
+      textualToolCallRetries: 1,
+    });
+  });
+
+  it("streams a lead-in sentence live and holds back only the markup after it", async () => {
+    const { body, seq } = await live([textual(`Run.\n${GEMMA_MARKUP}`), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(2);
+    expect(frameDeltas(body)).toContainEqual({ content: "Run.\n" });
+    expect(body).not.toContain("<shell");
+  });
+
+  it.each([
+    ["prose with a div", "Use a <div> wrapper and a <span> inside it."],
+    ["a final answer", "All done: the tests pass."],
+  ])("delivers a live turn with %s whole and does not retry", async (_label, content) => {
+    const { body, seq, sink } = await live([textual(content)]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(content);
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).not.toHaveProperty(
+      "textualToolCallRecovery",
+    );
+  });
+
+  it("passes a live turn through once the retries are spent and records the exhaustion", async () => {
+    const { body, seq, sink } = await live([textual(GEMMA_MARKUP)]);
+
+    expect(seq.requests).toHaveLength(3);
+    expect(body).not.toContain('"tool_calls"');
+    expect(liveText(body)).toContain("<shell command");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      textualToolCallRecovery: "retry-exhausted",
+      textualToolCallRetries: 2,
+    });
+  });
+});

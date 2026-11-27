@@ -2825,6 +2825,30 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   capability no longer authenticates, sends no further attempt and ends the turn as rejected
   (409 `SKILL_SELECTION_CHANGED` with `skill-unavailable`, or 401 with `capability-invalid`), so
   the runtime does not resend it.
+- **A tool call written as text is asked for again, never executed (live defect M-1).** A local
+  model (Gemma, Qwen, DeepSeek) sometimes ends a turn with `finish_reason: stop`, no native
+  `tool_calls` and text that is tool-call markup (`<shell command="npm test" />`,
+  `<tool_call>{"name":"bash",…}</tool_call>`, `<function=name>`, a fenced JSON call). The runtime
+  reads that as the end of the turn, so the run used to settle `succeeded` without the requested
+  work and the user saw raw markup. The coding sidecar gateway owns the recovery because it alone
+  sees the request's tool catalog and both delivery paths. A turn qualifies only when it finished
+  `stop` with no native call and its text is dominated (at least 60 % of it, at most 32 KiB) by
+  markup that names a tool the request advertised (`coding-textual-tool-call.ts`); prose, code
+  blocks and markup naming no advertised tool never qualify. The gateway then re-requests the model
+  with the original request plus one fixed system hint to use the native tool-calling interface, at
+  most twice per runtime request (a loop guard, not a work limit: once spent, the response passes
+  through unchanged, exactly as before). The text is never parsed into a tool call and nothing is
+  executed from it. A buffered answer is simply discarded. A live (streamed) turn holds back, from
+  the first character that can start markup (`<`, or a line-leading code fence, `{` or `[`), the rest of
+  the attempt until it finishes, so a discarded attempt never reaches the runtime; prose before that
+  point streams live and stays (the retry continues after it), a held text that turns out to be an
+  ordinary answer is released in one frame, and a hold past 32 KiB is released unexamined. The
+  reasoning of a retried live attempt is not forwarded (the first attempt's was shown), a discarded
+  attempt's usage is counted beside the final answer's (`discardedAttemptUsage`), and a model that
+  needs exact reasoning continuation keeps the pass-through (its discarded attempt would leave
+  continuation state behind). `coding-sidecar.gateway.outcome` records
+  `textualToolCallRecovery` (`retried-native`, `retry-exhausted`) and `textualToolCallRetries`
+  (counts and closed words only, never the markup) on a turn that needed it.
 - **Native child sessions inherit the parent run.** A subagent's session is admitted only when its
   `parentID` chain, read from the runtime's own session list, reaches the run's session within
   eight steps inside the run's workspace (at most 64 cached children). Its asks take the parent's

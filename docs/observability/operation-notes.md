@@ -1249,7 +1249,11 @@ a cancellation) omits both, because it cannot know; a repaired turn that failed 
 is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
 discarded (a repair's first answer, a rejected tool call) remains in the run's cumulative usage
 roll-up without a prompt-token allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
-`discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
+`discardedPromptTokens`, `discardedCompletionTokens`). A turn whose model wrote its tool call as text
+(finish `stop`, no native call, markup naming an advertised tool) is re-requested by the gateway at
+most twice with one fixed hint (ADR-0137, live defect M-1); `coding-sidecar.gateway.outcome` then
+carries `textualToolCallRecovery` (`retried-native`, `retry-exhausted`) and `textualToolCallRetries`,
+never the markup. The correction the model receives is one fixed
 sentence, and the failed answer's reasoning is never recorded. For default and shared-history profiles, runtime reasoning fields are
 never forwarded directly: the coding sidecar drops echoed reasoning fields and reasoning-only assistant
 messages, and `coding-sidecar.gateway.request-validated` counts the dropped messages. By default
