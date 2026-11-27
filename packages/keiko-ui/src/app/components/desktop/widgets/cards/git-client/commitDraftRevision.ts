@@ -22,8 +22,9 @@ function headCommitOf(
  * is never logged or sent.
  *
  * A new branch from the current commit keeps it, as does any status read that changes nothing
- * staged. Its known limit: the same path staged again with other content by a tool outside this
- * window, under the same index status, keeps it too.
+ * staged. Its known limits, both outside this window: the same path staged again with other content
+ * under the same index status keeps it, and so does another commit checked out on a detached HEAD
+ * with the same staged selection (the status names no detached commit).
  */
 export function stagedSelectionSignature(
   status: GitRepositoryStatusResponse | null | undefined,
