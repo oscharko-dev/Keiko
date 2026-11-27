@@ -11,7 +11,15 @@ import {
   recordSseStreamFrame,
   SSE_STALLED_READER_TIMEOUT_MS,
 } from "../sse-write.js";
-import type { CodingAppSessionChannelSnapshot } from "./channelContract.js";
+import {
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
+  type CodingSafeActivityTextDelta,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import {
+  CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
+  type CodingAppSessionChannelSnapshot,
+} from "./channelContract.js";
 
 /**
  * How long one buffered app-session frame may wait for its peer to drain it, and how long a closing
@@ -97,6 +105,61 @@ function guardedSessionStreamFrame(
   }
 }
 
+function textDeltasOf(
+  snapshot: CodingAppSessionChannelSnapshot,
+): readonly CodingSafeActivityTextDelta[] {
+  const { content } = snapshot;
+  return content !== null && "feed" in content ? (content.textDeltas ?? []) : [];
+}
+
+function sameText(
+  a: CodingSafeActivityTextDelta | undefined,
+  b: CodingSafeActivityTextDelta,
+): boolean {
+  return a?.messageId === b.messageId && a.part === b.part;
+}
+
+// Appends `next` to the delta that already ends where it starts, so a long stream stays few pieces.
+function appendDelta(
+  merged: CodingSafeActivityTextDelta[],
+  next: CodingSafeActivityTextDelta,
+): void {
+  let index = merged.length - 1;
+  while (index >= 0 && !sameText(merged[index], next)) index -= 1;
+  const last = merged[index];
+  if (
+    last !== undefined &&
+    last.offset + last.text.length === next.offset &&
+    last.text.length + next.text.length <= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS
+  ) {
+    merged[index] = { ...last, text: last.text + next.text };
+  } else {
+    merged.push(next);
+  }
+}
+
+/**
+ * A snapshot's text deltas are consume-once: the producer advances its published offset as it takes
+ * them, so a snapshot replaced while a frame drains would take its deltas with it and leave the
+ * reader a gap. The newest snapshot (the complete projection) carries the replaced one's deltas in
+ * order. Where that would pass the delta count or the channel's frame budget, the newest snapshot
+ * goes out as it is and the reader reads the rest as pages — the contract for any left-out delta.
+ */
+export function carryReplacedTextDeltas(
+  replaced: CodingAppSessionChannelSnapshot,
+  newest: CodingAppSessionChannelSnapshot,
+): CodingAppSessionChannelSnapshot {
+  const dropped = textDeltasOf(replaced);
+  const { content } = newest;
+  if (dropped.length === 0 || content === null || !("feed" in content)) return newest;
+  const merged: CodingSafeActivityTextDelta[] = [];
+  for (const delta of [...dropped, ...textDeltasOf(newest)]) appendDelta(merged, delta);
+  if (merged.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS) return newest;
+  const carried = { ...newest, content: { ...content, textDeltas: merged } };
+  const bytes = Buffer.byteLength(JSON.stringify(carried), "utf8");
+  return bytes > CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES ? newest : carried;
+}
+
 /** A stream without a composed channel serves one content-free snapshot and ends. */
 export function writeContentFreeSessionStream(
   res: ServerResponse,
@@ -114,7 +177,8 @@ export function writeContentFreeSessionStream(
 
 /**
  * The app-session stream's one writer. A snapshot is the complete current projection, so while one
- * frame drains only the newest pending snapshot is kept and written on `drain` (latest wins). A peer
+ * frame drains only the newest pending snapshot is kept and written on `drain` (latest wins; the
+ * text deltas of a replaced snapshot travel in the newer one). A peer
  * that does not drain within {@link CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS} is the stalled client
  * KEIKO-0225 reports: the stream stops publishing and closes; the route keeps that close bounded.
  */
@@ -151,7 +215,8 @@ class AppSessionStreamWriter implements SessionStreamWriter {
     }
     if (this.draining) {
       if (this.pending !== undefined) this.coalescedSnapshotCount += 1;
-      this.pending = snapshot;
+      this.pending =
+        this.pending === undefined ? snapshot : carryReplacedTextDeltas(this.pending, snapshot);
       return true;
     }
     try {
