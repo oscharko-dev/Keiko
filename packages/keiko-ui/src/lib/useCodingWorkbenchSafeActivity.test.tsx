@@ -814,6 +814,21 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(view.result.current.feed).toBeNull();
   });
 
+  it("reads a recovery-required run without a projection as needing attention, not as a lost connection (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "recovery-required",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+    expect(view.result.current.feed).toBeNull();
+  });
+
   it("labels the projection as offline when the transport throws a TypeError", async () => {
     getSnapshotMock.mockRejectedValue(new TypeError("Network request failed"));
     const view = renderHook(() =>

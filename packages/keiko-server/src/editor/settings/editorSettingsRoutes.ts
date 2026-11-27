@@ -20,7 +20,7 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../../routes.js";
-import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
+import { startSseHeartbeat, openSseResponse } from "../../sse.js";
 import type { EditorSettingsControlMutation } from "./editorSettingsControl.js";
 import { editorSettingsRootToken, parseEditorSettingsEtag } from "./editorSettingsStore.js";
 
@@ -340,7 +340,7 @@ export async function handleEditorSettingsEvents(
   const resolved = await resolveEventRoot(ctx, deps);
   if (resolved.status !== 200) return resolved;
   const controller = new AbortController();
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   const unsubscribe = deps.editorSettingsEvents.subscribe({
     controller,

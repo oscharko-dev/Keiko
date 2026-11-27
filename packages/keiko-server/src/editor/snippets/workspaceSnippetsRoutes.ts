@@ -11,7 +11,7 @@ import {
 import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, STREAMING, type RouteContext, type RouteResult } from "../../routes.js";
-import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
+import { startSseHeartbeat, openSseResponse } from "../../sse.js";
 import { writeSseFrame } from "../../sse-write.js";
 import type { WorkspaceSnippetsChangeEvent } from "./workspaceSnippetsService.js";
 
@@ -236,7 +236,7 @@ export function handleWorkspaceSnippetsEvents(
   if (subscription.kind === "subscriberLimit") {
     return { status: 429, body: errorBody("SUBSCRIBER_LIMIT", "Too many snippet subscribers.") };
   }
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   let stopped = false;
   const stop = (): void => {

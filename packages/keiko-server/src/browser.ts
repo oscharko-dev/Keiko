@@ -11,7 +11,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import { readyMessage, startSseHeartbeat, openSseResponse } from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -284,7 +284,7 @@ export function openBrowserSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The
   // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.

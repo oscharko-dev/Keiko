@@ -187,6 +187,15 @@ describe("restoreConversation", () => {
     expect(restoration.overflowMessageIds.size).toBe(0);
   });
 
+  it("restores a recovery-required run's conversation from history (U-23)", () => {
+    const restoration = restoreConversation(snapshot("recovery-required"), history);
+    expect(restoration?.feed.runId).toBe("run-7");
+    expect(restoration?.feed.turns[0]?.messages.map((entry) => entry.messageId)).toEqual([
+      "m-2",
+      "m-5",
+    ]);
+  });
+
   it("restores nothing for a live run, an unloaded history or a snapshot without a run", () => {
     expect(restoreConversation(snapshot("running"), history)).toBeNull();
     expect(restoreConversation(snapshot("failed"), null)).toBeNull();

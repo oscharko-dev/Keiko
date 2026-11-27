@@ -15,7 +15,7 @@ import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
-import { SSE_HEADERS, writeMessageEvent, writeReadyMessage, startSseHeartbeat } from "./sse.js";
+import { writeMessageEvent, writeReadyMessage, startSseHeartbeat, openSseResponse } from "./sse.js";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
@@ -722,7 +722,7 @@ export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Hand
   const detachByRunId = new Map<string, () => void>();
   let closed = false;
 
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res, { openFrame: false });
   const stopHeartbeat = startSseHeartbeat(ctx.res);
 
   const detachRun = (runId: string): void => {
@@ -800,7 +800,7 @@ function openSseStream(
   redactor: UiHandlerDeps["redactor"],
   correlationId?: string,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res, { openFrame: false });
   startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {

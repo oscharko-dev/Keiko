@@ -39,6 +39,16 @@ function settledRunId(snapshot: CodingWorkbenchRuntimeSnapshot | null): string |
   return snapshot !== null && settledRunState(snapshot.state) ? snapshot.runId : undefined;
 }
 
+// U-23: a run that ended before a server restart is `recovery-required`, not settled, yet the
+// server holds no live projection for it either. Its conversation comes back from Coding History
+// exactly like a settled run's; only the synthesized settlement row stays settled-only.
+function restorableRunId(snapshot: CodingWorkbenchRuntimeSnapshot | null): string | undefined {
+  return snapshot !== null &&
+    (settledRunState(snapshot.state) || snapshot.state === "recovery-required")
+    ? snapshot.runId
+    : undefined;
+}
+
 function heldSettlement(events: readonly CodingWorkbenchRuntimeSseEvent[], runId: string): boolean {
   return events.some(
     (event) => event.runId === runId && event.kind === "status" && settledRunState(event.state),
@@ -389,7 +399,7 @@ export function restoreConversation(
   snapshot: CodingWorkbenchRuntimeSnapshot | null,
   detail: CodingHistoryDetail | null,
 ): RestoredConversation | null {
-  const runId = settledRunId(snapshot);
+  const runId = restorableRunId(snapshot);
   if (snapshot === null || runId === undefined || detail === null) return null;
   const context = { runId, updatedAt: snapshot.updatedAt, historyCut: detail.truncated };
   const { turns, unplaced, answers } = packedConversation(

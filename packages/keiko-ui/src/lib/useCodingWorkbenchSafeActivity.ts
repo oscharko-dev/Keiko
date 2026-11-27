@@ -304,10 +304,20 @@ function missingProjectionState(
   runState: CodingWorkbenchRuntimeStateName | undefined,
 ): CodingWorkbenchSafeActivityState {
   return {
-    status: terminalRunState(runState) ? "ended" : "unavailable",
+    status: missingProjectionStatus(runState),
     feed: null,
     errorCode: null,
   };
+}
+
+// U-23: a run in recovery-required lost its projection with the process that held it (a server
+// restart); Reconnect cannot bring it back, so it reads as the run needing attention, not as a lost
+// connection. The channel stays open, so a projection that is rebuilt later still replaces this.
+function missingProjectionStatus(
+  runState: CodingWorkbenchRuntimeStateName | undefined,
+): CodingWorkbenchSafeActivityStatus {
+  if (terminalRunState(runState)) return "ended";
+  return runState === "recovery-required" ? "recovery" : "unavailable";
 }
 
 function isSafeActivityContent(

@@ -54,7 +54,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../../sse.js";
+import { readyMessage, startSseHeartbeat, openSseResponse } from "../../sse.js";
 import { writeSseFrame } from "../../sse-write.js";
 import {
   breakpointStoreWorkspaceFingerprint,
@@ -2449,7 +2449,7 @@ function openDebugStream(
   result: Extract<ReturnType<DapEventBridge["subscribe"]>, { readonly kind: "ok" }>,
   controller: AbortController,
 ): typeof STREAMING {
-  ctx.res.writeHead(200, SSE_HEADERS);
+  openSseResponse(ctx.res);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   const stop = (): void => {
     stopHeartbeat();

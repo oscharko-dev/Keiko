@@ -59,7 +59,7 @@ import {
   type RouteDefinition,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { startSseHeartbeat, openSseResponse } from "../sse.js";
 import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type {
@@ -1207,7 +1207,7 @@ export function openCodingRuntimeSse(
   runId: string,
   lastEventId: string | undefined,
 ): void {
-  res.writeHead(200, SSE_HEADERS);
+  openSseResponse(res);
   const stopHeartbeat = startSseHeartbeat(res, undefined, "heartbeat");
   let detach = (): void => undefined;
   let closed = false;
