@@ -271,4 +271,72 @@ describe("a long run's activity within the byte bounds", () => {
       CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
     );
   });
+
+  it("never evicts a running call while a settled step or call remains", () => {
+    const { projection } = open({ maxTurnBytes: 3_000 });
+    for (let step = 0; step < 40; step += 1) {
+      const id = `msg_step_${String(step)}`;
+      projection.ingest(RUN_ID, message(id, "assistant"));
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: id,
+        callId: `call_${String(step)}`,
+        tool: "keiko_workspace_read",
+        state: step === 0 ? "running" : "succeeded",
+        occurredAt: "2026-07-18T17:00:01.000Z",
+      });
+    }
+    const turn = feedOf(projection).turns[0];
+    expect(turn?.truncated).toBe(true);
+    // The oldest step keeps its message and its running call; settled steps went instead.
+    expect(turn?.messages.some(({ messageId }) => messageId === "msg_step_0")).toBe(true);
+    expect(turn?.tools.find(({ callId }) => callId === "call_0")?.state).toBe("running");
+    expect(turn?.messages.some(({ messageId }) => messageId === "msg_step_1")).toBe(false);
+    expect(turn?.messages.at(-1)?.messageId).toBe("msg_step_39");
+  });
+
+  it("counts a runaway of unsettled calls instead of purging the feed", () => {
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      activityLog,
+      limits: { maxTurnBytes: 4_096 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_a", "assistant"));
+    for (let call = 0; call < 100; call += 1) {
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_a",
+        callId: `call_${String(call)}`,
+        tool: "keiko_workspace_read",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:01.000Z",
+      });
+    }
+    const feed = feedOf(projection);
+    const turn = feed.turns[0];
+    expect(turn?.truncated).toBe(true);
+    expect(turn?.tools.at(-1)?.callId).toBe("call_99");
+    expect(feed.droppedEventCount).toBe(100 - (turn?.tools.length ?? 0));
+    expect(feed.droppedEventCount).toBeGreaterThan(0);
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+  });
+
+  it("projects a 600-step run, 3 KB answers and two calls per step, inside vitest's own timeout", () => {
+    // The test timeout is the guard: eviction work that grows with the run (a quadratic rescan per
+    // signal) cannot finish 2,400 signals in it. No wall-clock comparison is made.
+    const { projection } = open();
+    runStepsWithCalls(projection, 600);
+    const feed = feedOf(projection);
+    expect(feed.turns[0]?.messages.at(-1)?.messageId).toBe("msg_step_599");
+    expect(feed.turns[0]?.tools.at(-1)?.state).toBe("running");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+  });
 });

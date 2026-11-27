@@ -549,15 +549,22 @@ interface MutableFeed {
 interface PriorState {
   readonly feed: StoredFeed | undefined;
   readonly messageTurns: Map<string, string> | undefined;
+  readonly toolOwners: Map<string, string> | undefined;
   readonly texts: RetainedTexts | undefined;
 }
 
-const NO_ROLLBACK: PriorState = { feed: undefined, messageTurns: undefined, texts: undefined };
+const NO_ROLLBACK: PriorState = {
+  feed: undefined,
+  messageTurns: undefined,
+  toolOwners: undefined,
+  texts: undefined,
+};
 
 function rollbackSnapshot(entry: ProjectionEntry): PriorState {
   return {
     feed: structuredClone(entry.feed),
     messageTurns: new Map(entry.messageTurns),
+    toolOwners: new Map(entry.toolOwners),
     texts: cloneRetainedTexts(entry.texts),
   };
 }
@@ -860,6 +867,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (prior.feed !== undefined && prior.messageTurns !== undefined) {
       entry.feed = prior.feed;
       replaceMap(entry.messageTurns, prior.messageTurns);
+      if (prior.toolOwners !== undefined) replaceMap(entry.toolOwners, prior.toolOwners);
       // The retained texts roll back with the feed, so the feed names exactly what they hold.
       if (prior.texts !== undefined) restoreRetainedTexts(entry.texts, prior.texts);
       return this.reject(runId, "capacity-rejected");
@@ -2014,11 +2022,11 @@ function shedToolDetail(turns: readonly MutableTurn[], over: () => boolean): voi
   for (const keepFailures of [true, false]) {
     for (const turn of turns) {
       for (let index = 0; index < turn.tools.length; index += 1) {
-        if (!over()) return;
         const tool = turn.tools[index];
-        if (tool !== undefined && sheddable(tool, keepFailures)) {
-          turn.tools[index] = withoutToolDetail(tool);
-        }
+        // Only a call with detail to shed costs a size check, so a turn of plain calls pays nothing.
+        if (tool === undefined || !sheddable(tool, keepFailures)) continue;
+        if (!over()) return;
+        turn.tools[index] = withoutToolDetail(tool);
       }
     }
   }
@@ -2096,36 +2104,94 @@ function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number)
       turn.truncated = true;
     }
   }
-  // Last, whole events go, oldest first and one message at a time: an assistant message leaves
-  // together with its own tool rows, so the newest message and its running call outlive every
-  // older step (#4491). The user anchor stays.
-  while (bytes(turn) > maxBytes) {
-    const evicted = evictOldestStep(entry, turn);
-    if (evicted === 0) break;
-    turn.truncated = true;
-    lost += evicted;
-  }
+  // Last, whole events go, oldest first (#4491). Order: an older assistant message whose calls
+  // are all settled leaves together with them (the user anchor and the newest message stay); then
+  // single settled calls; then the body-free detail of calls that have not settled; only when a
+  // runaway of unsettled calls alone still exceeds the bound does the oldest such call go, counted
+  // like every other loss (the alternative is a purged feed). A call with no message id is owned
+  // by no message and leaves only as a single settled call.
+  const stages: readonly (() => Iterable<EvictionStep>)[] = [
+    (): EvictionStep[] => settledStepSteps(entry, turn),
+    (): EvictionStep[] => settledToolSteps(turn),
+  ];
+  for (const stage of stages) lost += evictWhileOver(entry, turn, maxBytes, stage);
+  if (bytes(turn) > maxBytes) shedUnsettledToolDetail(turn, () => bytes(turn) > maxBytes);
+  lost += evictWhileOver(entry, turn, maxBytes, (): EvictionStep[] => allToolSteps(turn));
+  if (lost > 0) turn.truncated = true;
   return lost;
 }
 
-// Removes the oldest assistant message but the newest (preferring one without a running call) with
-// its tool rows; once only the newest message is left, the oldest settled call goes. Returns how
-// many events (messages plus tool rows) it removed.
-function evictOldestStep(entry: ProjectionEntry, turn: MutableTurn): number {
+interface EvictionStep {
+  readonly messages: readonly MutableMessage[];
+  readonly tools: readonly CodingSafeActivityTool[];
+}
+
+// One pass indexes the calls by their message, so choosing a victim never rescans the turn.
+function settledStepSteps(entry: ProjectionEntry, turn: MutableTurn): EvictionStep[] {
+  const byOwner = new Map<string, CodingSafeActivityTool[]>();
+  for (const tool of turn.tools) {
+    const owner = entry.toolOwners.get(tool.callId);
+    if (owner !== undefined) byOwner.set(owner, [...(byOwner.get(owner) ?? []), tool]);
+  }
   const newest = turn.messages.at(-1);
-  const older = turn.messages.filter(
-    (message) => message.role === "assistant" && message !== newest,
-  );
-  const owned = (message: MutableMessage): CodingSafeActivityTool[] =>
-    turn.tools.filter(({ callId }) => entry.toolOwners.get(callId) === message.messageId);
-  const victim = older.find((message) => owned(message).every(settledTool)) ?? older[0];
-  if (victim === undefined) return evictOldestSettledTool(entry, turn) ? 1 : 0;
-  const calls = owned(victim);
-  turn.tools = turn.tools.filter((tool) => !calls.includes(tool));
-  for (const { callId } of calls) entry.toolOwners.delete(callId);
-  turn.messages.splice(turn.messages.indexOf(victim), 1);
-  entry.messageTurns.delete(victim.messageId);
-  return 1 + calls.length;
+  const steps: EvictionStep[] = [];
+  for (const message of turn.messages) {
+    if (message.role !== "assistant" || message === newest) continue;
+    const calls = byOwner.get(message.messageId) ?? [];
+    if (calls.every(settledTool)) steps.push({ messages: [message], tools: calls });
+  }
+  return steps;
+}
+
+function settledToolSteps(turn: MutableTurn): EvictionStep[] {
+  return turn.tools.filter(settledTool).map((tool) => ({ messages: [], tools: [tool] }));
+}
+
+function allToolSteps(turn: MutableTurn): EvictionStep[] {
+  return turn.tools.map((tool) => ({ messages: [], tools: [tool] }));
+}
+
+// Removes steps in order until the turn fits, tracking the size incrementally (an element and its
+// separator); the turn is then re-measured, and the stage repeats while the estimate fell short.
+function evictWhileOver(
+  entry: ProjectionEntry,
+  turn: MutableTurn,
+  maxBytes: number,
+  stage: () => Iterable<EvictionStep>,
+): number {
+  let lost = 0;
+  for (;;) {
+    let estimate = bytes(turn);
+    if (estimate <= maxBytes) return lost;
+    const messages = new Set<MutableMessage>();
+    const tools = new Set<CodingSafeActivityTool>();
+    for (const step of stage()) {
+      if (estimate <= maxBytes) break;
+      for (const message of step.messages) {
+        messages.add(message);
+        estimate -= bytes(message) + 1;
+      }
+      for (const tool of step.tools) {
+        tools.add(tool);
+        estimate -= bytes(tool) + 1;
+      }
+    }
+    if (messages.size + tools.size === 0) return lost;
+    turn.messages = turn.messages.filter((message) => !messages.has(message));
+    turn.tools = turn.tools.filter((tool) => !tools.has(tool));
+    for (const message of messages) entry.messageTurns.delete(message.messageId);
+    for (const tool of tools) entry.toolOwners.delete(tool.callId);
+    lost += messages.size + tools.size;
+  }
+}
+
+function shedUnsettledToolDetail(turn: MutableTurn, over: () => boolean): void {
+  for (let index = 0; index < turn.tools.length; index += 1) {
+    const tool = turn.tools[index];
+    if (tool === undefined || settledTool(tool) || !hasToolDetail(tool)) continue;
+    if (!over()) return;
+    turn.tools[index] = withoutToolDetail(tool);
+  }
 }
 
 function settledTool({ state }: CodingSafeActivityTool): boolean {

@@ -24,6 +24,40 @@ vi.mock("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity", async (imp
   return { ...actual, validateCodingSafeActivityFeed: validateMock };
 });
 
+function stepSignals(index: number): readonly [object, object] {
+  return [
+    {
+      kind: "message",
+      messageId: `msg_${String(index)}`,
+      role: "assistant",
+      parentMessageId: "msg_user_0",
+      occurredAt: "2026-07-18T17:00:00.001Z",
+    },
+    {
+      kind: "tool",
+      messageId: `msg_${String(index)}`,
+      callId: `call_${String(index)}`,
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    },
+  ];
+}
+
+function orphanedCalls(
+  turn:
+    | {
+        readonly messages: readonly { readonly messageId: string }[];
+        readonly tools: readonly { readonly callId: string }[];
+      }
+    | undefined,
+): string[] {
+  const kept = new Set((turn?.messages ?? []).map(({ messageId }) => messageId));
+  return (turn?.tools ?? [])
+    .map(({ callId }) => callId)
+    .filter((callId) => !kept.has(`msg_${callId.slice("call_".length)}`));
+}
+
 const RUN_ID = "run-safe-activity-invariant";
 const WORKSPACE_ID = "workspace-safe-activity-invariant";
 
@@ -112,5 +146,54 @@ describe("codingSafeActivityProjection finalizeIngest invariant-violation purge 
     // The rolled-back signal was never applied, so its redelivery is applied, not deduplicated.
     expect(projection.ingest(RUN_ID, answer)).toBe(true);
     expect(JSON.stringify(projection.currentContent())).toContain("msg_answer");
+  });
+
+  it("restores each call's owning message with a rolled-back eviction (#4491)", async () => {
+    validateMock.mockReset();
+    const { validateCodingSafeActivityFeed: realValidate } = await vi.importActual<
+      typeof import("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity")
+    >("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity");
+    validateMock.mockImplementation(realValidate);
+    const { createCodingSafeActivityProjection } =
+      await import("./codingSafeActivityProjection.js");
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      // One turn is near the turn limit, so every signal takes a rollback snapshot; the small turn
+      // bound makes the pass after enough steps evict the oldest step with its call.
+      limits: { maxTurns: 1, maxTurnBytes: 1_200 },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, {
+      kind: "message",
+      messageId: "msg_user_0",
+      role: "user",
+      occurredAt: "2026-07-18T17:00:00.000Z",
+    });
+    const ingestSteps = (from: number, to: number): void => {
+      for (let index = from; index < to; index += 1) {
+        for (const signal of stepSignals(index)) projection.ingest(RUN_ID, signal as never);
+      }
+    };
+    // Enough steps that the small turn bound already evicts the oldest ones.
+    ingestSteps(0, 25);
+    const index = 25;
+    // The next step's call is the signal whose pass evicts; that pass is rolled back once.
+    const [message, tool] = stepSignals(index);
+    projection.ingest(RUN_ID, message as never);
+    validateMock.mockReturnValueOnce({ ok: false, value: undefined, errors: ["forced for test"] });
+    expect(projection.ingest(RUN_ID, tool as never)).toBe(false);
+    expect(projection.ingest(RUN_ID, tool as never)).toBe(true);
+    ingestSteps(index + 1, index + 7);
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new Error("expected an available feed");
+    expect(feed.turns[0]?.tools.length).toBeGreaterThan(0);
+    expect(feed.turns[0]?.messages.length).toBeLessThan(25);
+    // Every kept call still belongs to a kept message: none was orphaned by the rollback.
+    expect(orphanedCalls(feed.turns[0])).toEqual([]);
   });
 });

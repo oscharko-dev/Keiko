@@ -83,8 +83,15 @@ OpenCode opens one assistant message per agent step and a run calls a tool per a
 truncated."). The per-turn message and tool counts are now 512 each (a message or call serializes to more than 64 bytes, so 512 exceed the 32 KiB turn bound), above what the 32 KiB turn
 bound admits, so the byte bounds (message 16 KiB, turn 32 KiB, feed 60 KiB, reasoning 8 KiB) are the
 memory guard and the counts only stop a runaway producer of empty shells. A turn still over its byte
-bound after retained answer text, tool detail, reasoning, segments and calls were shed gives up its
-oldest assistant message together with its own tool rows, one message at a time (never the user anchor, the newest message or a running call while an older message remains), and reads as truncated. The
+bound after retained answer text, tool detail, reasoning, segments and calls were shed gives up
+whole events in this order, oldest first, and reads as truncated: (1) an older assistant message
+whose calls are all settled, together with those calls (the user anchor and the newest message
+stay); (2) single settled calls; (3) the command, output and error text of calls that have not
+settled (their rows stay, marked `detailOmitted`); (4) only when a runaway of unsettled calls alone
+still exceeds the bound, the oldest such call. A message with a running call is never evicted, and a
+running call goes only at step 4. Every message and call removed in steps 1, 2 and 4 is counted and
+logged (below); the alternative to step 4 would be a purged feed. A call that carries no message id
+is owned by no message and leaves only at step 2 or 4. The
 correlation caps in the OpenCode backend (2,048 entries, 128 KiB) hold only calls that
 have not settled and remain a memory guard.
 
