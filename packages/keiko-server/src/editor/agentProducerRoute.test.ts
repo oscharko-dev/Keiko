@@ -251,6 +251,9 @@ class FakeVerificationRunnerManager implements VerificationRunnerManager {
   };
   public readonly abort = (): boolean => false;
   public readonly inFlightCount = (): number => 0;
+  public readonly previewCommands = (): never => {
+    throw new Error("previewCommands not exercised");
+  };
   public readonly subscribe = (): (() => void) => (): void => undefined;
   // The runner's own package-script decision as a pure query. These doubles never exercise the
   // operator-decision wait, so they report the workspace as trusted and no wait is ever entered.

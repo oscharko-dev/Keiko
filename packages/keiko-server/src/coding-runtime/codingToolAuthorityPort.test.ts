@@ -924,6 +924,7 @@ describe("CodingToolAuthorityPort", () => {
       const approvalProofVerifier = {
         matches: vi.fn(() => false),
         consume: vi.fn(() => false),
+        takeApprovedPlan: vi.fn(() => undefined),
         matchesCommit: vi.fn(() => true),
         consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
       };
@@ -971,6 +972,7 @@ describe("CodingToolAuthorityPort", () => {
       const approvalProofVerifier = {
         matches: vi.fn(() => false),
         consume: vi.fn(() => false),
+        takeApprovedPlan: vi.fn(() => undefined),
         matchesCommit: vi.fn(() => true),
         consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
       };
@@ -1004,6 +1006,7 @@ describe("CodingToolAuthorityPort", () => {
       const approvalProofVerifier = {
         matches: vi.fn(() => false),
         consume: vi.fn(() => false),
+        takeApprovedPlan: vi.fn(() => undefined),
         matchesCommit: vi.fn(() => true),
         consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
       };
@@ -1113,7 +1116,7 @@ describe("CodingToolAuthorityPort", () => {
     const preview = createCodingToolAuthorityPreview(
       { resolveCapabilityForDelegation, revalidateCapabilityForMutation },
       runtimeContext,
-      { approvalProofVerifier: { matches, consume } },
+      { approvalProofVerifier: { matches, consume, takeApprovedPlan: () => undefined } },
     );
     const request = {
       ...approvableRequest("command"),

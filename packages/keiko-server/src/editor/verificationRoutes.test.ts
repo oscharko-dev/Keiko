@@ -75,6 +75,9 @@ class FakeManager implements VerificationRunnerManager {
 
   public readonly abort = (): boolean => this.abortReturns;
   public readonly inFlightCount = (): number => 0;
+  public readonly previewCommands = (): never => {
+    throw new Error("previewCommands not exercised");
+  };
   public readonly subscribe = (listener: VerificationRunnerEventEmitter): (() => void) => {
     this.subscribers.add(listener);
     return (): void => {
