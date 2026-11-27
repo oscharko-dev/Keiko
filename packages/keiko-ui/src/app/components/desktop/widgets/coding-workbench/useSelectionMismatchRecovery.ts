@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 
 import type { CodingWorkbenchMutationState } from "@/lib/coding-workbench-live-state";
 
-/** The error code the server answers a start with when its active workspace is not the one shown. */
-export const SELECTION_MISMATCH_ERROR_CODE = "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH";
+import { SELECTION_MISMATCH_ERROR_CODE } from "@/lib/coding-workbench-runtime-mutations";
+
+export { SELECTION_MISMATCH_ERROR_CODE };
 
 /**
  * A start or retry the server refused because its active workspace is another repository than the

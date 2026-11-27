@@ -4514,11 +4514,14 @@ export class CodingRuntimeOrchestrator {
     correlationId: string | undefined,
   ): Extract<CodingRuntimeStartResult, { readonly ok: false }> {
     recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap, scope.detail);
-    // A start-only refusal, answered before any run exists: it is never a run failure code.
+    // A start-only refusal, answered before any run exists: it is never a run failure code. A
+    // server with no active workspace (its pointer was invalidated, e.g. the repository was deleted
+    // and cloned again at the same path) is the same recoverable fact as another active repository:
+    // the window re-reads and re-binds what it shows. The log keeps the precise gap.
     return {
       ok: false,
       failureCode:
-        scope.gap === "workspace-selection-mismatch"
+        scope.gap === "workspace-selection-mismatch" || scope.gap === "no-active-workspace"
           ? "workspace-selection-mismatch"
           : "authority-resolution-failed",
     };

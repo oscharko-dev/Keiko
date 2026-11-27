@@ -37,6 +37,13 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => ({
   ...apiMocks,
 }));
 
+const workspaceMocks = vi.hoisted(() => ({ getActiveTaskWorkspace: vi.fn() }));
+
+vi.mock("./task-workspace-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./task-workspace-api")>()),
+  ...workspaceMocks,
+}));
+
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
 
 // The queue's preemption signal: every command must hand it to the API call it makes (#4109).
@@ -118,7 +125,47 @@ describe("mutationResultMatchesCurrentTruth", () => {
   });
 });
 
+describe("createStartMutation without an active server workspace", () => {
+  const options = { projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT };
+
+  beforeEach(() => {
+    workspaceMocks.getActiveTaskWorkspace.mockReset();
+  });
+
+  it("sends no start and names the recoverable selection refusal when the server has none", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValue(null);
+    const mutation = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await expect(mutation.run(SIGNAL)).rejects.toMatchObject({
+      code: "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
+      status: 409,
+    });
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one start once the server reports an active workspace", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValueOnce(null).mockResolvedValue({});
+    const first = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await expect(first.run(SIGNAL)).rejects.toMatchObject({ status: 409 });
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+    const second = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await second.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the decision to the server when the pointer cannot be read", async () => {
+    workspaceMocks.getActiveTaskWorkspace.mockRejectedValue(new Error("offline"));
+    const mutation = createStartMutation("task", stateWithRun(null, { canStart: true }), options);
+    await mutation.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createStartMutation", () => {
+  beforeEach(() => {
+    workspaceMocks.getActiveTaskWorkspace.mockReset();
+    workspaceMocks.getActiveTaskWorkspace.mockResolvedValue({});
+  });
+
   // The run starts in the repository the person sees or not at all: the body states the displayed
   // root, which the server compares with its active workspace and refuses on a difference.
   it("states the displayed repository on the start and on the retry request", async () => {

@@ -36,10 +36,55 @@ import {
   submitCodingWorkbenchRuntimeInboxAction,
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
+import { ApiError } from "./api-shared-primitives";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { correlationIdOf } from "./client-error-summary";
+import { bffRequestErrorKind } from "./http";
+import { getActiveTaskWorkspace } from "./task-workspace-api";
 import {
   offeredCodingWorkbenchAgents,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
+
+/** The error code a start answers with when the server's active workspace is not the one shown. */
+export const SELECTION_MISMATCH_ERROR_CODE = "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH";
+
+// A start is sent only while the server itself reports an active workspace. A repository deleted
+// and cloned again at the same path invalidates the server's pointer while the window still shows
+// the repository as bound; the doomed request then failed with a raw authority code. Reading the
+// pointer first turns that into the named, recoverable selection refusal, which makes the window
+// read its binding again and bind what it shows. A failed read is not an answer: the start goes on
+// and the server stays the authority.
+function correlationFields(error: unknown): { readonly correlationId?: string } {
+  const correlationId = correlationIdOf(error);
+  return correlationId === undefined ? {} : { correlationId };
+}
+
+async function requireServerActiveWorkspace(): Promise<void> {
+  let active: Awaited<ReturnType<typeof getActiveTaskWorkspace>>;
+  try {
+    active = await getActiveTaskWorkspace();
+  } catch (error) {
+    reportClientDiagnostic("[keiko] coding workbench start pre-check unreadable", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+      ...correlationFields(error),
+    });
+    return;
+  }
+  if (active !== null) return;
+  reportClientDiagnostic("[keiko] coding workbench start held: server has no active workspace", {
+    kind: "other",
+    errorKind: "validation-failed",
+  });
+  throw new ApiError(
+    SELECTION_MISMATCH_ERROR_CODE,
+    "The server has no active workspace for the repository shown.",
+    409,
+  );
+}
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
@@ -170,8 +215,10 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: (signal) =>
-      startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options), signal),
+    run: async (signal): Promise<CodingWorkbenchRuntimeSnapshot> => {
+      await requireServerActiveWorkspace();
+      return startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options), signal);
+    },
   };
 }
 

@@ -325,6 +325,22 @@ interface FixtureOptions {
   readonly taskHasShellTool?: boolean | undefined;
   // Whether the run's tool-call or patch budget is used up (#4491); unset reads as not.
   readonly toolBudgetExhausted?: ((runId: string) => boolean) | undefined;
+  // The server has no active workspace: its pointer was invalidated (a repository deleted and
+  // cloned again at the same path), while the Workbench still shows the repository.
+  readonly noActiveWorkspace?: boolean | undefined;
+}
+
+function fixtureActiveWorkspace(noActiveWorkspace: boolean | undefined, root: string): unknown {
+  if (noActiveWorkspace === true) return undefined;
+  return {
+    instance: {
+      workspaceId: "workspace-1",
+      repositoryId: ACTIVE_REPOSITORY_ID,
+      repositoryRoot: ACTIVE_REPOSITORY_ROOT,
+      baseBranch: "dev",
+    },
+    binding: { activeRoot: root },
+  };
 }
 
 /** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
@@ -392,6 +408,7 @@ function fixtureFrom({
   runtimeVersion,
   taskHasShellTool,
   toolBudgetExhausted,
+  noActiveWorkspace,
 }: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -600,15 +617,7 @@ function fixtureFrom({
       snapshots: store,
       evidence,
       workspaceLifecycle: {
-        getActive: () => ({
-          instance: {
-            workspaceId: "workspace-1",
-            repositoryId: ACTIVE_REPOSITORY_ID,
-            repositoryRoot: ACTIVE_REPOSITORY_ROOT,
-            baseBranch: "dev",
-          },
-          binding: { activeRoot: activeRoot() },
-        }),
+        getActive: () => fixtureActiveWorkspace(noActiveWorkspace, activeRoot()),
         listAll: () => workspaceInventory ?? [],
       } as never,
       launchResolver,
@@ -3215,6 +3224,27 @@ describe("CodingRuntimeOrchestrator", () => {
     const serialized = JSON.stringify(captured.records);
     expect(serialized).not.toContain(expectedRoot);
     expect(serialized).not.toContain(ACTIVE_REPOSITORY_ROOT);
+  });
+
+  // A repository deleted and cloned again at the same path invalidates the server's active
+  // pointer while the window still shows it. The start is refused with the named, recoverable
+  // selection refusal (the window re-reads and re-binds), never the generic authority failure.
+  it("refuses a start while the server has no active workspace as a recoverable selection refusal", async () => {
+    const captured = captureDiagnostics();
+    const f = fixtureFrom({ diagnostics: captured.diagnostics, noActiveWorkspace: true });
+
+    expect(await f.orchestrator.start(start, "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13")).toEqual({
+      ok: false,
+      failureCode: "workspace-selection-mismatch",
+    });
+    expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",
+        operation: "coding-runtime.start",
+        code: "stage=start-scope:reason=no-active-workspace",
+      }),
+    );
   });
 
   it("starts when the expected repository is the active one in another spelling", async () => {
