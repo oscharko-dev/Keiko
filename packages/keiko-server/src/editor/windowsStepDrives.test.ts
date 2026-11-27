@@ -13,6 +13,7 @@ import {
 import {
   defineWindowsStepDrives,
   mapWindowsStepDrives,
+  substDriveHost,
   unmapWindowsStepDrives,
   type WindowsDriveHost,
   type WindowsStepDriveScope,
@@ -194,5 +195,49 @@ describe("mapWindowsStepDrives (#4496)", () => {
       driveCount: 2,
       refusedCount: 1,
     });
+  });
+});
+
+describe("substDriveHost (#4496)", () => {
+  function runner(results: Record<string, boolean>): {
+    readonly calls: string[];
+    readonly run: (args: readonly string[]) => boolean;
+  } {
+    const calls: string[] = [];
+    return {
+      calls,
+      run: (args): boolean => {
+        const call = args.join(" ");
+        calls.push(call);
+        return results[call] ?? false;
+      },
+    };
+  }
+
+  it("keeps a letter subst defined and Windows shows", () => {
+    const subst = runner({ "K: D:\\work": true });
+    expect(substDriveHost(subst.run, () => true).define("K:", "D:\\work")).toBe(true);
+    expect(subst.calls).toEqual(["K: D:\\work"]);
+  });
+
+  it("removes a letter subst defined but Windows does not show, so no mapping is left behind", () => {
+    const subst = runner({ "K: D:\\work": true, "K: /D": true });
+    expect(substDriveHost(subst.run, () => false).define("K:", "D:\\work")).toBe(false);
+    expect(subst.calls).toEqual(["K: D:\\work", "K: /D"]);
+  });
+
+  it("removes nothing when subst refused the letter", () => {
+    const subst = runner({});
+    const visible = (): boolean => {
+      throw new Error("a refused letter is never probed");
+    };
+    expect(substDriveHost(subst.run, visible).define("K:", "D:\\work")).toBe(false);
+    expect(subst.calls).toEqual(["K: D:\\work"]);
+  });
+
+  it("removes a letter through subst /D", () => {
+    const subst = runner({ "K: /D": true });
+    expect(substDriveHost(subst.run, () => true).remove("K:")).toBe(true);
+    expect(subst.calls).toEqual(["K: /D"]);
   });
 });

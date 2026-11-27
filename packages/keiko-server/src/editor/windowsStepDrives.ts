@@ -215,9 +215,26 @@ export function nodeWindowsDriveHost(env: NodeJS.ProcessEnv): WindowsDriveHost {
     });
     return result.error === undefined && result.status === 0;
   };
+  return substDriveHost(subst, (drive): boolean => existsSync(`${drive}\\`));
+}
+
+/**
+ * The drive host over a `subst` runner. A letter subst reported but Windows does not show is not the
+ * step's, so its mapping is removed again; otherwise it would stay defined in the logon session with
+ * no step recording it.
+ */
+export function substDriveHost(
+  subst: (args: readonly string[]) => boolean,
+  driveVisible: (drive: string) => boolean,
+): WindowsDriveHost {
+  const remove = (drive: string): boolean => subst([drive, "/D"]);
   return {
-    // A letter subst reported but Windows does not show is not the step's.
-    define: (drive, root) => subst([drive, root]) && existsSync(`${drive}\\`),
-    remove: (drive) => subst([drive, "/D"]),
+    define: (drive, root): boolean => {
+      if (!subst([drive, root])) return false;
+      if (driveVisible(drive)) return true;
+      remove(drive);
+      return false;
+    },
+    remove,
   };
 }
