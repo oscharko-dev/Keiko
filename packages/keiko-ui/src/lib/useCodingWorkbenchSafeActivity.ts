@@ -336,7 +336,8 @@ function stateForLifecycle(
   // exact "stale content presented as live" the acceptance criterion forbids. Honest failure
   // first; the operator reconnects and only then sees a real terminal feed.
   if (current.feed === null) {
-    return current.status === "unavailable" && terminalRunState(runState)
+    return (current.status === "unavailable" || current.status === "recovery") &&
+      terminalRunState(runState)
       ? { ...current, status: "ended" }
       : current;
   }

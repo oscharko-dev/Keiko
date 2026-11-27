@@ -106,18 +106,33 @@ describe("SSE stream open (U-23)", () => {
   });
 
   it("is the only way server code writes SSE headers", () => {
+    // Files that legitimately name the content type: the helper itself, the two OpenAI-compatible
+    // gateway streams (their own headers, first chunk written at once) and client-side readers.
+    const allowedContentType = new Set([
+      "sse.ts",
+      "coding-sidecar-gateway.ts",
+      "coding-runtime/opencodeHttpClient.ts",
+      "coding-runtime/opencodeV2HttpClient.ts",
+      "coding-runtime/nativeWebSearch.ts",
+      "coding-runtime/opencodeFunctionalHarness/_support.ts",
+    ]);
     const root = fileURLToPath(new URL(".", import.meta.url));
     const offenders: string[] = [];
+    const codeOf = (path: string): string =>
+      readFileSync(path, "utf8")
+        .split("\n")
+        .filter((line) => !/^\s*(?:\/\/|\*|\/\*)/u.test(line) && !/^\s*import\b/u.test(line))
+        .join("\n");
     const visit = (dir: string): void => {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
         if (statSync(path).isDirectory()) visit(path);
-        else if (name.endsWith(".ts") && !name.endsWith(".test.ts") && !path.endsWith("sse.ts")) {
-          if (
-            /writeHead\(\s*200,\s*(?:\{\s*\.\.\.)?SSE_HEADERS/u.test(readFileSync(path, "utf8"))
-          ) {
-            offenders.push(path.slice(root.length));
-          }
+        else if (name.endsWith(".ts") && !name.endsWith(".test.ts")) {
+          const relative = path.slice(root.length);
+          const code = codeOf(path);
+          const usesHeaders = relative !== "sse.ts" && /\bSSE_HEADERS\b/u.test(code);
+          const namesType = !allowedContentType.has(relative) && code.includes("text/event-stream");
+          if (usesHeaders || namesType) offenders.push(relative);
         }
       }
     };

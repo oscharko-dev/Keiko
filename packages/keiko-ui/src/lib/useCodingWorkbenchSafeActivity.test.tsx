@@ -829,6 +829,58 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(view.result.current.feed).toBeNull();
   });
 
+  it("turns a recovery-required run without a projection into ended once it is cancelled (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      ({ runState }: { readonly runState: "recovery-required" | "cancelled" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "recovery-required" as "recovery-required" | "cancelled" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+
+    view.rerender({ runState: "cancelled" });
+
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  it("replaces the recovery status when a projection appears on the open channel later (U-23)", async () => {
+    getSnapshotMock.mockResolvedValue(unavailableSnapshot());
+    let publish: ((value: CodingAppSessionChannelSnapshot) => void) | undefined;
+    streamSnapshotsMock.mockImplementation(
+      ({
+        signal,
+        onSnapshot,
+      }: {
+        readonly signal: AbortSignal;
+        readonly onSnapshot: typeof publish;
+      }): Promise<void> => {
+        publish = onSnapshot;
+        return new Promise((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "recovery-required",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("recovery"));
+    expect(view.result.current.feed).toBeNull();
+
+    act(() => {
+      publish?.(snapshot(1));
+    });
+
+    await waitFor(() => expect(view.result.current.feed).not.toBeNull());
+    expect(view.result.current.status).toBe("recovery");
+    view.unmount();
+  });
+
   it("labels the projection as offline when the transport throws a TypeError", async () => {
     getSnapshotMock.mockRejectedValue(new TypeError("Network request failed"));
     const view = renderHook(() =>
