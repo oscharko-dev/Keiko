@@ -1,6 +1,7 @@
 "use client";
 
-import { startingProjectRoot } from "./windows/startingProjectRoot";
+import { gitReopenRoot, startingProjectRoot } from "./windows/startingProjectRoot";
+import { useRememberedGitRoot } from "./windows/useRememberedGitRoot";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -1807,7 +1808,6 @@ function AppShellInner(): ReactNode {
   const shortcutRoot = activeWorkspace.activeRoot ?? startingRoot;
   // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
   // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
-  const repositoryShortcutRoot = startingRoot;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );
@@ -3063,6 +3063,10 @@ function AppShellInner(): ReactNode {
   );
   const undoStack = useUndoStack({ apply: applyUndoAction });
 
+  // W-4: reopening Git returns to the repository the person last chose in a Git window; the starting
+  // project is only the fallback (gitReopenRoot owns the rule, ADR-0027).
+  const rememberedGitRoot = useRememberedGitRoot(ws.wins);
+  const sessionProjects = session.projects;
   const onTool = useCallback(
     (id: string): void => {
       if (!(id in WIN_TYPES)) return;
@@ -3080,7 +3084,9 @@ function AppShellInner(): ReactNode {
       }
       let projectRoot: string | undefined;
       if (panel === "governedGit") {
-        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : repositoryShortcutRoot;
+        projectRoot = before
+          ? panelBindingRoot(ws.wins, "governedGit")
+          : gitReopenRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
       }
       openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
       undoStack.push({
@@ -3092,7 +3098,16 @@ function AppShellInner(): ReactNode {
         ...(panel === "governedGit" ? { projectRoot } : {}),
       });
     },
-    [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
+    [
+      activeWorkspace.activeRoot,
+      rememberedGitRoot,
+      searchOwner,
+      sessionProjects,
+      startingRoot,
+      undoStack,
+      ws.api,
+      ws.wins,
+    ],
   );
 
   useEffect(() => {

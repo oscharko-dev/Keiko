@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { startingProjectPaths, startingProjectRoot, startingProjects } from "./startingProjectRoot";
+import {
+  gitReopenRoot,
+  startingProjectPaths,
+  startingProjectRoot,
+  startingProjects,
+} from "./startingProjectRoot";
 
 function project(overrides: Partial<ProjectWithAvailability>): ProjectWithAvailability {
   return {
@@ -56,5 +61,29 @@ describe("startingProjects", () => {
         project({ path: "/offline", available: false }),
       ]),
     ).toEqual([first]);
+  });
+});
+
+describe("gitReopenRoot", () => {
+  const listed = [project({ path: "/a" }), project({ path: "/b" })];
+
+  it("returns to the repository last chosen in the Git window, not the starting project", () => {
+    expect(gitReopenRoot("/b", listed, "/a")).toBe("/b");
+  });
+
+  it("falls back to the starting project when none was chosen", () => {
+    expect(gitReopenRoot(undefined, listed, "/a")).toBe("/a");
+    expect(gitReopenRoot(undefined, listed, undefined)).toBeUndefined();
+  });
+
+  it("never returns a chosen repository the list marks gone or refused", () => {
+    const gone = [project({ path: "/a" }), project({ path: "/b", available: false })];
+    const refused = [project({ path: "/a" }), project({ path: "/b", readable: false })];
+    expect(gitReopenRoot("/b", gone, "/a")).toBe("/a");
+    expect(gitReopenRoot("/b", refused, "/a")).toBe("/a");
+  });
+
+  it("keeps a chosen repository the shell list does not carry yet", () => {
+    expect(gitReopenRoot("/new", listed, "/a")).toBe("/new");
   });
 });

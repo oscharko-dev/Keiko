@@ -38,6 +38,15 @@ or replacement database at the same loopback address cannot inherit another data
 references. Unscoped legacy browser snapshots remain untouched and are not replayed without
 provable ownership. Chats, messages and files remain in their existing owning stores.
 
+The repository a freshly opened Git window shows is browser-transient UI state with one owner,
+`useRememberedGitRoot` plus `gitReopenRoot` (`keiko-ui`, no new store). While a Git window is open
+its repository is persisted in the window's own `cfg.projectPath`, and layout restoration brings it
+back. When the person closes Git and opens it again from the rail, the window returns to the
+repository last chosen in a Git window, unless the project list marks that repository gone or
+refused; otherwise it falls back to the starting project (the active workspace's repository). A
+managed task worktree is never used. The chat session's project does not override a choice made in
+the Git window (W-4, #4491).
+
 The memory-only revision cache is also scoped to its owning `UiStore`. Layout writes require both
 the storage identifier and the existing `If-Match` revision. A request belonging to another data
 store is refused before reading or mutating its snapshot. If the identifier cannot be resolved,
