@@ -169,7 +169,7 @@ type StagePlan =
   | { readonly kind: "none" }
   | { readonly kind: "convert"; readonly auto: boolean; readonly checkout: StageCheckout };
 type StageCheckout = "crlf" | "lf" | "unknown";
-export interface GitStageLineEndingAttributes {
+interface GitStageLineEndingAttributes {
   readonly text: string;
   readonly eol: string;
 }
@@ -252,7 +252,9 @@ interface FileStage {
   readonly indexClass: string | undefined;
 }
 // `git check-attr -z` answers one `path NUL attribute NUL value NUL` record per path and attribute,
-// in the order asked. A failed, cut-short or misordered answer proves nothing: `undefined`.
+// in the order asked. A failed, cut-short or misordered answer proves nothing: `undefined`. Git on
+// macOS prints a decomposed (NFD) path precomposed (`core.precomposeunicode`), so paths are compared
+// in NFC.
 async function readAttributeValues(
   ctx: GitStageEffectContext,
   attributes: readonly string[],
@@ -267,14 +269,25 @@ async function readAttributeValues(
     const row: string[] = [];
     for (const [attributeIndex, attribute] of attributes.entries()) {
       const at = (pathIndex * attributes.length + attributeIndex) * 3;
-      const value = fields[at + 2];
-      if (fields[at] !== path || fields[at + 1] !== attribute || value === undefined)
-        return undefined;
+      const value = recordValue(fields.slice(at, at + 3), path, attribute);
+      if (value === undefined) return undefined;
       row.push(value);
     }
     rows.push(row);
   }
   return rows;
+}
+// The value of one `path NUL attribute NUL value` record, when it answers for this path (compared in
+// NFC) and this attribute.
+function recordValue(
+  record: readonly string[],
+  path: string,
+  attribute: string,
+): string | undefined {
+  const [recordPath, recordAttribute, value] = record;
+  if (recordPath?.normalize("NFC") !== path.normalize("NFC") || recordAttribute !== attribute)
+    return undefined;
+  return value;
 }
 // Each path's conversion under `lineEndings` and its `text`/`eol` attributes, plus the index
 // line-break class an `auto` conversion depends on; `undefined` when the attributes cannot be read.

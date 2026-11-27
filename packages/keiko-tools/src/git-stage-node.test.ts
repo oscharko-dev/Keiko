@@ -346,6 +346,8 @@ describe("exact-file staging under text and eol attributes", () => {
     crlf: "v1\r\nv2\r\n",
     mixed: "v1\r\nv2\n",
     binary: "a\r\n\0b\r\n",
+    empty: "",
+    loneCr: "v1\rv2\r\n",
   } as const;
 
   function attributedRepository(attributes: string, committed: string): string {
@@ -414,6 +416,7 @@ describe("exact-file staging under text and eol attributes", () => {
   ])(
     "never stores an object git add would not, nor one that checks out differently: %j",
     async (attributes) => {
+      let stagedCount = 0;
       for (const committed of [CONTENTS.lf, CONTENTS.crlf]) {
         const repo = attributedRepository(attributes, committed);
         for (const [autocrlf, lineEndings] of MODES) {
@@ -423,11 +426,14 @@ describe("exact-file staging under text and eol attributes", () => {
               expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
               continue;
             }
+            stagedCount += 1;
             expect(git(repo, ["rev-parse", ":a.txt"]).trim()).toBe(oracle);
             if (oracle !== raw) expect(checkout(repo, autocrlf, oracle)).toBe(worktree);
           }
         }
       }
+      // Every attribute set stages at least its unchanged LF file in each mode: never vacuous.
+      expect(stagedCount).toBeGreaterThanOrEqual(MODES.length * 2);
     },
   );
 
@@ -476,5 +482,41 @@ describe("exact-file staging under text and eol attributes", () => {
     writeFileSync(join(repo, "a.txt"), CONTENTS.lf);
     await expect(stageExactFiles(context(repo), request(repo))).resolves.toBe(false);
     expect(git(repo, ["diff", "--cached", "--name-only"]).trim()).toBe("");
+  });
+});
+
+// Audit of the #4491 attribute fix: Git on macOS prints a decomposed file name precomposed, so a
+// check-attr answer for an NFD pathspec must still be matched to its path, not refused.
+describe("exact-file staging of a decomposed (NFD) file name", () => {
+  it("stages a file whose pathspec is NFD while Git precomposes its name", async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-nfd-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    git(base, ["config", "core.precomposeunicode", "true"]);
+    writeFileSync(join(base, "a.txt"), "v1\n");
+    git(base, ["add", "a.txt"]);
+    git(base, ["-c", "commit.gpgsign=false", "commit", "-qm", "base"]);
+    const decomposed = "e\u0301.txt";
+    writeFileSync(join(base, decomposed), "v1\n");
+    const headSha = git(base, ["rev-parse", "HEAD"]).trim();
+    await expect(
+      stageExactFiles(context(base), {
+        pathspecs: [decomposed],
+        verified: {
+          headSha,
+          stagedTreeDigest: "0".repeat(64),
+          branchName: "main",
+          baseRef: "refs/heads/main",
+          baseSha: headSha,
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(
+      git(base, ["-c", "core.quotepath=false", "diff", "--cached", "--name-only"])
+        .trim()
+        .normalize("NFC"),
+    ).toBe("\u00e9.txt");
   });
 });
