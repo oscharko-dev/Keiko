@@ -30,7 +30,7 @@ import {
   type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
   readGitTreeEntries,
-  readGitBlobText,
+  readGitBlobTextWithin,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
 import {
@@ -329,7 +329,15 @@ export function runtimeGitStatusOfRaw(
     truncated: raw.truncated || raw.changes.length > 50,
   };
 }
+/**
+ * The most bytes of one side the line diff reads (memory protection). A larger side is neither an
+ * error nor a zero: the diff lists the file as truncated and a stage review says its counts are
+ * unavailable.
+ */
+export const RUNTIME_GIT_SIDE_MAX_BYTES = 8 * 1024 * 1024;
+
 interface DiffSides {
+  readonly tooLarge: boolean;
   readonly path: string;
   readonly before: string;
   readonly after: string;
@@ -375,6 +383,17 @@ function diffFile(
   log: DiffSearchLog,
 ): GitEditorDiffFile | undefined {
   if ((sides.added && sides.deleted) || sides.same) return undefined;
+  if (sides.tooLarge)
+    return {
+      path: sides.path,
+      layer: scope === "staged" ? "staged" : "worktree",
+      status: binaryStatus(sides),
+      binary: false,
+      hunks: [],
+      addedLines: 0,
+      removedLines: 0,
+      truncated: true,
+    };
   if (sides.binary)
     return {
       path: sides.path,
@@ -428,6 +447,7 @@ async function readSides(
     added: before.missing,
     deleted: after.missing,
     binary: before.binary || after.binary,
+    tooLarge: before.tooLarge || after.tooLarge,
     same: before.objectId === after.objectId && before.mode === after.mode,
     oldMode: before.mode,
     newMode: after.mode,
@@ -439,17 +459,28 @@ interface FileSide {
   readonly text: string;
   readonly missing: boolean;
   readonly binary: boolean;
+  readonly tooLarge: boolean;
 }
 async function objectSide(
   deps: ReturnType<typeof runtimeGitReadDeps>,
   entry: { readonly objectId: string; readonly mode: string } | undefined,
 ): Promise<FileSide> {
   if (entry === undefined)
-    return { text: "", missing: true, binary: false, objectId: "", mode: "0" };
-  const text = await readGitBlobText(deps, entry.objectId);
+    return { text: "", missing: true, binary: false, tooLarge: false, objectId: "", mode: "0" };
+  const text = await readGitBlobTextWithin(deps, entry.objectId, RUNTIME_GIT_SIDE_MAX_BYTES);
+  if (text === undefined)
+    return {
+      text: "",
+      missing: false,
+      binary: false,
+      tooLarge: true,
+      mode: entry.mode,
+      objectId: entry.objectId,
+    };
   return {
     text,
     missing: false,
+    tooLarge: false,
     binary: text.includes("\0") || text.includes("\uFFFD"),
     mode: entry.mode,
     objectId: entry.objectId,
@@ -463,10 +494,12 @@ async function workingSide(
   const file = await readGitStageFile(context.workspace.root, path, {
     fs: runtimeWorkspaceFs(context),
   });
+  const tooLarge = file.bytes.length > RUNTIME_GIT_SIDE_MAX_BYTES;
   return {
+    tooLarge,
     objectId: file.mode === "0" ? "" : gitBlobObjectId(file.bytes, hashLength),
     mode: file.mode,
-    text: Buffer.from(file.bytes).toString("utf8"),
+    text: tooLarge ? "" : Buffer.from(file.bytes).toString("utf8"),
     missing: file.mode === "0",
     binary: !isUtf8(file.bytes) || file.bytes.includes(0),
   };
@@ -544,6 +577,8 @@ export interface StageSelectionReview {
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  /** True when a side was too large to count: the line counts then cover only the other files. */
+  readonly countsUnavailable?: true;
 }
 
 /**
@@ -600,6 +635,21 @@ async function admitSelection(
   return admitted;
 }
 
+// The changed lines of one path's two sides; `undefined` when there is nothing to count (binary or
+// unchanged) and "unavailable" when a side was too large to read within its bound.
+function sideCounts(
+  sides: DiffSides,
+  execution: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): { readonly added: number; readonly deleted: number } | "unavailable" | undefined {
+  if (sides.tooLarge) return "unavailable";
+  if (sides.binary || sides.same) return undefined;
+  const before = lineDiffSide(sides.before);
+  const after = lineDiffSide(sides.after);
+  const log = { seams: execution, correlationId };
+  return lineChangeCounts(before, after, searchLoggedLineChanges(log, before, after));
+}
+
 /**
  * Line counts for an admitted selection: the changed lines of each pending path's two sides, from
  * the same line diff the diff reader renders but never limited by its response budget. A one-line
@@ -615,19 +665,24 @@ export async function reviewStageSelection(
 ): Promise<StageSelectionReview> {
   let addedLines = 0;
   let deletedLines = 0;
+  let countsUnavailable = false;
   for (const change of selection.filter((entry) => entry.pending)) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
     const sides = await readSides(context, execution, change.path, scope); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
-    if (sides.binary || sides.same) continue;
-    const before = lineDiffSide(sides.before);
-    const after = lineDiffSide(sides.after);
-    const log = { seams: execution, correlationId: context.correlationId };
-    const counts = lineChangeCounts(before, after, searchLoggedLineChanges(log, before, after));
-    addedLines += counts.added;
-    deletedLines += counts.deleted;
+    const counts = sideCounts(sides, execution, context.correlationId);
+    if (counts === "unavailable") countsUnavailable = true;
+    else if (counts !== undefined) {
+      addedLines += counts.added;
+      deletedLines += counts.deleted;
+    }
   }
-  return { fileCount: selection.length, addedLines, deletedLines };
+  return {
+    fileCount: selection.length,
+    addedLines,
+    deletedLines,
+    ...(countsUnavailable ? { countsUnavailable: true as const } : {}),
+  };
 }
 
 export async function runtimeGitDiff(

@@ -8,7 +8,8 @@ import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveEditorAgentSessionRoot } from "../editor/agentRootBoundary.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
-import { resolveGovernedCommitMessagePolicy } from "../gitDelivery/commitPolicySettings.js";
+import type { VerifiedCommitMessageVerdict } from "../gitDelivery/verifiedCommitTypes.js";
+import { resolveGovernedCommitMessagePolicyDecision } from "../gitDelivery/commitPolicySettings.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedCommitRuntime.js";
@@ -67,11 +68,14 @@ export function createProductionVerifiedCommitDependencies(
     // #3390: return the full validation (not just `.ok`) so a "blocked"/"message-policy" result
     // carries the closed violation codes end to end into the live OpenCode/sidecar commit-proposal
     // path — see VerifiedCommitServiceOptions["messageAllowed"] and VerifiedCommitResult["violations"].
-    messageAllowed: async (message, workspace) =>
-      validateGitCommitMessage(
-        message,
-        await resolveGovernedCommitMessagePolicy(deps, workspace.root),
-      ),
+    messageAllowed: async (message, workspace): Promise<VerifiedCommitMessageVerdict> => {
+      const decision = await resolveGovernedCommitMessagePolicyDecision(deps, workspace.root);
+      return {
+        ...validateGitCommitMessage(message, decision.policy),
+        policyMode: decision.mode,
+        policySource: decision.source,
+      };
+    },
   };
 }
 

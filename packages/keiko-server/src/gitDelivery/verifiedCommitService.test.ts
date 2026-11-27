@@ -5,6 +5,7 @@ import {
   logDeniedPathExclusion,
   logStagedConversion,
   reviewStageSelection,
+  RUNTIME_GIT_SIDE_MAX_BYTES,
   runtimeGitDiff,
   runtimeGitReadDeps,
   runtimeGitStatusOfRaw,
@@ -30,7 +31,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -388,8 +391,11 @@ describe("#3386 AC11 — readVerifiedCommitReview never consults gitChangeSnapsh
 
 describe("verified commit review that cannot be built", () => {
   it("blocks with review-incomplete and logs the closed cause on the result line", async () => {
-    writeFileSync(join(root, "code.js"), `// ${"x".repeat(20_000)}\nexport const long = 1;\n`);
-    git(["add", "code.js"]);
+    // A path longer than the review payload accepts is an identity the review cannot carry.
+    const deep = join(root, ...Array.from({ length: 6 }, () => "d".repeat(100)));
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(deep, "f.js"), "export const deep = 1;\n");
+    git(["add", "-A"]);
     const ticket = ticketOf(await service.beginVerification());
     if (ticket === undefined) throw new Error("verification ticket unavailable");
     expect(await service.completeVerification(ticket, report())).toBe(true);
@@ -400,14 +406,60 @@ describe("verified commit review that cannot be built", () => {
     );
     expect(logged).toMatchObject({
       correlationId: "verified-commit-test",
-      extra: { phase: "result", state: "blocked", reviewIncompleteCause: "file-truncated" },
+      extra: { phase: "result", state: "blocked", reviewIncompleteCause: "payload-invalid" },
     });
     const persisted = expectActivityLogProof(
       "git.verified-commit.emitted-line",
       formatActivityLogProofLine(logged ?? {}),
     );
-    expect(persisted).toMatchObject({ reviewIncompleteCause: "file-truncated" });
+    expect(persisted).toMatchObject({ reviewIncompleteCause: "payload-invalid" });
   });
+});
+
+describe("verified commit review of a large legitimate change (G-4)", () => {
+  it("proposes 303 renames with reference edits and logs only counts", async () => {
+    const count = 303;
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "test"), { recursive: true });
+    for (let n = 100; n < 100 + count; n += 1) {
+      writeFileSync(join(root, "src", `m${String(n)}.js`), `export const n = ${String(n)};\n`);
+      writeFileSync(join(root, "test", `t${String(n)}.js`), `import "../src/m${String(n)}.js";\n`);
+    }
+    git(["add", "-A"]);
+    git(["commit", "-qm", "seed modules"]);
+    for (let n = 100; n < 100 + count; n += 1) {
+      renameSync(
+        join(root, "src", `m${String(n)}.js`),
+        join(root, "src", `module-${String(n)}.js`),
+      );
+      writeFileSync(
+        join(root, "test", `t${String(n)}.js`),
+        `import "../src/module-${String(n)}.js";\n`,
+      );
+    }
+    git(["add", "-A"]);
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    const proposal = await service.propose("feat: rename the modules");
+    expect(proposal).toMatchObject({ status: "approval-required" });
+    const review = service.review(proposal?.proposalId ?? "")?.review;
+    expect(review).toMatchObject({
+      fileCount: count * 2,
+      pathsTruncated: true,
+      addedLines: count,
+      deletedLines: count,
+    });
+    expect(review?.paths.length).toBeLessThan(count * 2);
+    const logged = events.find(
+      (event) => event.op === "git.verified-commit" && event.extra?.state === "approval-required",
+    );
+    expect(logged?.extra).toMatchObject({
+      reviewFileCount: count * 2,
+      reviewRenameCount: count,
+      reviewPathsTruncated: true,
+    });
+  }, 60_000);
 });
 
 describe("verified Code-task commit service", () => {
@@ -1494,6 +1546,43 @@ describe("verified Code-task commit service", () => {
 });
 
 describe("productive runtime status/diff/stage lane", () => {
+  // G-5 fault injection: a read that fails names its closed reason on the stage-propose line.
+  it("names the closed read failure on a stage-propose line when a blob cannot be read", async () => {
+    const blob = git(["rev-parse", ":code.js"]);
+    const objectFile = join(root, ".git", "objects", blob.slice(0, 2), blob.slice(2));
+    chmodSync(objectFile, 0o644);
+    rmSync(objectFile);
+    writeFileSync(join(root, "code.js"), "export const value = 9;\n");
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    await gitService.execute(
+      {
+        action: "git",
+        actionId: "unreadable",
+        idempotencyKey: "unreadable",
+        operation: "stage",
+        phase: "propose",
+        paths: ["code.js"],
+      },
+      { check: () => true },
+    );
+    const failed = events.find(
+      (event) => event.op === "git.runtime-action" && event.extra?.state === "failed",
+    );
+    expect(failed).toMatchObject({
+      correlationId: "verified-commit-test",
+      extra: { phase: "stage-propose", state: "failed", readFailure: "exit-nonzero" },
+    });
+    expectActivityLogProof(
+      "git.runtime-action.emitted-line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+  });
   it("stages remaining edits when the selected set also contains already-staged files", async () => {
     const stagedBlob = git(["rev-parse", ":code.js"]);
     writeFileSync(join(root, "other.js"), "export const other = 3;\n");
@@ -2229,6 +2318,44 @@ describe("productive runtime status/diff/stage lane", () => {
       expect.objectContaining({ path: "context.js", addedLines: 1, removedLines: 1 }),
     ]);
     expect(staged.files[0]?.hunks).toHaveLength(1);
+  });
+  // G-5: a tracked text file above the 64 KiB blob cap used to fail the whole stage proposal.
+  it("counts a one-line edit of a tracked file larger than 64 KiB", async () => {
+    const lines = Array.from(
+      { length: 4000 },
+      (_, index) => `export const big${String(index)} = 1;`,
+    );
+    writeFileSync(join(root, "big.js"), `${lines.join("\n")}\n`);
+    git(["add", "big.js"]);
+    git(["commit", "-qm", "big"]);
+    lines[2000] = "export const big2000 = 2;";
+    writeFileSync(join(root, "big.js"), `${lines.join("\n")}\n`);
+    expect(statSync(join(root, "big.js")).size).toBeGreaterThan(65_536);
+    const execution = options.execution ?? {};
+    const selection = await admitStageSelection(context(), execution, ["big.js"]);
+    await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+      fileCount: 1,
+      addedLines: 1,
+      deletedLines: 1,
+    });
+  });
+  it("says counts are unavailable, never zero, for a side too large to count", async () => {
+    const line = `${"x".repeat(1023)}\n`;
+    const text = line.repeat(RUNTIME_GIT_SIDE_MAX_BYTES / 1024 + 8);
+    writeFileSync(join(root, "huge.txt"), text);
+    git(["add", "huge.txt"]);
+    git(["commit", "-qm", "huge"]);
+    writeFileSync(join(root, "huge.txt"), "shrunk\n");
+    const execution = options.execution ?? {};
+    const selection = await admitStageSelection(context(), execution, ["huge.txt"]);
+    await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+      fileCount: 1,
+      addedLines: 0,
+      deletedLines: 0,
+      countsUnavailable: true,
+    });
+    const diff = await runtimeGitDiff(context(), execution, "unstaged", ["huge.txt"]);
+    expect(diff.files).toEqual([expect.objectContaining({ path: "huge.txt", truncated: true })]);
   });
   // A diff search that stops at a bound shows its region as one replaced block: correct, not minimal.
   // The log names the bound and the sides' sizes, so a whole-file hunk or count is reconstructable

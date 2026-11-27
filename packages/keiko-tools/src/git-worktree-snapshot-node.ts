@@ -263,8 +263,14 @@ function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
 
 // Thrown when a read-only inspection command exits non-zero (e.g. not a git repository). The caller
 // translates this into a content-free server error rather than leaking git's stderr.
+/** Why a read-only Git inspection failed, as a closed value the activity log can carry. */
+export type GitReadFailureReason = "truncated" | "exit-nonzero" | "spawn-failed";
+
 export class GitWorktreeReadError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly reason?: GitReadFailureReason,
+  ) {
     super(message);
     this.name = "GitWorktreeReadError";
   }
@@ -606,11 +612,15 @@ async function runReadResult(
       runDeps,
     );
   } catch {
-    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`);
+    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`, "spawn-failed");
   }
-  if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
+  if (result.truncated)
+    throw new GitWorktreeReadError("git inspection output was truncated", "truncated");
   if (result.exitCode === null || !acceptedExitCodes.includes(result.exitCode)) {
-    throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
+    throw new GitWorktreeReadError(
+      `git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`,
+      "exit-nonzero",
+    );
   }
   return result;
 }
@@ -850,6 +860,30 @@ export async function readGitBlobText(
   );
 }
 
+/**
+ * One blob's text when it is at most `maxBytes` long, `undefined` when it is longer. The size is
+ * asked first (`cat-file -s`), so a large blob is never loaded and never fails the read: the caller
+ * decides what a side too large to count means.
+ */
+export async function readGitBlobTextWithin(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-blob-sha-invalid");
+  const size = Number((await runRead(machineReadContext(deps), ["cat-file", "-s", sha])).trim());
+  if (!Number.isSafeInteger(size) || size < 0)
+    throw new GitWorktreeReadError("git blob size is unreadable");
+  if (size > maxBytes) return undefined;
+  return runRead(
+    buildReadContext({
+      ...deps,
+      policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: Math.max(size, 1) + 1024 },
+    }),
+    ["cat-file", "blob", sha],
+  );
+}
+
 export async function readGitRemoteAliases(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<readonly string[]> {
@@ -1065,8 +1099,87 @@ export async function readGitStagedDiff(deps: NodeGitWorktreeReaderDeps): Promis
     "--no-textconv",
     "--no-color",
     "--unified=3",
+    STAGED_DIFF_RENAME_DETECTION,
+    STAGED_DIFF_RENAME_LIMIT,
     "--",
   ]);
+}
+
+// A pure rename is one rename record with no content, not a full delete and a full add. The limit
+// travels as the diff's own `-l` operand because the read allowlist denies `-c`; it only bounds how
+// many inexact renames Git pairs, never what is staged.
+const STAGED_DIFF_RENAME_DETECTION = "-M";
+const STAGED_DIFF_RENAME_LIMIT = "-l2000";
+
+/** One staged change as `diff --cached --numstat` counts it; a rename is one entry. */
+export interface GitStagedChangeEntry {
+  readonly path: string;
+  readonly oldPath?: string;
+  readonly addedLines: number;
+  readonly deletedLines: number;
+  readonly binary: boolean;
+}
+
+const NUMSTAT_COUNTS = /^(\d+|-)\t(\d+|-)\t(.*)$/su;
+
+/**
+ * Exact staged change counts (`--numstat -z`), independent of any display bound: every file is
+ * listed once with its true line counts, a rename shows both names, and no path is quoted. A record
+ * that does not parse throws, so a review never presents a partial list as complete.
+ */
+export async function readGitStagedChangeSummary(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<readonly GitStagedChangeEntry[]> {
+  const policy = {
+    ...(deps.policy ?? DEFAULT_SANDBOX_POLICY),
+    maxOutputBytes: Math.min(deps.policy?.maxOutputBytes ?? 4_194_304, 4_194_304),
+  };
+  const output = await runRead(buildReadContext({ ...deps, policy }), [
+    "diff",
+    "--cached",
+    "--numstat",
+    "-z",
+    "--no-ext-diff",
+    "--no-textconv",
+    STAGED_DIFF_RENAME_DETECTION,
+    STAGED_DIFF_RENAME_LIMIT,
+    "--",
+  ]);
+  return parseNumstatRecords(output.split("\0"));
+}
+
+function numstatEntry(
+  match: RegExpExecArray,
+  oldPath: string | undefined,
+  newPath: string | undefined,
+): GitStagedChangeEntry {
+  if (newPath === undefined || newPath === "")
+    throw new GitWorktreeReadError("git numstat record is incomplete");
+  const binary = match[1] === "-" || match[2] === "-";
+  return {
+    path: newPath,
+    ...(oldPath === undefined ? {} : { oldPath }),
+    addedLines: binary ? 0 : Number(match[1]),
+    deletedLines: binary ? 0 : Number(match[2]),
+    binary,
+  };
+}
+
+function parseNumstatRecords(fields: readonly string[]): readonly GitStagedChangeEntry[] {
+  const entries: GitStagedChangeEntry[] = [];
+  let index = 0;
+  while (index < fields.length) {
+    const field = fields[index] ?? "";
+    index += 1;
+    if (field === "") continue;
+    const match = NUMSTAT_COUNTS.exec(field);
+    if (match === null) throw new GitWorktreeReadError("git numstat record is malformed");
+    if (match[3] === "") {
+      entries.push(numstatEntry(match, fields[index], fields[index + 1]));
+      index += 2;
+    } else entries.push(numstatEntry(match, undefined, match[3]));
+  }
+  return entries;
 }
 
 export async function readStagedPaths(deps: NodeGitWorktreeReaderDeps): Promise<readonly string[]> {

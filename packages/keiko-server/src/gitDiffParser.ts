@@ -429,7 +429,7 @@ function relativePathUnderPrefix(path: string, normalizedPrefix: string): string
 // backslash is an ordinary character here (Git never prints a Windows separator); the shared
 // contained-path predicate refuses it only because the editor surfaces take a Windows separator
 // to be one. A backslash also splits a segment for the traversal test, so `..\x` stays refused.
-function isRepositoryRelativePath(path: string): boolean {
+export function isRepositoryRelativePath(path: string): boolean {
   return (
     !path.startsWith("\\") &&
     !path.split(/[/\\]/u).includes("..") &&

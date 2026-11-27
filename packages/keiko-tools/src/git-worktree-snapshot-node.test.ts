@@ -5,7 +5,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitEnv } from "@oscharko-dev/keiko-git";
@@ -25,6 +33,9 @@ import {
   gitConfigIndicatesPromisorRemote,
   readGitRemoteAliases,
   readGitRemoteUrl,
+  readGitStagedChangeSummary,
+  readGitStagedDiff,
+  readGitBlobTextWithin,
   readGitPushRemoteUrls,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
@@ -741,6 +752,33 @@ describe("readStagedConflictMarkerFileCount", () => {
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  });
+});
+
+describe("staged change summary (G-4)", () => {
+  it("lists a pure rename as one entry with no content and exact counts for an edit", async () => {
+    writeFileSync(join(root, "a.js"), "one\ntwo\nthree\n", "utf8");
+    writeFileSync(join(root, "b.js"), "keep\n", "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-m", "base"]);
+    renameSync(join(root, "a.js"), join(root, "renamed name.js"));
+    writeFileSync(join(root, "b.js"), "keep\nmore\n", "utf8");
+    git(["add", "-A"]);
+    expect(await readGitStagedChangeSummary(deps())).toEqual([
+      { path: "b.js", addedLines: 1, deletedLines: 0, binary: false },
+      { path: "renamed name.js", oldPath: "a.js", addedLines: 0, deletedLines: 0, binary: false },
+    ]);
+    const patch = await readGitStagedDiff(deps());
+    expect(patch).toContain("rename from a.js");
+    expect(patch).not.toContain("deleted file mode");
+  });
+  it("reads a blob within its bound and says so, never throwing, when it is larger", async () => {
+    writeFileSync(join(root, "big.txt"), "x".repeat(70_000), "utf8");
+    git(["add", "-A"]);
+    git(["commit", "-m", "big"]);
+    const sha = git(["rev-parse", "HEAD:big.txt"]).trim();
+    expect((await readGitBlobTextWithin(deps(), sha, 100_000))?.length).toBe(70_000);
+    expect(await readGitBlobTextWithin(deps(), sha, 1_000)).toBeUndefined();
   });
 });
 

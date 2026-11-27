@@ -38604,6 +38604,12 @@
               "required": false
             },
             {
+              "name": "countsUnavailable",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "errorClass",
               "type": "string",
               "dataClass": "error-kind",
@@ -38643,6 +38649,12 @@
               "name": "proposalId",
               "type": "string",
               "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "readFailure",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -39348,6 +39360,18 @@
               "required": false
             },
             {
+              "name": "messagePolicyMode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "messagePolicySource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "omittedCount",
               "type": "integer",
               "dataClass": "count",
@@ -39378,9 +39402,27 @@
               "required": false
             },
             {
+              "name": "reviewFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "reviewIncompleteCause",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "reviewPathsTruncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "reviewRenameCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

@@ -4214,12 +4214,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/gitDelivery/commitPolicySettings.ts",
-      "owner": "resolveGovernedCommitMessagePolicy",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/gitDelivery/commitRoutes.ts",
       "owner": "parseCommitDraftJson",
       "kind": "unregistered-catch",

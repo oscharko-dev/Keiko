@@ -33,6 +33,13 @@ function errorsFor(value: unknown): readonly string[] {
 }
 
 describe("coding workbench runtime approval review channel", () => {
+  it("accepts an honest counts-unavailable marker and refuses a non-boolean one", () => {
+    expect(errorsFor(activeReview({ countsUnavailable: true }))).toEqual([]);
+    expect(errorsFor(activeReview({ countsUnavailable: "yes" }))).toContain(
+      "pendingApprovalReview.countsUnavailable must be a boolean",
+    );
+  });
+
   it("accepts a bounded, workspace-relative review", () => {
     expect(validateCodingWorkbenchRuntimeApprovalReviewChannelPayload(activeReview()).ok).toBe(
       true,

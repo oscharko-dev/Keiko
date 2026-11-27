@@ -20,6 +20,8 @@ import {
   readGitStageCandidate,
   readGitStageSupport,
   readGitRawWorktreeSnapshotAtHead,
+  GitWorktreeReadError,
+  type GitReadFailureReason,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
 import {
@@ -182,6 +184,13 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     pathCount: { type: "integer", dataClass: "count", required: false },
     fileCount: { type: "integer", dataClass: "count", required: false },
+    countsUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
+    readFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["truncated", "exit-nonzero", "spawn-failed"],
+    },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
     // #3902 AC2: the closed outcome of a fetch or pull (`GIT_SYNC_OUTCOMES`); the Git process lines
     // of the same correlation carry a failure's own error evidence.
@@ -252,6 +261,8 @@ interface RuntimeGitActivityFields {
   readonly proposalId?: string;
   readonly pathCount?: number;
   readonly fileCount?: number;
+  readonly countsUnavailable?: boolean;
+  readonly readFailure?: GitReadFailureReason;
   readonly truncated?: boolean;
   readonly syncOutcome?: GitSyncOutcome;
   readonly failureKind?: string;
@@ -408,6 +419,7 @@ function assembleProposal(
       fileCount: review.fileCount,
       addedLines: review.addedLines,
       deletedLines: review.deletedLines,
+      ...(review.countsUnavailable === true ? { countsUnavailable: true } : {}),
     },
   };
 }
@@ -617,6 +629,9 @@ export class RuntimeGitService {
         failureKind,
         errorClass: detail.errorClass,
         ...thrownGitCode(cause),
+        ...(cause instanceof GitWorktreeReadError && cause.reason !== undefined
+          ? { readFailure: cause.reason }
+          : {}),
         ...(detail.frames === undefined ? {} : { frames: detail.frames }),
         ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
       },

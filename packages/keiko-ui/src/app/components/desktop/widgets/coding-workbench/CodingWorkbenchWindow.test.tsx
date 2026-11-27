@@ -3617,6 +3617,26 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
+  it("G-5: says line counts are unavailable instead of showing a silent zero", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/huge.txt"],
+        pathsTruncated: false,
+        fileCount: 1,
+        addedLines: 0,
+        deletedLines: 0,
+        countsUnavailable: true,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("Line counts are unavailable because a file is too large");
+  });
+
   it("#2802: marks a truncated file list instead of understating the blast radius", () => {
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
@@ -4142,7 +4162,7 @@ describe("CodingWorkbenchWindow", () => {
     const user = userEvent.setup();
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
-      review: { ...APPROVAL_REVIEW, requestId: "permission-8" },
+      review: { ...APPROVAL_REVIEW, requestId: "permission-7" },
       retry: vi.fn(),
     });
     const liveActions = renderWorkbench(editApprovalState());

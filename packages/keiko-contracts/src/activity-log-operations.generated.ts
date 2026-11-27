@@ -32691,6 +32691,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      countsUnavailable: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      readFailure: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["truncated", "exit-nonzero", "spawn-failed"],
+      },
       truncated: {
         type: "boolean",
         dataClass: "closed-enum",
@@ -33414,6 +33425,33 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       violationCount: {
         type: "integer",
         dataClass: "count",
+        required: false,
+      },
+      messagePolicyMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["keiko-conventional", "repository-native"],
+      },
+      messagePolicySource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["setting", "repository", "fallback"],
+      },
+      reviewFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reviewRenameCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reviewPathsTruncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: false,
       },
       reviewIncompleteCause: {

@@ -1210,6 +1210,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
   "codingWorkbench.approval.changes.truncated":
     "Es werden nur die ersten {shown} von {total} Dateien aufgeführt.",
+  "codingWorkbench.approval.changes.countsUnavailable":
+    "Die Zeilenzahlen sind nicht verfügbar, weil eine Datei zu groß zum Zählen ist; die Dateiliste ist vollständig.",
   "codingWorkbench.approval.changes.loading": "Geänderte Dateien werden geladen …",
   "codingWorkbench.approval.changes.unavailable":
     "Geänderte Dateien nicht abrufbar. Fenster erneut koppeln, um sie vor der Entscheidung zu sehen.",

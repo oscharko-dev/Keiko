@@ -56,6 +56,12 @@ export interface VerifiedCommitProposal {
   readonly review: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimePendingApprovalReview;
 }
 
+/** A validation plus the closed facts of the policy it was judged against (for the log only). */
+export type VerifiedCommitMessageVerdict = GitCommitMessageValidation & {
+  readonly policyMode?: "keiko-conventional" | "repository-native";
+  readonly policySource?: "setting" | "repository" | "fallback";
+};
+
 export interface VerifiedCommitServiceOptions {
   readonly context: () => VerifiedCommitRunContext | undefined;
   /**
@@ -77,7 +83,7 @@ export interface VerifiedCommitServiceOptions {
   readonly messageAllowed: (
     message: string,
     workspace: WorkspaceInfo,
-  ) => Promise<boolean | GitCommitMessageValidation>;
+  ) => Promise<boolean | VerifiedCommitMessageVerdict>;
 }
 
 /**

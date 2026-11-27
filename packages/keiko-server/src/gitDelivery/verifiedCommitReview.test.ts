@@ -125,12 +125,12 @@ describe("readVerifiedCommitReview with quoted Git paths", () => {
 });
 
 describe("readVerifiedCommitReview names its cause when the review is incomplete", () => {
-  it("names a file whose hunk line is over-long", async () => {
+  it("reviews a file whose hunk line is over-long with its exact counts", async () => {
     const root = stagedRepo("long line", "dir/big.js");
     writeFileSync(join(root, "dir/big.js"), `a\n${"x".repeat(20_000)}\n`);
     runGit(root, ["add", "-A"]);
     const read = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
-    expect(read).toEqual({ incomplete: "file-truncated" });
+    expect(reviewOf(read)).toMatchObject({ fileCount: 1, addedLines: 1, deletedLines: 1 });
   });
 
   it("names a diff that lists a file the review cannot place", async () => {
@@ -148,5 +148,44 @@ describe("readVerifiedCommitReview names its cause when the review is incomplete
     );
     const read = await readVerifiedCommitReview(contextFor(root), RESULT, "fix: size", {});
     expect(read).toEqual({ incomplete: "payload-invalid" });
+  });
+});
+
+describe("readVerifiedCommitReview of a large legitimate change (G-4)", () => {
+  it("reviews 303 pure renames and their reference edits with exact counts", async () => {
+    const root = join(scratch, "bulk");
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "test"), { recursive: true });
+    runGit(root, ["init", "-qb", "dev"]);
+    runGit(root, ["config", "user.name", "Keiko Test"]);
+    runGit(root, ["config", "user.email", "keiko@example.test"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    const count = 303;
+    for (let n = 100; n < 100 + count; n += 1) {
+      writeFileSync(join(root, "src", `m${String(n)}.js`), `export const n = ${String(n)};\n`);
+      writeFileSync(join(root, "test", `t${String(n)}.js`), `import "../src/m${String(n)}.js";\n`);
+    }
+    runGit(root, ["add", "-A"]);
+    runGit(root, ["commit", "-qm", "seed"]);
+    for (let n = 100; n < 100 + count; n += 1) {
+      renameSync(
+        join(root, "src", `m${String(n)}.js`),
+        join(root, "src", `module-${String(n)}.js`),
+      );
+      writeFileSync(
+        join(root, "test", `t${String(n)}.js`),
+        `import "../src/module-${String(n)}.js";\n`,
+      );
+    }
+    runGit(root, ["add", "-A"]);
+    const read = await readVerifiedCommitReview(contextFor(root), RESULT, "feat: rename", {});
+    expect(read).toMatchObject({ renameCount: count });
+    expect(reviewOf(read)).toMatchObject({
+      fileCount: count * 2,
+      pathsTruncated: true,
+      addedLines: count,
+      deletedLines: count,
+    });
+    expect(reviewOf(read).paths).toHaveLength(50);
   });
 });

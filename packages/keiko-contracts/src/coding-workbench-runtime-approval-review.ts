@@ -148,6 +148,11 @@ export interface CodingWorkbenchRuntimePendingApprovalReview {
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  /**
+   * True when a file was too large to count: `addedLines` and `deletedLines` then cover the other
+   * files only. An honest marker, never a silent zero.
+   */
+  readonly countsUnavailable?: boolean;
   /** Authenticated, transient human review only; never the durable runtime/event projection. */
   readonly draftDelivery?: CodingRuntimeDeliveryReview;
   readonly verifiedCommit?: { readonly result: VerifiedCommitResult; readonly message: string };
@@ -211,6 +216,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "fileCount",
         "addedLines",
         "deletedLines",
+        "countsUnavailable",
         "verifiedCommit",
         "draftDelivery",
         "nativeAction",
@@ -237,6 +243,8 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   validateReviewCount(value.fileCount, "fileCount", errors);
   validateReviewCount(value.addedLines, "addedLines", errors);
   validateReviewCount(value.deletedLines, "deletedLines", errors);
+  if (value.countsUnavailable !== undefined && typeof value.countsUnavailable !== "boolean")
+    errors.push("pendingApprovalReview.countsUnavailable must be a boolean");
   validateReviewFileCountConsistency(value, errors);
   if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
 }

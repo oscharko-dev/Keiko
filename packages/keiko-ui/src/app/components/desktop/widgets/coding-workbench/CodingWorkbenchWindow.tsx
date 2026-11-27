@@ -2995,6 +2995,11 @@ function ApprovalReviewBody({
           </li>
         ))}
       </ul>
+      {review.countsUnavailable === true ? (
+        <p className={styles.approvalResearchDetail}>
+          {t("codingWorkbench.approval.changes.countsUnavailable")}
+        </p>
+      ) : null}
       {review.pathsTruncated ? (
         <p className={styles.approvalResearchDetail}>
           {t("codingWorkbench.approval.changes.truncated", {

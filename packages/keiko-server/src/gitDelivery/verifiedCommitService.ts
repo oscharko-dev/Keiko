@@ -14,7 +14,6 @@ import type {
   VerificationReport,
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
-  GitCommitMessageValidation,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   VerifiedCommitBinding,
@@ -71,6 +70,7 @@ import type {
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
   VerifiedCommitBlockingPaths,
+  VerifiedCommitMessageVerdict,
 } from "./verifiedCommitTypes.js";
 
 const VERIFIED_COMMIT_RESULT_REASONS = [
@@ -193,6 +193,21 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       ],
     },
     violationCount: { type: "integer", dataClass: "count", required: false },
+    messagePolicyMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["keiko-conventional", "repository-native"],
+    },
+    messagePolicySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["setting", "repository", "fallback"],
+    },
+    reviewFileCount: { type: "integer", dataClass: "count", required: false },
+    reviewRenameCount: { type: "integer", dataClass: "count", required: false },
+    reviewPathsTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
     reviewIncompleteCause: {
       type: "string",
       dataClass: "closed-enum",
@@ -262,6 +277,11 @@ interface VerifiedCommitActivityFields {
   readonly violations?: NonNullable<VerifiedCommitResult["violations"]>;
   readonly violationCount?: number;
   readonly reviewIncompleteCause?: VerifiedCommitReviewIncompleteCause;
+  readonly messagePolicyMode?: "keiko-conventional" | "repository-native";
+  readonly messagePolicySource?: "setting" | "repository" | "fallback";
+  readonly reviewFileCount?: number;
+  readonly reviewRenameCount?: number;
+  readonly reviewPathsTruncated?: boolean;
   readonly attemptedStatus?: VerifiedCommitStatus;
   readonly attemptedReason?: VerifiedCommitReason;
   readonly effectPhase?: "pre-effect" | "post-effect";
@@ -487,14 +507,57 @@ function kernelDetails(
 // #3390: `messageAllowed` accepts a plain boolean (existing wiring) or the full validation the
 // pure git-commit-policy validator already computes; only the latter carries closed violation
 // codes the model can self-correct against instead of asking the operator.
-function messagePolicyAllowed(value: boolean | GitCommitMessageValidation): boolean {
+function messagePolicyAllowed(value: boolean | VerifiedCommitMessageVerdict): boolean {
   return typeof value === "boolean" ? value : value.ok;
 }
 
 function messagePolicyViolationDetails(
-  value: boolean | GitCommitMessageValidation,
+  value: boolean | VerifiedCommitMessageVerdict,
 ): Pick<VerifiedCommitResult, "violations"> {
   return typeof value === "boolean" || value.ok ? {} : { violations: value.violations };
+}
+
+function commitCommand(
+  context: VerifiedCommitRunContext,
+  facts: VerifiedCommitFacts,
+  message: string,
+): VerifiedCommitProposal["command"] {
+  return {
+    kind: "commit",
+    message,
+    allowEmpty: false,
+    verified: {
+      head: facts.head,
+      stagedTreeDigest: facts.stagedTreeDigest,
+      branchName: context.headRef,
+      baseRef: context.baseRef,
+      base: facts.base,
+    },
+  };
+}
+
+function reviewActivity(
+  review: VerifiedCommitProposal["review"],
+  renameCount: number,
+): Pick<
+  VerifiedCommitActivityFields,
+  "reviewFileCount" | "reviewRenameCount" | "reviewPathsTruncated"
+> {
+  return {
+    reviewFileCount: review.fileCount,
+    reviewRenameCount: renameCount,
+    reviewPathsTruncated: review.pathsTruncated,
+  };
+}
+
+function messagePolicyActivity(
+  value: boolean | VerifiedCommitMessageVerdict,
+): Pick<VerifiedCommitActivityFields, "messagePolicyMode" | "messagePolicySource"> {
+  if (typeof value === "boolean") return {};
+  return {
+    ...(value.policyMode === undefined ? {} : { messagePolicyMode: value.policyMode }),
+    ...(value.policySource === undefined ? {} : { messagePolicySource: value.policySource }),
+  };
 }
 
 function guardedProposal(
@@ -776,6 +839,7 @@ class VerifiedCommitController implements VerifiedCommitService {
         "message-policy",
         undefined,
         messagePolicyViolationDetails(messagePolicy),
+        messagePolicyActivity(messagePolicy),
       );
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
@@ -845,22 +909,19 @@ class VerifiedCommitController implements VerifiedCommitService {
       context,
       expiresAtMs: this.now() + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
       ...(verificationFailed ? { verificationFailed: true as const } : {}),
-      command: {
-        kind: "commit",
-        message,
-        allowEmpty: false,
-        verified: {
-          head: facts.head,
-          stagedTreeDigest: facts.stagedTreeDigest,
-          branchName: context.headRef,
-          baseRef: context.baseRef,
-          base: facts.base,
-        },
-      },
+      command: commitCommand(context, facts, message),
     };
     this.proposals.clear();
     this.proposals.set(binding.proposalId, proposal);
-    return this.record(context, binding, "approval-required", "approval-required");
+    return this.record(
+      context,
+      binding,
+      "approval-required",
+      "approval-required",
+      undefined,
+      {},
+      reviewActivity(review, read.renameCount),
+    );
   }
 
   private reviewIncomplete(
@@ -1199,7 +1260,15 @@ class VerifiedCommitController implements VerifiedCommitService {
     reason: VerifiedCommitReason,
     headSha?: string,
     details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
-    activity: Pick<VerifiedCommitActivityFields, "reviewIncompleteCause"> = {},
+    activity: Pick<
+      VerifiedCommitActivityFields,
+      | "reviewIncompleteCause"
+      | "reviewFileCount"
+      | "reviewRenameCount"
+      | "reviewPathsTruncated"
+      | "messagePolicyMode"
+      | "messagePolicySource"
+    > = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     if (!this.persist(context, binding, status, reason, result))
