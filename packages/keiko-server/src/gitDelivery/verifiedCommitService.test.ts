@@ -2503,6 +2503,83 @@ describe("productive runtime status/diff/stage lane", () => {
       deletedLines: 1,
     });
   });
+  // #4491 (found live on Windows 11 with `core.autocrlf=true`): the stage review compared the raw
+  // CRLF worktree bytes with the LF index blob and counted every line as changed. The counts must be
+  // what Git's own `diff --numstat` (worktree against index, under the repository's configuration and
+  // attributes) reports; each expectation below is read from Git, never restated.
+  describe("the stage review of a file whose line breaks Git converts on add", () => {
+    function numstat(path: string): { readonly added: number; readonly deleted: number } {
+      const [added, deleted] = git(["diff", "--numstat", "--", path]).split("\t");
+      return { added: Number(added), deleted: Number(deleted) };
+    }
+    async function reviewed(path: string): Promise<unknown> {
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, [path]);
+      const review = await reviewStageSelection(context(), execution, selection ?? []);
+      const diff = await runtimeGitDiff(context(), execution, "unstaged", [path]);
+      expect(diff.files).toEqual([
+        expect.objectContaining({
+          addedLines: review.addedLines,
+          removedLines: review.deletedLines,
+        }),
+      ]);
+      return { added: review.addedLines, deleted: review.deletedLines, review };
+    }
+    const lines = Array.from({ length: 10 }, (_, index) => `line ${String(index)};`);
+    const edited = lines.map((line, index) => (index === 4 ? "line four;" : line));
+    function commitLf(path: string): void {
+      writeFileSync(join(root, path), `${lines.join("\n")}\n`);
+      git(["add", path]);
+      git(["commit", "-qm", `add ${path}`]);
+    }
+    function writeCrlf(path: string, content: readonly string[]): void {
+      writeFileSync(join(root, path), `${content.join("\r\n")}\r\n`);
+    }
+
+    it("counts one changed line of a CRLF worktree file under core.autocrlf=true", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      commitLf("Zins.java");
+      writeCrlf("Zins.java", edited);
+      const expected = numstat("Zins.java");
+      expect(expected).toEqual({ added: 1, deleted: 1 });
+      await expect(reviewed("Zins.java")).resolves.toMatchObject({ ...expected });
+    });
+
+    it("counts every line of a genuine CRLF change when no conversion applies", async () => {
+      git(["config", "core.autocrlf", "false"]);
+      commitLf("plain.txt");
+      writeCrlf("plain.txt", lines);
+      const expected = numstat("plain.txt");
+      expect(expected).toEqual({ added: 10, deleted: 10 });
+      await expect(reviewed("plain.txt")).resolves.toMatchObject({ ...expected });
+    });
+
+    it("counts one changed line under a `* text=auto eol=crlf` attribute", async () => {
+      writeFileSync(join(root, ".gitattributes"), "* text=auto eol=crlf\n");
+      git(["add", ".gitattributes"]);
+      commitLf("attr.txt");
+      writeCrlf("attr.txt", edited);
+      const expected = numstat("attr.txt");
+      expect(expected).toEqual({ added: 1, deleted: 1 });
+      await expect(reviewed("attr.txt")).resolves.toMatchObject({ ...expected });
+    });
+
+    it("leaves a binary file as the unconverted, uncounted representation", async () => {
+      git(["config", "core.autocrlf", "true"]);
+      writeFileSync(join(root, "blob.bin"), Buffer.from([0, 13, 10, 1, 2, 3]));
+      git(["add", "blob.bin"]);
+      git(["commit", "-qm", "binary"]);
+      writeFileSync(join(root, "blob.bin"), Buffer.from([0, 13, 10, 9, 9, 9]));
+      expect(git(["diff", "--numstat", "--", "blob.bin"])).toBe("-\t-\tblob.bin");
+      const execution = options.execution ?? {};
+      const selection = await admitStageSelection(context(), execution, ["blob.bin"]);
+      await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+        fileCount: 1,
+        addedLines: 0,
+        deletedLines: 0,
+      });
+    });
+  });
   it("says counts are unavailable, never zero, for a side too large to count", async () => {
     const line = `${"x".repeat(1023)}\n`;
     const text = line.repeat(RUNTIME_GIT_SIDE_MAX_BYTES / 1024 + 8);

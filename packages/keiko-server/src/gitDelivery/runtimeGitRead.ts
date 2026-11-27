@@ -27,6 +27,7 @@ import {
   createGitStagedObjectIdPort,
   createGitReadSession,
   type GitStagedConversionEvidence,
+  type GitStagedObjectIdPort,
   type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
   readGitTreeEntries,
@@ -344,6 +345,9 @@ interface DiffSides {
   readonly added: boolean;
   readonly deleted: boolean;
   readonly binary: boolean;
+  // The worktree side holds line breaks Git's staging would convert and the conversion could not be
+  // judged: the counts are unavailable, never a guess (#4491).
+  readonly conversionUnknown: boolean;
   readonly same: boolean;
   readonly oldMode: string;
   readonly newMode: string;
@@ -383,7 +387,7 @@ function diffFile(
   log: DiffSearchLog,
 ): GitEditorDiffFile | undefined {
   if ((sides.added && sides.deleted) || sides.same) return undefined;
-  if (sides.tooLarge)
+  if (sides.tooLarge || sides.conversionUnknown)
     return {
       path: sides.path,
       layer: scope === "staged" ? "staged" : "worktree",
@@ -439,7 +443,7 @@ async function readSides(
   const after =
     scope === "staged"
       ? await objectSide(deps, index)
-      : await workingSide(context, path, index?.objectId.length ?? 40);
+      : await workingSide(context, deps, path, index?.objectId.length ?? 40);
   return {
     path,
     before: before.text,
@@ -448,6 +452,7 @@ async function readSides(
     deleted: after.missing,
     binary: before.binary || after.binary,
     tooLarge: before.tooLarge || after.tooLarge,
+    conversionUnknown: after.conversionUnknown,
     same: before.objectId === after.objectId && before.mode === after.mode,
     oldMode: before.mode,
     newMode: after.mode,
@@ -460,13 +465,22 @@ interface FileSide {
   readonly missing: boolean;
   readonly binary: boolean;
   readonly tooLarge: boolean;
+  readonly conversionUnknown: boolean;
 }
 async function objectSide(
   deps: ReturnType<typeof runtimeGitReadDeps>,
   entry: { readonly objectId: string; readonly mode: string } | undefined,
 ): Promise<FileSide> {
   if (entry === undefined)
-    return { text: "", missing: true, binary: false, tooLarge: false, objectId: "", mode: "0" };
+    return {
+      text: "",
+      missing: true,
+      binary: false,
+      tooLarge: false,
+      conversionUnknown: false,
+      objectId: "",
+      mode: "0",
+    };
   const text = await readGitBlobTextWithin(deps, entry.objectId, RUNTIME_GIT_SIDE_MAX_BYTES);
   if (text === undefined)
     return {
@@ -474,6 +488,7 @@ async function objectSide(
       missing: false,
       binary: false,
       tooLarge: true,
+      conversionUnknown: false,
       mode: entry.mode,
       objectId: entry.objectId,
     };
@@ -481,6 +496,7 @@ async function objectSide(
     text,
     missing: false,
     tooLarge: false,
+    conversionUnknown: false,
     binary: text.includes("\0") || text.includes("\uFFFD"),
     mode: entry.mode,
     objectId: entry.objectId,
@@ -488,6 +504,7 @@ async function objectSide(
 }
 async function workingSide(
   context: VerifiedCommitRunContext,
+  deps: ReturnType<typeof runtimeGitReadDeps>,
   path: string,
   hashLength: number,
 ): Promise<FileSide> {
@@ -495,14 +512,69 @@ async function workingSide(
     fs: runtimeWorkspaceFs(context),
   });
   const tooLarge = file.bytes.length > RUNTIME_GIT_SIDE_MAX_BYTES;
-  return {
+  const raw: FileSide = {
     tooLarge,
+    conversionUnknown: false,
     objectId: file.mode === "0" ? "" : gitBlobObjectId(file.bytes, hashLength),
     mode: file.mode,
     text: tooLarge ? "" : Buffer.from(file.bytes).toString("utf8"),
     missing: file.mode === "0",
     binary: !isUtf8(file.bytes) || file.bytes.includes(0),
   };
+  // Git's staging stores CRLF as LF under `core.autocrlf`, `core.eol` or a `text`/`eol` attribute, so
+  // a CRLF worktree file is compared with its index blob as Git would store it, not byte for byte.
+  return raw.missing || raw.binary || raw.tooLarge || !raw.text.includes("\r")
+    ? raw
+    : await settledWorkingSide(context, deps, file, raw, hashLength);
+}
+// What Git's own staging would store for a worktree file that holds a CR (#4491). Git decides: the
+// staged-object port (the very conversion the verified staging and the raw reader's settlement use)
+// answers the object id Git would write, and the worktree side is whichever of its two possible
+// contents, the bytes as they are or with every CRLF turned into LF, hashes to that id. An answer
+// matching neither, or none at all, is unknown and never a guessed count. A path the port does not
+// settle (no conversion applies, or the index entry already holds a CR so Git keeps the bytes) is
+// compared as it is. The settlement is reported on the raw reader's conversion operation.
+function sideStagedAs(raw: FileSide, stagedId: string | undefined, hashLength: number): FileSide {
+  if (stagedId === undefined || stagedId === raw.objectId) return raw;
+  const text = raw.text.replaceAll("\r\n", "\n");
+  const objectId = gitBlobObjectId(Buffer.from(text, "utf8"), hashLength);
+  return objectId === stagedId ? { ...raw, text, objectId } : { ...raw, conversionUnknown: true };
+}
+async function settledWorkingSide(
+  context: VerifiedCommitRunContext,
+  deps: ReturnType<typeof runtimeGitReadDeps>,
+  file: Parameters<GitStagedObjectIdPort>[0][number],
+  raw: FileSide,
+  hashLength: number,
+): Promise<FileSide> {
+  const unknown: FileSide = { ...raw, conversionUnknown: true };
+  if (deps.stagedObjectIds === undefined) return unknown;
+  const stats = { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 };
+  const report = (
+    outcome: GitStagedConversionEvidence["outcome"],
+    more: Partial<GitStagedConversionEvidence> = {},
+  ): void =>
+    deps.onStagedConversion?.({
+      convertible: 1,
+      batches: 1,
+      settledClean: 0,
+      ...stats,
+      outcome,
+      ...more,
+    });
+  try {
+    const answer = await deps.stagedObjectIds([file], stats);
+    if (answer === undefined || typeof answer === "string") {
+      report("undecidable", typeof answer === "string" ? { reason: answer } : {});
+      return unknown;
+    }
+    report("answered");
+    return sideStagedAs(raw, answer.get(file.path), hashLength);
+  } catch (error) {
+    report("error", { error });
+    if (!context.stillAuthorized() || context.signal?.aborted === true) throw error;
+    return unknown;
+  }
 }
 
 function changedInScope(change: GitChangedFile, scope: GitEditorDiffScope): boolean {
@@ -642,7 +714,7 @@ function sideCounts(
   execution: GitDeliveryExecutionSeams,
   correlationId: string | undefined,
 ): { readonly added: number; readonly deleted: number } | "unavailable" | undefined {
-  if (sides.tooLarge) return "unavailable";
+  if (sides.tooLarge || sides.conversionUnknown) return "unavailable";
   if (sides.binary || sides.same) return undefined;
   const before = lineDiffSide(sides.before);
   const after = lineDiffSide(sides.after);
