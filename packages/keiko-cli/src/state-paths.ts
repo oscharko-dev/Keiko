@@ -196,6 +196,24 @@ export function stateDirInsideStartFolder(
 }
 
 /**
+ * The UI process admits its data below the start folder's `.keiko` by the path's spelling, so a
+ * `.keiko` that is a link to another folder inside the start folder still holds the state
+ * directory. Only the canonical comparison decides every other placement.
+ */
+function spelledBelowRuntimeRoot(
+  cwd: string,
+  stateDir: string,
+  platform: NodeJS.Platform,
+): boolean {
+  const startFolder = resolve(cwd);
+  const state = resolve(stateDir);
+  return (
+    pathInsideRoot(startFolder, state, platform) &&
+    !stateDirInsideStartFolder(startFolder, state, platform)
+  );
+}
+
+/**
  * The UI process keeps its data out of the folder it starts in, apart from that folder's `.keiko`
  * ("KEIKO_UI_DATA_DIR must not be inside the current workspace"), and its data lives in the state
  * directory unless `KEIKO_UI_DATA_DIR` names another one. A state directory inside the start folder
@@ -210,6 +228,7 @@ export function assertStateDirOutsideStartFolder(
 ): void {
   const uiDataDir = env.KEIKO_UI_DATA_DIR;
   if (typeof uiDataDir === "string" && uiDataDir.length > 0) return;
+  if (spelledBelowRuntimeRoot(cwd, stateDir, process.platform)) return;
   if (
     !stateDirInsideStartFolder(
       resolveWithExistingAncestor(cwd),

@@ -806,6 +806,19 @@ describe("isInsidePath", () => {
 });
 
 describe("assertStateDirOutsideStartFolder (#4491)", () => {
+  it("keeps the .keiko exemption when .keiko is a link to a folder inside the start folder", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    mkdirSync(join(cwd, "data"));
+    symlinkSync(join(cwd, "data"), join(cwd, DEFAULT_STATE_DIR_NAME), "junction");
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, DEFAULT_STATE_DIR_NAME), {});
+    }).not.toThrow();
+    // The UI process accepts its data only below the spelled .keiko, never the link's target.
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, join(cwd, "data"), {});
+    }).toThrow(/inside the folder Keiko starts from/u);
+  });
+
   it("refuses a state directory inside the start folder outside its .keiko", () => {
     const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
     expect(() => {
