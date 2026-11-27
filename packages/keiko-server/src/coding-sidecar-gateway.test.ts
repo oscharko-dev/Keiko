@@ -12588,11 +12588,26 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     resetServerLogger();
   });
 
-  const NATIVE_RECOVERY_TOOLS = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
-    type: "function" as const,
-    function: { name, description: "", parameters: { type: "object", properties: {} } },
-  }));
-  const GEMMA_MARKUP = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> </todo>\n<shell command="npm test | tail -n 1" />`;
+  // The REAL native catalog the sidecar sees: the pinned OpenCode advertisement, with its own tool
+  // names (`todowrite`, `shell`, …) and parameter schemas.
+  const NATIVE_RECOVERY_TOOLS = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          `./coding-runtime/opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as readonly { readonly name: string; readonly parameters: unknown }[]
+  )
+    .filter((tool) => !tool.name.startsWith("keiko_"))
+    .map((tool) => ({
+      type: "function" as const,
+      function: { name: tool.name, description: "", parameters: tool.parameters },
+    }));
+  // The answer observed live (M-1, Gemma 4 31B): a plan written as `<todo>` elements, then the call.
+  const GEMMA_MARKUP = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> <todo content="Commit the fix" status="pending"/> </todo>\n<shell command="npm test | tail -n 1" />`;
   const QWEN_MARKUP = `<tool_call>\n{"name": "shell", "arguments": {"command": "git commit -am fix"}}\n</tool_call>`;
   const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
     events.find((event) => event.op === op);
@@ -12667,11 +12682,10 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     throw error;
   }
 
-  // The hint rides in the leading system message, never as a late message after the tool messages.
+  // The hint rides at the end of the LAST message: no message is added or reordered and every
+  // earlier byte (the prompt prefix the provider caches) is unchanged.
   const hasHint = (request: GatewayRequest | undefined): boolean =>
-    request?.messages[0]?.role === "system" &&
-    request.messages[0].content.includes("native tool-calling interface") &&
-    request.messages.at(-1)?.role !== "system";
+    request?.messages.at(-1)?.content.includes("native tool-calling interface") === true;
 
   async function buffered(answers: readonly (NormalizedResponse | Error)[]): Promise<{
     readonly result: RouteResult | typeof STREAMING;
@@ -12734,7 +12748,9 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
       expect(hasHint(seq.requests[0])).toBe(false);
       expect(hasHint(seq.requests[1])).toBe(true);
       expect(seq.requests[1]?.messages).toHaveLength(seq.requests[0]?.messages.length ?? -1);
-      expect(seq.requests[1]?.messages.slice(1)).toEqual(seq.requests[0]?.messages.slice(1));
+      expect(seq.requests[1]?.messages.slice(0, -1)).toEqual(
+        seq.requests[0]?.messages.slice(0, -1),
+      );
       expect(result).toMatchObject({ status: 200 });
       expect(bodyText(result)).toContain("tool_calls");
       expect(bodyText(result)).not.toContain("<shell");
@@ -12834,13 +12850,10 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
       "a json-labelled fence showing a call",
       '```json\n{"name":"shell","arguments":{"command":"npm test"}}\n```',
     ],
-    [
-      "a read element shown inside a fence",
-      'The model writes:\n```xml\n<read filePath="a.ts" />\n```',
-    ],
+    ["a read element shown inside a fence", 'The model writes:\n```xml\n<read path="a.ts" />\n```'],
     [
       "an explanation of a tool call",
-      'To read a file the model writes <read filePath="a.ts" /> and the runtime answers it.',
+      'To read a file the model writes <read path="a.ts" /> and the runtime answers it.',
     ],
     ["a prompt template", "<task>Summarise the repository and list the open risks.</task>"],
   ])("never re-requests a buffered or live answer that shows %s", async (_label, content) => {

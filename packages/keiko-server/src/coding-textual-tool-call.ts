@@ -82,7 +82,7 @@ export function toolIndex(
     const params =
       typeof properties === "object" && properties !== null ? Object.keys(properties) : [];
     if (tool.name.length > 0) {
-      index.set(tool.name.toLowerCase(), new Set(params.map((param) => param.toLowerCase())));
+      index.set(asciiLower(tool.name), new Set(params.map(asciiLower)));
     }
   }
   return index;
@@ -238,7 +238,7 @@ function namesAdvertisedTool(lower: string, names: ReadonlySet<string>): boolean
 // A JSON object (or array) that names an advertised tool beside an arguments key. Read by scanning,
 // never by parsing: the text is hostile and a parse would add nothing the scan does not decide.
 function looksLikeJsonCall(body: string, names: ReadonlySet<string>): boolean {
-  const lower = body.trim().toLowerCase();
+  const lower = asciiLower(body.trim());
   const bracketed =
     (lower.startsWith("{") && lower.endsWith("}")) ||
     (lower.startsWith("[") && lower.endsWith("]"));
@@ -266,7 +266,7 @@ function fencedBlocks(text: string): readonly FencedBlock[] {
     blocks.push({
       start: open,
       end: close + 3,
-      label: label.toLowerCase(),
+      label: asciiLower(label),
       body: inner.slice(label.length),
     });
     open = text.indexOf("```", close + 3);
@@ -335,19 +335,57 @@ export function detectTextualToolCall(
 ): TextualToolCallForm | undefined {
   const text = content.trim();
   if (tools.size === 0 || text.length === 0 || text.length > MAX_ANALYZED_CHARS) return undefined;
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   const names: ReadonlySet<string> = new Set(tools.keys());
   const blocks = fencedBlocks(text);
   const sole = soleToolFence(text, blocks);
+  const inScope = (span: Span): boolean =>
+    sole === undefined ? !insideFence(span, blocks) : insideFence(span, [sole]);
   const spans = [
     ...namedElementSpans(text, lower, tools),
     ...functionTagSpans(text, lower, names),
     ...wrapperSpans(text, lower, names),
-  ].filter((span) => (sole === undefined ? !insideFence(span, blocks) : insideFence(span, [sole])));
+  ].filter(inScope);
   spans.push(...jsonCallSpans(text, names, blocks));
   const [first] = spans;
   if (first === undefined) return undefined;
-  return markupShare(text, spans) >= MIN_MARKUP_SHARE ? first.form : undefined;
+  // Once a call to an advertised tool is there, the well-formed attribute elements around it (a
+  // model's plan or todo list written beside the call) belong to the same markup.
+  const companions = attributeElementSpans(text, lower).filter(inScope);
+  return markupShare(text, [...spans, ...companions]) >= MIN_MARKUP_SHARE ? first.form : undefined;
+}
+
+// Lower-cases ASCII letters only, so the result has the length of the input and every index into it
+// is an index into the original (`toLowerCase` can change the length of some Unicode text).
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/gu, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
+}
+
+const MAX_COMPANION_TAGS = 32;
+
+// Every well-formed attribute-bearing element (`<name attr="…"/>`), with the wrapper that holds
+// elements of the same name (`<name> <name a="x"/> </name>`), whatever its name is.
+function attributeElementSpans(text: string, lower: string): Span[] {
+  const spans: Span[] = [];
+  const names = new Set<string>();
+  const tag = /<([a-z][a-z0-9_-]{0,63})(?=[\s/>])/gu;
+  for (let found = tag.exec(lower); found !== null; found = tag.exec(lower)) {
+    const name = found[1] ?? "";
+    const end = tagEnd(text, found.index);
+    if (end === -1 || !lower.slice(found.index + name.length + 1, end).includes("=")) continue;
+    if (names.size >= MAX_COMPANION_TAGS && !names.has(name)) continue;
+    names.add(name);
+    spans.push({ start: found.index, end, form: "named-element" });
+  }
+  for (const name of names) {
+    const [first] = openingTagIndexes(lower, name);
+    const closing = `</${name}>`;
+    const closeAt = lower.lastIndexOf(closing);
+    if (first !== undefined && closeAt > first) {
+      spans.push({ start: first, end: closeAt + closing.length, form: "named-element" });
+    }
+  }
+  return spans;
 }
 
 /**
@@ -363,18 +401,28 @@ export function textualToolCallForm(
 }
 
 /**
- * The request of the retry: the original with the one fixed correction merged into its leading system
- * message (or added as one when it has none), never the markup. It is not appended as a late message
- * after the tool messages, which chat templates behind LiteLLM (Gemma) may reject or reorder.
+ * The request of the retry: the original with the one fixed correction appended to the content of its
+ * LAST message, never the markup. Every earlier message keeps its bytes, so the provider's prompt
+ * prefix cache still serves the retry (a hint in the leading system message would change the first
+ * bytes and lose it), and no message is added or reordered, so the role sequence a chat template
+ * sees is unchanged: a late system message, or a second consecutive user message, is what Gemma
+ * templates behind LiteLLM may reject or reorder. Only a last message that cannot carry text (an
+ * assistant prefill, a system message or a message with content parts) gets a short user message.
  */
 export function withTextualToolCallHint<T extends { readonly messages: readonly ChatMessage[] }>(
   request: T,
 ): T {
-  const [first, ...rest] = request.messages;
-  const messages: readonly ChatMessage[] =
-    first?.role === "system"
-      ? [{ ...first, content: `${first.content}\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` }, ...rest]
-      : [{ role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT }, ...request.messages];
+  const last = request.messages.at(-1);
+  const carriesText =
+    last !== undefined &&
+    (last.role === "user" || last.role === "tool") &&
+    last.contentParts === undefined;
+  const messages: readonly ChatMessage[] = carriesText
+    ? [
+        ...request.messages.slice(0, -1),
+        { ...last, content: `${last.content}\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` },
+      ]
+    : [...request.messages, { role: "user", content: TEXTUAL_TOOL_CALL_RETRY_HINT }];
   return { ...request, messages };
 }
 

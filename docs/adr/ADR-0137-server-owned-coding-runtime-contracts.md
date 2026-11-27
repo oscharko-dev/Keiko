@@ -2835,14 +2835,24 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `stop` with no native call and its text is essentially markup (at least 85 % of its non-whitespace
   characters, at most 32 KiB, `coding-textual-tool-call.ts`) that names a tool the request advertised
   and has a tool call's shape: an element with attributes, or a body naming one of the tool's
-  parameters (a bare `<read>` or `<task>text</task>` is a word or a template), a wrapper element
-  around such a call, a `<function=tool>` tag, or a JSON call. Markup inside a code fence never
+  parameters (a bare `<read>` or `<subagent>text</subagent>` is a word or a template), a wrapper
+  element around such a call, a `<function=tool>` tag, or a JSON call. Once such a call is there, the
+  well-formed attribute elements beside it (a plan written as `<todo content="…" status="…"/>`
+  elements, whatever their name) and the wrapper holding them count toward that share, so the plan a
+  model writes before its call does not hide the call; without a call to an advertised tool they
+  count for nothing. Matching is case-insensitive over ASCII only, so every offset stays an offset
+  into the original text. Markup inside a code fence never
   qualifies, except an unlabelled or tool/XML-labelled fence that is the entire answer (a `json`
   fence is always a sample). Prose, explanations and samples that show markup, prompt templates and
   markup naming no advertised tool never qualify. The gateway then re-requests the model with the
-  original request, the one fixed hint to use the native tool-calling interface merged into its
-  leading system message (not a late message after the tool messages, which chat templates behind
-  LiteLLM may reject or reorder), at most twice per runtime request (a loop guard, not a work limit:
+  original request and the one fixed hint to use the native tool-calling interface appended to the
+  content of its last message: every earlier byte is unchanged, so the provider's prompt prefix cache
+  still serves the retry (a hint in the leading system message would change the first bytes), and no
+  message is added or reordered, so the role sequence a chat template sees is unchanged (a late
+  system message, or a second consecutive user message, is what Gemma templates behind LiteLLM may
+  reject or reorder). Only a last message that cannot carry text (an assistant prefill, a system
+  message, content parts) gets a short user message. It is made at most twice per runtime request
+  (a loop guard, not a work limit:
   once spent, the response passes through unchanged, exactly as before). The text is never parsed
   into a tool call and nothing is executed from it. A buffered answer is simply discarded. A live
   (streamed) turn holds back, from the first character that can start markup (a `<` followed by a

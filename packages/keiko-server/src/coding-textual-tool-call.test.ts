@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   detectTextualToolCall,
@@ -11,22 +12,25 @@ import {
   withTextualToolCallHint,
 } from "./coding-textual-tool-call.js";
 
-const TOOLS = toolIndex([
-  { name: "read", parameters: { properties: { filePath: {} } } },
-  { name: "edit", parameters: { properties: { filePath: {}, oldString: {} } } },
-  { name: "shell", parameters: { properties: { command: {} } } },
-  { name: "todo", parameters: { properties: { todos: {} } } },
-  { name: "task", parameters: { properties: { prompt: {} } } },
-  { name: "Bash" },
-]);
+// The REAL catalog the native sidecar sees: the tool names and parameter schemas of the pinned
+// OpenCode 2.4.2 advertisement (`todowrite`, not `todo`; `path`, not `filePath`).
+const REAL_TOOLS = JSON.parse(
+  readFileSync(
+    new URL(
+      "./coding-runtime/opencodeToolSchemas.opencode-2.4.2-advertised.fixture.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as readonly { readonly name: string; readonly parameters: Record<string, unknown> }[];
+const TOOLS = toolIndex(REAL_TOOLS);
+
+// The answer observed live (M-1, Gemma 4 31B): a plan written as `<todo>` elements, then the call.
+const OBSERVED_ANSWER = `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> <todo content="Commit the fix" status="pending"/> </todo>\n<shell command="npm test | tail -n 1" />`;
 
 describe("detectTextualToolCall", () => {
   it.each([
-    [
-      "an XML element named after a tool (the live Gemma turn)",
-      `<todo> <todo content="Verify the fix by running npm test" status="in_progress"/> </todo>\n<shell command="npm test | tail -n 1" />`,
-      "named-element",
-    ],
+    ["an XML element named after a tool (the live Gemma turn)", OBSERVED_ANSWER, "named-element"],
     [
       "an attribute value that contains a closing angle bracket",
       `<shell command="a > b" />`,
@@ -34,7 +38,7 @@ describe("detectTextualToolCall", () => {
     ],
     [
       "an element whose body names a parameter",
-      `<edit>\n<filePath>a.ts</filePath>\n<oldString>x</oldString>\n</edit>`,
+      `<edit>\n<path>a.ts</path>\n<oldString>x</oldString>\n</edit>`,
       "named-element",
     ],
     [
@@ -49,15 +53,15 @@ describe("detectTextualToolCall", () => {
     ],
     [
       "an unlabelled fence that is the whole answer",
-      '```\n{"name":"edit","arguments":{"filePath":"a.ts"}}\n```',
+      '```\n{"name":"edit","arguments":{"path":"a.ts"}}\n```',
       "json-call",
     ],
     [
       "a bare OpenAI-shaped JSON call",
-      `{"type":"function","function":{"name":"bash","arguments":{}}}`,
+      `{"type":"function","function":{"name":"shell","arguments":{}}}`,
       "json-call",
     ],
-    ["a mixed-case tool name", `<BASH command="ls"/>`, "named-element"],
+    ["a mixed-case tool name", `<SHELL command="ls"/>`, "named-element"],
   ])("detects %s", (_label, text, form) => {
     expect(detectTextualToolCall(text, TOOLS)).toBe(form);
   });
@@ -88,17 +92,22 @@ describe("detectTextualToolCall", () => {
     ],
     [
       "a tool element inside an xml fence among prose",
-      'Call it like this:\n```xml\n<read filePath="a.ts"/>\n```',
+      'Call it like this:\n```xml\n<read path="a.ts"/>\n```',
     ],
     [
       "a tool element inside a fence that is not the whole answer",
-      '```xml\n<read filePath="a.ts"/>\n```\nThat reads the file.',
+      '```xml\n<read path="a.ts"/>\n```\nThat reads the file.',
     ],
     [
       "an explanation of a tool call",
-      `To read a file, the model writes <read filePath="src/a.ts" /> and the runtime answers with the content of that file, which it then reads.`,
+      `To read a file, the model writes <read path="src/a.ts" /> and the runtime answers with the content of that file, which it then reads.`,
     ],
-    ["a prompt template", `<task>Summarise the repository</task>`],
+    ["a prompt template", `<subagent>Summarise the repository</subagent>`],
+    [
+      "a plan element beside no call",
+      `<todo content="Verify the fix" status="in_progress"/> <todo content="Commit" status="pending"/>`,
+    ],
+    ["a case-folding answer that is prose", `İİİ ${"x".repeat(50)} <SHELL> is a tool`],
     ["a bare tool-named tag", `<shell>`],
     ["an empty tool-named element", `<read/>`],
     [
@@ -109,6 +118,19 @@ describe("detectTextualToolCall", () => {
     ["empty text", "   "],
   ])("does not detect %s", (_label, text) => {
     expect(detectTextualToolCall(text, TOOLS)).toBeUndefined();
+  });
+
+  it("counts the plan elements beside a call, and only beside one", () => {
+    const plan = `<todo content="Verify" status="pending"/>\n<shell command="npm test" />`;
+    expect(detectTextualToolCall(plan, TOOLS)).toBe("named-element");
+    expect(detectTextualToolCall(OBSERVED_ANSWER, toolIndex([]))).toBeUndefined();
+  });
+
+  it("keeps indexes aligned when lower-casing would change the length", () => {
+    expect(
+      detectTextualToolCall(`İİİİİİİİİİİİİİİİİİİİİİİİİİİİ <shell command="ls" />`, TOOLS),
+    ).toBeUndefined();
+    expect(detectTextualToolCall(`<SHELL COMMAND="ls" />`, TOOLS)).toBe("named-element");
   });
 
   it("never detects without an advertised tool", () => {
@@ -139,32 +161,49 @@ describe("textualToolCallForm", () => {
 });
 
 describe("withTextualToolCallHint", () => {
-  it("merges the fixed correction into the leading system message", () => {
+  const tool = (content: string): { role: "tool"; content: string; toolCallId: string } => ({
+    role: "tool",
+    content,
+    toolCallId: "c",
+  });
+
+  it("appends the correction to the last message and keeps every earlier byte", () => {
     const original = {
-      modelId: "m",
       messages: [
         { role: "system" as const, content: "Be brief." },
         { role: "user" as const, content: "hi" },
-        { role: "tool" as const, content: "result", toolCallId: "c" },
+        tool("result"),
       ],
     };
     const hinted = withTextualToolCallHint(original);
-    expect(hinted.messages).toEqual([
-      { role: "system", content: `Be brief.\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` },
-      original.messages[1],
-      original.messages[2],
-    ]);
-    expect(original.messages[0]?.content).toBe("Be brief.");
+    expect(hinted.messages.slice(0, -1)).toEqual(original.messages.slice(0, -1));
+    expect(hinted.messages.at(-1)).toEqual({
+      role: "tool",
+      content: `result\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}`,
+      toolCallId: "c",
+    });
+    expect(hinted.messages).toHaveLength(original.messages.length);
+    expect(original.messages[2]?.content).toBe("result");
   });
 
-  it("adds a leading system message when the request has none, never a late one", () => {
+  it("appends to a last user message without adding a second consecutive user message", () => {
     const hinted = withTextualToolCallHint({
       messages: [{ role: "user" as const, content: "hi" }],
     });
     expect(hinted.messages).toEqual([
-      { role: "system", content: TEXTUAL_TOOL_CALL_RETRY_HINT },
-      { role: "user", content: "hi" },
+      { role: "user", content: `hi\n\n${TEXTUAL_TOOL_CALL_RETRY_HINT}` },
     ]);
+  });
+
+  it("adds a short user message after a last message that cannot carry text", () => {
+    const hinted = withTextualToolCallHint({
+      messages: [
+        { role: "user" as const, content: "hi" },
+        { role: "assistant" as const, content: "partial" },
+      ],
+    });
+    expect(hinted.messages.at(-1)).toEqual({ role: "user", content: TEXTUAL_TOOL_CALL_RETRY_HINT });
+    expect(hinted.messages).toHaveLength(3);
   });
 });
 
