@@ -25,6 +25,8 @@ import {
 import * as sandbox from "@oscharko-dev/keiko-sandbox";
 import {
   DEFAULT_VERIFICATION_LIMITS,
+  ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
+  runVerification,
   mavenTestArguments,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
@@ -822,6 +824,36 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       expect(plans[0]?.steps.map((step) => step.command)).toEqual(["mvn"]);
       const lines = events.filter((event) => event.op === "editor.verification.execute");
       expect(lines.map((event) => event.extra?.runnerId)).toEqual(["maven", "maven"]);
+    });
+
+    // #4491: the planned step is judged by the orchestrator's own fail-closed rule on any host, a
+    // macOS or Linux one included, so the model is told isolation is unavailable, never "no script".
+    it("denies the planned Maven step as isolation unavailable when the probe finds no backend", async () => {
+      mavenProject();
+      const reports: VerificationReport[] = [];
+      const manager = makeManager({
+        execute: async (args): Promise<ExecuteVerificationResult> => {
+          const probe = { available: false, backend: "none" };
+          const report = await runVerification(args.plan, {
+            workspace: args.workspace,
+            networkEnforcement: "enforce-or-fail-closed",
+            enforcedNetworkAvailable: probe.available,
+          });
+          reports.push(report);
+          return { report, probe };
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+        probeIsolation: async () =>
+          Promise.resolve({ probe: { available: false, backend: "none" }, durationMs: 1 } as never),
+        windowsMavenRepository: () => repository,
+      });
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(reports[0]?.results.map((result) => result.status)).toEqual(["denied"]);
+      expect(reports[0]?.results[0]?.detail).toMatch(
+        new RegExp(`^${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}`),
+      );
     });
 
     it("leaves a project with a package.json to npm, pom.xml or not", async () => {

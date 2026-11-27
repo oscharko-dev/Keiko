@@ -363,10 +363,35 @@ export function windowsMavenRepository(
   return isDirectory(repository) ? repository : undefined;
 }
 
+// A run resolves its supervisor more than once (the isolation probe, then the run itself); the
+// runtime discovery verifies a payload's digests, so it happens once per run and its result is
+// reused. Bounded, and never keyed by a missing correlation id.
+const RUN_RUNTIME_CACHE_LIMIT = 32;
+const runRuntimes = new Map<string, ResolvedPortableOpenCodeRuntime | undefined>();
+
 // The runtime found the way the Coding activation finds it: packaged release, dev checkout, then the
 // npm runtime package (#4491), so an installation whose Coding runs start has governed steps too.
-function discoveredRuntime(env: NodeJS.ProcessEnv): ResolvedPortableOpenCodeRuntime | undefined {
-  return discoverActivatedRuntime({ env });
+function discoveredRuntime(
+  env: NodeJS.ProcessEnv,
+  correlationId: string | undefined,
+): ResolvedPortableOpenCodeRuntime | undefined {
+  if (correlationId !== undefined && runRuntimes.has(correlationId)) {
+    return runRuntimes.get(correlationId);
+  }
+  const runtime = discoverActivatedRuntime({ env, ...(correlationId ? { correlationId } : {}) });
+  if (correlationId !== undefined) {
+    if (runRuntimes.size >= RUN_RUNTIME_CACHE_LIMIT) {
+      const oldest = runRuntimes.keys().next();
+      if (!oldest.done) runRuntimes.delete(oldest.value);
+    }
+    runRuntimes.set(correlationId, runtime);
+  }
+  return runtime;
+}
+
+/** Forgets the runtimes resolved for earlier runs; a test seam. */
+export function resetRunRuntimesForTest(): void {
+  runRuntimes.clear();
 }
 
 export interface WindowsStepSupervisorInput {
@@ -537,7 +562,7 @@ export function resolveWindowsStepSupervisor(
   if ((input.platform ?? process.platform) !== "win32") return undefined;
   const env = input.env ?? process.env;
   const binary = supervisorBinary(
-    input.runtime === undefined ? discoveredRuntime(env) : input.runtime(),
+    input.runtime === undefined ? discoveredRuntime(env, input.correlationId) : input.runtime(),
   );
   const { roots: readRoots, profile, refused } = windowsStepReadRoots(env);
   const mavenRepository = (input.mavenRepository ?? windowsMavenRepository)(env);

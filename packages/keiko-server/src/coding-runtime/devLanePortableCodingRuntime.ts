@@ -107,6 +107,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly admitRuntimeSupervisor?: boolean | undefined;
   /** Receives the redacted diagnostic of a verification that failed unexpectedly. */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** The logical operation a discovery failure belongs to; absent, the failure line gets its own id. */
+  readonly correlationId?: string | undefined;
   /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
   readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
   /** Hermetic test seam for the retired executable trees a refusal names as outdated. */
@@ -207,7 +209,7 @@ export function discoverNpmLaneOpenCode(
     emitServerDiagnostic(
       input.diagnostics,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId: input.correlationId ?? randomUUID(),
         operation: "coding.runtime.discover",
         source: "coding.runtime.discovery",
         error,

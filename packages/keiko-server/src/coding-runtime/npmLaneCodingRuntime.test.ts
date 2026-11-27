@@ -25,6 +25,9 @@ import {
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import { windowsGatewayHelperPin } from "./productionOpenCodeBackend.js";
+import { resolveWindowsStepSupervisor } from "../editor/windowsStepSupervisor.js";
 import {
   plantDirectoryRedirect,
   plantSymlinkOrSkip,
@@ -426,6 +429,29 @@ describe("npm-lane OpenCode discovery", () => {
     },
   );
 
+  // #4491: the refusal a verification run causes belongs to that run's correlation.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "records the discovery failure under the correlation id of the operation that asked",
+    () => {
+      const install = globalInstall();
+      chmodSync(join(install.runtimeRoot, "opencode-compatible", "payload", "bin", "opencode"), 0);
+      const records: ServerDiagnosticRecord[] = [];
+      discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: { "macos-arm64": install.approval },
+        diagnostics: { record: (record) => records.push(record) },
+        correlationId: "verification-run-4491",
+      });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "coding.runtime.discover",
+        correlationId: "verification-run-4491",
+      });
+    },
+  );
+
   it("never trusts a digest the runtime package supplies about itself", () => {
     const install = globalInstall();
     write(
@@ -543,6 +569,38 @@ describe("npm-lane OpenCode discovery on Windows", () => {
     expect(discoverWindows(install, unpinned)).toEqual({
       outcome: "refused",
       reason: "payload-unapproved",
+    });
+  });
+  // #4491: the runtime the real npm-lane discovery activates is the one the verification step
+  // supervisor is governed by, at the pin the discovery verified, and by nothing else.
+  describe("as the verification step supervisor's runtime", () => {
+    function supervisorLine(install: GlobalInstall, tamper?: string): Record<string, unknown> {
+      const discovery = discoverWindows(install);
+      if (discovery.outcome !== "activated") throw new Error("expected activation");
+      expect(windowsGatewayHelperPin(discovery.runtime)).toBe(sha256(SUPERVISOR));
+      if (tamper !== undefined) write(discovery.runtime.nativeHelperPath ?? "", tamper, 0o755);
+      const events: ServerLogEvent[] = [];
+      const supervisor = resolveWindowsStepSupervisor({
+        platform: "win32",
+        env: { USERPROFILE: "C:\\Users\\dev" },
+        activityLog: { write: (event): void => void events.push(event) },
+        runtime: () => discovery.runtime,
+      });
+      expect(supervisor === undefined).toBe(tamper !== undefined);
+      return (
+        events.find((event) => event.op === "editor.verification.windows-step-supervisor")?.extra ??
+        {}
+      );
+    }
+
+    it("is available when the installed supervisor carries the discovered pin", () => {
+      expect(supervisorLine(windowsInstall())).toMatchObject({ outcome: "available" });
+    });
+
+    it("is no supervisor, recorded as pin-mismatch, when the installed bytes changed afterwards", () => {
+      expect(supervisorLine(windowsInstall(), "supervisor-bin4ry")).toMatchObject({
+        outcome: "pin-mismatch",
+      });
     });
   });
 });

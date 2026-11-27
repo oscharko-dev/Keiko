@@ -153,6 +153,8 @@ export interface PortableOpenCodeDiscoveryInput {
   readonly installRoot?: string | undefined;
   readonly attestation?: PortableRuntimeAttestationPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** The logical operation a discovery failure belongs to; absent, the failure line gets its own id. */
+  readonly correlationId?: string | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   /** Test seam for the lane-downgrade probe; production spawns the real platform verifier. */
   readonly commandRunner?: PortableRuntimeCommandRunner | undefined;
@@ -407,7 +409,7 @@ export function discoverPortableOpenCode(
     emitServerDiagnostic(
       input.diagnostics,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId: input.correlationId ?? randomUUID(),
         operation: "coding.runtime.discover",
         source: "coding.runtime.discovery",
         error,

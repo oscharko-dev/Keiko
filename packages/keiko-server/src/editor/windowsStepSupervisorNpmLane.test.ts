@@ -17,7 +17,7 @@ vi.mock("../coding-runtime/runtimeLaneDiscovery.js", () => ({
   },
 }));
 
-import { resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
+import { resetRunRuntimesForTest, resolveWindowsStepSupervisor } from "./windowsStepSupervisor.js";
 
 // #4491: an npm installation (`npm install @oscharko-dev/keiko` plus the optional Windows runtime
 // package) starts its Coding runs from the npm lane, but its verification steps resolved only the
@@ -28,6 +28,7 @@ const roots: string[] = [];
 afterEach(() => {
   discovered.runtime = undefined;
   discovered.hosts = [];
+  resetRunRuntimesForTest();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -59,7 +60,7 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
     });
 
     expect(supervisor).toBeDefined();
-    expect(discovered.hosts).toEqual([{ env }]);
+    expect(discovered.hosts).toEqual([{ env, correlationId: "npm-lane-step-supervisor" }]);
     const line = events.find((event) => event.op === "editor.verification.windows-step-supervisor");
     expect(line?.extra?.outcome).toBe("available");
     expect(line?.correlationId).toBe("npm-lane-step-supervisor");
@@ -77,5 +78,33 @@ describe("the Windows step supervisor on the npm lane (#4491)", () => {
     expect(
       events.find((event) => event.op === "editor.verification.windows-step-supervisor")?.extra,
     ).toMatchObject({ outcome: "no-runtime" });
+  });
+  // The probe and the run both resolve the supervisor; the payload verification behind it happens
+  // once per run, and a failure it records carries that run's correlation id.
+  it("discovers once per verification run and hands the run's correlation id to the discovery", () => {
+    const log = { write: (): void => undefined };
+    const env = {};
+    for (let resolution = 0; resolution < 2; resolution += 1) {
+      resolveWindowsStepSupervisor({
+        platform: "win32",
+        env,
+        activityLog: log,
+        correlationId: "run-a",
+      });
+    }
+    resolveWindowsStepSupervisor({
+      platform: "win32",
+      env,
+      activityLog: log,
+      correlationId: "run-b",
+    });
+    resolveWindowsStepSupervisor({ platform: "win32", env, activityLog: log });
+    resolveWindowsStepSupervisor({ platform: "win32", env, activityLog: log });
+    expect(discovered.hosts).toEqual([
+      { env, correlationId: "run-a" },
+      { env, correlationId: "run-b" },
+      { env },
+      { env },
+    ]);
   });
 });

@@ -1852,6 +1852,7 @@
     "keiko-server/coding-runtime/runtimeAuthorityService",
     "keiko-server/coding-runtime/runtimeCapabilityStore",
     "keiko-server/coding-runtime/runtimeGatewayProcessSandbox",
+    "keiko-server/coding-runtime/runtimeLaneDiscovery",
     "keiko-server/coding-runtime/runtimeProcessSupervisor",
     "keiko-server/coding-runtime/secureWorkspaceTextRead",
     "keiko-server/coding-runtime/secureWorkspaceTextReadAbsence",
