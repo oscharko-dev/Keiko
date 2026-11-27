@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { ApiError } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import { loadMemoryAutonomyMode, persistMemoryAutonomyMode } from "@/lib/memory-session-api";
 import {
   currentConversationMemoryModeRevision,
@@ -15,6 +20,7 @@ type PersistAutonomyMode = (
   expectedRevision: number,
   signal?: AbortSignal,
 ) => Promise<MemoryAutonomyPolicyWire>;
+type LoadAutonomyMode = () => Promise<MemoryAutonomyPolicyWire>;
 type PersistenceOutcome =
   | { readonly kind: "success"; readonly policy: MemoryAutonomyPolicyWire }
   | { readonly kind: "failure" };
@@ -30,11 +36,31 @@ function observeServerRevision(policy: MemoryAutonomyPolicyWire): void {
   }
 }
 
-async function settlePersistence(
+// The server refused the save because its policy revision is not the one this page last saw:
+// another window saved a mode, or the page now talks to a Keiko whose state started over.
+function isRevisionConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
+
+// The mode stayed as it was; the person sees "could not be saved", the log records why.
+function reportPersistFailure(
+  error: unknown,
+  attempt: "first" | "after-reread",
+): PersistenceOutcome {
+  reportClientDiagnostic(`Autonomy mode save failed (${attempt} attempt).`, {
+    correlationId: correlationIdOf(error),
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
+  return { kind: "failure" };
+}
+
+async function persistBeforeDeadline(
   persist: PersistAutonomyMode,
   mode: CodingWorkbenchMode,
+  expectedRevision: number,
   timeoutMs: number,
-): Promise<PersistenceOutcome> {
+): Promise<MemoryAutonomyPolicyWire> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject): void => {
@@ -45,26 +71,56 @@ async function settlePersistence(
     }, timeoutMs);
   });
   try {
-    const policy = await Promise.race([
-      persist(mode, latestServerRevision, controller.signal),
-      deadline,
-    ]);
-    observeServerRevision(policy);
-    return { kind: "success", policy };
-  } catch {
-    // Convert the rejection to an explicit queue outcome; change() surfaces it to the user.
-    return { kind: "failure" };
+    return await Promise.race([persist(mode, expectedRevision, controller.signal), deadline]);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
 }
 
-function persistInIntentOrder(
+async function settlePersistence(
   persist: PersistAutonomyMode,
+  reload: LoadAutonomyMode,
   mode: CodingWorkbenchMode,
   timeoutMs: number,
 ): Promise<PersistenceOutcome> {
-  const pending = persistenceQueue.then(() => settlePersistence(persist, mode, timeoutMs));
+  try {
+    const policy = await persistBeforeDeadline(persist, mode, latestServerRevision, timeoutMs);
+    observeServerRevision(policy);
+    return { kind: "success", policy };
+  } catch (error) {
+    // Convert the rejection to an explicit queue outcome; change() surfaces it to the user.
+    return isRevisionConflict(error)
+      ? persistAgainstCurrentRevision(persist, reload, mode, timeoutMs)
+      : reportPersistFailure(error, "first");
+  }
+}
+
+// One re-read and one more save: the re-read revision is the server's own, so it replaces the
+// remembered one even when it is lower. A second conflict is surfaced, never retried again.
+async function persistAgainstCurrentRevision(
+  persist: PersistAutonomyMode,
+  reload: LoadAutonomyMode,
+  mode: CodingWorkbenchMode,
+  timeoutMs: number,
+): Promise<PersistenceOutcome> {
+  try {
+    const current = await reload();
+    if (Number.isSafeInteger(current.revision)) latestServerRevision = current.revision;
+    const policy = await persistBeforeDeadline(persist, mode, latestServerRevision, timeoutMs);
+    observeServerRevision(policy);
+    return { kind: "success", policy };
+  } catch (error) {
+    return reportPersistFailure(error, "after-reread");
+  }
+}
+
+function persistInIntentOrder(
+  persist: PersistAutonomyMode,
+  reload: LoadAutonomyMode,
+  mode: CodingWorkbenchMode,
+  timeoutMs: number,
+): Promise<PersistenceOutcome> {
+  const pending = persistenceQueue.then(() => settlePersistence(persist, reload, mode, timeoutMs));
   persistenceQueue = pending.then((): void => undefined);
   return pending;
 }
@@ -149,7 +205,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
       const persistenceRequest = ++latestPersistenceRequest;
       setPending(true);
       setError(null);
-      void persistInIntentOrder(persist, mode, persistTimeoutMs)
+      void persistInIntentOrder(persist, load, mode, persistTimeoutMs)
         .then((outcome): void => {
           if (outcome.kind === "failure") {
             if (
@@ -180,7 +236,7 @@ export function useAutonomyModePolicy(options: AutonomyModePolicyOptions = {}): 
           if (mounted.current && request === sequence.current) setPending(false);
         });
     },
-    [persist, persistTimeoutMs, setMemoryMode],
+    [load, persist, persistTimeoutMs, setMemoryMode],
   );
 
   return {
