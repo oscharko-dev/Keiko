@@ -798,6 +798,13 @@ export function isExplicitMemoryStatement(text: string): boolean {
   return explicitStatementKind(text) !== null;
 }
 
+// A clear request to remember a stated fact: the instruction prefix and a fact the extractor would
+// accept. "Remember when we fixed the build?" or "Merke dir nicht, dass ..." asks nothing to be kept.
+export function isRememberRequest(text: string): boolean {
+  const instruction = readRememberInstruction(text);
+  return instruction !== null && statedFactAfterPrefix(instruction.remainder) !== null;
+}
+
 export function explicitStatementKind(text: string): "forget" | "remember" | null {
   if (forgetTargetOf(text) !== null) return "forget";
   return readRememberInstruction(text) === null ? null : "remember";

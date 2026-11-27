@@ -2667,6 +2667,15 @@ describe("desktop chat routes", () => {
     expect(off).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
     const ordinary = await send("What is the capital of France?");
     expect(ordinary).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    for (const notAStatement of [
+      "Remember when we fixed the build?",
+      "Merke dir nicht, dass ich Tabellen mag.",
+      "Remember how to run this?",
+      "Merke dir ",
+    ]) {
+      const asked = await send(notAStatement, { enabled: false });
+      expect(asked).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    }
     const on = await send("remember that I prefer short answers", { enabled: true });
     expect(on).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
     expect(listAllMemories(memoryVault, { includeExpired: true })).toHaveLength(1);

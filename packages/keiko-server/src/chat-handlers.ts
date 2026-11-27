@@ -134,7 +134,7 @@ import { memoriesUsedInAnswer } from "./memory-answer-use.js";
 import { logExplicitMemoryRemember } from "./memory-explicit-statement-log.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
-  explicitStatementKind,
+  isRememberRequest,
   extractCandidatesFromUserText,
   type CaptureContext,
   type CaptureOutcome,
@@ -1941,7 +1941,7 @@ export function rememberMeetsMemoryOff(
   request: Pick<SendDesktopChatRequest, "content" | "memory">,
 ): boolean {
   const memoryOff = request.memory?.enabled !== true || deps.memoryVault === undefined;
-  return memoryOff && explicitStatementKind(request.content) === "remember";
+  return memoryOff && isRememberRequest(request.content);
 }
 
 // What the answer must know about this turn's own remember request before it is written.

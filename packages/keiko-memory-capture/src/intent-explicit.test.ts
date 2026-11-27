@@ -14,6 +14,7 @@ import {
   isExplicitMemoryStatement,
   isForgettableStatement,
   isMemoryForgetReference,
+  isRememberRequest,
   tryExtractCorrection,
   tryExtractForget,
   tryExtractRemember,
@@ -994,5 +995,28 @@ describe("a statement whose word holds many periods", () => {
     expect(explicitStatementKind(`Vergiss den Bericht${run}`)).toBe("forget");
     expect(explicitStatementKind(`Merke dir, dass ${run}`)).toBe("remember");
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("isRememberRequest", () => {
+  it("accepts exactly the remember statements the extractor turns into a proposal", () => {
+    const texts = [
+      "Merke dir: Mein Lieblingsprojekt heißt Nordlicht.",
+      "remember that I prefer tables for numbers",
+      "Remember when we fixed the build?",
+      "Merke dir nicht, dass ich Tabellen mag.",
+      "Remember how to run this?",
+      "Merke dir ",
+      "What is the capital of France?",
+      "Vergiss, dass ich Tabellen mag.",
+    ];
+    const accepted = texts.filter((text) => isRememberRequest(text));
+    expect(accepted).toEqual([
+      "Merke dir: Mein Lieblingsprojekt heißt Nordlicht.",
+      "remember that I prefer tables for numbers",
+    ]);
+    for (const text of texts) {
+      expect(isRememberRequest(text)).toBe(tryExtractRemember(text, ctx()) !== null);
+    }
   });
 });
