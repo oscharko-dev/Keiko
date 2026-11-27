@@ -617,6 +617,19 @@ describe("POST /api/task-workspaces/local", () => {
     });
     expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
     expect(fixture.selectLocal).not.toHaveBeenCalled();
+    // The timeline shows the no-op as an activate line with the closed outcome `unchanged`.
+    expect(fixture.sink.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "task-workspace.lifecycle",
+          correlationId: "local-route-regression",
+          extra: expect.objectContaining<Record<string, unknown>>({
+            operation: "activate",
+            outcome: "unchanged",
+          }) as unknown,
+        }),
+      ]),
+    );
 
     const switched = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
       method: "POST",
@@ -625,6 +638,30 @@ describe("POST /api/task-workspaces/local", () => {
     });
     expect(switched.status).toBe(200);
     expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+  });
+
+  // A managed worktree of the same root standing on the requested branch is another workspace: a
+  // Local selection must run its own validation, never answer with the worktree's view.
+  it("does not treat an active worktree on the requested branch as the Local checkout", async () => {
+    const fixture = await localRouteFixture();
+    const created = (await (await provision("t1")).json()) as ProvisionBody;
+    await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: created.instance.workspaceId, requestedBy: "u" }),
+    });
+    expect(fixture.pointer.get()?.workspaceId).toBe(created.instance.workspaceId);
+    fixture.admitWorkspaceSelection.mockClear();
+
+    const response = await postLocal({
+      root: repoRoot,
+      branch: created.instance.taskBranch,
+      requestedBy: "u",
+    });
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+    expect(fixture.selectLocal).toHaveBeenCalledOnce();
+    expect(JSON.stringify(await response.json())).not.toContain(created.instance.workspaceId);
   });
 
   it("still admits a selection of another branch of the active checkout", async () => {

@@ -117,6 +117,7 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
         "blocked",
         "failed",
         "retry-required",
+        "unchanged",
         "reconciled",
         "repaired",
         "operator-required",

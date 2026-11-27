@@ -57,6 +57,9 @@ export type WorkspaceLifecycleOutcome =
   | "blocked"
   | "failed"
   | "retry-required"
+  // A selection of the workspace that already is the active one changed nothing (U-3); logged
+  // only, never an evidence record.
+  | "unchanged"
   // #447: `reconciled` = a startup/explicit reconciliation classified the workspace;
   // `repaired` = a controlled repair completed; `operator-required` = the recommended recovery needs
   // an operator to act first, so no automatic mutation was attempted.

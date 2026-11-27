@@ -21,6 +21,7 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { FilesError, resolveRoot } from "../files.js";
 import {
+  logWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
   type WorkspaceLifecycleFailureInput,
 } from "./activity-log.js";
@@ -496,9 +497,35 @@ function alreadyActiveSelection(
   branch: string | undefined,
 ): ActiveWorkspaceView | undefined {
   if (active?.instance.repositoryRoot !== realRoot) return undefined;
+  // A managed worktree of the same root and branch is another workspace: only an in-place
+  // (Local or folder) workspace in state `active` counts, and `getActive` has re-proved its
+  // registration, canonical root, branch and Git directory identity just before.
+  if (active.instance.executionLocation !== "local" || active.instance.lifecycleState !== "active")
+    return undefined;
   const folder = active.instance.workspaceKind === "folder";
   if (folder !== (branch === undefined)) return undefined;
   return folder || active.instance.taskBranch === branch ? active : undefined;
+}
+
+/** The timeline shows the repeat as an `activate` line with the closed outcome `unchanged`. */
+function recordUnchangedSelection(
+  active: ActiveWorkspaceView,
+  correlationId: string | undefined,
+): void {
+  logWorkspaceLifecycle(
+    {},
+    {
+      operation: "activate",
+      outcome: "unchanged",
+      workspaceId: active.instance.workspaceId,
+      taskId: active.instance.taskId,
+      correlationId,
+      attempt: 1,
+      durationMs: 0,
+      worktreeCount: 0,
+      workspaceKind: active.instance.workspaceKind === "folder" ? "folder" : undefined,
+    },
+  );
 }
 
 /**
@@ -514,10 +541,10 @@ function alreadyActiveWorkspace(
 ): ActiveWorkspaceView | undefined {
   if (acquireLock) return undefined;
   const current = guard.getActive(ctx.correlationId);
-  return current?.instance.workspaceId === workspaceId &&
-    current.instance.lifecycleState === "active"
-    ? current
-    : undefined;
+  if (current?.instance.workspaceId !== workspaceId || current.instance.lifecycleState !== "active")
+    return undefined;
+  recordUnchangedSelection(current, ctx.correlationId);
+  return current;
 }
 
 // Reads an in-place selection (Local checkout, folder) and admits it against the coding runtime.
@@ -539,7 +566,10 @@ async function readInPlaceSelection(
     resolved.realRoot,
     branch,
   );
-  if (current !== undefined) return { body, realRoot: resolved.realRoot, requestedBy, current };
+  if (current !== undefined) {
+    recordUnchangedSelection(current, ctx.correlationId);
+    return { body, realRoot: resolved.realRoot, requestedBy, current };
+  }
   await admitWorkspaceSelection(deps);
   if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
