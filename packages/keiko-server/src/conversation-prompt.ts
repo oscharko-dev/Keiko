@@ -32,6 +32,10 @@ export const CONVERSATION_PROFILE_FENCE_END = "===UNTRUSTED_PERSON_PROFILE_END==
 // person's words alone, so the answer learns it before it is written and never claims it was stored.
 export const CONVERSATION_REMEMBER_REFUSED_NOTICE =
   "Keiko did not store what the person asked it to remember in their latest message, because it contains personal identifiers or other content Keiko never keeps. Do not say it was stored or noted; tell the person in one short sentence that it was not saved.";
+// A person's own request to remember something while Chat memory is switched off: nothing is stored,
+// so the answer must not say it was (1.5.9 night walk; #4213's rule for a refused statement).
+export const CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE =
+  "MemoriaViva (Keiko's memory) is switched off for this chat, so Keiko did not store what the person asked it to remember in their latest message. Do not say it was stored or noted; tell the person in one short sentence that it was not saved because MemoriaViva is off for this chat and that they can switch it on in the chat.";
 export const CONVERSATION_SYSTEM_PROMPT =
   "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. " +
   "Answer in German by default. Use another language only when the user explicitly asks for it or the task clearly requires it. " +

@@ -283,7 +283,10 @@ clear request is never ignored. Each decision is recorded body-free as `memory.e
 `scopeKind`, `tombstoneWritten`, `forgottenCount` (memories deleted, including the earlier values of
 a corrected fact) and `tombstoneCount`, on the Chat and on the Memory window alike, so one entry, a
 sweep and a lineage can be told apart from the log alone. `failed` is a technical fault only; a
-governance refusal is `refused` and a missing memory is `not-found` (#4223).
+governance refusal is `refused` and a missing memory is `not-found` (#4223). A clear remember
+statement in a turn sent with Chat memory switched off (or without a vault) stores nothing: the
+answer is told so before it is written, on the ordinary and the grounded path alike, and the turn
+records `memory.explicit.remember` with `memory-off` (#4491, 1.5.9 walk).
 
 Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
 candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,

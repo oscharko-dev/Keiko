@@ -32,6 +32,7 @@ import {
 } from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
 import {
+  CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
   CONVERSATION_REMEMBER_REFUSED_NOTICE,
   conversationSystemPrompt,
   renderStandingProfileBlock,
@@ -130,8 +131,10 @@ import {
   type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
 import { memoriesUsedInAnswer } from "./memory-answer-use.js";
+import { logExplicitMemoryRemember } from "./memory-explicit-statement-log.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
+  explicitStatementKind,
   extractCandidatesFromUserText,
   type CaptureContext,
   type CaptureOutcome,
@@ -1931,6 +1934,25 @@ function asksToRemember(outcome: CaptureOutcome): boolean {
   );
 }
 
+// A clear "Merke dir" in a turn whose memory is switched off (or has no vault) stores nothing, so it
+// must not be answered as stored either.
+export function rememberMeetsMemoryOff(
+  deps: UiHandlerDeps,
+  request: Pick<SendDesktopChatRequest, "content" | "memory">,
+): boolean {
+  const memoryOff = request.memory?.enabled !== true || deps.memoryVault === undefined;
+  return memoryOff && explicitStatementKind(request.content) === "remember";
+}
+
+// What the answer must know about this turn's own remember request before it is written.
+function rememberNoticeForTurn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): string | undefined {
+  if (rememberMeetsMemoryOff(deps, request)) return CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE;
+  return rememberRequestRefused(deps, request) ? CONVERSATION_REMEMBER_REFUSED_NOTICE : undefined;
+}
+
 // A person's own "Merke dir" that Keiko refuses must not be answered as stored (#4213).
 export function rememberRequestRefused(
   deps: UiHandlerDeps,
@@ -1993,6 +2015,10 @@ export async function collectMemoryActions(
   memoryContext: ConversationMemoryRuntimeContext | undefined,
   correlationId: string = UNKNOWN_CORRELATION_ID,
 ): Promise<readonly ConversationMemoryActionWire[]> {
+  if (rememberMeetsMemoryOff(deps, request)) {
+    logExplicitMemoryRemember("memory-off", correlationId);
+    return [];
+  }
   if (memoryContext === undefined) {
     return [];
   }
@@ -2200,7 +2226,7 @@ function systemContextForTurn(
   const profileFacts = memory.context.profile?.entries.map((entry) => entry.text) ?? [];
   return joinSystemContext(
     renderStandingProfileBlock(profileFacts),
-    rememberRequestRefused(deps, request) ? CONVERSATION_REMEMBER_REFUSED_NOTICE : undefined,
+    rememberNoticeForTurn(deps, request),
     snapshot.rehydratedContext,
   );
 }

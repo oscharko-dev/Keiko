@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
-import { CONVERSATION_REMEMBER_REFUSED_NOTICE } from "./conversation-prompt.js";
+import {
+  CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE,
+  CONVERSATION_REMEMBER_REFUSED_NOTICE,
+} from "./conversation-prompt.js";
 import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import {
   buildRedactor,
@@ -2623,6 +2626,50 @@ describe("desktop chat routes", () => {
     expect(kept).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
     const ordinary = await send("What is the capital of France?");
     expect(ordinary).not.toContain(CONVERSATION_REMEMBER_REFUSED_NOTICE);
+    memoryVault.close();
+  });
+
+  // 1.5.9 night walk: Chat memory is off by default, and "Merke dir: …" was answered as noted.
+  it("tells the answer that a remember request was not stored while memory is off", async () => {
+    const memoryDir = join(tmp, "memory-vault-off-notice");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const send = async (content: string, memory?: { enabled: boolean }): Promise<string> => {
+      const before = seenRequests.length;
+      const res = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content,
+          ...(memory === undefined ? {} : { memory: { ...memory, context: {} } }),
+        }),
+      });
+      expect(res.status).toBe(200);
+      return seenRequests
+        .slice(before)
+        .flatMap((request) => request.messages.map((message) => message.content))
+        .join("\n");
+    };
+
+    const absent = await send("Merke dir: Mein Lieblingsprojekt heißt Nordlicht.");
+    expect(absent).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    const off = await send("remember that I prefer tables for numbers", { enabled: false });
+    expect(off).toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    const ordinary = await send("What is the capital of France?");
+    expect(ordinary).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    const on = await send("remember that I prefer short answers", { enabled: true });
+    expect(on).not.toContain(CONVERSATION_REMEMBER_MEMORY_OFF_NOTICE);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toHaveLength(1);
     memoryVault.close();
   });
 
