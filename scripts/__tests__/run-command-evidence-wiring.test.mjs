@@ -597,9 +597,7 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
     const source = readFileSync(path, "utf8");
     const analysis = analyzeFile(path, source);
     expect(analysis.callSiteCount).toBeGreaterThanOrEqual(2);
-    expect(analysis.softlyWired.map((site) => site.fn)).not.toContain(
-      "readStageConfig",
-    );
+    expect(analysis.softlyWired.map((site) => site.fn)).not.toContain("readStageConfig");
     const mutation = source.replace("onTerminated: ctx.runDeps.onTerminated,", "");
     expect(mutation).not.toBe(source);
     expect(analyzeFile(path, mutation).softlyWired.map((site) => site.fn)).toContain(
