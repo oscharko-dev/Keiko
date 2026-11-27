@@ -1402,6 +1402,10 @@ describe("CodingWorkbenchWindow", () => {
       }),
       actions: liveActions,
     });
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => {
+      diagnostics.push(message);
+    });
     render(<CodingWorkbenchWindow selectedRoot="/repo" selectedLocation="local" />);
 
     const notice =
@@ -1414,6 +1418,10 @@ describe("CodingWorkbenchWindow", () => {
     expect(start).toHaveAttribute("aria-disabled", "true");
     await user.click(start);
     expect(liveActions.start).not.toHaveBeenCalled();
+    expect(diagnostics.filter((line) => line.includes("start blocked"))).toEqual([
+      "[keiko] coding workbench start blocked: task-branch-moved",
+    ]);
+    resetClientDiagnosticWriter();
   });
 
   // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable

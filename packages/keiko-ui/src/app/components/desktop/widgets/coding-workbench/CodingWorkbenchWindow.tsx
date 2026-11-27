@@ -1496,6 +1496,12 @@ function workbenchFailureReport(failure: CodingWorkbenchClientError | null): Rea
 // #4491: the next message of this local task would be refused on the branch the checkout moved to.
 function TaskBranchMovedNotice({ move }: { readonly move: TaskBranchMove | null }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const blocked = move !== null;
+  useEffect(() => {
+    // Body-free: the branch names are the person's data and stay out of the diagnostic.
+    if (blocked)
+      reportClientDiagnostic("[keiko] coding workbench start blocked: task-branch-moved");
+  }, [blocked]);
   if (move === null) return null;
   return (
     <output className={styles.alert}>
