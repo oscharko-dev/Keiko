@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
-  gitReopenRoot,
+  decideGitReopen,
+  isManagedTaskWorktreePath,
   startingProjectPaths,
   startingProjectRoot,
   startingProjects,
@@ -64,26 +65,49 @@ describe("startingProjects", () => {
   });
 });
 
-describe("gitReopenRoot", () => {
+describe("decideGitReopen", () => {
   const listed = [project({ path: "/a" }), project({ path: "/b" })];
+  const worktree = "/a/.keiko/dev/ui/task-workspaces/a/ws-1";
 
   it("returns to the repository last chosen in the Git window, not the starting project", () => {
-    expect(gitReopenRoot("/b", listed, "/a")).toBe("/b");
+    expect(decideGitReopen("/b", listed, "/a")).toEqual({ root: "/b" });
   });
 
-  it("falls back to the starting project when none was chosen", () => {
-    expect(gitReopenRoot(undefined, listed, "/a")).toBe("/a");
-    expect(gitReopenRoot(undefined, listed, undefined)).toBeUndefined();
+  it("falls back to the starting project when none was chosen, without a reason", () => {
+    expect(decideGitReopen(undefined, listed, "/a")).toEqual({ root: "/a" });
+    expect(decideGitReopen(undefined, listed, undefined)).toEqual({ root: undefined });
   });
 
-  it("never returns a chosen repository the list marks gone or refused", () => {
+  it("never returns a chosen repository the list marks gone or refused, and says why", () => {
     const gone = [project({ path: "/a" }), project({ path: "/b", available: false })];
     const refused = [project({ path: "/a" }), project({ path: "/b", readable: false })];
-    expect(gitReopenRoot("/b", gone, "/a")).toBe("/a");
-    expect(gitReopenRoot("/b", refused, "/a")).toBe("/a");
+    expect(decideGitReopen("/b", gone, "/a")).toEqual({
+      root: "/a",
+      fallbackReason: "remembered-unavailable",
+    });
+    expect(decideGitReopen("/b", refused, "/a")).toEqual({
+      root: "/a",
+      fallbackReason: "remembered-unreadable",
+    });
+  });
+
+  it("never returns a managed task worktree, even one the list carries", () => {
+    const withWorktree = [...listed, project({ path: worktree })];
+    expect(decideGitReopen(worktree, withWorktree, "/a")).toEqual({
+      root: "/a",
+      fallbackReason: "remembered-managed-worktree",
+    });
   });
 
   it("keeps a chosen repository the shell list does not carry yet", () => {
-    expect(gitReopenRoot("/new", listed, "/a")).toBe("/new");
+    expect(decideGitReopen("/new", listed, "/a")).toEqual({ root: "/new" });
+  });
+});
+
+describe("isManagedTaskWorktreePath", () => {
+  it("recognizes POSIX and Windows managed worktree paths only", () => {
+    expect(isManagedTaskWorktreePath("/r/.keiko/dev/ui/task-workspaces/r/ws")).toBe(true);
+    expect(isManagedTaskWorktreePath("C:\\r\\.keiko\\x\\task-workspaces\\ws")).toBe(true);
+    expect(isManagedTaskWorktreePath("/r/task-workspaces")).toBe(false);
   });
 });

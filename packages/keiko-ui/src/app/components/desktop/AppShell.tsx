@@ -1,6 +1,6 @@
 "use client";
 
-import { gitReopenRoot, startingProjectRoot } from "./windows/startingProjectRoot";
+import { decideGitReopen, startingProjectRoot } from "./windows/startingProjectRoot";
 import { useRememberedGitRoot } from "./windows/useRememberedGitRoot";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -450,6 +450,19 @@ export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefi
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
   api.add("search", { root });
   dispatchWorkspaceSearchFocus();
+}
+
+// Body-free: only the closed reason is reported, never the repository path.
+function reopenGitRoot(
+  remembered: string | undefined,
+  projects: Parameters<typeof decideGitReopen>[1],
+  fallback: string | undefined,
+): string | undefined {
+  const decision = decideGitReopen(remembered, projects, fallback);
+  if (decision.fallbackReason !== undefined) {
+    reportClientDiagnostic(`git-window: reopen fell back (${decision.fallbackReason})`);
+  }
+  return decision.root;
 }
 
 function openShellTool(
@@ -3086,7 +3099,7 @@ function AppShellInner(): ReactNode {
       if (panel === "governedGit") {
         projectRoot = before
           ? panelBindingRoot(ws.wins, "governedGit")
-          : gitReopenRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
+          : reopenGitRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
       }
       openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
       undoStack.push({

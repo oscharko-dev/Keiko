@@ -39,13 +39,19 @@ references. Unscoped legacy browser snapshots remain untouched and are not repla
 provable ownership. Chats, messages and files remain in their existing owning stores.
 
 The repository a freshly opened Git window shows is browser-transient UI state with one owner,
-`useRememberedGitRoot` plus `gitReopenRoot` (`keiko-ui`, no new store). While a Git window is open
+`useRememberedGitRoot` plus `decideGitReopen` (`keiko-ui`, no new store). While a Git window is open
 its repository is persisted in the window's own `cfg.projectPath`, and layout restoration brings it
-back. When the person closes Git and opens it again from the rail, the window returns to the
-repository last chosen in a Git window, unless the project list marks that repository gone or
-refused; otherwise it falls back to the starting project (the active workspace's repository). A
-managed task worktree is never used. The chat session's project does not override a choice made in
-the Git window (W-4, #4491).
+back. The shell additionally remembers the repository last shown in a Git window in memory only:
+the memory belongs to the mounted shell, so it is dropped on a reload or remount, and the desktop
+mounts the shell only after resolving the installation-scoped layout identifier, so a new
+installation identity starts without it. When the person closes Git and opens it again from the
+rail, the window returns to that repository, unless it is a managed task worktree (never
+remembered: a hand-off path the window ignores is not a repository the person chose) or the project
+list marks it gone or refused; otherwise it falls back to the starting project (the active
+workspace's repository) and reports a body-free closed reason through `reportClientDiagnostic`. A
+repository the shell list does not carry yet is kept: the Git window reads it through its own list
+and refuses it visibly, running no repository operation, if it is gone. The chat session's project
+does not override a choice made in the Git window (W-4, #4491).
 
 The memory-only revision cache is also scoped to its owning `UiStore`. Layout writes require both
 the storage identifier and the existing `If-Match` revision. A request belonging to another data

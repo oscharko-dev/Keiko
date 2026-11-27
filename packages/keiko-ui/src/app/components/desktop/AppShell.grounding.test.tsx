@@ -3091,6 +3091,27 @@ describe("AppShell grounding connections", () => {
       projectPath: "/repo",
       rootBinding: "coding-repository",
     });
+    expect(reportedDiagnostics).toContainEqual({
+      message: "git-window: reopen fell back (remembered-unavailable)",
+    });
+  });
+
+  it("never reopens Git on a managed task worktree a hand-off put in it, and reports why", async () => {
+    const worktree = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-1";
+    const api = await closeAndReopenGit({ projectPath: worktree });
+    expect(api.add).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      rootBinding: "coding-repository",
+    });
+    // The window never showed the worktree, so nothing was remembered and no fallback is reported.
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain(worktree);
+  });
+
+  it("reports no fallback and no path when the chosen repository is reopened", async () => {
+    await closeAndReopenGit({ projectPath: "/repo-b", rootBinding: "coding-repository" });
+    expect(reportedDiagnostics.some((entry) => entry.message.startsWith("git-window:"))).toBe(
+      false,
+    );
   });
 
   it("opens Git from the rail with the selected project while a task workspace is active", async () => {
