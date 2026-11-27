@@ -1,3 +1,4 @@
+import { codingToolCallIdFromActionId } from "./codingToolIpc.js";
 import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import { codingRunMcpServers, selectedRunMcpServers } from "./codingJiraPodBinding.js";
@@ -1012,7 +1013,6 @@ function observeOpenCodeSandboxAttestation(
 
 const MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS = 2_048;
 const MAX_SAFE_ACTIVITY_TOOL_CORRELATION_BYTES = 128 * 1_024;
-const SAFE_ACTIVITY_CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 interface BoundedCorrelations<T> {
   readonly values: Map<string, T>;
@@ -1131,7 +1131,9 @@ const MAPPED_ACTIVITY_TOOLS: ReadonlySet<string> = new Set(
 function capturedChildHash(tools: ActivityToolCorrelations, actionId: string): string | undefined {
   const binding = tools.binding;
   if (binding === undefined || !actionId.startsWith(`${binding.sessionId}:`)) return undefined;
-  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(callIdFromAction(actionId) ?? "");
+  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(
+    codingToolCallIdFromActionId(actionId) ?? "",
+  );
   return match !== null && Number(match[2]) <= MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS
     ? match[1]
     : undefined;
@@ -1143,9 +1145,13 @@ function rememberAdmittedChild(
     NonNullable<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"]>
   >[0],
 ): void {
-  if (tools.binding === undefined || !callIdFromAction(input.actionId)?.startsWith("cm_")) return;
+  if (
+    tools.binding === undefined ||
+    !codingToolCallIdFromActionId(input.actionId)?.startsWith("cm_")
+  )
+    return;
   const parentHash = capturedChildHash(tools, input.actionId);
-  const callId = callIdFromAction(input.actionId);
+  const callId = codingToolCallIdFromActionId(input.actionId);
   if (parentHash === undefined || callId === undefined || !MAPPED_ACTIVITY_TOOLS.has(input.tool)) {
     tools.projection.recordDrop(tools.runId, "validation-rejected");
     return;
@@ -1278,7 +1284,7 @@ function settledToolSignal({
   presentation,
 }: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0]):
   Extract<CodingSafeActivitySignal, { readonly kind: "tool" }> | undefined {
-  const callId = callIdFromAction(actionId);
+  const callId = codingToolCallIdFromActionId(actionId);
   if (
     callId === undefined ||
     (presentation !== undefined && !isCodingSafeActivityToolPresentation(presentation))
@@ -1386,12 +1392,6 @@ function deleteCorrelation<T>(correlations: BoundedCorrelations<T>, callId: stri
 
 function correlationBytes(callId: string, value: unknown): number {
   return Buffer.byteLength(callId, "utf8") + Buffer.byteLength(JSON.stringify(value), "utf8");
-}
-
-function callIdFromAction(actionId: string): string | undefined {
-  const separator = actionId.indexOf(":");
-  const callId = separator >= 0 ? actionId.slice(separator + 1) : "";
-  return SAFE_ACTIVITY_CALL_ID.test(callId) ? callId : undefined;
 }
 
 /**

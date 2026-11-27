@@ -3638,6 +3638,15 @@ function invalidVerificationApprovalEvent(
     : undefined;
 }
 
+// The policy rebuilds the card from its own closed facts; the call the ask holds back is the one
+// fact it does not know, so it is carried over exactly or not at all.
+function withAskedCallId(
+  request: CodingWorkbenchPermissionRequest,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchPermissionRequest {
+  return event.callId === undefined ? request : { ...request, callId: event.callId };
+}
+
 function supervisedMutationEvent(
   active: ActiveRuntime,
   sequence: number,
@@ -3672,7 +3681,7 @@ function supervisedMutationEvent(
       return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
     }
     return runtimeEvent(active, sequence, "permission-requested", {
-      permissionRequest: decision.permissionRequest,
+      permissionRequest: withAskedCallId(decision.permissionRequest, event),
     });
   }
   if (decision.status === "allowed")

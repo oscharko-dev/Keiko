@@ -110,6 +110,7 @@ export function requestDraftDeliveryApproval(
   service: DraftDeliveryService | undefined,
   proposalId: string,
   onEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  callId?: string,
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
@@ -131,6 +132,7 @@ export function requestDraftDeliveryApproval(
         scopeLabel: "workspace-scope",
         risk: "high",
         policyReason: "approval-required",
+        ...(callId === undefined ? {} : { callId }),
         expiresAt: new Date(proposal.expiresAtMs).toISOString(),
       },
     },

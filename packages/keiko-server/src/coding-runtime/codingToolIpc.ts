@@ -1,3 +1,4 @@
+import { CODING_WORKBENCH_TOOL_CALL_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdits.js";
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
@@ -110,6 +111,16 @@ const CODING_TOOL_ACTIONS: ReadonlySet<string> = new Set(Object.keys(CODING_TOOL
 export interface CodingToolRequestIdentity {
   readonly actionId: string;
   readonly idempotencyKey: string;
+}
+
+/**
+ * The model's tool call id inside a request's `actionId` (`<sessionID>:<callID>`), the id of that
+ * call's row in the safe activity feed; undefined when the action id names no well-formed call.
+ */
+export function codingToolCallIdFromActionId(actionId: string): string | undefined {
+  const separator = actionId.indexOf(":");
+  const callId = separator >= 0 ? actionId.slice(separator + 1) : "";
+  return CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(callId) ? callId : undefined;
 }
 
 export interface CodingToolApprovalProof {

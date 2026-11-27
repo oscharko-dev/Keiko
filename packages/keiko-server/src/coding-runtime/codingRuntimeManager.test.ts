@@ -1,3 +1,4 @@
+import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   expectActivityLogProof,
@@ -3464,6 +3465,83 @@ describe("coding runtime manager", () => {
     expect(redeem("feature/y")).toBe(false);
     expect(redeem("feature/x")).toBe(true);
     expect(redeem("feature/x")).toBe(false);
+  });
+
+  // Lab 2026-11-27: in Supervised workspace the governed ask is rebuilt by the supervised policy, which
+  // dropped the id of the call it holds back, so the tool row kept reading "Running" beside the card.
+  it("keeps the call a governed task-branch ask holds back on the supervised approval card", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const codingToolApprovals = createCodingToolApprovalBridge();
+    const request = {
+      action: "git" as const,
+      operation: "branch" as const,
+      branchName: "feature/x",
+      actionId: "ses_1:call_branch_1",
+      idempotencyKey: "ses_1:call_branch_1",
+    };
+    const approvalProof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest("run-1988", request),
+    };
+    let ask: ((event: SidecarPermissionEvent) => void) | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => child.handle),
+      codingToolApprovals,
+      openCodeLifecycleAdapter: {
+        handshake: (input) => {
+          ask = input.onPermission;
+          return Promise.resolve({ ok: true });
+        },
+      },
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const projected = projectOpenCodePermissionEvent(
+      {
+        id: "evt_branch",
+        type: "permission.asked",
+        properties: {
+          id: "per_branch",
+          sessionID: "ses_1",
+          permission: OPENCODE_GOVERNED_ACTION_PERMISSION,
+          patterns: ["branch"],
+          always: [],
+          metadata: {
+            kind: "command-execution",
+            actionClass: "command-execution",
+            reasonCode: "approval-required",
+            expiresAt: "2026-07-07T13:05:00.000Z",
+            actionKind: "git-branch",
+            scopeLabel: "workspace-scope",
+            risk: "medium",
+            policyReason: "approval-required",
+            commandLabel: "branch",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            approvalId: approvalProof.approvalId,
+            approvalDigest: approvalProof.approvalDigest,
+            targetPathHash: createHash("sha256").update("feature/x", "utf8").digest("hex"),
+          },
+        },
+      },
+      "ses_1",
+    );
+    if (projected === undefined || ask === undefined) throw new Error("expected a governed ask");
+    ask({ ...projected, callId: "call_branch_1" });
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: { actionKind: "git-branch", callId: "call_branch_1" },
+    });
   });
 
   it("rolls back the issued approval when verification bridge activation fails", async () => {

@@ -101,6 +101,7 @@ export function requestVerifiedCommitApproval(
   service: VerifiedCommitService | undefined,
   proposalId: string,
   onEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  callId?: string,
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
@@ -121,6 +122,8 @@ export function requestVerifiedCommitApproval(
       scopeLabel: "workspace-scope",
       risk: "high",
       policyReason: "approval-required",
+      // The call that waits for this decision, so the Workbench shows exactly that row as waiting.
+      ...(callId === undefined ? {} : { callId }),
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };
@@ -155,6 +158,7 @@ export function requestRuntimeStageApproval(
   service: RuntimeGitService | undefined,
   proposalId: string,
   onEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  callId?: string,
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
@@ -175,6 +179,7 @@ export function requestRuntimeStageApproval(
       scopeLabel: "workspace-scope",
       risk: "medium",
       policyReason: "approval-required",
+      ...(callId === undefined ? {} : { callId }),
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };

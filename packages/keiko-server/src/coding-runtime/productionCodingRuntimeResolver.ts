@@ -1713,14 +1713,14 @@ function runtimeGitFacadeOptions({
     ...(verifiedCommitService === undefined ? {} : { verifiedCommitService }),
     ...(runtimeGitService === undefined ? {} : { runtimeGitService }),
     ...(draftDeliveryService === undefined ? {} : { draftDeliveryService }),
-    requestDraftDeliveryApproval: (id): void => {
-      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent);
+    requestDraftDeliveryApproval: (id, callId): void => {
+      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent, callId);
     },
-    requestStageApproval: (proposalId): void => {
-      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent);
+    requestStageApproval: (proposalId, callId): void => {
+      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent, callId);
     },
-    requestCommitApproval: (proposalId): void => {
-      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent);
+    requestCommitApproval: (proposalId, callId): void => {
+      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent, callId);
     },
   };
 }

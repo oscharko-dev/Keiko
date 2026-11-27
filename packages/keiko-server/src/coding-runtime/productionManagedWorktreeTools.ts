@@ -1,3 +1,4 @@
+import { codingToolCallIdFromActionId } from "./codingToolIpc.js";
 import { ACTIVITY_LOG_DIAGNOSTIC_FIELDS } from "@oscharko-dev/keiko-contracts/runtime/activity-log-diagnostic-fields";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
@@ -546,11 +547,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly ciObservationService?: CiObservationService;
   readonly draftDeliveryService?: DraftDeliveryService;
-  readonly requestDraftDeliveryApproval?: (proposalId: string) => void;
+  readonly requestDraftDeliveryApproval?: (proposalId: string, callId?: string) => void;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
-  readonly requestStageApproval?: (proposalId: string) => void;
-  readonly requestCommitApproval?: (proposalId: string) => void;
+  readonly requestStageApproval?: (proposalId: string, callId?: string) => void;
+  readonly requestCommitApproval?: (proposalId: string, callId?: string) => void;
   readonly authority: Pick<
     CodingRuntimeAuthorityService,
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
@@ -1000,7 +1001,14 @@ function buildRuntimeGitPort(
       const result = await input.runtimeGitService.execute(request, guard, signal);
       if (result.kind === "refused")
         return { status: "failed", reasonCode: GIT_REFUSAL_REASON_CODES[result.reason] };
-      return stageReleaseResult(await releaseStageProposal(input, result, signal));
+      return stageReleaseResult(
+        await releaseStageProposal(
+          input,
+          result,
+          signal,
+          codingToolCallIdFromActionId(request.actionId),
+        ),
+      );
     },
   };
 }
@@ -1021,18 +1029,20 @@ async function runCiObservation(
 function requestStageReview(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
+  callId: string | undefined,
 ): void {
   if (
     (result.kind === "stage" || result.kind === "unstage") &&
     result.status === "approval-required"
   )
-    input.requestStageApproval?.(result.proposalId);
+    input.requestStageApproval?.(result.proposalId, callId);
 }
 
 async function releaseStageProposal(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
   signal: AbortSignal | undefined,
+  callId: string | undefined,
 ): Promise<
   import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
 > {
@@ -1041,7 +1051,7 @@ async function releaseStageProposal(
     result.status !== "approval-required"
   )
     return result;
-  requestStageReview(input, result);
+  requestStageReview(input, result, callId);
   const actionKind = result.kind === "stage" ? "git-stage" : "git-unstage";
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
@@ -1154,7 +1164,10 @@ async function releaseDraftDeliveryProposal(
     recordPolicyAuthorizedProposal(input, actionKind, proposal.record.proposalId);
     return { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" };
   }
-  input.requestDraftDeliveryApproval?.(proposal.record.proposalId);
+  input.requestDraftDeliveryApproval?.(
+    proposal.record.proposalId,
+    codingToolCallIdFromActionId(request.actionId),
+  );
   const outcome = await waitForRuntimeProposalApproval(
     declinableProposalProbe(input, service),
     proposal.record.proposalId,
@@ -1193,7 +1206,7 @@ async function completeVerifiedCommitRequest(
     recordPolicyAuthorizedProposal(input, "commit", result.proposalId);
     return { status: "completed", verifiedCommit: result, approvalDisposition: "ready" };
   }
-  input.requestCommitApproval?.(result.proposalId);
+  input.requestCommitApproval?.(result.proposalId, codingToolCallIdFromActionId(request.actionId));
   const outcome = await waitForRuntimeProposalApproval(
     declinableProposalProbe(input, service),
     result.proposalId,

@@ -280,7 +280,7 @@ describe("production managed worktree tools", () => {
         capability: "opaque-capability",
         body: JSON.stringify({
           action: "delivery",
-          actionId: "delivery-1",
+          actionId: "ses_1:call_commit_1",
           idempotencyKey: "delivery-key",
           intent: "commit",
           phase: "propose",
@@ -288,7 +288,8 @@ describe("production managed worktree tools", () => {
         }),
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId);
+      // The ask names the call that waits for it, so that call's row reads "Waiting for approval".
+      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId, "call_commit_1");
       let settled = false;
       void pending.then((): void => {
         settled = true;
@@ -349,12 +350,12 @@ describe("production managed worktree tools", () => {
           operation: "stage",
           phase: "propose",
           paths: ["src/index.ts"],
-          actionId: "stage-1",
+          actionId: "ses_1:call_stage_1",
           idempotencyKey: "stage-1",
         }),
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384");
+      expect(requestStageApproval).toHaveBeenCalledExactlyOnceWith("stage-3384", "call_stage_1");
       let settled = false;
       void pending.then((): void => {
         settled = true;

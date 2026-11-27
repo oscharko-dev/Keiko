@@ -131,8 +131,14 @@ describe("server-built delivery approval requests", () => {
         command: { kind: "stage" },
       }),
     } as unknown as RuntimeGitService;
-    requestRuntimeStageApproval(service, "stage-1", (event) => void events.push(event));
+    requestRuntimeStageApproval(
+      service,
+      "stage-1",
+      (event) => void events.push(event),
+      "call_stage_1",
+    );
     expect(events[0]?.permissionRequest).toMatchObject({
+      callId: "call_stage_1",
       actionKind: "git-stage",
       reasonCode: "stage-approval-required",
       scopeLabel: "workspace-scope",
@@ -166,12 +172,22 @@ describe("server-built delivery approval requests", () => {
     const service = {
       review: () => ({ binding: { runId: "run-commit" }, expiresAtMs: EXPIRES_AT_MS, review: {} }),
     } as unknown as VerifiedCommitService;
-    requestVerifiedCommitApproval(service, "commit-1", (event) => void events.push(event));
+    requestVerifiedCommitApproval(
+      service,
+      "commit-1",
+      (event) => void events.push(event),
+      "call_commit_1",
+    );
     expect(events[0]?.permissionRequest).toMatchObject({
+      callId: "call_commit_1",
       actionKind: "commit",
       scopeLabel: "workspace-scope",
       policyReason: "approval-required",
     });
+    // An ask that names no call never invents one.
+    const unbound: CodingWorkbenchRuntimeEvent[] = [];
+    requestVerifiedCommitApproval(service, "commit-2", (event) => void unbound.push(event));
+    expect(unbound[0]?.permissionRequest).not.toHaveProperty("callId");
   });
 });
 
