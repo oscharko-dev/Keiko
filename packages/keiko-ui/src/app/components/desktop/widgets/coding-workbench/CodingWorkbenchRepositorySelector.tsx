@@ -788,6 +788,7 @@ function SelectorRecoveryForState({
           t={t}
         />
       ) : null}
+      <ReconnectNotice failed={state.reconnectFailed} t={t} />
     </>
   );
 }
@@ -912,7 +913,6 @@ export function CodingWorkbenchRepositorySelector({
         onReconnected={work.onReconnected}
         t={t}
       />
-      <ReconnectNotice failed={state.reconnectFailed} t={t} />
     </div>
   );
 }
