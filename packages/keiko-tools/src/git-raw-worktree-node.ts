@@ -23,6 +23,7 @@ import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runt
 import { gitBlobObjectId, gitIndexEntriesDigest, type IndexEntry } from "./git-index-identity.js";
 import {
   GitWorktreeReadError,
+  type GitStagedObjectIdPort,
   readGitIndexStat,
   readGitIndexEntries,
   readGitTreeEntries,
@@ -36,6 +37,7 @@ import {
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { workspaceFsOf } from "./exec.js";
+import { CommandCancelledError } from "./errors.js";
 import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
@@ -233,7 +235,7 @@ async function scanPaths(
   paths: readonly string[],
 ): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
-  const convertible = new Map<string, GitStageFile>();
+  const pending: PendingConversions = { files: new Map(), overCap: 0 };
   let total = 0;
   let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
@@ -254,43 +256,82 @@ async function scanPaths(
     }
     const working = await workingStatus(scan, path, MAX_CONTENT_BYTES - total);
     total += working.bytes;
-    collectConvertible(convertible, path, working);
+    collectConvertible(pending, path, working);
     const staged = indexStatus(scan.head.get(path), scan.index.get(path));
     if (staged !== " " || working.status !== " " || working.untracked)
       changes.push(changed(path, staged, working.status, working.untracked));
   }
   return {
-    changes: await settleConvertedFiles(scan, changes, convertible),
+    changes: await settleConvertedFiles(scan, changes, pending),
     truncated,
     deniedPathCount,
   };
 }
+// A Windows checkout never matches the index stat data, so every tracked file can land here: one
+// scan settles at most this many, in one batch; the rest stay modified (fail closed).
+const MAX_CONVERTIBLE_FILES = 1000;
+interface PendingConversions {
+  readonly files: Map<string, GitStageFile>;
+  overCap: number;
+}
 function collectConvertible(
-  convertible: Map<string, GitStageFile>,
+  pending: PendingConversions,
   path: string,
   working: WorkingInspection,
 ): void {
-  if (working.convertible !== undefined) convertible.set(path, working.convertible);
+  if (working.convertible === undefined) return;
+  if (pending.files.size >= MAX_CONVERTIBLE_FILES) pending.overCap += 1;
+  else pending.files.set(path, working.convertible);
 }
-// A stat-dirty file whose bytes Git's staging would convert to exactly the index object is clean in
-// the working tree, as `git status` says; the judgement runs through the staging's own conversion
-// with every filter driver neutralised, never through a Git process that could run one. Without the
-// port, or when it cannot answer for a file, the file stays modified (fail closed).
+// The port's answer, or why there is none: a cancellation ends the read, any other failure leaves
+// every file modified and is reported to the observer (never silent, never a rejected read).
+async function askStagedObjectPort(
+  scan: ScanInputs,
+  port: GitStagedObjectIdPort,
+  files: readonly GitStageFile[],
+): Promise<
+  | { readonly outcome: "answered"; readonly ids: ReadonlyMap<string, string | undefined> }
+  | { readonly outcome: "undecidable" }
+  | { readonly outcome: "error"; readonly error: unknown }
+> {
+  try {
+    const ids = await port(files);
+    return ids === undefined ? { outcome: "undecidable" } : { outcome: "answered", ids };
+  } catch (error) {
+    if (scan.deps.signal?.aborted === true || error instanceof CommandCancelledError)
+      throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+    return { outcome: "error", error };
+  }
+}
+// A stat-dirty file whose bytes Git's conversion maps to exactly the index object is clean in the
+// working tree, as `git status` says; the judgement hashes them under Git's own conversion with every
+// configured filter driver overridden by the port's allowlisted keys. Without the port, or when it
+// cannot answer for a file, the file stays modified (fail closed).
 async function settleConvertedFiles(
   scan: ScanInputs,
   changes: readonly GitChangedFile[],
-  convertible: ReadonlyMap<string, GitStageFile>,
+  pending: PendingConversions,
 ): Promise<readonly GitChangedFile[]> {
   const port = scan.deps.stagedObjectIds;
-  if (port === undefined || convertible.size === 0) return changes;
-  const stagedAs = await port([...convertible.values()]);
-  if (stagedAs === undefined) return changes;
-  return changes.flatMap((change) => {
-    const objectId = convertible.has(change.path) ? stagedAs.get(change.path) : undefined;
+  if (port === undefined || pending.files.size === 0) return changes;
+  const answer = await askStagedObjectPort(scan, port, [...pending.files.values()]);
+  const ids = answer.outcome === "answered" ? answer.ids : new Map<string, string | undefined>();
+  let settledClean = 0;
+  const settled = changes.flatMap((change) => {
+    const objectId = pending.files.has(change.path) ? ids.get(change.path) : undefined;
     if (objectId === undefined || objectId !== scan.index.get(change.path)?.objectId)
       return [change];
+    settledClean += 1;
     return change.staged ? [{ ...change, worktreeStatus: " " as const, unstaged: false }] : [];
   });
+  scan.deps.onStagedConversion?.({
+    convertible: pending.files.size,
+    overCap: pending.overCap,
+    settledClean,
+    outcome: answer.outcome,
+    ...(answer.outcome === "error" ? { error: answer.error } : {}),
+  });
+  return settled;
 }
 async function workingStatus(
   scan: ScanInputs,

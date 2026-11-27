@@ -6931,6 +6931,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "git-raw-conversion-settlement",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["git.raw-status.conversion-settled"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["git.raw-status.conversion-settled"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["git.raw-status.conversion-settled"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["git.raw-status.conversion-settled"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "files-copy-containment-refusal",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

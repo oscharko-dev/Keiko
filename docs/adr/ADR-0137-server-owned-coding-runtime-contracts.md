@@ -2386,10 +2386,17 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (#4491). The conversion hash overrides every configured `filter.<name>` driver (the read path's
   neutralization; an unreadable configuration refuses), and the check before the index is promoted
   re-reads the effective line-ending mode and refuses when it differs from the one the objects
-  were hashed under (PR #4568 review). The raw status reader judges a stat-dirty converted file
-  (Keiko's index-info entries carry no stat data, and Windows stat data never matches) through the
-  same conversion the staging uses, never through a Git process that could run a filter, so a CRLF
-  file staged as its LF form reads as clean in the working tree, as `git status` says (#4491). It is an option of the stage tool rather than a tool of its own, so the
+  were hashed under (PR #4568 review). The raw status reader judges a regular file whose
+  bytes differ from its index object and whose index stat data does not match (Keiko's index-info
+  entries carry none, and Windows stat data never matches) by hashing it under Git's own conversion,
+  the way `git status` compares such an entry: clean when the converted object is the index object,
+  without requiring that the conversion round-trips. Every configured `filter.<name>` driver is
+  overridden by the staging's own overrides, the port's Git runs are limited to an allowlist (an
+  attribute lookup and `hash-object --stdin-paths`, never `-w`, with only the filter, `core.autocrlf`
+  and `core.safecrlf` overrides), and a file with a `filter`, `ident` or encoding attribute, a
+  symlink, a file past the per-scan cap of 1000, or any answer the port cannot give stays modified.
+  One batch per scan keeps the process count constant, and each scan that offered files records one
+  `git.raw-status.conversion-settled` line (counts and a closed outcome) (#4491). It is an option of the stage tool rather than a tool of its own, so the
   catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
   a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely

@@ -131,6 +131,20 @@ export type GitStagedObjectIdPort = (
   files: readonly GitStageFile[],
 ) => Promise<ReadonlyMap<string, string | undefined> | undefined>;
 
+/**
+ * Body-free evidence of one raw scan's conversion settlement (#4491): how many stat-dirty regular
+ * files were offered to the port, how many settled clean, how many exceeded the per-scan cap and so
+ * stayed modified, and whether the port answered, could not decide, or failed (`error` carries the
+ * failure for the owner's classification; it is never serialised here).
+ */
+export interface GitStagedConversionEvidence {
+  readonly convertible: number;
+  readonly overCap: number;
+  readonly settledClean: number;
+  readonly outcome: "answered" | "undecidable" | "error";
+  readonly error?: unknown;
+}
+
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
   // The read-only port every containment check of this lane resolves through (exec.ts
@@ -152,6 +166,8 @@ export interface NodeGitWorktreeReaderDeps {
   // How a stat-dirty file Git's staging converts is judged by the raw reader (#4491). Absent: such a
   // file stays modified.
   readonly stagedObjectIds?: GitStagedObjectIdPort | undefined;
+  // Receives one body-free evidence record per scan that offered files to the port.
+  readonly onStagedConversion?: ((evidence: GitStagedConversionEvidence) => void) | undefined;
 }
 
 interface ReadContext {
@@ -701,25 +717,44 @@ const INDEX_EOL_ENTRY = /^i\/(\S*)\s+w\/\S*\s+attr\/[^\t]*\t([^\0]+)$/u;
  * `lf`, `crlf`, `mixed`, `none` or `-text`. A path without an index entry is absent from the map; a
  * path listed more than once (an unresolved merge) maps to `conflict`. Unparseable output throws.
  */
+// The pathspecs of one `ls-files --eol` run stay far below Windows' CreateProcess limit (about 32 K
+// UTF-16 units for the whole command line).
+const INDEX_EOL_ARGV_BUDGET = 8000;
+function pathspecChunks(paths: readonly string[]): readonly (readonly string[])[] {
+  const chunks: string[][] = [];
+  let used = INDEX_EOL_ARGV_BUDGET;
+  for (const path of paths) {
+    const spec = `:(literal)${path}`;
+    used += spec.length + 1;
+    if (used > INDEX_EOL_ARGV_BUDGET) {
+      chunks.push([]);
+      used = spec.length + 1;
+    }
+    chunks.at(-1)?.push(spec);
+  }
+  return chunks;
+}
 export async function readGitIndexLineBreaks(
   deps: NodeGitWorktreeReaderDeps,
   paths: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
-  const output = await runRead(metadataReadContext(deps), [
-    "ls-files",
-    "--eol",
-    "-z",
-    "--",
-    ...paths.map((path) => `:(literal)${path}`),
-  ]);
   const classes = new Map<string, string>();
-  if (output === "") return classes;
-  if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
-  for (const line of output.slice(0, -1).split("\0")) {
-    const match = INDEX_EOL_ENTRY.exec(line);
-    if (match?.[1] === undefined || match[2] === undefined)
-      throw new GitWorktreeReadError("git eol listing is malformed");
-    classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
+  for (const chunk of pathspecChunks(paths)) {
+    const output = await runRead(metadataReadContext(deps), [
+      "ls-files",
+      "--eol",
+      "-z",
+      "--",
+      ...chunk,
+    ]); // NOSONAR typescript:S9382 -- sequential chunks keep the spawn count and memory bounded
+    if (output === "") continue;
+    if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
+    for (const line of output.slice(0, -1).split("\0")) {
+      const match = INDEX_EOL_ENTRY.exec(line);
+      if (match?.[1] === undefined || match[2] === undefined)
+        throw new GitWorktreeReadError("git eol listing is malformed");
+      classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
+    }
   }
   return classes;
 }

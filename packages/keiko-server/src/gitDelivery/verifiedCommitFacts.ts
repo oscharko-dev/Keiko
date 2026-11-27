@@ -1,7 +1,6 @@
 import {
   GitRawWorktreeReadError,
   readGitRawChangesAtHead,
-  createGitStagedObjectIdPort,
   readGitRemoteAliases,
   readGitBaseState,
   gitCommitMessageDigest,
@@ -10,7 +9,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
-import { logDeniedPathExclusion } from "./runtimeGitRead.js";
+import { logDeniedPathExclusion, withStagedConversion } from "./runtimeGitRead.js";
 import {
   VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
   type VerifiedCommitBlockingPaths,
@@ -74,7 +73,7 @@ export async function readVerifiedCommitFacts(
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   };
-  const deps = { ...readBase, stagedObjectIds: createGitStagedObjectIdPort(readBase) };
+  const deps = withStagedConversion(readBase, seams, context.correlationId);
   // ONE raw read supplies the facts AND an unclean candidate's blocking paths, so the paths can never
   // contradict the refusal they ride on. They used to come from a second read taken after this one,
   // with no cross-check (review finding on PR #3452).

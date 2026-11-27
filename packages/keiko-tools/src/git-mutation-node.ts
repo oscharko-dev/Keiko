@@ -80,6 +80,7 @@ import {
   filterDriversOverridable,
   unstageExactFiles,
   gitStagedObjectIdOf,
+  gitStagedObjectPortArgvAllowed,
   type GitStageEffectContext,
   type GitStageLineEndings,
 } from "./git-stage-node.js";
@@ -777,19 +778,6 @@ export async function readGitStageSupport(
   );
 }
 
-// The only Git runs the read-only staged-object port may make: the object hash (never `-w`) and the
-// attribute lookup, after the leading `-c` overrides that neutralise every configured filter driver.
-function readOnlyStageArgv(argv: readonly string[]): boolean {
-  let at = 0;
-  while (argv[at] === "-c") at += 2;
-  const subcommand = argv[at];
-  return (
-    (subcommand === "hash-object" || subcommand === "check-attr") &&
-    !argv.includes("-w") &&
-    !argv.includes("--stdin-paths")
-  );
-}
-
 /**
  * The raw reader's staged-object port (#4491): what Git's staging would store for a file's bytes,
  * computed by the very conversion the verified staging uses (`gitStagedObjectIdOf`), under the same
@@ -810,7 +798,7 @@ export function createGitStagedObjectIdPort(
       check: () => Promise.resolve(!ctx.signal.aborted),
       filterDriverNames: () => Promise.resolve(config.filterDrivers),
       run: (argv, stdin) => {
-        if (!readOnlyStageArgv(argv)) throw new Error("git-staged-object-port-denied");
+        if (!gitStagedObjectPortArgvAllowed(argv)) throw new Error("git-staged-object-port-denied");
         return runOne(ctx, argv, stdin);
       },
       indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
@@ -859,6 +847,7 @@ export {
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
   type GitStagedObjectIdPort,
+  type GitStagedConversionEvidence,
 } from "./git-worktree-snapshot-node.js";
 export { readGitStageCandidate } from "./git-stage-node.js";
 export { gitCommitMessageDigest } from "./git-index-identity.js";

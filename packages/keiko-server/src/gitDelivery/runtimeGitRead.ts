@@ -25,6 +25,8 @@ import {
   gitBlobObjectId,
   readGitRawChangesAtHead,
   createGitStagedObjectIdPort,
+  type GitStagedConversionEvidence,
+  type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
   readGitTreeEntries,
   readGitBlobText,
@@ -38,9 +40,11 @@ import {
   type LineChangeBlock,
   type LineDiffSide,
 } from "./lineDiff.js";
+import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
+  gitDeliveryActivityErrorKind,
   gitDeliveryTerminationHandler,
   type GitDeliveryExecutionSeams,
   type GitDeliveryTerminationLogSeam,
@@ -61,6 +65,32 @@ const DENIED_PATHS_EXCLUDED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["git-denied-path-exclusion"],
   proofIds: ["git.raw-status.denied-paths-excluded.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.raw-status.conversion-settled",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitRead.logStagedConversion",
+  fields: {
+    convertible: { type: "integer", dataClass: "count", required: true },
+    overCap: { type: "integer", dataClass: "count", required: true },
+    settledClean: { type: "integer", dataClass: "count", required: true },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["answered", "undecidable", "error"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-raw-conversion-settlement"],
+  proofIds: ["git.raw-status.conversion-settled.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -144,6 +174,51 @@ function searchLoggedLineChanges(
   }
   return search.blocks;
 }
+/**
+ * One line per raw scan that offered stat-dirty files to the staged-conversion port (#4491): how many,
+ * how many settled clean, how many exceeded the per-scan cap, and whether the port answered, could
+ * not decide or failed. A scan whose files all stayed "modified" is reconstructable from it alone.
+ */
+export function logStagedConversion(
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+  evidence: GitStagedConversionEvidence,
+): void {
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      STAGED_CONVERSION_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(evidence.outcome === "error"
+          ? { level: "warn", errorKind: gitDeliveryActivityErrorKind(errorKindOf(evidence.error)) }
+          : {}),
+      },
+      {
+        convertible: evidence.convertible,
+        overCap: evidence.overCap,
+        settledClean: evidence.settledClean,
+        outcome: evidence.outcome,
+      },
+    ),
+  );
+}
+/**
+ * The raw reader judges a stat-dirty converted file through the staging's own conversion and reports
+ * the settlement to the Activity Log under the run's correlation.
+ */
+export function withStagedConversion(
+  base: NodeGitWorktreeReaderDeps,
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+): NodeGitWorktreeReaderDeps {
+  return {
+    ...base,
+    stagedObjectIds: createGitStagedObjectIdPort(base),
+    onStagedConversion: (evidence: GitStagedConversionEvidence): void => {
+      logStagedConversion(seams, correlationId, evidence);
+    },
+  };
+}
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -153,8 +228,7 @@ export function runtimeGitReadDeps(
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(execution, context.correlationId),
   };
-  // The raw reader judges a stat-dirty converted file through the staging's own conversion (#4491).
-  return { ...base, stagedObjectIds: createGitStagedObjectIdPort(base) };
+  return withStagedConversion(base, execution, context.correlationId);
 }
 export async function runtimeGitStatus(
   context: VerifiedCommitRunContext,

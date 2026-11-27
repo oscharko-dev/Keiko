@@ -261,7 +261,11 @@ async function readAttributeValues(
   attributes: readonly string[],
   paths: readonly string[],
 ): Promise<readonly (readonly string[])[] | undefined> {
-  const result = await ctx.run(["check-attr", "-z", ...attributes, "--", ...paths]);
+  // The paths travel on stdin (NUL separated), so a selection never meets the command-line limit.
+  const result = await ctx.run(
+    ["check-attr", "-z", ...attributes, "--stdin"],
+    paths.map((path) => `${path}\0`).join(""),
+  );
   if (result.exitCode !== 0 || result.truncated || !result.stdout.endsWith("\0")) return undefined;
   const fields = result.stdout.slice(0, -1).split("\0");
   if (fields.length !== paths.length * attributes.length * 3) return undefined;
@@ -299,7 +303,15 @@ async function fileStages(
 ): Promise<ReadonlyMap<string, FileStage> | undefined> {
   const paths = files.map((file) => file.path);
   const values = paths.length === 0 ? [] : await readAttributeValues(ctx, ["text", "eol"], paths);
-  if (values === undefined) return undefined;
+  return values === undefined ? undefined : stagesOfValues(ctx, paths, lineEndings, values);
+}
+// `values` are the `text` and `eol` attribute values of each path, in order.
+async function stagesOfValues(
+  ctx: GitStageEffectContext,
+  paths: readonly string[],
+  lineEndings: GitStageLineEndings,
+  values: readonly (readonly string[])[],
+): Promise<ReadonlyMap<string, FileStage>> {
   const plans = paths.map((path, index) => {
     const [text = "unspecified", eol = "unspecified"] = values[index] ?? [];
     return [path, stagePlan(lineEndings, { text, eol })] as const;
@@ -373,13 +385,86 @@ export async function gitStageAttributesSupported(
   const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
   return values?.every(attributeRowAdmitted) ?? false;
 }
+// The only Git runs the read-only staged-object port may make: the attribute lookup and the object
+// hash from stdin paths (never `-w`), after leading `-c` overrides that are exactly the filter-driver
+// neutralisation and the line-ending pins. Only the arguments before a `--` are inspected: operands
+// after it are paths, and a tracked file named `-w` is not an option.
+const PORT_CONFIG_OVERRIDES: readonly RegExp[] = [
+  /^filter\.[^=\n\r\0]+\.(?:clean|smudge|process)=$/u,
+  /^filter\.[^=\n\r\0]+\.required=false$/u,
+  /^core\.autocrlf=(?:true|input|false)$/u,
+  /^core\.safecrlf=false$/u,
+];
+export function gitStagedObjectPortArgvAllowed(argv: readonly string[]): boolean {
+  const separator = argv.indexOf("--");
+  const options = separator < 0 ? argv : argv.slice(0, separator);
+  let at = 0;
+  while (options[at] === "-c") {
+    if (!PORT_CONFIG_OVERRIDES.some((pattern) => pattern.test(options[at + 1] ?? ""))) return false;
+    at += 2;
+  }
+  const command = options.slice(at).join("\0");
+  return (
+    command === ["hash-object", "--stdin-paths"].join("\0") ||
+    command === ["check-attr", "-z", ...STAGE_ATTRIBUTES, "--stdin"].join("\0")
+  );
+}
+
+// A path the reader can hand to `hash-object --stdin-paths`: one line, not C-quoted.
+function stdinPathSafe(path: string): boolean {
+  return !/[\n\r]/u.test(path) && !path.startsWith('"');
+}
+async function hashPathsUnderConversion(
+  ctx: GitStageEffectContext,
+  lineEndings: GitStageLineEndings,
+  paths: readonly string[],
+): Promise<readonly string[] | undefined> {
+  const result = await ctx.run(
+    [
+      ...(await filterNeutralizingArgs(ctx)),
+      "-c",
+      `core.autocrlf=${AUTOCRLF_OF[lineEndings]}`,
+      "-c",
+      "core.safecrlf=false",
+      "hash-object",
+      "--stdin-paths",
+    ],
+    `${paths.join("\n")}\n`,
+  );
+  if (result.exitCode !== 0 || result.truncated) return undefined;
+  const ids = result.stdout.split("\n").filter((line) => line !== "");
+  return ids.length === paths.length &&
+    ids.every((id) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(id))
+    ? ids
+    : undefined;
+}
+// Whether Git's conversion of this file's bytes can equal an index object it did not already match
+// raw: a regular file whose attributes staging admits, converted under `text`/`eol` or an `auto`
+// path whose index entry holds no CR (Git keeps the bytes of one that does, so its raw hash already
+// decided). Unlike staging, a conversion that does not check out byte for byte is still judged: the
+// question is only whether Git would store the index object, as `git status` asks it.
+function conversionCanSettle(
+  file: GitStageFile,
+  row: readonly string[] | undefined,
+  stage: FileStage | undefined,
+): boolean {
+  if (row === undefined || !attributeRowAdmitted(row) || stage?.plan.kind !== "convert")
+    return false;
+  if (file.mode === "0" || file.mode === "120000" || !stdinPathSafe(file.path)) return false;
+  return (
+    !stage.plan.auto || stage.indexClass === undefined || INDEX_WITHOUT_CR.has(stage.indexClass)
+  );
+}
 /**
  * The object Git's own staging would store for each file's current bytes, without writing anything:
- * the raw reader's judgement of a converted file whose index stat data is absent or stale (#4491).
- * An entry is `undefined` when staging would refuse the file (a filter driver, `ident`, an encoding,
- * a conversion that does not round-trip), so the caller keeps treating it as modified. The whole
- * result is `undefined` when the attributes or the configuration cannot be read. Every hash runs with
- * all configured filter drivers overridden, so no driver can run.
+ * the raw reader's judgement of a regular file whose raw bytes differ from its index object while
+ * the index carries no usable stat data (#4491). Git's `git status` asks the same question: does
+ * its conversion of the working file equal the index object. One configuration read, one attribute
+ * read, one line-break listing (in the reader's chunks) and one `hash-object --stdin-paths` serve the
+ * whole batch, whatever its size. Every hash runs with all configured filter drivers overridden, so
+ * no driver can run. An entry is `undefined` when conversion cannot settle the file (no conversion
+ * applies, a filter, `ident` or encoding attribute, an unreadable class), so the caller keeps it
+ * modified; the whole result is `undefined` when the attributes or the configuration cannot be read.
  */
 export async function gitStagedObjectIdOf(
   ctx: GitStageEffectContext,
@@ -389,29 +474,29 @@ export async function gitStagedObjectIdOf(
   if (files.length === 0) return new Map();
   const names = await ctx.filterDriverNames();
   if (names === undefined || !filterDriversOverridable(names)) return undefined;
-  const admitted = await readAttributeValues(
+  const paths = files.map((file) => file.path);
+  const values = await readAttributeValues(ctx, STAGE_ATTRIBUTES, paths);
+  if (values === undefined) return undefined;
+  const stages = await stagesOfValues(
     ctx,
-    STAGE_ATTRIBUTES,
-    files.map((file) => file.path),
+    paths,
+    lineEndings,
+    values.map((row) => [row[4] ?? "unspecified", row[5] ?? "unspecified"]),
   );
-  const stages = admitted === undefined ? undefined : await fileStages(ctx, files, lineEndings);
-  if (admitted === undefined || stages === undefined) return undefined;
-  const result = new Map<string, string | undefined>();
-  for (const [position, file] of files.entries()) {
-    const row = admitted[position];
-    const stage =
-      row !== undefined && attributeRowAdmitted(row) ? stages.get(file.path) : undefined;
-    result.set(file.path, await stagedObjectIdOfFile(ctx, file, stage)); // NOSONAR typescript:S9382 -- one Git hash at a time, bounded by the reader's byte budget
-  }
-  return result;
-}
-function stagedObjectIdOfFile(
-  ctx: GitStageEffectContext,
-  file: GitStageFile,
-  stage: FileStage | undefined,
-): Promise<string | undefined> {
-  if (stage === undefined || file.mode === "0") return Promise.resolve(undefined);
-  return stagedObjectId(ctx, file, stage, false);
+  const settle = files.filter((file, at) =>
+    conversionCanSettle(file, values[at], stages.get(file.path)),
+  );
+  const ids =
+    settle.length === 0
+      ? []
+      : await hashPathsUnderConversion(
+          ctx,
+          lineEndings,
+          settle.map((file) => file.path),
+        );
+  if (ids === undefined) return undefined;
+  const byPath = new Map(settle.map((file, at) => [file.path, ids[at]]));
+  return new Map(paths.map((path) => [path, byPath.get(path)]));
 }
 /**
  * Objects are created from the verified bytes without any filter driver; the only conversion is

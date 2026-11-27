@@ -27,6 +27,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2747,6 +2748,37 @@ describe("deny-listed paths in the run's repository", () => {
       formatActivityLogProofLine(exclusions[0] ?? {}),
     );
     expect(persisted).toMatchObject({ deniedPathCount: 2 });
+  });
+});
+
+describe("a converted file staged without stat data", () => {
+  it("reads as clean in the working tree and records the settlement under the run's correlation", async () => {
+    git(["config", "core.autocrlf", "true"]);
+    writeFileSync(join(root, "crlf.txt"), "one\r\ntwo\r\n");
+    git(["add", "crlf.txt"]);
+    // A later mtime defeats the stat shortcut, as Windows' stat data does.
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(root, "crlf.txt"), later, later);
+    const execution = options.execution ?? {};
+    events.length = 0;
+
+    const status = await runtimeGitStatus(context(), execution);
+    expect(status.changes.filter((change) => change.path === "crlf.txt")).toEqual([
+      expect.objectContaining({ staged: true, unstaged: false }),
+    ]);
+
+    const settled = events.filter((event) => event.op === "git.raw-status.conversion-settled");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({
+      category: "process",
+      correlationId: "verified-commit-test",
+      extra: { convertible: 1, overCap: 0, settledClean: 1, outcome: "answered" },
+    });
+    const persisted = expectActivityLogProof(
+      "git.raw-status.conversion-settled.emitted-line",
+      formatActivityLogProofLine(settled[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ convertible: 1, settledClean: 1, outcome: "answered" });
   });
 });
 
