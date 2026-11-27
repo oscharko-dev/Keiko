@@ -1832,13 +1832,17 @@ function verificationPlanChanged(
   kind: VerificationKind,
 ): VerificationPortResult | undefined {
   // The digest rides on the approval record this very call spent, so it is bound to this call.
-  const bound = input.approvalProofVerifier?.takeApprovedPlan?.({
+  const bound = input.approvalProofVerifier?.takeApprovedPlan({
     runId: input.authorityRef.runId,
     request,
   });
+  if (bound === undefined) return undefined;
+  // The card showed commands. A runner that cannot plan them again cannot prove they are still the
+  // ones the person saw, so the call fails closed instead of running unbound.
   const preview = input.verificationRunner.previewCommands;
-  if (bound === undefined || preview === undefined) return undefined;
-  if (verificationPlanDigestOf(input, preview, request, kind) === bound) return undefined;
+  if (preview !== undefined && verificationPlanDigestOf(input, preview, request, kind) === bound) {
+    return undefined;
+  }
   return verificationPortRefusal(input, "verification-plan-changed");
 }
 

@@ -126,7 +126,7 @@ export interface CodingToolApprovalProofVerifier {
    * call (ADR-0124 D6); absent when the approval showed none. The digest lives on the approved
    * record the call's own consumption spent, so it cannot be bound under another call's identity.
    */
-  readonly takeApprovedPlan?: (input: {
+  readonly takeApprovedPlan: (input: {
     readonly runId: string;
     readonly request: ApprovableToolRequest;
   }) => string | undefined;

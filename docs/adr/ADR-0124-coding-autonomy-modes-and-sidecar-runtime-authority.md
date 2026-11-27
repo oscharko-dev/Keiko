@@ -314,7 +314,10 @@ therefore spends nothing and receives no digest. Consumption fails closed: an ap
 commands but holds no digest, or a full hand-over table, is not spent. The run then plans again
 exactly as the preview did (one planning function, the ask's package folder; a `targetPath` exists
 only for `targeted-test`, which shows and binds nothing) and refuses a differing plan with the closed
-reason `verification-plan-changed`. Accepted residual: between that re-plan and the runner's own
+reason `verification-plan-changed`. The approval proof's own digest does not cover the package
+folder; the plan digest does, through each step's folder, command and script body. A runner that
+cannot plan again while the card showed commands fails closed with the same reason, so a call never
+runs unbound. Accepted residual: between that re-plan and the runner's own
 plan the workspace could change again (a TOCTOU window); runs are serial and the runner plans from
 the same files immediately after, so the window is accepted. Fields are body-free in the Activity
 Log.

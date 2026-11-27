@@ -1902,6 +1902,7 @@ describe("production managed worktree tools", () => {
       readonly now: string;
       readonly packageDir?: string;
       readonly targetPath?: string;
+      readonly planner?: "absent" | "throws";
     }): Promise<{
       readonly result: unknown;
       readonly runToReport: ReturnType<typeof vi.fn>;
@@ -1962,10 +1963,17 @@ describe("production managed worktree tools", () => {
         },
         verificationRunner: {
           runToReport,
-          previewCommands: (input) => {
-            replanned.push(input);
-            return stepsOf(options.now);
-          },
+          ...(options.planner === "absent"
+            ? {}
+            : {
+                previewCommands: (input): VerificationCommandPreview => {
+                  replanned.push(input);
+                  if (options.planner === "throws") {
+                    throw new Error(`cannot plan rm -rf ${options.now}`);
+                  }
+                  return stepsOf(options.now);
+                },
+              }),
         },
         diagnostics: { record: (record): void => void records.push(record) },
         onRuntimeEvent: vi.fn(),
@@ -2000,6 +2008,29 @@ describe("production managed worktree tools", () => {
         }),
       ]);
       expect(JSON.stringify(records)).not.toContain("rm -rf");
+    });
+
+    it("fails closed when the card showed commands but the runner cannot plan them again", async () => {
+      const { result, runToReport } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        planner: "absent",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the plan cannot be made, with a body-free line", async () => {
+      const { result, runToReport, records } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        planner: "throws",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+      expect(records.length).toBeGreaterThan(0);
+      expect(JSON.stringify(records)).not.toContain("rm -rf");
+      expect(JSON.stringify(records)).not.toContain("vitest run");
     });
 
     it("a test call cannot carry a targetPath, so the re-plan never refuses spuriously for one", async () => {

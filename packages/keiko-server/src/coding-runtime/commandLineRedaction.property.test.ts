@@ -31,8 +31,30 @@ const VALUES = ["hunter2", "s3cr3t-value", "a.b/c:d", "x".repeat(40), "tok_9F8e7
 const SAFE_VALUES = ["true", "4", "dot", "src/app"] as const;
 const SPACES = [" ", "  ", "\t"] as const;
 
-type Shape = "equals" | "define" | "space" | "quoted" | "wrapped" | "env" | "unbalanced";
-const SHAPES = ["equals", "define", "space", "quoted", "wrapped", "env", "unbalanced"] as const;
+const SHAPES = [
+  "equals",
+  "define",
+  "space",
+  "quoted",
+  "wrapped",
+  "env",
+  "unbalanced",
+  "escaped",
+  "escapedSingle",
+  "powershell",
+  "envFlag",
+  "envFlagSpaced",
+] as const;
+type Shape = (typeof SHAPES)[number];
+// Names whose substring is a credential word but whose LAST segment is not: never masked.
+const SUBSTRING_NAMES = [
+  "pass-through",
+  "keyword",
+  "key-file",
+  "monkey-patch",
+  "password-file",
+  "author",
+] as const;
 
 interface Case {
   readonly name: string;
@@ -52,6 +74,8 @@ const generateCase: Generator<Case> = (random) => ({
   space: random.pick(SPACES),
 });
 
+const envName = (name: string): string => name.replace(/[^A-Za-z0-9_]/gu, "_");
+
 function render(item: Case): string {
   const option = {
     equals: `--${item.name}=${item.value}`,
@@ -59,8 +83,13 @@ function render(item: Case): string {
     space: `--${item.name} ${item.value}`,
     quoted: `--${item.name}="${item.value} with spaces"`,
     wrapped: `"--${item.name}=${item.value} with spaces"`,
-    env: `${item.name.replace(/[^A-Za-z0-9_]/gu, "_")}=${item.value}`,
+    env: `${envName(item.name)}=${item.value}`,
     unbalanced: `"oops --${item.name}=${item.value}`,
+    escaped: `--${item.name}="${item.value}\\" ${item.value}x"`,
+    escapedSingle: `--${item.name} '${item.value}\\' ${item.value}x`,
+    powershell: `$env:${envName(item.name)}="${item.value} w"`,
+    envFlag: `--env=${envName(item.name)}=${item.value}`,
+    envFlagSpaced: `--env ${envName(item.name)}=${item.value}`,
   }[item.shape];
   return ["mvn", ...item.before, option, ...item.after].join(item.space);
 }
@@ -91,10 +120,21 @@ describe("redactCommandLineCredentials (properties)", () => {
         what: `the ${shape} spelling`,
         count: seen[shape],
         runs,
-        share: 0.1,
+        share: 0.04,
         validatedRuns: 200,
       });
     }
+  });
+
+  it("decides on the last segment of the name, never on a substring", async () => {
+    await checkProperty({
+      name: "substring names are left alone",
+      generate: (random) =>
+        `tool --${random.pick(SUBSTRING_NAMES)}=${random.pick(VALUES)} --${random.pick(SUBSTRING_NAMES)} ${random.pick(SAFE_VALUES)}`,
+      property: (line) => {
+        expect(redactCommandLineCredentials(line)).toBe(line);
+      },
+    });
   });
 
   it("changes nothing in a line without a credential-named option", async () => {
