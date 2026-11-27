@@ -2124,6 +2124,7 @@ describe("CodingRuntimeOrchestrator", () => {
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+    expect(f.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-1", "run-ended");
     expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([]);
   });
 
@@ -2142,6 +2143,8 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(DELIVERY_CONTINUATION_MAX + 1);
+    // #4491: a failed run settles the calls it left open, as a stopped one does.
+    expect(f.safeActivityProjection.interrupt).toHaveBeenCalledWith("run-1", "run-ended");
     expect(
       linesWithOp(captured, "coding-runtime.run.delivery-continued").map(
         (line) => (line.extra as { readonly attempt?: number } | undefined)?.attempt,

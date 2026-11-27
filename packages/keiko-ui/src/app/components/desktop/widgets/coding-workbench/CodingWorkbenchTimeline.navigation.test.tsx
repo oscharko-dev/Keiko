@@ -395,4 +395,26 @@ describe("a running call", () => {
     );
     expect(container.querySelector('[role="timer"]')).toBeNull();
   });
+
+  // #4491: a call that never reported its end must not keep "Running" and a ticking clock once the
+  // run is over.
+  it.each(["running", "pending"] as const)(
+    "shows a %s call as ended and stops its clock once the run has settled",
+    (state) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(AT));
+      const open = tool("call-open", "shell", state, {
+        command: { text: "npm test", truncated: false },
+      });
+      const { container } = render(<TimelineOf feed={feedOf([open])} active={false} />);
+      act(() => {
+        vi.advanceTimersByTime(12_000);
+      });
+      expect(container.querySelector('[role="timer"]')).toBeNull();
+      expect(container.querySelector('[data-state="running"]')).toBeNull();
+      expect(container.querySelector('[data-state="pending"]')).toBeNull();
+      expect(container.textContent).not.toMatch(/Running|Pending/u);
+      expect(container.textContent).toMatch(/Cancelled|Stopped/u);
+    },
+  );
 });

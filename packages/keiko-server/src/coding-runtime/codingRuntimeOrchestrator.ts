@@ -5717,17 +5717,18 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  // A stopped or taken-over run keeps its tool rows, as OpenCode keeps an aborted session's steps;
-  // only the calls still open are settled as cancelled (owner decision 2026-10-30, #3907).
+  // A run that ended keeps its tool rows, as OpenCode keeps an aborted session's steps; only the
+  // calls still open are settled as cancelled (owner decision 2026-10-30, #3907). That holds for every
+  // terminal state: a call that never reported its end must not stay "Running" after a failed,
+  // succeeded, budget- or time-exhausted run (#4491).
   private interruptExplicitlyEndedActivity(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
   ): void {
-    if (state !== "cancelled" && state !== "taken-over") return;
-    this.deps.safeActivityProjection?.interrupt(
-      runId,
-      state === "taken-over" ? "takeover" : "stop",
-    );
+    if (!TERMINAL_STATES.has(state)) return;
+    const reason =
+      state === "taken-over" ? "takeover" : state === "cancelled" ? "stop" : "run-ended";
+    this.deps.safeActivityProjection?.interrupt(runId, reason);
   }
 
   private publishSettlement(

@@ -17307,6 +17307,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "stop",
           "takeover",
+          "run-ended",
           "shutdown",
           "workspace-switch",
           "invariant-violation",

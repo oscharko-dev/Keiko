@@ -147,6 +147,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       values: [
         "stop",
         "takeover",
+        "run-ended",
         "shutdown",
         "workspace-switch",
         "invariant-violation",
@@ -486,7 +487,7 @@ export interface CodingSafeActivityProjection {
   // `correlationId` is the calling operation (a server shutdown); see the implementation.
   readonly purgeAll: (reason: CodingSafeActivityPurgeReason, correlationId?: string) => void;
   readonly markUnavailable: (runId: string) => void;
-  readonly interrupt: (runId: string, reason: "stop" | "takeover") => void;
+  readonly interrupt: (runId: string, reason: "stop" | "takeover" | "run-ended") => void;
   readonly currentContent: () => CodingSafeActivityContent | null;
   /** A listed assistant answer's complete text, for Coding History; undefined when there is none. */
   readonly answerText: (runId: string, messageId: string) => string | undefined;
@@ -931,7 +932,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
    * tool rows stay, and every call that had not settled is shown as cancelled. The calls the run
    * made remain readable after it ended (owner decision 2026-10-30, #3907).
    */
-  public interrupt(runId: string, reason: "stop" | "takeover"): void {
+  public interrupt(runId: string, reason: "stop" | "takeover" | "run-ended"): void {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
     const occurredAt = instant(this.now());

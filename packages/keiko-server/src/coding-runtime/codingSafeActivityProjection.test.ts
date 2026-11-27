@@ -1588,7 +1588,7 @@ describe("bounded coding safe-activity projection", () => {
   // Owner decision 2026-10-30 (#3907 F3): Stop and takeover used to purge the feed, so a stopped
   // run lost every tool row while standalone OpenCode keeps an aborted session's steps. The feed now
   // stays; only the calls still open settle as cancelled, as OpenCode marks them aborted.
-  it.each(["stop", "takeover"] as const)(
+  it.each(["stop", "takeover", "run-ended"] as const)(
     "keeps the tool rows on %s and settles only the open calls as cancelled",
     (reason) => {
       const activityLog = createBufferedServerLogSink();
