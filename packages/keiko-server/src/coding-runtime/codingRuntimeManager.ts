@@ -1472,6 +1472,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active: ActiveRuntime,
     failureCode: CodingRuntimeFailureCode,
   ): Promise<CodingRuntimeStartResult> {
+    const observed = failure(failureCode, codexRetryable(failureCode));
+    const folded = await this.exitTeardownFailure(active, observed);
+    if (folded !== undefined) {
+      return folded.failureCode === "runtime-reap-unproven"
+        ? folded
+        : this.recordLaunchFailure(request, folded);
+    }
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
@@ -1481,10 +1488,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     active.status = "stopped";
     if (this.active === active) this.active = undefined;
-    return this.recordLaunchFailure(
-      request,
-      failure(failureCode, failureCode === "start-aborted" || failureCode === "start-timeout"),
-    );
+    return this.recordLaunchFailure(request, failure(failureCode, codexRetryable(failureCode)));
   }
 
   private async completeOpenCodeStart(
@@ -1505,12 +1509,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.startupOutput?.close();
     active.startupOutput = undefined;
     active.stdoutParser = undefined;
-    if (
-      handshakeFailure === undefined &&
-      this.active === active &&
-      !active.stopRequested &&
-      active.status === "starting"
-    ) {
+    if (handshakeFailure === undefined && this.startStillOwned(active)) {
       active.status = "ready";
       this.startLifecycleMonitor(active);
       this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
@@ -1519,6 +1518,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (handshakeFailure === undefined || this.active !== active) {
       return refusedLaunchFailure(active, failure("runtime-crashed", false));
     }
+    const folded = await this.exitTeardownFailure(active, handshakeFailure);
+    if (folded !== undefined) return folded;
     active.stopRequested = true;
     active.status = "stopping";
     const receipt = await this.revokeAndTerminate(active);
@@ -1529,6 +1530,25 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.status = "stopped";
     this.active = undefined;
     return refusedLaunchFailure(active, handshakeFailure);
+  }
+
+  // The runtime's exit already started its own teardown (handleExit publishes it on `stopPromise`).
+  // A start failure that arrives while it runs (the closed stdout rejects the handshake before the
+  // exit is known on a real host) folds onto it: a second reap would find the tree no longer
+  // supervisor-owned and read as unproven, and the supervisor's refusal would lose to it.
+  private startStillOwned(active: ActiveRuntime): boolean {
+    return this.active === active && !active.stopRequested && active.status === "starting";
+  }
+
+  private async exitTeardownFailure(
+    active: ActiveRuntime,
+    observed: FailureResult,
+  ): Promise<FailureResult | undefined> {
+    const outcome = active.tearingDown ? await active.stopPromise : undefined;
+    if (outcome === undefined) return undefined;
+    return outcome.ok
+      ? refusedLaunchFailure(active, observed)
+      : failure("runtime-reap-unproven", false);
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
@@ -3035,6 +3055,10 @@ function isLoopbackUrl(raw: string): boolean {
   } catch {
     return false;
   }
+}
+
+function codexRetryable(code: CodingRuntimeFailureCode): boolean {
+  return code === "start-aborted" || code === "start-timeout";
 }
 
 function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureResult {

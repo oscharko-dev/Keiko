@@ -1498,7 +1498,10 @@ Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervis
     refusal 18 settles the run with `runtime-supervisor-no-desktop` and names
     `supervisor-no-desktop` on the `coding-runtime.exit` line (`codingRuntimeManager.test.ts`),
     and the Workbench words that code as a signed-in desktop session
-    (`codingWorkbenchLabels.test.ts`). `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
+    (`codingWorkbenchLabels.test.ts`). The same test pins the host's real ordering, where the closed
+    stdout fails the handshake while the exit's own teardown is still reaping: the start folds onto
+    that teardown (one reap, proven because nothing was created) and the refusal, not
+    `runtime-reap-unproven`, settles the run. `nativeRuntimeProcessTree.refusal-codes.test.ts` reads every
     `error_code` of `keiko_runtime_supervisor.c` and fails when one lacks its own word, shares a
     word, or does not reach a run failure code the Workbench can word. The profile sweep's counts are
     pinned from the launch response (`nativeRuntimeProcessBackend.windows-grants.test.ts`) and the
