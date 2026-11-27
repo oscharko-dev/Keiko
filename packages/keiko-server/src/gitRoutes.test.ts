@@ -427,6 +427,32 @@ describe("GET /api/git/status", () => {
     expect(JSON.stringify(second)).not.toContain("second");
   });
 
+  // PR #4568 audit pin: the raw listing names every index entry whatever the person's diff
+  // configuration hides, so a submodule pointer staged again moves the digest even with
+  // diff.ignoreSubmodules=all.
+  it("moves the staged digest for a staged submodule pointer the diff configuration hides", async () => {
+    const read = async (): Promise<Record<string, unknown>> =>
+      (
+        await handleGitStatus(
+          ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+          deps(defaultGitProcessRunner),
+        )
+      ).body as Record<string, unknown>;
+    await runRealGit(["init", "--quiet"]);
+    await runRealGit(["config", "diff.ignoreSubmodules", "all"]);
+    await writeFile(join(root, "a.md"), "first");
+    await runRealGit(["add", "a.md"]);
+    const pointer = (oid: string): Promise<unknown> =>
+      runRealGit(["update-index", "--add", "--cacheinfo", `160000,${oid},vendor`]);
+    await pointer("1".repeat(40));
+    const first = await read();
+    await pointer("2".repeat(40));
+    const second = await read();
+    expect(first.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(second.stagedDigest).not.toBe(first.stagedDigest);
+  });
+
   // PR #4568 audit: a folder-scoped status shows no staged change outside its folder, yet a commit
   // takes the whole index, so the digest still names what is staged there.
   it("names the staged digest of the whole index in a status scoped to a folder", async () => {

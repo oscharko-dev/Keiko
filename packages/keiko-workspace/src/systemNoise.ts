@@ -26,10 +26,17 @@ const ANY_DEPTH_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * Registry hive files of a user profile (`NTUSER.DAT`, `ntuser.dat.LOG1`, the
- * `NTUSER.DAT{guid}.TM.blf` transaction logs). Always locked while the person is signed in. The
- * prefix ends in `dat`, so a person's own `ntuser.notes.md` stays searchable.
+ * `NTUSER.DAT{guid}.TM.blf` transaction logs). Always locked while the person is signed in. Only
+ * the hive name itself or the hive name followed by `.` or `{` matches, so a person's own
+ * `ntuser.notes.md` or `ntuser.database.md` stays searchable.
  */
-const ANY_DEPTH_SYSTEM_NOISE_PREFIX = "ntuser.dat";
+const PROFILE_HIVE_NAME = "ntuser.dat";
+
+function isProfileHiveFile(lower: string): boolean {
+  if (!lower.startsWith(PROFILE_HIVE_NAME)) return false;
+  const next = lower.charAt(PROFILE_HIVE_NAME.length);
+  return next === "" || next === "." || next === "{";
+}
 
 /** The other profile files beside the hives: logon-script settings and the policy cache. */
 const PROFILE_SYSTEM_NOISE_NAMES: ReadonlySet<string> = new Set(["ntuser.ini", "ntuser.pol"]);
@@ -80,7 +87,7 @@ export function isSystemNoiseEntry(name: string, context: SystemNoiseEntryContex
   if (
     ANY_DEPTH_SYSTEM_NOISE_NAMES.has(lower) ||
     PROFILE_SYSTEM_NOISE_NAMES.has(lower) ||
-    lower.startsWith(ANY_DEPTH_SYSTEM_NOISE_PREFIX)
+    isProfileHiveFile(lower)
   ) {
     return true;
   }

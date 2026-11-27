@@ -216,8 +216,8 @@ function spelledBelowRuntimeRoot(
 /**
  * The UI process keeps its data out of the folder it starts in, apart from that folder's `.keiko`
  * ("KEIKO_UI_DATA_DIR must not be inside the current workspace"), and its data lives in the state
- * directory unless `KEIKO_UI_DATA_DIR` names another one. A state directory inside the start folder
- * was refused by the UI process only after `keiko start` had spawned it, so the launcher could report
+ * directory unless `KEIKO_UI_DATA_DIR` names another one, which must then be absolute and free of NUL bytes. A data folder
+ * it refuses was refused only after `keiko start` had spawned it, so the launcher could report
  * nothing but "Keiko stopped while it was starting", and every retry failed the same way (#4491).
  * It is refused here, with its reason, before anything starts.
  */
@@ -227,12 +227,20 @@ export function assertStateDirOutsideStartFolder(
   env: EnvSource,
 ): void {
   const uiDataDir = env.KEIKO_UI_DATA_DIR;
-  if (typeof uiDataDir === "string" && uiDataDir.length > 0) return;
-  if (spelledBelowRuntimeRoot(cwd, stateDir, process.platform)) return;
+  const named = typeof uiDataDir === "string" && uiDataDir.length > 0;
+  const dataDir = named ? uiDataDir : stateDir;
+  const label = named ? "KEIKO_UI_DATA_DIR" : "the state directory";
+  if (!isAbsolute(dataDir) || dataDir.includes("\0")) {
+    throw new LauncherError(
+      "UI_DATA_DIR_INVALID",
+      `keiko: ${label} must be an absolute path without NUL bytes; refusing to proceed.`,
+    );
+  }
+  if (spelledBelowRuntimeRoot(cwd, dataDir, process.platform)) return;
   if (
     !stateDirInsideStartFolder(
       resolveWithExistingAncestor(cwd),
-      resolveWithExistingAncestor(stateDir),
+      resolveWithExistingAncestor(dataDir),
       process.platform,
     )
   ) {
@@ -240,8 +248,17 @@ export function assertStateDirOutsideStartFolder(
   }
   throw new LauncherError(
     "STATE_DIR_IN_START_FOLDER",
-    `keiko: the state directory lies inside the folder Keiko starts from, where Keiko keeps no data. Choose a folder outside it, or its ${DEFAULT_STATE_DIR_NAME} folder; refusing to proceed.`,
+    `keiko: ${label} lies inside the folder Keiko starts from, where Keiko keeps no data. Choose a folder outside it, or its ${DEFAULT_STATE_DIR_NAME} folder; refusing to proceed.`,
   );
+}
+
+/** The closed launch failure reason of a placement refusal, or undefined for any other error. */
+export function placementRefusalReason(
+  code: string,
+): "state-dir-in-start-folder" | "state-dir" | undefined {
+  if (code === "STATE_DIR_IN_START_FOLDER") return "state-dir-in-start-folder";
+  if (code === "UI_DATA_DIR_INVALID") return "state-dir";
+  return undefined;
 }
 
 function explicitStateDirSource(

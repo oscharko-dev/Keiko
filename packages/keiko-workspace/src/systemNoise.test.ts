@@ -16,6 +16,8 @@ describe("Windows system noise (#4437)", () => {
     "ehthumbs_vista.db",
     "NTUSER.DAT",
     "ntuser.dat.LOG1",
+    "NTUSER.DAT",
+    "NTUSER.DAT{016888bd-6c6f-11de-8d1d-001e0bcde3ec}.TM.blf",
     "ntuser.ini",
     "NTUSER.POL",
     "NTUSER.DAT{53b39e88-18c4-11ea-a811-000d3aa4692b}.TM.blf",
@@ -69,6 +71,8 @@ describe("Windows system noise (#4437)", () => {
     // A person's own files that only start like a profile file (#4483 audit).
     "ntuser.notes.md",
     "NTUSER.txt",
+    "ntuser.database.md",
+    "ntuser.data",
     "",
     ".",
     "..",

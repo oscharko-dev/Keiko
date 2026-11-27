@@ -85,6 +85,7 @@ import {
   removeStaleShutdownRequest,
   removePidFileIfMatches,
   assertStateDirOutsideStartFolder,
+  placementRefusalReason,
   resolveContainedStateDir,
   writeExclusivePidFile,
   writeBrowserOpenRequest,
@@ -1529,8 +1530,10 @@ function stateDirPlacementRefused(
     return false;
   } catch (e) {
     if (!(e instanceof LauncherError)) throw e;
+    const reason = placementRefusalReason(e.code);
+    if (reason === undefined) throw e;
     io.err(`${e.message}\n`);
-    startFailed(deps, "state-dir-in-start-folder");
+    startFailed(deps, reason);
     return true;
   }
 }
@@ -2038,9 +2041,8 @@ function refusedAtParse(
   recordFailure: LifecycleRuntimeDeps["recordFailure"],
 ): number {
   io.err(outcome.message);
-  if (outcome.code === "STATE_DIR_IN_START_FOLDER") {
-    startFailed({ recordFailure }, "state-dir-in-start-folder");
-  }
+  const reason = placementRefusalReason(outcome.code);
+  if (reason !== undefined) startFailed({ recordFailure }, reason);
   return 1;
 }
 

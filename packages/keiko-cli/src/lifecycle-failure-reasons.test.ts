@@ -140,6 +140,44 @@ describe("every non-zero exit of a start records its closed reason", () => {
     expect(result.err).toContain("inside the folder Keiko starts from");
   });
 
+  it("state-dir-in-start-folder: a KEIKO_UI_DATA_DIR inside the start folder", async () => {
+    const root = makeRoot();
+    const result = await start(
+      root,
+      [],
+      {
+        homedir: () => root,
+        spawnFn: () => {
+          throw new Error("must not spawn");
+        },
+      },
+      { KEIKO_UI_DATA_DIR: join(root, "ui") },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.reasons).toEqual(["state-dir-in-start-folder"]);
+    expect(result.err).toContain("KEIKO_UI_DATA_DIR lies inside the folder Keiko starts from");
+  });
+
+  it("state-dir: a relative KEIKO_UI_DATA_DIR the UI process would refuse", async () => {
+    const root = makeRoot();
+    const result = await start(
+      root,
+      [],
+      {
+        homedir: () => root,
+        spawnFn: () => {
+          throw new Error("must not spawn");
+        },
+      },
+      { KEIKO_UI_DATA_DIR: "ui" },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.reasons).toEqual(["state-dir"]);
+    expect(result.err).toContain("KEIKO_UI_DATA_DIR must be an absolute path without NUL bytes");
+  });
+
   it("state-dir-in-start-folder: a restart records the refusal before stopping anything", async () => {
     const root = makeRoot();
     const reasons: LaunchFailureReason[] = [];

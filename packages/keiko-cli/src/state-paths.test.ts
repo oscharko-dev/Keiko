@@ -848,6 +848,32 @@ describe("assertStateDirOutsideStartFolder (#4491)", () => {
       });
     }).not.toThrow();
   });
+
+  it("refuses a KEIKO_UI_DATA_DIR the UI process would refuse, before anything starts", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "keiko-start-folder-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-state-elsewhere-"));
+    expect(() => {
+      assertStateDirOutsideStartFolder(outside, outside, { KEIKO_UI_DATA_DIR: join(cwd, "ui") });
+    }).not.toThrow();
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: join(cwd, "ui") });
+    }).toThrow(/KEIKO_UI_DATA_DIR lies inside the folder Keiko starts from/u);
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, {
+        KEIKO_UI_DATA_DIR: join(cwd, DEFAULT_STATE_DIR_NAME, "ui"),
+      });
+    }).not.toThrow();
+    let refusal: unknown;
+    try {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: "ui" });
+    } catch (e) {
+      refusal = e;
+    }
+    expect(refusal).toMatchObject({ code: "UI_DATA_DIR_INVALID" });
+    expect(() => {
+      assertStateDirOutsideStartFolder(cwd, outside, { KEIKO_UI_DATA_DIR: `${outside}\0/ui` });
+    }).toThrow(/KEIKO_UI_DATA_DIR must be an absolute path without NUL bytes/u);
+  });
 });
 
 describe("the start-folder placement follows the UI process's containment (#4491)", () => {

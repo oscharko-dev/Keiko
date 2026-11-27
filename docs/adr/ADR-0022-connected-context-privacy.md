@@ -875,7 +875,7 @@ Activity Log records the closed failure kind and request correlation without exp
 Windows system noise is pruned while descending, never by the security tier (#4437,
 `packages/keiko-workspace/src/systemNoise.ts`). At any depth these names are pruned
 case-insensitively: `$Recycle.Bin`, `System Volume Information`, `desktop.ini`, `Thumbs.db`,
-`ehthumbs.db`, `ehthumbs_vista.db`, the profile registry hives (`ntuser.dat*`) and the profile files
+`ehthumbs.db`, `ehthumbs_vista.db`, the profile registry hives (`ntuser.dat`, `ntuser.dat.*`, `ntuser.dat{*`) and the profile files
 `ntuser.ini` and `ntuser.pol`. Directly below a connected drive root (`C:\`) the legacy recycle bins
 `RECYCLER` and `RECYCLED` and the operating-system folders and files `Windows`, `Windows.old`, `$Windows.~BT`, `$Windows.~WS`, `$WinREAgent`, `$GetCurrent`,
 `$SysReset`, `Config.Msi`, `PerfLogs`, `Recovery`, `pagefile.sys`, `hiberfil.sys`,
