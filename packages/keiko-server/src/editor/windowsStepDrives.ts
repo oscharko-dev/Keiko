@@ -221,7 +221,8 @@ export function nodeWindowsDriveHost(env: NodeJS.ProcessEnv): WindowsDriveHost {
 /**
  * The drive host over a `subst` runner. A letter subst reported but Windows does not show is not the
  * step's, so its mapping is removed again; otherwise it would stay defined in the logon session with
- * no step recording it.
+ * no step recording it. A letter subst refused is never removed: the refusal usually means another
+ * mapping took the letter since the pool was read, and that mapping belongs to the person.
  */
 export function substDriveHost(
   subst: (args: readonly string[]) => boolean,

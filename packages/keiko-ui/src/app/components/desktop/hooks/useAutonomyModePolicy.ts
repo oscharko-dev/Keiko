@@ -55,12 +55,12 @@ function reportPersistFailure(
   return { kind: "failure" };
 }
 
-async function persistBeforeDeadline(
-  persist: PersistAutonomyMode,
-  mode: CodingWorkbenchMode,
-  expectedRevision: number,
+// Every request of a save runs against the same deadline, so a stalled request cannot hold the
+// queue: later intents would otherwise wait behind it with no error shown.
+async function beforeDeadline<T>(
+  work: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
-): Promise<MemoryAutonomyPolicyWire> {
+): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject): void => {
@@ -71,10 +71,19 @@ async function persistBeforeDeadline(
     }, timeoutMs);
   });
   try {
-    return await Promise.race([persist(mode, expectedRevision, controller.signal), deadline]);
+    return await Promise.race([work(controller.signal), deadline]);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
+}
+
+function persistBeforeDeadline(
+  persist: PersistAutonomyMode,
+  mode: CodingWorkbenchMode,
+  expectedRevision: number,
+  timeoutMs: number,
+): Promise<MemoryAutonomyPolicyWire> {
+  return beforeDeadline((signal) => persist(mode, expectedRevision, signal), timeoutMs);
 }
 
 async function settlePersistence(
@@ -104,7 +113,7 @@ async function persistAgainstCurrentRevision(
   timeoutMs: number,
 ): Promise<PersistenceOutcome> {
   try {
-    const current = await reload();
+    const current = await beforeDeadline(() => reload(), timeoutMs);
     if (Number.isSafeInteger(current.revision)) latestServerRevision = current.revision;
     const policy = await persistBeforeDeadline(persist, mode, latestServerRevision, timeoutMs);
     observeServerRevision(policy);

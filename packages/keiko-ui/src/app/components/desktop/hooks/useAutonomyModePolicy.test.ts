@@ -315,6 +315,37 @@ describe("useAutonomyModePolicy", (): void => {
     );
   });
 
+  it("frees the intent queue when the re-read after a conflict stalls", async (): Promise<void> => {
+    let loads = 0;
+    const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
+      ++loads === 1
+        ? Promise.resolve(policy("governed-assist", 3))
+        : new Promise<MemoryAutonomyPolicyWire>(() => undefined),
+    );
+    const persist = vi.fn(
+      (mode: CodingWorkbenchMode, expectedRevision: number): Promise<MemoryAutonomyPolicyWire> =>
+        mode === "supervised-coding"
+          ? Promise.reject(conflict())
+          : Promise.resolve(policy(mode, expectedRevision + 1)),
+    );
+    const view = renderHook((): AutonomyModePolicy =>
+      useAutonomyModePolicy({ load, persist, persistTimeoutMs: 10 }),
+    );
+    await waitFor((): void => expect(view.result.current.pending).toBe(false));
+
+    act((): void => view.result.current.change("supervised-coding"));
+    act((): void => view.result.current.change("autonomous-delivery"));
+
+    await waitFor((): void =>
+      expect(view.result.current.requestedMode).toBe("autonomous-delivery"),
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Autonomy mode save failed (after-reread attempt).",
+      expect.objectContaining({ errorKind: expect.any(String) }),
+    );
+  });
+
   it("does not save again after a failure that is not a revision conflict", async (): Promise<void> => {
     const load = vi.fn((): Promise<MemoryAutonomyPolicyWire> =>
       Promise.resolve(policy("governed-assist", 3)),
