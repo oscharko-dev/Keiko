@@ -2560,6 +2560,23 @@ describe("status total change count (#4491 U-7)", () => {
     expect(status.totalChanges).toBe(total);
   });
 
+  it("omits the total when git's output was cut by the byte cap", () => {
+    const records = [
+      "## main",
+      ...Array.from({ length: DEFAULT_MAX_CHANGES + 100 }, (_, i) => `?? src/f-${String(i)}.ts`),
+    ];
+    const status = parseStatus(
+      `${records.join("\0")}\0`,
+      "/repo",
+      "/repo",
+      "",
+      DEFAULT_MAX_CHANGES,
+      true,
+    );
+    expect(status.truncated).toBe(true);
+    expect(status).not.toHaveProperty("totalChanges");
+  });
+
   it("reports the listed count as the total when nothing is cut", () => {
     const status = parseStatus("## main\0 M a.ts\0?? b.ts\0", "/repo", "/repo", "", 10, false);
     expect(status.truncated).toBe(false);

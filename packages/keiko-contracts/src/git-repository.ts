@@ -169,8 +169,8 @@ export interface GitRepositoryStatusResponse {
   readonly maxChanges: number;
   /**
    * The exact number of changed files Git listed, counted past `maxChanges`, so a bounded list can
-   * say how many it left out. When the Git run itself was cut short (`truncated` with a listing no
-   * longer than `maxChanges`) it is only a lower bound. Absent on responses from older servers.
+   * say how many it left out. Absent when Git's own output was cut short (the total is then
+   * unknown) and on responses from older servers.
    */
   readonly totalChanges?: number | undefined;
 }

@@ -665,7 +665,8 @@ export function parseStatus(
       collected.scopedChangeCount,
     ),
     maxChanges,
-    totalChanges: collected.scopedChangeCount,
+    // A byte-cut listing proves only the records it shows: the total is unknown, never a count.
+    ...(processTruncated ? {} : { totalChanges: collected.scopedChangeCount }),
   };
 }
 

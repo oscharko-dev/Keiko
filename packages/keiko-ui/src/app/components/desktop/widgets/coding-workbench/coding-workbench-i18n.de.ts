@@ -746,7 +746,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.changedFiles": "{count} geänderte Dateien",
   "codingWorkbench.changes.changedFiles.one": "1 geänderte Datei",
   "codingWorkbench.changes.changedFilesShowing":
-    "Die ersten {count} von {total} geänderten Dateien werden angezeigt",
+    "{count} von {total} geänderten Dateien werden angezeigt",
   "codingWorkbench.changes.virtualInstructions":
     "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.changes.filesTruncated":

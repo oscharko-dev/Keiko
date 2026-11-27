@@ -712,8 +712,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
   "codingWorkbench.changes.changedFiles": "{count} changed files",
   "codingWorkbench.changes.changedFiles.one": "1 changed file",
-  "codingWorkbench.changes.changedFilesShowing":
-    "Showing the first {count} of {total} changed files",
+  "codingWorkbench.changes.changedFilesShowing": "Showing {count} of {total} changed files",
   "codingWorkbench.changes.virtualInstructions":
     "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.changes.filesTruncated":
