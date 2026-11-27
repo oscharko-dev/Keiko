@@ -654,6 +654,42 @@ function nextWorkspaceZ(list: readonly AppWindow[], zc: MutateArgs["zc"]): numbe
   return zc.current;
 }
 
+/** A visible window is frontmost when no other visible window sits above it. */
+export function isFrontmostWindow(list: readonly AppWindow[], target: AppWindow): boolean {
+  if (target.minimized === true) return false;
+  return list.every((w) => w.minimized === true || w.id === target.id || w.z < target.z);
+}
+
+/**
+ * Launcher click on a tool whose window exists. Minimized: restore and raise. Behind another
+ * window: raise only. Frontmost: minimize rather than close, so an unsent prompt or draft held in
+ * the window is never lost to a mis-click; the next click restores it.
+ */
+/** True when the panel's window is open (not minimized) but another visible window sits above it. */
+export function panelIsBehindAnotherWindow(
+  wins: readonly AppWindow[] | null,
+  panel: WindowType,
+): boolean {
+  const existing = wins?.find((w) => w.type === panel);
+  return (
+    existing !== undefined &&
+    existing.minimized !== true &&
+    !isFrontmostWindow(wins ?? [], existing)
+  );
+}
+
+function toggleExistingTool(
+  list: readonly AppWindow[],
+  existing: AppWindow,
+  zc: MutateArgs["zc"],
+): AppWindow[] {
+  if (existing.minimized !== true && isFrontmostWindow(list, existing)) {
+    return list.map((w) => (w.id === existing.id ? { ...w, minimized: true } : w));
+  }
+  const nextZ = nextWorkspaceZ(list, zc);
+  return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
+}
+
 function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
@@ -673,13 +709,7 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (vp === null) return ws;
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
-      if (existing?.minimized === true) {
-        const nextZ = nextWorkspaceZ(list, zc);
-        return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
-      }
-      if (existing !== undefined) {
-        return list.filter((w) => w.type !== type);
-      }
+      if (existing !== undefined) return toggleExistingTool(list, existing, zc);
       if (list.length >= MAX_WORKSPACE_WINDOWS) {
         windowLimitReached = true;
         return list;

@@ -46,6 +46,7 @@ import {
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   toggleWorkspaceSelection,
+  panelIsBehindAnotherWindow,
   totalSourceCap,
 } from "./workspaceActions";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
@@ -2575,7 +2576,7 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     });
   });
 
-  it("opens one Local Knowledge tool window and closes it on the next toggle", () => {
+  it("opens one Local Knowledge tool window and minimizes it (never closes it) on the next toggle", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -2590,7 +2591,61 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(1);
 
     toggleTool("localKnowledge");
-    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+    expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(1);
+    expect(wins?.find((w) => w.type === "localKnowledge")?.minimized).toBe(true);
+
+    toggleTool("localKnowledge");
+    expect(wins?.find((w) => w.type === "localKnowledge")?.minimized).toBe(false);
+  });
+
+  it("raises an open window that sits behind another window instead of removing it", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 },
+    ];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 5 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("governedGit");
+
+    expect(wins).toHaveLength(2);
+    expect(wins?.find((w) => w.id === "governedGit")).toMatchObject({ z: 6 });
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).not.toBe(true);
+  });
+
+  it("reports only an open window beneath a visible one as behind another window", () => {
+    const back = { ...win("governedGit", {}, "governedGit"), z: 1 };
+    const front = { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 };
+    expect(panelIsBehindAnotherWindow([back, front], "governedGit")).toBe(true);
+    expect(panelIsBehindAnotherWindow([back, front], "chat")).toBe(false);
+    expect(panelIsBehindAnotherWindow([{ ...back, minimized: true }, front], "governedGit")).toBe(
+      false,
+    );
+    expect(panelIsBehindAnotherWindow(null, "governedGit")).toBe(false);
+  });
+
+  it("treats a window beneath only minimized windows as frontmost and minimizes it", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 9, minimized: true },
+    ];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 9 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("governedGit");
+
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    expect(wins).toHaveLength(2);
   });
 
   it("does not open a tool beyond the workspace-wide window limit", () => {

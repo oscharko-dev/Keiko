@@ -53,6 +53,7 @@ import {
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   totalSourceCap,
+  panelIsBehindAnotherWindow,
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
 import {
@@ -473,6 +474,14 @@ function reopenGitRoot(
     );
   }
   return decision.root;
+}
+
+function pushPanelToggleUnlessRaised(
+  undoStack: WorkspaceUndoStackApi,
+  raisedOnly: boolean,
+  action: WorkspaceUiAction,
+): void {
+  if (!raisedOnly) undoStack.push(action);
 }
 
 function openShellTool(
@@ -3112,7 +3121,9 @@ function AppShellInner(): ReactNode {
           : reopenGitRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
       }
       openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
-      undoStack.push({
+      // An open window behind another one is only raised: nothing opened or closed, so there is
+      // nothing for undo to reverse.
+      pushPanelToggleUnlessRaised(undoStack, panelIsBehindAnotherWindow(ws.wins, panel), {
         kind: "ui.panel.toggle",
         panel,
         before,
