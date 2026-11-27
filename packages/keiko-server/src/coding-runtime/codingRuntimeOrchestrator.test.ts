@@ -2088,7 +2088,7 @@ describe("CodingRuntimeOrchestrator", () => {
     },
   );
 
-  async function startUnboundRun() {
+  async function startUnboundRun(runId = "run-1") {
     const captured = captureActivityLog();
     const verifiedCommits = new Map<string, VerifiedCommitResult>();
     const f = fixture(
@@ -2100,6 +2100,7 @@ describe("CodingRuntimeOrchestrator", () => {
       undefined,
       undefined,
       verifiedCommits,
+      runId === "run-1" ? undefined : () => runId,
     );
     let finish: ((outcome: "succeeded") => void) | undefined;
     const completion = new Promise<"succeeded">((resolve) => {
@@ -2107,19 +2108,25 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
     await f.orchestrator.start(start);
-    const row = f.rows.get("run-1");
+    const row = f.rows.get(runId);
     if (row === undefined) throw new Error("expected the started run row");
     const { issueBindingDigest: _issue, ...refused } = historicalVerifiedCommit(row);
     const { headSha: _head, committedTreeDigest: _tree, ...uncommitted } = refused;
-    f.rows.set("run-1", {
-      ...row,
-      verifiedCommitResult: {
-        ...uncommitted,
-        status: "approval-required",
-        reason: "approval-required",
-      },
-    });
-    return { f, captured, verifiedCommits, finish: () => finish?.("succeeded") };
+    const propose = (status: "approval-required" | "blocked", proposalId: string): void => {
+      const current = f.rows.get(runId);
+      if (current === undefined) throw new Error("expected the run row");
+      f.rows.set(runId, {
+        ...current,
+        verifiedCommitResult: {
+          ...uncommitted,
+          proposalId,
+          status,
+          reason: status === "blocked" ? "review-incomplete" : "approval-required",
+        },
+      });
+    };
+    propose("approval-required", "commit-4491");
+    return { f, captured, verifiedCommits, propose, finish: () => finish?.("succeeded") };
   }
 
   it("asks for recovery when the delivery evidence of a run without an issue is unreadable", async () => {
@@ -2137,12 +2144,12 @@ describe("CodingRuntimeOrchestrator", () => {
 
   it("keeps a run succeeded when the person denied its commit proposal", async () => {
     const { f, finish } = await startUnboundRun();
-    const asked = await f.orchestrator.ingest(deliveryPermission("commit-denied", "commit"));
+    const asked = await f.orchestrator.ingest(deliveryPermission("commit-4491", "commit"));
     expect(successfulSnapshot(asked).state).toBe("awaiting-approval");
     expect(
       (
         await f.orchestrator.decideApproval("run-1", {
-          requestId: "commit-denied",
+          requestId: "commit-4491",
           decision: "denied",
           expectedRevision: successfulSnapshot(asked).revision,
         })
@@ -2157,13 +2164,47 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBeUndefined();
   });
 
-  it("logs the unevidenced delivery of a run without an issue without an issue number", async () => {
-    const { f, captured, finish } = await startUnboundRun();
+  it("settles a run failed when its commit proposal was refused by the approval queue bound", async () => {
+    const { f, finish } = await startUnboundRun();
+    await f.orchestrator.ingest(verificationPermission("permission-1"));
+    for (let index = 0; index < MAX_QUEUED_APPROVALS_PER_RUN; index += 1) {
+      await f.orchestrator.ingest(verificationPermission(`permission-${String(index + 2)}`));
+    }
+    await f.orchestrator.ingest(deliveryPermission("commit-4491", "commit"));
 
     finish();
 
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+  });
+
+  it("settles truthfully when the model proposes a new commit after the person's denial", async () => {
+    const { f, propose, finish } = await startUnboundRun();
+    const asked = await f.orchestrator.ingest(deliveryPermission("commit-4491", "commit"));
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "commit-4491",
+      decision: "denied",
+      expectedRevision: successfulSnapshot(asked).revision,
+    });
+    propose("blocked", "commit-4492");
+
+    finish();
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    });
+  });
+
+  it("logs the unevidenced delivery of a run without an issue without an issue number", async () => {
+    const runId = "run-unevidenced-0001";
+    const { f, captured, finish } = await startUnboundRun(runId);
+
+    finish();
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(runId)?.failureCode).toBe("delivery-not-evidenced");
     });
     const line = requireLoggedEvent(
       captured.records.find((event) => event.op === "coding-runtime.run.delivery-unevidenced"),
@@ -2172,9 +2213,9 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(line).toMatchObject({
       level: "warn",
       errorKind: "validation-failed",
-      extra: { runId: "run-1", hasVerifiedCommit: false, hasDraftDelivery: false },
+      extra: { runId, hasVerifiedCommit: false, hasDraftDelivery: false },
     });
-    expect(line.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(line.correlationId).toBe(runId);
     expect(line.extra).not.toHaveProperty("issueNumber");
   });
 

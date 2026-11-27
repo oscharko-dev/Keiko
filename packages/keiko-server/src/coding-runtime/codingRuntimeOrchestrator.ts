@@ -2235,9 +2235,9 @@ export class CodingRuntimeOrchestrator {
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
-  // Runs whose person explicitly denied a commit proposal: a deliberate "no" is not an unfinished
-  // delivery.
-  private readonly deniedCommitRuns = new Set<string>();
+  // The commit proposal a run's person explicitly denied: a deliberate "no" is not an unfinished
+  // delivery. It covers only that proposal, so a later proposal settles on its own outcome.
+  private readonly deniedCommitProposals = new Map<string, string>();
   private readonly verificationContinuations = new Map<string, number>();
   // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
   // settles.
@@ -2918,7 +2918,6 @@ export class CodingRuntimeOrchestrator {
     if (actionKind === "verification-command") {
       this.effort.verificationBlocked(runId, "verification-command-denied");
     }
-    if (actionKind === "commit") this.deniedCommitRuns.add(runId);
   }
 
   private finishApprovalDecision(
@@ -2927,7 +2926,12 @@ export class CodingRuntimeOrchestrator {
     decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"],
     actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
   ): CodingRuntimeOrchestratorResult {
-    if (decision === "denied") this.noteApprovalDenied(current.runId, actionKind);
+    if (decision === "denied") {
+      this.noteApprovalDenied(current.runId, actionKind);
+      // Only the person's own decision is a denial; the queue bound's refusal is the system's.
+      if (actionKind === "commit")
+        this.deniedCommitProposals.set(current.runId, challenge.permission.requestId);
+    }
     // A denial rejects this one step: the runtime already told the model, and the run goes on
     // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
     this.dropActiveApproval(current.runId);
@@ -4259,7 +4263,7 @@ export class CodingRuntimeOrchestrator {
     | undefined {
     const attempt = live.verifiedCommitResult;
     if (attempt === undefined || attempt.status === "succeeded") return target;
-    if (this.deniedCommitRuns.has(live.runId)) return target;
+    if (this.deniedCommitProposals.get(live.runId) === attempt.proposalId) return target;
     const evidence = this.deliveryEvidence(live);
     if (!evidence.readable) {
       this.recordDeliveryEvidenceUnreadable(live, evidence.error);
@@ -5906,7 +5910,7 @@ export class CodingRuntimeOrchestrator {
     // Every settlement ends a run's continuation budget, not only the task-settlement path: a
     // continued run that is stopped, taken over or moved to recovery must not keep its entry.
     this.deliveryContinuations.delete(next.runId);
-    this.deniedCommitRuns.delete(next.runId);
+    this.deniedCommitProposals.delete(next.runId);
     this.verificationContinuations.delete(next.runId);
     // Likewise its edit refusal streak and any escalation that has not settled it (F5).
     this.editRefusals.clear(next.runId);
