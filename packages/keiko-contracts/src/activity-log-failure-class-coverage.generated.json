@@ -39390,6 +39390,12 @@
               "required": true
             },
             {
+              "name": "proofAgeMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "proposalId",
               "type": "string",
               "dataClass": "opaque-id",
@@ -39485,6 +39491,7 @@
             "completeness-state",
             "count",
             "digest",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id",

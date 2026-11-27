@@ -33370,6 +33370,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      proofAgeMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       passed: {
         type: "boolean",
         dataClass: "closed-enum",

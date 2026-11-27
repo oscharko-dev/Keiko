@@ -381,8 +381,13 @@ human-decision wait and a longer one is not honored, so the card deadline, the c
 the minted approval TTL are one instant. The same wait is the lifetime of every governed Git
 proposal (stage, commit, draft delivery) and the default of both approval stores (W-6: a 5-minute
 ask lost a run's commit after the person stepped away). `coding-runtime.approval.waiting` records
-`expiresInMs`. A verification's freshness for a commit proposal remains 5 minutes, since it is a
-proof age and not a human wait.
+`expiresInMs`. A verification's proof for a commit proposal is bound to its candidate by content
+(head, base, staged-tree digest, repository digest and the run context), not by the clock (V-2: a
+slow local model's turn took 6 minutes and a 5-minute wall-clock bound ended a healthy run as
+`verification-stale`). The same facts in the same run are as true after 6 or 59 minutes. Only a
+backstop remains: a proof older than the longest run (`MAX_RUNTIME_MAX_DURATION_MINUTES`, 480) is
+`verification-stale`. A changed candidate is `candidate-drift` and a different run context is
+`verification-stale`; both result lines carry `proofAgeMs`.
 
 The run's own wait on an approval ends at the same instant as the ask's
 (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in

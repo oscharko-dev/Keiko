@@ -1,4 +1,5 @@
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   readGitRawWorktreeSnapshotAtHead,
@@ -166,6 +167,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     untrackedCount: { type: "integer", dataClass: "count", required: false },
     verificationGeneration: { type: "integer", dataClass: "count", required: false },
     currentGeneration: { type: "integer", dataClass: "count", required: false },
+    proofAgeMs: { type: "integer", dataClass: "duration", required: false },
     passed: { type: "boolean", dataClass: "closed-enum", required: false },
     verificationEvidenceId: {
       type: "string",
@@ -263,6 +265,7 @@ type VerifiedCommitActivityPhase =
 interface VerifiedCommitActivityFields {
   readonly verificationGeneration?: number;
   readonly currentGeneration?: number;
+  readonly proofAgeMs?: number;
   readonly reason?: VerifiedCommitReason;
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
@@ -316,7 +319,16 @@ function failedVerificationCheckCount(report: VerificationReport): number {
   ).length;
 }
 
-const TTL_MS = 5 * 60 * 1000;
+// A verification proof is bound to its candidate by content (`sameVerifiedCommitFacts`, the run
+// context), not by the clock: the same facts in the same run are as true after 6 minutes as after
+// one, and a slow local model's turn can take longer than any short wall-clock bound (live defect
+// V-2). Only a backstop remains: no proof outlives the longest run the product allows.
+const VERIFICATION_PROOF_BACKSTOP_MS = MAX_RUNTIME_MAX_DURATION_MINUTES * 60 * 1000;
+
+function proofAgeExpired(startedAtMs: number, nowMs: number): boolean {
+  return nowMs - startedAtMs >= VERIFICATION_PROOF_BACKSTOP_MS;
+}
+
 interface VerificationTicket {
   readonly context: VerifiedCommitRunContext;
   readonly facts: VerifiedCommitFacts;
@@ -348,7 +360,7 @@ function verificationRejection(
   )
     return "verification-failed";
   if (!sameVerifiedCommitFacts(before.facts, after)) return "candidate-drift";
-  if (now - before.startedAtMs >= TTL_MS) return "verification-stale";
+  if (proofAgeExpired(before.startedAtMs, now)) return "verification-stale";
   return undefined;
 }
 
@@ -363,7 +375,7 @@ function failingEvidence(
     report.workspaceRoot === before.context.workspace.root &&
     commitVerificationReportFailed(report, before.startedAtMs, now) &&
     sameVerifiedCommitFacts(before.facts, after) &&
-    now - before.startedAtMs < TTL_MS
+    !proofAgeExpired(before.startedAtMs, now)
   );
 }
 
@@ -394,7 +406,7 @@ function untrackedEvidence(
     ran &&
     sameCommitCandidate(before.facts, after) &&
     (after.clean || untrackedOutsideCandidate(context, after)) &&
-    now - before.startedAtMs < TTL_MS
+    !proofAgeExpired(before.startedAtMs, now)
   );
 }
 
@@ -824,12 +836,40 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (verification === undefined) return this.recordMissingProof(context, binding, facts);
     if (!verification.passed && !this.admitsFailedVerification(verification))
       return this.record(context, binding, "verification-failed", "verification-failed");
-    if (
-      !contextMatches(context, verification.context) ||
-      !this.candidateCurrent(context, verification.facts, facts) ||
-      this.now() - verification.startedAtMs >= TTL_MS
-    )
-      return this.record(context, binding, "drift", "verification-stale");
+    const proofAgeMs = this.now() - verification.startedAtMs;
+    if (!contextMatches(context, verification.context))
+      return this.record(
+        context,
+        binding,
+        "drift",
+        "verification-stale",
+        undefined,
+        {},
+        {},
+        proofAgeMs,
+      );
+    if (!this.candidateCurrent(context, verification.facts, facts))
+      return this.record(
+        context,
+        binding,
+        "drift",
+        "candidate-drift",
+        undefined,
+        {},
+        {},
+        proofAgeMs,
+      );
+    if (proofAgeExpired(verification.startedAtMs, this.now()))
+      return this.record(
+        context,
+        binding,
+        "drift",
+        "verification-stale",
+        undefined,
+        {},
+        {},
+        proofAgeMs,
+      );
     const messagePolicy = await this.options.messageAllowed(message, context.workspace);
     if (!messagePolicyAllowed(messagePolicy))
       return this.record(
@@ -1269,6 +1309,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       | "messagePolicyMode"
       | "messagePolicySource"
     > = {},
+    proofAgeMs?: number,
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     if (!this.persist(context, binding, status, reason, result))
@@ -1279,6 +1320,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       reason,
       proposalId: binding.proposalId,
       stagedTreeDigest: binding.stagedTreeDigest,
+      ...(proofAgeMs === undefined ? {} : { proofAgeMs }),
       ...(result.violations === undefined
         ? {}
         : { violations: result.violations, violationCount: result.violations.length }),

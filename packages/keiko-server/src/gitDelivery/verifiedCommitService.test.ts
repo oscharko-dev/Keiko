@@ -1,3 +1,4 @@
+import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import {
@@ -1297,6 +1298,47 @@ describe("verified Code-task commit service", () => {
     now += GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS - 1;
     const approval = await claim(id);
     expect((await service.execute(id, approval))?.status).toBe("succeeded");
+  });
+  it.each([6, 59])(
+    "admits a commit on a proof recorded %i minutes earlier for unchanged facts (V-2)",
+    async (minutes) => {
+      const ticket = ticketOf(await service.beginVerification());
+      if (ticket === undefined) throw new Error("verification ticket unavailable");
+      expect(await service.completeVerification(ticket, report())).toBe(true);
+      now += minutes * 60_000;
+      expect(await service.propose("feat: slow model turn")).toMatchObject({
+        status: "approval-required",
+      });
+    },
+  );
+  it("still refuses a changed staged tree after a proof, as candidate-drift with the proof age", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    now += 6 * 60_000;
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(["add", "code.js"]);
+    expect(await service.propose("feat: changed after proof")).toMatchObject({
+      status: "drift",
+      reason: "candidate-drift",
+    });
+    const line = events.filter((event) => event.extra?.phase === "result").at(-1);
+    expect(line?.extra).toMatchObject({ reason: "candidate-drift", proofAgeMs: 6 * 60_000 });
+  });
+  it("retires a proof only at the longest run the product allows, naming its age", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    now += MAX_RUNTIME_MAX_DURATION_MINUTES * 60_000;
+    expect(await service.propose("feat: after the run limit")).toMatchObject({
+      status: "drift",
+      reason: "verification-stale",
+    });
+    const line = events.filter((event) => event.extra?.phase === "result").at(-1);
+    expect(line?.extra).toMatchObject({
+      reason: "verification-stale",
+      proofAgeMs: MAX_RUNTIME_MAX_DURATION_MINUTES * 60_000,
+    });
   });
   it("rejects expiry, revocation, and restart replay without resurrecting a claim", async () => {
     const id = await verifiedProposal();
