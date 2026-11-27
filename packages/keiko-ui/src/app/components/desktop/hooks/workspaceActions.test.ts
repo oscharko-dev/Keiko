@@ -2711,6 +2711,32 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(next).toBe(only);
   });
 
+  it("raises the background window after a minimize and restore cycle on the other launcher", () => {
+    let wins: AppWindow[] | null = [];
+    const winsRef: MutableRefObject<AppWindow[]> = { current: [] };
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+        winsRef.current = wins ?? [];
+      },
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+      winsRef,
+    });
+    const visible = (): string[] =>
+      (wins ?? []).filter((w) => w.minimized !== true).map((w) => w.type);
+
+    toggleTool("governedGit");
+    toggleTool("coding");
+    toggleTool("coding"); // frontmost: minimized
+    expect(visible()).toEqual(["governedGit"]);
+    toggleTool("coding"); // restored in front
+    expect(toggleTool("governedGit")).toBe("raise");
+    expect(visible().toSorted()).toEqual(["coding", "governedGit"]);
+    const z = (type: string): number => wins?.find((w) => w.type === type)?.z ?? 0;
+    expect(z("governedGit")).toBeGreaterThan(z("coding"));
+  });
+
   it("does not open a tool beyond the workspace-wide window limit", () => {
     let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
       win("files", {}, `files-${String(index)}`),
