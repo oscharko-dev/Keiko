@@ -171,7 +171,7 @@ import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
 import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
-import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
+import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
@@ -1752,16 +1752,7 @@ function WorkbenchColumns({
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
-  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
-  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
-  // worktree may have moved (native edits emit no runtime event of their own, #3897).
-  const journeyChanges = useCodingWorkbenchChanges({
-    root: liveWorkspaceRoot,
-    runId: state.run.value?.runId,
-    changeSignal: changesRefreshSignal(state.events, activity.feed),
-    bindingPending: workspaceBindingPending,
-    submittedRoot: runBoundRoot,
-  });
+  const changesSignal = changesRefreshSignal(state.events, activity.feed);
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
   // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.
@@ -1769,7 +1760,18 @@ function WorkbenchColumns({
     runId: state.run.value?.runId,
     live: REVERT_READ_STATES.has(state.run.value?.state ?? ""),
     revision: state.run.value?.revision,
-    changeSignal: changesRefreshSignal(state.events, activity.feed),
+    changeSignal: changesSignal,
+  });
+  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
+  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
+  // worktree may have moved (native edits emit no runtime event of their own, #3897), and when an undo or
+  // restore puts files back.
+  const journeyChanges = useCodingWorkbenchChanges({
+    root: liveWorkspaceRoot,
+    runId: state.run.value?.runId,
+    changeSignal: changesSignalWithUndo(changesSignal, revert.revert?.staged),
+    bindingPending: workspaceBindingPending,
+    submittedRoot: runBoundRoot,
   });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(

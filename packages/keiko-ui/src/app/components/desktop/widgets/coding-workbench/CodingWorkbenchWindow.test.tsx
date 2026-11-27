@@ -4291,6 +4291,22 @@ describe("CodingWorkbenchWindow", () => {
         await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
       },
     );
+
+    it("reads the Changes list again when an undo puts files back and when they are restored", async () => {
+      const newest = { staged: false, fileCount: 1, additions: 1, deletions: 1 };
+      revertHookMock.mockReturnValue({ revert: newest });
+      const feed = feedWithTools([{ tool: "edit", state: "succeeded" }]);
+      const run = mountRun(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(1));
+
+      revertHookMock.mockReturnValue({ revert: { ...newest, staged: true } });
+      run.rerenderWith(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+
+      revertHookMock.mockReturnValue({ revert: newest });
+      run.rerenderWith(feed);
+      await waitFor(() => expect(gitStatusMock).toHaveBeenCalledTimes(3), { timeout: 3_000 });
+    });
   });
 
   it("announces an unavailable authentication setup plan in the single live status", () => {
