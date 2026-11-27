@@ -599,6 +599,44 @@ describe("POST /api/task-workspaces/local", () => {
     });
   });
 
+  // U-3: selecting the checkout that already is the active workspace changes nothing, so it must
+  // not end the settled run's undo window (admission) nor purge its activity (selection).
+  it("leaves the held undo window and the activity alone when the checkout is already active", async () => {
+    const fixture = await localRouteFixture();
+    const first = (await (await postLocal()).json()) as {
+      readonly active: { readonly instance: { readonly workspaceId: string } };
+    };
+    fixture.admitWorkspaceSelection.mockClear();
+    fixture.selectLocal.mockClear();
+
+    const again = await postLocal();
+
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({
+      active: { instance: { workspaceId: first.active.instance.workspaceId } },
+    });
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+    expect(fixture.selectLocal).not.toHaveBeenCalled();
+
+    const switched = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: first.active.instance.workspaceId, requestedBy: "u" }),
+    });
+    expect(switched.status).toBe(200);
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+  });
+
+  it("still admits a selection of another branch of the active checkout", async () => {
+    const fixture = await localRouteFixture();
+    await postLocal();
+    fixture.admitWorkspaceSelection.mockClear();
+
+    await postLocal({ root: repoRoot, branch: "other-branch", requestedBy: "u" });
+
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledOnce();
+  });
+
   it("returns 503 when the lifecycle is unavailable", async () => {
     expect((await postLocal()).status).toBe(503);
   });

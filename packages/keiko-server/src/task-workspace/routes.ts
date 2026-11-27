@@ -443,6 +443,13 @@ export async function handleSetActiveTaskWorkspace(
       if (!selectableWorkspace(guard, workspaceId)) {
         throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
       }
+      const current = alreadyActiveWorkspace(guard, ctx, workspaceId, body.acquireLock === true);
+      if (current !== undefined) {
+        return {
+          status: 200,
+          body: redacted(deps, { instance: current.instance, binding: current.binding }),
+        };
+      }
       await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,
@@ -473,6 +480,44 @@ interface InPlaceSelection {
   readonly body: Record<string, unknown>;
   readonly realRoot: string;
   readonly requestedBy: string;
+  /** The selection names the workspace that is already active: nothing is admitted or changed. */
+  readonly current?: ActiveWorkspaceView;
+}
+
+/**
+ * The active view when the selection names the workspace that already is the active one: same
+ * root and kind and, for a Local checkout, the branch the live checkout stands on (the active read
+ * re-proves the checkout identity and branch). Selecting it again changes nothing, so it must not
+ * end the settled run's undo window or purge its activity (U-3).
+ */
+function alreadyActiveSelection(
+  active: ActiveWorkspaceView | undefined,
+  realRoot: string,
+  branch: string | undefined,
+): ActiveWorkspaceView | undefined {
+  if (active?.instance.repositoryRoot !== realRoot) return undefined;
+  const folder = active.instance.workspaceKind === "folder";
+  if (folder !== (branch === undefined)) return undefined;
+  return folder || active.instance.taskBranch === branch ? active : undefined;
+}
+
+/**
+ * The active view when a switch names the workspace that already is the active, running one:
+ * nothing changes, so no undo window ends and no activity is purged (U-3). A request that takes
+ * the workspace lock is never a repeat.
+ */
+function alreadyActiveWorkspace(
+  guard: WorkspaceLifecycleService,
+  ctx: RouteContext,
+  workspaceId: string,
+  acquireLock: boolean,
+): ActiveWorkspaceView | undefined {
+  if (acquireLock) return undefined;
+  const current = guard.getActive(ctx.correlationId);
+  return current?.instance.workspaceId === workspaceId &&
+    current.instance.lifecycleState === "active"
+    ? current
+    : undefined;
 }
 
 // Reads an in-place selection (Local checkout, folder) and admits it against the coding runtime.
@@ -481,11 +526,20 @@ interface InPlaceSelection {
 async function readInPlaceSelection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
+  guard: WorkspaceLifecycleService,
+  withBranch: boolean,
 ): Promise<InPlaceSelection> {
   const body = await readJsonObject(ctx.req);
   const root = requireSafeField(body.root, "root");
   const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
   const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const branch = withBranch ? requireSafeField(body.branch, "branch") : undefined;
+  const current = alreadyActiveSelection(
+    guard.getActive(ctx.correlationId),
+    resolved.realRoot,
+    branch,
+  );
+  if (current !== undefined) return { body, realRoot: resolved.realRoot, requestedBy, current };
   await admitWorkspaceSelection(deps);
   if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
@@ -511,7 +565,10 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const { body, realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
+      const selection = await readInPlaceSelection(ctx, deps, guard, true);
+      if (selection.current !== undefined)
+        return { status: 200, body: redacted(deps, { active: selection.current }) };
+      const { body, realRoot, requestedBy } = selection;
       const branch = requireSafeField(body.branch, "branch");
       let active: ActiveWorkspaceView;
       try {
@@ -554,7 +611,10 @@ export async function handleSelectFolderWorkspace(
       correlationId: ctx.correlationId,
     },
     async () => {
-      const { realRoot, requestedBy } = await readInPlaceSelection(ctx, deps);
+      const selection = await readInPlaceSelection(ctx, deps, guard, false);
+      if (selection.current !== undefined)
+        return { status: 200, body: redacted(deps, { active: selection.current }) };
+      const { realRoot, requestedBy } = selection;
       const active = selectFolder({
         root: realRoot,
         requestedBy,
