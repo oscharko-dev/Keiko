@@ -53,6 +53,7 @@ interface CapturedEditor {
 
 interface CapturedCompletionRegistration {
   readonly language: string;
+  readonly dispose: () => void;
   readonly provider: {
     readonly triggerCharacters?: readonly string[];
     provideCompletionItems: (
@@ -174,8 +175,9 @@ vi.mock("@monaco-editor/react", () => {
         language: string,
         provider: CapturedCompletionRegistration["provider"],
       ): { dispose: () => void } => {
-        captured.completion.push({ language, provider });
-        return { dispose: vi.fn() };
+        const dispose = vi.fn();
+        captured.completion.push({ language, provider, dispose });
+        return { dispose };
       },
       // Navigation/action/signature registration surface (#2104): registration/disposal only — the
       // provider bodies themselves are exercised at the bridge-unit level (definition-bridge.test.ts,
@@ -1425,6 +1427,29 @@ describe("KeikoCodeEditor — completion bridge (#1199)", () => {
     render(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
     await flushMount();
     expect(captured.completion.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+  });
+
+  // #4491: a reload shows the loading placeholder, so the Monaco editor is replaced while this
+  // component stays mounted. Monaco language providers are global; an undisposed set from the
+  // replaced editor answered every request again (inlay hints shown twice, then three times).
+  it("releases the providers of an editor that a reload replaced", async () => {
+    const provideCompletions = vi.fn();
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
+    await flushMount();
+    rerender(
+      <KeikoCodeEditor {...baseProps({ provideCompletions, loadState: { status: "loading" } })} />,
+    );
+    rerender(<KeikoCodeEditor {...baseProps({ provideCompletions })} />);
+    await flushMount();
+    expect(captured.completion.map((r) => r.language)).toEqual([
+      "typescript",
+      "javascript",
+      "typescript",
+      "javascript",
+    ]);
+    expect(captured.completion.map((r) => vi.mocked(r.dispose).mock.calls.length)).toEqual([
+      1, 1, 0, 0,
+    ]);
   });
 
   it("registers no completion provider when the host supplies no resolver", async () => {
