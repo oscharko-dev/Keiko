@@ -35,6 +35,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { SHELL_VERIFICATION_STATUS_RULE } from "./codingRuntimeVerificationContinuation.js";
+import type { CodingRepositoryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
 import { codingToolDiscoveryText } from "./codingToolIpc.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
@@ -2470,6 +2471,119 @@ describe("CodingToolFacade", () => {
 // #3579: a refused or skipped verification used to read as a failed one in the Workbench timeline,
 // because the card knew only that the tool reported an error. The presentation names, in the
 // contract's closed words, why the call the model received ended as it did.
+// PERF-2: the generated tool shim states `truncated: false`, so the runtime never shortens a
+// governed result. That holds only because the facade bounds the model-visible result itself, at
+// 64 KiB: a repository search, a read, a discovery and a research page. Each oversized producer
+// answer is bounded here with an honest marker, and stays valid JSON.
+describe("the model-visible bound of a governed result (PERF-2)", () => {
+  const BOUND = 64 * 1024;
+  const hit = (index: number): Record<string, unknown> => ({
+    path: `src/file-${String(index)}.ts`,
+    startLine: 1,
+    endLine: 2,
+    snippet: "s".repeat(4_000),
+    redacted: false,
+    snippetTruncated: false,
+  });
+
+  interface Answered {
+    readonly status: string;
+    readonly search?: CodingRepositoryResult;
+    readonly read?: { readonly text: string; readonly byteCount: number };
+  }
+
+  async function answerFor(
+    body: Record<string, unknown>,
+    delegated: Record<string, unknown>,
+  ): Promise<Answered> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], ...delegated }),
+    );
+    const answer = await createCodingToolFacade(ports).execute({
+      body: requestBody(body),
+      capability,
+    });
+    return answer;
+  }
+
+  it("drops the trailing hits of an oversized search and says output-limit", async () => {
+    const hits = Array.from({ length: 200 }, (_, index) => hit(index));
+    const result = await answerFor(
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "needle",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 50,
+        },
+      },
+      { search: { ...stubSearchResult, hits, truncationReasons: ["result-limit"] } },
+    );
+    const search = result.search;
+    if (search?.ok !== true || search.kind !== "search") throw new Error("expected a search");
+    expect(Buffer.byteLength(JSON.stringify(search))).toBeLessThanOrEqual(BOUND);
+    expect(search.hits.length).toBeGreaterThan(0);
+    expect(search.hits.length).toBeLessThan(hits.length);
+    expect(search.truncationReasons).toEqual(["result-limit", "output-limit"]);
+    expect(search.hits[0]).toEqual(hits[0]);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  it("refuses a search that no number of hits makes fit", async () => {
+    const result = await answerFor(
+      {
+        action: "search",
+        repositoryRequest: {
+          kind: "search",
+          mode: "literal",
+          query: "needle",
+          caseSensitive: false,
+          includeGlobs: [],
+          excludeGlobs: [],
+          maxResults: 50,
+        },
+      },
+      {
+        search: {
+          ...stubSearchResult,
+          hits: [],
+          truncationReasons: [],
+          diagnostics: { huge: "x".repeat(BOUND) },
+        },
+      },
+    );
+    expect(result.status).toBe("failed");
+    expect(result).not.toHaveProperty("search");
+  });
+
+  it("cuts an oversized research page at the read bound, on a whole character", async () => {
+    const text = "é".repeat(150_000);
+    const result = await answerFor(
+      { action: "egress", target: "https://example.test" },
+      { read: { text } },
+    );
+    const { read } = result;
+    if (read === undefined) throw new Error("expected a research page");
+    expect(read.byteCount).toBeLessThanOrEqual(BOUND);
+    expect(Buffer.byteLength(read.text)).toBe(read.byteCount);
+    expect(text.startsWith(read.text)).toBe(true);
+    expect(JSON.stringify(result).length).toBeLessThan(BOUND * 2);
+  });
+
+  it("refuses a repository read above the read bound instead of passing it on", async () => {
+    const result = await answerFor(
+      { action: "read", relativePath: "src/a.ts", startLine: 1, maxLines: 10 },
+      { read: { text: "x".repeat(BOUND + 1), digest: "a".repeat(64), totalLines: 1 } },
+    );
+    expect(result).not.toHaveProperty("read");
+  });
+});
+
 describe("CodingToolFacade verification presentation (#3579)", () => {
   async function presented(delegateOutcome: unknown): Promise<unknown> {
     const ports = facade();

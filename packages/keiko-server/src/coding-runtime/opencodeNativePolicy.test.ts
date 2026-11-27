@@ -1,4 +1,12 @@
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -1468,6 +1476,92 @@ describe("the saved full output of a shortened tool result (PERF-2)", () => {
         expect(
           effect(paths, mode, "read", [join(paths.output, "tool_0123456789ab")], {}, null),
         ).toBe("deny:workspace-escape");
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a dot-dot path out of it, for the directory check and for a read", () => {
+    const paths = saved();
+    try {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/../*`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [`${paths.output}/../../outside.txt`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [`${paths.output}/sub/../../x`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("admits the directory in its Windows resource form with a backslash wildcard", () => {
+    const paths = saved();
+    try {
+      expect(effect(paths, "governed-assist", "external_directory", [`${paths.output}\\*`])).toBe(
+        "allow",
+      );
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  // The directory's parents are inside the private state a shell may write: a link put in place of
+  // the directory, or inside it, must not name a place outside it.
+  it("refuses it when the directory itself, or a file in it, is a link", () => {
+    const paths = saved();
+    try {
+      const elsewhere = join(paths.root, "elsewhere");
+      mkdirSync(elsewhere);
+      writeFileSync(join(elsewhere, "secret.txt"), "secret\n");
+      const inner = join(paths.output, "leak.txt");
+      symlinkSync(join(paths.root, "outside.txt"), inner);
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"])
+        expect(effect(paths, mode, "read", [inner]), mode).toBe("deny:workspace-escape");
+      rmSync(paths.output, { recursive: true, force: true });
+      symlinkSync(elsewhere, paths.output);
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "read", [join(paths.output, "secret.txt")]), mode).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "external_directory", [`${paths.output}/*`]), mode).toBe(
+          "deny:workspace-escape",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  // A shell naming the directory by its absolute path may read it with a viewer and nothing else.
+  it("refuses a shell command that writes, deletes or chains in it, in every mode", () => {
+    const paths = saved();
+    try {
+      const file = join(paths.output, "tool_0123456789ab");
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        for (const command of [
+          `echo x > ${file}`,
+          `rm ${file}`,
+          `cp /etc/hosts ${file}`,
+          `cat ${file}; rm ${file}`,
+          `cat ${file} > ${file}.copy`,
+          `sed -i s/a/b/ ${file}`,
+          `cat ${file} | tee ${file}`,
+          `echo $(rm ${file})`,
+        ])
+          expect(effect(paths, mode, "shell", [command]), `${mode}: ${command}`).toBe(
+            "deny:workspace-escape",
+          );
+        for (const command of [`cat ${file}`, `tail -n 50 ${file}`, `grep needle ${file}`])
+          expect(effect(paths, mode, "shell", [command]), `${mode}: ${command}`).not.toBe(
+            "deny:workspace-escape",
+          );
       }
     } finally {
       rmSync(paths.root, { recursive: true, force: true });

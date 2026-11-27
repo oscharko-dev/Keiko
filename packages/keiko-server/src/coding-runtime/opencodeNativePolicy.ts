@@ -977,7 +977,11 @@ function classifyNativeAction(
   const pathAction = classifyPathAction(request, roots);
   if (pathAction !== undefined) return pathAction;
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
-  if (permission === "shell") return classifyShell(resources, roots.workspaceRoot);
+  if (permission === "shell")
+    return (
+      savedOutputWrite(resources, roots.toolOutputRoot) ??
+      classifyShell(resources, roots.workspaceRoot)
+    );
   return EXECUTE;
 }
 
@@ -1474,14 +1478,16 @@ function admittedRelative(resource: string, roots: AdmittedRoots): string | unde
  * (#3900 AC5); every other external directory stays a hard denial.
  */
 function externalDirectory(resources: readonly string[], roots: AdmittedRoots): Classified {
-  const directories = resources.map((resource) => resource.trim().replace(/\/\*$/u, ""));
+  const directories = resources.map((resource) => resource.trim().replace(/[\\/]\*$/u, ""));
   const within = (root: string | undefined): boolean =>
     root !== undefined &&
     directories.length > 0 &&
     directories.every(
       (directory) => isAbsolute(directory) && workspaceRelative(directory, root) !== undefined,
     );
-  if (within(roots.planRoot) || within(roots.toolOutputRoot)) return READ;
+  if (within(roots.planRoot)) return READ;
+  if (within(roots.toolOutputRoot))
+    return toolOutputRootLinkFree(roots.toolOutputRoot ?? "") ? READ : PATH_LINK_ESCAPE;
   if ((roots.externalRoots ?? []).some((root) => within(root))) return EXTERNAL_READ;
   return {
     reason: "workspace-escape",
@@ -1512,9 +1518,28 @@ function outsideWorkspaceRead(
  * accepted external reference.
  */
 function toolOutputRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
-  return roots.toolOutputRoot === undefined
-    ? undefined
-    : readWithinRoots(paths, [roots.toolOutputRoot], READ);
+  const root = roots.toolOutputRoot;
+  if (root === undefined) return undefined;
+  const inside = readWithinRoots(paths, [root], READ);
+  return inside !== undefined && !toolOutputRootLinkFree(root) ? PATH_LINK_ESCAPE : inside;
+}
+
+/**
+ * The saved-output directory is the model's own data, but its parents are inside the run's private
+ * state, which a shell may write. It is admitted only while no component between the run's private
+ * root and the directory is a link: a replaced directory would otherwise name any place its target
+ * does (the physical check resolves the root itself). A missing directory has nothing to read.
+ */
+function toolOutputRootLinkFree(root: string): boolean {
+  const target = resolve(root);
+  let current = resolve(target, "..", "..", "..", "..", "..");
+  for (const part of relative(current, target).split(sep)) {
+    current = join(current, part);
+    const stat = lstatIfPresent(current);
+    if (stat === undefined) return true;
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+  }
+  return true;
 }
 
 function readWithinRoots(
@@ -1719,6 +1744,53 @@ function reservedSegment(segment: string): boolean {
   if (reservedInvocation(commandTokens(segment))) return true;
   const words = shellWords(segment);
   return words !== undefined && reservedInvocation(invocationTokens(words));
+}
+
+// Viewers a shell may point at the saved output of a shortened result: they only read.
+const SAVED_OUTPUT_VIEWERS: ReadonlySet<string> = new Set([
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "grep",
+  "rg",
+  "nl",
+  "less",
+]);
+// Redirections, command chaining and substitution turn a viewer into something that can write.
+const SHELL_WRITE_SYNTAX = /[<>;&`]|\$\(|\btee\b/u;
+
+/**
+ * A shell command that names the saved-output directory by its absolute path may only read there:
+ * the directory is the model's own data, readable by design, never a place to write or delete. A
+ * viewer command without redirection or chaining is left to the ordinary shell rules; anything else
+ * naming the directory is refused in every mode. A command that only changes into the directory and
+ * writes a relative path names no absolute path and stays with the ordinary shell rules and the
+ * kernel boundary (the run's private state is writable by design).
+ */
+function savedOutputWrite(
+  resources: readonly string[],
+  toolOutputRoot: string | undefined,
+): Classified | undefined {
+  if (toolOutputRoot === undefined) return undefined;
+  const root = toolOutputRoot.replaceAll("\\", "/").toLowerCase();
+  const names = (command: string): boolean =>
+    command.replaceAll("\\", "/").toLowerCase().includes(root);
+  const writes = resources.some(
+    (command) =>
+      names(command) &&
+      !(
+        SAVED_OUTPUT_VIEWERS.has(commandTokens(command)[0] ?? "") &&
+        !SHELL_WRITE_SYNTAX.test(command)
+      ),
+  );
+  return writes
+    ? {
+        reason: "workspace-escape",
+        message:
+          "Keiko refused this action: the saved output of a shortened result is read-only; use read, grep, head or tail on it.",
+      }
+    : undefined;
 }
 
 /**

@@ -19,7 +19,10 @@ import {
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
-import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
+import {
+  boundedCodingRepositoryResult,
+  isCodingRepositoryResult,
+} from "./codingRepositorySearchHandler.js";
 import {
   WORKSPACE_READ_REFUSAL_CODES,
   WORKSPACE_DISCOVERY_REFUSAL_CODES,
@@ -937,15 +940,16 @@ function projectSearch(
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
   if (request.action !== "search") return undefined;
-  return isCodingRepositoryResult(value.search)
-    ? {
+  const search = isCodingRepositoryResult(value.search)
+    ? boundedCodingRepositoryResult(value.search)
+    : undefined;
+  return search === undefined
+    ? projected("failed")
+    : {
         status: "completed",
-        evidence: [
-          { kind: "governed-delegate", code: value.search.ok ? "completed" : value.search.reason },
-        ],
-        search: value.search,
-      }
-    : projected("failed");
+        evidence: [{ kind: "governed-delegate", code: search.ok ? "completed" : search.reason }],
+        search,
+      };
 }
 
 function projectGovernedFailure(
