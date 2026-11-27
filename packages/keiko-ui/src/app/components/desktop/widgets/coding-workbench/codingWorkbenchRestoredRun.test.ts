@@ -9,7 +9,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage, CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
-  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_RETAINED_ANSWER_CHARS,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
@@ -491,7 +490,7 @@ describe("restoreConversation bounds and truncation", () => {
   // stays inside the contract's bounds, and nothing a bound leaves out is lost. The feed packs the
   // newest messages into as many turns as the bounds admit and names every older message, so the
   // transcript shows it whole. Where a message is shown is judged at the Window, in its own suite.
-  it("carries a run holding more messages than one turn admits across turns, losing none", () => {
+  it("carries a 40-message run in one turn, losing none and marking nothing truncated", () => {
     const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `m-${String(index)}`,
@@ -504,12 +503,8 @@ describe("restoreConversation bounds and truncation", () => {
     expect(restoredMessages(feed).map((entry) => entry.messageId)).toEqual(
       messages.map((entry) => entry.id),
     );
-    // The feed fills from the newest message backwards, so the oldest turn takes the remainder.
-    expect(feed.turns.map((turn) => turn.messages.length)).toEqual([
-      messages.length - 2 * CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
-      CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
-      CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
-    ]);
+    // #4491: a run of ordinary length is one turn; only a byte bound splits it.
+    expect(feed.turns.map((turn) => turn.messages.length)).toEqual([messages.length]);
     expect(overflowMessageIds.size).toBe(0);
     // Nothing was dropped or cut, so nothing reads as truncated.
     expect(feed.truncated).toBe(false);

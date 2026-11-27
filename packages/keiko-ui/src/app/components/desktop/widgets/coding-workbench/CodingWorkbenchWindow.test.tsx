@@ -17,7 +17,6 @@ import * as reportApi from "@/lib/support-report-api";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
@@ -1132,7 +1131,7 @@ describe("CodingWorkbenchWindow", () => {
         );
         expect(prompt).toBeLessThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
         // The line is the feed's, not one turn's: it falls beyond what one turn holds.
-        expect(fillers).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN);
+        expect(fillers * fillerChars).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES);
         const labels = [
           "P1",
           ...Array.from({ length: fillers }, (_, index) => `F${String(index + 1)}`),

@@ -76,6 +76,17 @@ human text. The pinned OpenCode 2.0.10 prompt transport prepends the labelled in
 text in the existing bounded prompt and carries `keikoContextPresentationV1` metadata naming the
 human display text and the hidden context digest. The safe-activity projection verifies that
 binding and shows only the human text.
+
+The safe-activity feed (`CodingSafeActivityFeed`) is bounded by bytes, not by step counts (#4491).
+OpenCode opens one assistant message per agent step and a run calls a tool per action, so a fixed
+16-message or 64-call turn cap evicted the earliest output of every ordinary run ("Activity
+truncated."). The per-turn message and tool counts are now 256 each, above what the 32 KiB turn
+bound admits, so the byte bounds (message 16 KiB, turn 32 KiB, feed 60 KiB, reasoning 8 KiB) are the
+memory guard and the counts only stop a runaway producer of empty shells. A turn still over its byte
+bound after retained answer text, tool detail, reasoning, segments and calls were shed gives up its
+oldest assistant message (never the user anchor or the newest message) and reads as truncated. The
+correlation caps in the OpenCode backend (2,048 entries, 128 KiB) hold only calls that
+have not settled and remain a memory guard.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
 feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.

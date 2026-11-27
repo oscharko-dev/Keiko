@@ -34,9 +34,15 @@ export const CODING_SAFE_ACTIVITY_PLAN_STEP_STATES = [
   "cancelled",
 ] as const;
 export const CODING_SAFE_ACTIVITY_MAX_TURNS = 32;
-export const CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN = 16;
+// #4491 A-1: OpenCode opens one assistant message per agent step and a coding run calls a tool per
+// action, so a count that ends ordinary work is a defect (owner decision "Work-ending limits"). The
+// per-turn message and tool counts therefore sit above what the byte bounds below can ever admit
+// (a message or a call serializes to well over 100 bytes against a 32 KiB turn): the byte bounds
+// are the memory guard, and these counts only stop a runaway producer of empty shells. A turn the
+// byte bound trims still reads as truncated.
+export const CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN = 256;
 export const CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE = 32;
-export const CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN = 64;
+export const CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN = 256;
 export const CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS = 4_096;
 export const CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES = 16 * 1_024;
 // #3878: an assistant message's model reasoning keeps to half of the message budget, so the answer

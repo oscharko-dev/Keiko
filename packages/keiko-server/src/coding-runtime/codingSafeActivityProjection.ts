@@ -2056,7 +2056,8 @@ function shedAnswerSegments(
 
 // #4546: a turn over its byte bound sheds its oldest content, never its messages. The turn's user
 // message is the parent every later answer names, and a message whose text was shed may still
-// stream; a message without content costs a few bytes, and `maxMessagesPerTurn` bounds how many.
+// stream; a message without content costs a few bytes, so only when the shells alone are still over
+// the bound does the oldest assistant message go (#4491), after everything above.
 // Retained answer text, settled tool detail and settled reasoning go first: they lose nothing a
 // page or the row's `detailOmitted` does not name.
 function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
@@ -2074,6 +2075,22 @@ function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number)
     turn.tools.shift();
     turn.truncated = true;
   }
+  // Last, a turn of many steps whose message shells alone exceed the bound gives up its oldest
+  // assistant messages (the user anchor and the newest message stay, as the count cap does).
+  while (bytes(turn) > maxBytes && evictOldestAssistantShell(entry, turn)) {
+    turn.truncated = true;
+  }
+}
+
+function evictOldestAssistantShell(entry: ProjectionEntry, turn: MutableTurn): boolean {
+  const newest = turn.messages.at(-1);
+  const index = turn.messages.findIndex(
+    (message) => message.role === "assistant" && message !== newest,
+  );
+  if (index < 0) return false;
+  const removed = turn.messages.splice(index, 1)[0];
+  if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
+  return true;
 }
 
 function enforceTurnCount(entry: ProjectionEntry, maxTurns: number): void {
