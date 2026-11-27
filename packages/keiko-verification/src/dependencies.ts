@@ -45,6 +45,7 @@ import {
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
+  VERIFICATION_RUNAWAY_OUTPUT_BYTES,
   type VerificationDependencyConsumer,
   type VerificationDependencyRefusalReason,
   type VerificationDependencyState,
@@ -1046,6 +1047,8 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
     policy: {
       ...DEFAULT_SANDBOX_POLICY,
       maxOutputBytes: DEPENDENCY_INSTALL_LIMITS.maxOutputBytes,
+      outputOverflow: "retain-head-tail",
+      runawayOutputBytes: VERIFICATION_RUNAWAY_OUTPUT_BYTES,
       defaultTimeoutMs: DEPENDENCY_INSTALL_LIMITS.wallTimeMs,
       network: DEPENDENCY_INSTALL_LIMITS.network,
       // Host network, reached only through the registry egress proxy (registryEgress.ts).

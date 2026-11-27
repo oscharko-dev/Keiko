@@ -29,6 +29,7 @@ import type {
   CodingToolVerificationFailure,
   CodingToolVerificationResult,
   VerificationNotRunStep,
+  VerificationResourceLimitWord,
 } from "./codingToolIpc.js";
 import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
 
@@ -80,6 +81,8 @@ export type GovernedCodingToolResult =
       readonly shellDependencies?: "installed" | undefined;
       /** The package folders a verification could not choose between (`packageDir`). */
       readonly packageCandidates?: readonly string[] | undefined;
+      /** The closed limit a verification step reached (output, memory or wall time). */
+      readonly resourceLimit?: VerificationResourceLimitWord | undefined;
     };
 
 export interface CodingToolGovernedPorts {
@@ -213,33 +216,42 @@ function governedFailureOutcome(
   result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
 ): unknown {
   if (result.reasonCode === undefined) return { outcome: "failed" };
-  if (action === "verification" && result.verificationFailure !== undefined) {
-    return {
-      outcome: "failed",
-      reasonCode: result.reasonCode,
-      verificationFailure: result.verificationFailure,
-    };
+  if (action === "verification") {
+    const verification = verificationFailureOutcome(result, result.reasonCode);
+    if (verification !== undefined) return verification;
   }
-  if (action === "verification" && result.notRun !== undefined) {
+  return action === "edit"
+    ? editFailureOutcome(result)
+    : { outcome: "failed", reasonCode: result.reasonCode };
+}
+
+// The one detail a failed verification carries to the facade, in the order the model needs it: a
+// red run's structured failure, the steps that never ran, the limit a step reached, the packages to
+// choose between. A failure with none of them is a bare reason code.
+function verificationFailureOutcome(
+  result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
+  reasonCode: string,
+): unknown {
+  if (result.verificationFailure !== undefined) {
+    return { outcome: "failed", reasonCode, verificationFailure: result.verificationFailure };
+  }
+  if (result.notRun !== undefined) {
     return {
       outcome: "failed",
-      reasonCode: result.reasonCode,
+      reasonCode,
       notRun: result.notRun,
       ...(result.shellDependencies === undefined
         ? {}
         : { shellDependencies: result.shellDependencies }),
     };
   }
-  if (action === "verification" && result.packageCandidates !== undefined) {
-    return {
-      outcome: "failed",
-      reasonCode: result.reasonCode,
-      packageCandidates: result.packageCandidates,
-    };
+  if (result.resourceLimit !== undefined) {
+    return { outcome: "failed", reasonCode, resourceLimit: result.resourceLimit };
   }
-  return action === "edit"
-    ? editFailureOutcome(result)
-    : { outcome: "failed", reasonCode: result.reasonCode };
+  if (result.packageCandidates !== undefined) {
+    return { outcome: "failed", reasonCode, packageCandidates: result.packageCandidates };
+  }
+  return undefined;
 }
 
 // A refused edit keeps the editor route's sentence and, for a refusal raised while preparing the

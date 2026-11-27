@@ -1857,7 +1857,38 @@ describe("CodingToolFacade", () => {
       ...(code === "NO_RUNNABLE_STEPS"
         ? { guidance: expect.stringContaining("This verifier has nothing to run") as unknown }
         : {}),
+      // A limit a step reached is neither red nor green, so the model is told what happened.
+      ...(code === "VERIFICATION_RESOURCE_EXCEEDED"
+        ? { guidance: expect.stringContaining("reached a resource limit") as unknown }
+        : {}),
+      ...(code === "VERIFICATION_TIMED_OUT"
+        ? { guidance: expect.stringContaining("ran out of its wall-time limit") as unknown }
+        : {}),
     });
+  });
+
+  it("names the closed limit a verification step reached, and withholds any other word", async () => {
+    const run = async (resourceLimit: string): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({
+          outcome: "failed",
+          reasonCode: "VERIFICATION_RESOURCE_EXCEEDED",
+          resourceLimit,
+        }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      });
+    };
+
+    await expect(run("output-limit")).resolves.toMatchObject({
+      reasonCode: "VERIFICATION_RESOURCE_EXCEEDED",
+      detail: "Limit reached: output-limit.",
+    });
+    const hostile = (await run("/Users/someone/secret")) as { detail?: string };
+    expect(hostile.detail).toBeUndefined();
   });
 
   it("forwards only the bounded structured diagnostics of a failed verifier", async () => {

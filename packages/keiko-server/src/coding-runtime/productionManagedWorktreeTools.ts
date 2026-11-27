@@ -107,6 +107,7 @@ import {
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  type VerificationResourceLimitWord,
   type VerificationNotRunStep,
   COMMIT_PROOF_UNAVAILABLE_CAUSES,
   type CommitProofUnavailableCause,
@@ -1724,6 +1725,8 @@ type VerificationPortResult =
       readonly shellDependencies?: "installed" | undefined;
       /** The workspace-relative package folders the model has to choose between (`packageDir`). */
       readonly packageCandidates?: readonly string[] | undefined;
+      /** The closed limit a step reached when the reason is a resource ceiling or the wall time. */
+      readonly resourceLimit?: VerificationResourceLimitWord | undefined;
     };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -2209,6 +2212,28 @@ function modelFacingStatus(report: VerificationReport): Exclude<VerificationStat
   return overall;
 }
 
+// The limit a step reached, in the closed words the model is told: which dimension the orchestrator
+// marked breached on the step that ran to a resource or wall-time end. Never a number or a path.
+const BREACHED_DIMENSION_WORDS: Readonly<Record<string, VerificationResourceLimitWord>> = {
+  "output-size": "output-limit",
+  memory: "memory-limit",
+  "wall-time": "time-limit",
+};
+
+function executedResourceLimit(
+  report: VerificationReport,
+  status: Exclude<VerificationStatus, "passed">,
+): VerificationResourceLimitWord | undefined {
+  if (status !== "resource-exceeded" && status !== "timed-out") return undefined;
+  for (const result of report.results) {
+    if (result.status !== status) continue;
+    const breached = result.appliedLimits.find((limit) => limit.breached === true);
+    const word = breached === undefined ? undefined : BREACHED_DIMENSION_WORDS[breached.dimension];
+    if (word !== undefined) return word;
+  }
+  return undefined;
+}
+
 function failedVerificationOutcome(
   input: ProductionManagedWorktreeToolInput,
   attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
@@ -2224,10 +2249,12 @@ function failedVerificationOutcome(
       ? notRunSteps(report)
       : undefined;
   if (notRun !== undefined) recordVerificationNotRun(input, notRun);
+  const resourceLimit = executedResourceLimit(report, status);
   return {
     status: "failed",
     reasonCode,
     ...(verificationFailure === undefined ? {} : { verificationFailure }),
+    ...(resourceLimit === undefined ? {} : { resourceLimit }),
     ...(notRun === undefined ? {} : { notRun }),
     ...(notRun !== undefined && installedForShell(report)
       ? { shellDependencies: "installed" }

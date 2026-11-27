@@ -23,7 +23,8 @@ create a second spawn implementation. This is a hard constraint: changes to `src
 `src/harness/**`, `src/workspace/**`, or `src/gateway/**` are not required for verification itself.
 
 **Resource limits must be honest.** Wall-time and output-size are genuinely enforced by #6
-(`SandboxPolicy.defaultTimeoutMs` and `maxOutputBytes`). A requested memory ceiling is enforced
+(`SandboxPolicy.defaultTimeoutMs`, and for output `outputOverflow: "retain-head-tail"` with
+`maxOutputBytes` as the retained window and `runawayOutputBytes` as the ceiling, see D2). A requested memory ceiling is enforced
 only when the complete spawned process tree can be sampled and terminated; otherwise the step is
 refused before spawn.
 Network is documented-not-OS-enforced in Wave 1, exactly as ADR-0006 D2 Dimension 4 states. The
@@ -78,7 +79,7 @@ first match wins:
 6. `error instanceof CommandCancelledError` → (`abortReason === "memory" ? "resource-exceeded" : "cancelled"`)
 7. any other `error` → `failed`
 8. resolved `result.timedOut` → `timed-out`
-9. resolved `result.truncated` → `resource-exceeded` (output-size limit breached)
+9. resolved `result.truncated` → `resource-exceeded` (the runaway output ceiling was breached)
 10. resolved `result.exitCode === 0` → `passed`
 11. otherwise → `failed`
 
@@ -94,7 +95,7 @@ Per-command limits map to the #6 boundary:
 | Dimension | Mechanism | Wave-1 enforcement |
 |---|---|---|
 | `wall-time` | `runCommand` `timeoutMs` (← step `limits.wallTimeMs`) | enforced — #6 SIGTERM→SIGKILL |
-| `output-size` | `SandboxPolicy.maxOutputBytes` (← step `limits.maxOutputBytes`) | enforced — #6 kills on flood, sets `truncated` |
+| `output-size` | `SandboxPolicy.runawayOutputBytes` (← step `limits.runawayOutputBytes`, default `VERIFICATION_RUNAWAY_OUTPUT_BYTES`, 1 GiB); `maxOutputBytes` is only the retained head and tail | enforced — #6 ends a runaway and sets `truncated`; output below the ceiling never ends a step |
 | `memory` | `ResourceMonitor` + `AbortController` (D3) | enforced only with complete process-tree sampling; otherwise fail closed |
 | `network` | `SandboxPolicy.network` (← step `limits.network`, default `"none"`) | NOT OS-enforced (ADR-0006 D2 Dim. 4) |
 
@@ -102,8 +103,26 @@ Every `VerificationResult.appliedLimits` records all four dimensions, always, wi
 `enforced` flag. `network` is `enforced:false` with the note "documented; OS-level isolation
 deferred to container wave (ADR-0006)". `memory` is `enforced:false` with a platform note whenever
 the run is not on Linux or no `maxMemoryBytes` ceiling was requested. `breached:true` is set only
-on the single dimension that actually fired for that step (output flood → `output-size`; the
+on the single dimension that actually fired for that step (runaway output → `output-size`; the
 sampler tripped → `memory`; wall-time → `wall-time`). This honesty is required, not optional.
+
+**Output volume never ends a healthy step (amended 2026-11-27, defect V-1).** The original flood
+guard killed a step the moment its combined output passed `maxOutputBytes` (1 MiB) and settled it
+`resource-exceeded`, so a passing but chatty suite (a 200,000-line trace, a verbose Maven, Gradle or
+Jest run) could never be verified through the governed path, while the same command passed in the
+run's own shell. A fixed bound that ends healthy work is a defect (owner decision 2026-11-24). A
+verification step now runs under `SandboxPolicy.outputOverflow: "retain-head-tail"`: each stream keeps
+a bounded head and tail (a quarter of `maxOutputBytes` each, so memory stays bounded), counts and
+discards the middle, and the command runs to its own exit code. The failure-location parser and the
+model-facing excerpt read the kept head and tail. Only an actual runaway ends a step: bytes arrived
+past `runawayOutputBytes` (`VERIFICATION_RUNAWAY_OUTPUT_BYTES`, 1 GiB, far beyond a realistic CI log,
+still reached within seconds by an endless writer), then `truncated` is set, the termination evidence
+says `output-cap` and the step is `resource-exceeded`. The wall-time limit and the Stop button stay
+the other ends. A step that dropped output reports `outputRetainedBytes` and `outputDiscardedBytes`;
+the `editor.verification.execute` completion line sums them and adds `outputCapFired` when a runaway
+was ended. The model is told the closed limit (`output-limit`, `memory-limit` or `time-limit`) and
+what to do, and a step that reached a limit settles in the tool catalog as a completed verification,
+never as `handler-failed`.
 
 ### D3 — Memory monitoring without modifying #6: a SpawnFn wrapper plus a ResourceMonitor seam
 

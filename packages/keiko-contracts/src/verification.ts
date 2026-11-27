@@ -38,7 +38,12 @@ export interface ResourceLimitDecision {
 
 export interface VerificationResourceLimits {
   readonly wallTimeMs: number;
+  // The size of the retained output window (head and tail): output past it is counted and
+  // discarded, never a reason to end the step.
   readonly maxOutputBytes: number;
+  // The bytes of output at which a step is a runaway and is ended. Absent means
+  // VERIFICATION_RUNAWAY_OUTPUT_BYTES.
+  readonly runawayOutputBytes?: number | undefined;
   // undefined => no memory ceiling requested; the monitor returns a documented no-op.
   readonly maxMemoryBytes: number | undefined;
   readonly network: NetworkPolicy;
@@ -54,6 +59,16 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
   maxMemoryBytes: undefined,
   network: "none",
 } as const;
+
+// Output volume never ends a healthy governed command (owner decision 2026-11-24: a fixed bound that
+// ends healthy work is a defect). A step keeps a bounded head and tail of its output
+// (`maxOutputBytes` is that retained window), counts and discards the rest, and runs to its own exit
+// code. Only an actual runaway ends it: bytes arrived across stdout+stderr past this ceiling. 1 GiB
+// is far beyond any realistic CI log (a 200,000-line trace is about 26 MB; a verbose multi-module
+// Maven or Gradle build with debug logging stays in the low hundreds of MB), while a loop that
+// writes as fast as a pipe drains still reaches it within seconds. Memory stays bounded by the
+// retained window whatever the ceiling; the wall-time limit and the Stop button remain.
+export const VERIFICATION_RUNAWAY_OUTPUT_BYTES = 1_073_741_824;
 
 // ─── Dependency bootstrap (ADR-0043 D17) ───────────────────────────────────────────
 // A plan's package scripts run against the workspace's installed dependencies, and a managed task
@@ -251,6 +266,11 @@ export interface VerificationResult {
   // Additive (Issue #2210, ADR-0126 D3): structured failure locations populated best-effort by the
   // Issue #2211 parser. Absent on existing consumers and for kinds/formats it cannot parse.
   readonly locations?: readonly VerificationFailureLocation[] | undefined;
+  // Additive: what the step kept and dropped of its output while it ran to its own end. Present only
+  // when the middle of the output was dropped; the kept head and tail still feed the failure
+  // locations. A runaway (`truncated: true`) carries neither.
+  readonly outputRetainedBytes?: number | undefined;
+  readonly outputDiscardedBytes?: number | undefined;
 }
 
 export interface VerificationReport {
@@ -480,7 +500,17 @@ function hasValidResultEvidence(value: Readonly<Record<string, unknown>>): boole
   if (value.detail !== undefined && !isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS)) {
     return false;
   }
-  return value.locations === undefined || isFailureLocations(value.locations);
+  return (
+    isOptionalByteCount(value.outputRetainedBytes) &&
+    isOptionalByteCount(value.outputDiscardedBytes) &&
+    (value.locations === undefined || isFailureLocations(value.locations))
+  );
+}
+
+function isOptionalByteCount(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
 }
 
 export function isVerificationResult(value: unknown): value is VerificationResult {
@@ -501,6 +531,8 @@ export function isVerificationResult(value: unknown): value is VerificationResul
       "appliedLimits",
       "detail",
       "locations",
+      "outputRetainedBytes",
+      "outputDiscardedBytes",
     ]) &&
     hasValidResultIdentity(value) &&
     hasValidResultExecution(value) &&

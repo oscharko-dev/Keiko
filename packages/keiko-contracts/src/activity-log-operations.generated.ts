@@ -21598,6 +21598,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["none", "current", "installed", "refused", "failed", "timed-out", "cancelled"],
       },
+      outputRetainedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      outputDiscardedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      outputCapFired: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",

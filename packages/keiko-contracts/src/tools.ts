@@ -99,6 +99,9 @@ export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGat
 
 export type FilesystemPolicy = "inherit" | "execution-root";
 
+// What the spawn boundary does with output past `SandboxPolicy.maxOutputBytes`.
+export type OutputOverflowPolicy = "terminate" | "retain-head-tail";
+
 // How the spawn boundary supplies HOME/USERPROFILE to the child.
 //   "ephemeral" — the default (ADR-0006 D2 Dimension 1 / C5): an empty per-run directory, so a
 //                 home-dir credential lookup (~/.npmrc, ~/.aws, ~/.git-credentials) resolves to
@@ -149,7 +152,19 @@ export interface SandboxPolicy {
   //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
   readonly outputScrub?: OutputScrubMode | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
+  // With `outputOverflow: "retain-head-tail"` it is instead the size of the RETAINED window: the
+  // child keeps running past it and only the middle of its output is dropped.
   readonly maxOutputBytes: number;
+  // What happens when the child writes more than `maxOutputBytes`. Absent / "terminate" keeps the
+  // flood guard above (kill the child, report `truncated`). "retain-head-tail" never ends a healthy
+  // command for output volume: it keeps a bounded head and tail of each stream, counts and discards
+  // the rest, and lets the command run to its own exit code (verification: a passing but chatty
+  // suite must verify). Only `runawayOutputBytes` ends such a command.
+  readonly outputOverflow?: OutputOverflowPolicy | undefined;
+  // The absolute ceiling, in bytes arrived across stdout+stderr, at which a "retain-head-tail"
+  // command is a runaway and is terminated (reason `output-cap`, result `truncated`). Ignored by
+  // "terminate"; absent means 1 GiB. Memory stays bounded by `maxOutputBytes` regardless of this value.
+  readonly runawayOutputBytes?: number | undefined;
   // Default per-command wall-time before SIGTERM/SIGKILL.
   readonly defaultTimeoutMs: number;
   // Grace period between SIGTERM and SIGKILL on timeout/abort.
@@ -653,6 +668,11 @@ export interface CommandResult {
   // all over-cap bytes arrived. summarizeCommand does NOT serialize this, so the model-facing JSON
   // is byte-identical; existing callers that do not read it are unaffected.
   readonly omittedByteCount?: number | undefined;
+  // "retain-head-tail" runs only: the middle of the output was dropped while the command ran to its
+  // own end. `retainedByteCount` is what stdout+stderr kept, `discardedByteCount` what was dropped.
+  // Absent when nothing was dropped, and always absent for a `truncated` (runaway) result.
+  readonly retainedByteCount?: number | undefined;
+  readonly discardedByteCount?: number | undefined;
 }
 
 // ─── Patch workflow ──────────────────────────────────────────────────────────────

@@ -217,6 +217,18 @@ export type VerificationNotRunReason =
   | "cancelled"
   | "skipped";
 
+/**
+ * The limit a verification step reached, in closed words (never a number or a path): the output
+ * runaway ceiling, the memory ceiling or the wall-time limit. Forwarded to the model with the
+ * resource-exceeded and timed-out outcomes so it never reads an opaque failure.
+ */
+export const VERIFICATION_RESOURCE_LIMIT_WORDS = [
+  "output-limit",
+  "memory-limit",
+  "time-limit",
+] as const;
+export type VerificationResourceLimitWord = (typeof VERIFICATION_RESOURCE_LIMIT_WORDS)[number];
+
 /** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
 export interface VerificationNotRunStep {
   readonly kind: VerificationKind;

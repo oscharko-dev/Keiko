@@ -426,12 +426,40 @@ describe("runVerification — outcomes", () => {
     expect(report.overallStatus).toBe("failed");
   });
 
-  it("output truncation → resource-exceeded with output-size breached:true", async () => {
+  it("a chatty command past maxOutputBytes that exits 0 is passed, with the trimming recorded", async () => {
     const ws = makeWorkspace();
     const child = makeFakeChild();
     const rec = recordingSpawn(child);
-    // Emit more than maxOutputBytes so #6 sets truncated and kills the child.
-    const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxOutputBytes: 8 };
+    // 200 lines of trace output against a 1 KiB retained window: the old flood guard killed this
+    // healthy run as `resource-exceeded`; now only the middle of the output is dropped.
+    const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxOutputBytes: 1_024 };
+    queueMicrotask(() => {
+      for (let line = 0; line < 200; line += 1) {
+        child.stdout.emit("data", Buffer.from(`trace line ${String(line).padStart(4, "0")}\n`));
+      }
+      child.emit("close", 0, null);
+    });
+    const report = await runVerification(
+      planOf([step({ limits })], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    const result = report.results[0];
+    expect(result?.status).toBe("passed");
+    expect(report.overallStatus).toBe("passed");
+    expect(result?.truncated).toBe(false);
+    expect(result?.outputDiscardedBytes).toBeGreaterThan(0);
+    expect(result?.outputRetainedBytes).toBeLessThanOrEqual(1_024);
+    expect((result?.outputRetainedBytes ?? 0) + (result?.outputDiscardedBytes ?? 0)).toBe(
+      200 * "trace line 0000\n".length,
+    );
+    expect(result?.appliedLimits.some((limit) => limit.breached === true)).toBe(false);
+  });
+
+  it("output past the runaway ceiling → resource-exceeded with output-size breached:true", async () => {
+    const ws = makeWorkspace();
+    const child = makeFakeChild();
+    const rec = recordingSpawn(child);
+    const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxOutputBytes: 8, runawayOutputBytes: 32 };
     queueMicrotask(() => {
       child.stdout.emit("data", Buffer.from("x".repeat(64), "utf8"));
       child.emit("close", null, "SIGTERM");
@@ -443,8 +471,10 @@ describe("runVerification — outcomes", () => {
     const result = report.results[0];
     expect(result?.status).toBe("resource-exceeded");
     expect(result?.truncated).toBe(true);
+    expect(result?.outputDiscardedBytes).toBeUndefined();
     const out = result?.appliedLimits.find((l) => l.dimension === "output-size");
     expect(out?.breached).toBe(true);
+    expect(out?.limit).toBe(32);
   });
 
   it("arbitrary npx verification commands are denied before spawn", async () => {

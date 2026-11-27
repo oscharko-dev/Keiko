@@ -120,6 +120,16 @@ describe("deep verification wire guards", () => {
     expect(isVerificationReport(guardedReport())).toBe(true);
   });
 
+  it("accepts the retained and discarded output counts and rejects a hostile one", () => {
+    const result = guardedResult();
+    expect(
+      isVerificationResult({ ...result, outputRetainedBytes: 4_096, outputDiscardedBytes: 26_000 }),
+    ).toBe(true);
+    expect(isVerificationResult({ ...result, outputDiscardedBytes: -1 })).toBe(false);
+    expect(isVerificationResult({ ...result, outputRetainedBytes: 1.5 })).toBe(false);
+    expect(isVerificationResult({ ...result, outputDiscardedBytes: "26" })).toBe(false);
+  });
+
   it("rejects open-ended or non-redacted result shapes", () => {
     const result = guardedResult();
     expect(isVerificationResult({ ...result, kind: "deploy" })).toBe(false);

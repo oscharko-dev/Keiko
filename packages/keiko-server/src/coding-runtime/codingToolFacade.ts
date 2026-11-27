@@ -79,6 +79,7 @@ import {
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  VERIFICATION_RESOURCE_LIMIT_WORDS,
   GOVERNED_ASK_DECLINED_REASON_CODE,
   COMMIT_PROOF_UNAVAILABLE_CAUSES,
 } from "./codingToolIpc.js";
@@ -968,6 +969,7 @@ function projectGovernedFailure(
     ...governedFailureCoaching(request, reasonCode),
     ...verificationNotRunDetail(request, reasonCode, value.notRun, value.shellDependencies),
     ...verificationPackageDetail(request, reasonCode, value.packageCandidates),
+    ...verificationResourceLimitDetail(request, reasonCode, value.resourceLimit),
   };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
@@ -1081,6 +1083,12 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
       "Verification could not run because this computer has no isolation Keiko can run project commands in safely: no running container runtime (Docker or Podman), and on Windows no verified Keiko runtime supervisor. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime (or, on Windows, repair the Keiko installation) and verify again, or check the change themselves.",
     // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
     // and the model gave up instead of running the build tool the repository already uses.
+    // A step that ran into a limit settled neither red nor green: its result says what to do next.
+    // The runaway ceiling is the only output bound, so a verbose but healthy suite never lands here.
+    VERIFICATION_RESOURCE_EXCEEDED:
+      "A verification step was ended because it reached a resource limit before it finished; the detail names the closed limit. This is not a failing test and nothing was verified. Do not retry the same verifier unchanged: for output-limit the command wrote an endless stream of output (a runaway loop, not an ordinary verbose test log), so find and stop what prints without end; for memory-limit narrow the check to the changed code. Where you have a shell of your own, the repository's own command run there counts as the verification.",
+    VERIFICATION_TIMED_OUT:
+      "A verification step ran out of its wall-time limit before it finished; the detail names the closed limit. This is not a failing test and nothing was verified. Do not retry the same verifier unchanged: narrow the check to the changed code (the targeted-test verifier), or look for a test that hangs.",
     NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
   },
   // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
@@ -1190,6 +1198,26 @@ function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
   return shell && reason === "isolation-unavailable"
     ? ISOLATION_UNAVAILABLE_WITH_SHELL
     : NOT_RUN_WORDS[reason];
+}
+
+const RESOURCE_LIMIT_WORDS: ReadonlySet<string> = new Set(VERIFICATION_RESOURCE_LIMIT_WORDS);
+
+// The closed word for the limit a step reached. Anything outside the vocabulary is withheld, like
+// every value the facade forwards to the model.
+function verificationResourceLimitDetail(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+  resourceLimit: unknown,
+): { readonly detail?: string } {
+  if (
+    request.action !== "verification" ||
+    (reasonCode !== "VERIFICATION_RESOURCE_EXCEEDED" && reasonCode !== "VERIFICATION_TIMED_OUT") ||
+    typeof resourceLimit !== "string" ||
+    !RESOURCE_LIMIT_WORDS.has(resourceLimit)
+  ) {
+    return {};
+  }
+  return { detail: `Limit reached: ${resourceLimit}.` };
 }
 
 // A workspace with several packages: the runner names the workspace-relative folders so the model can

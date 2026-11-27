@@ -2427,6 +2427,7 @@ export type {
   NetworkGatewayPolicy,
   FilesystemPolicy,
   HomeIsolation,
+  OutputOverflowPolicy,
   OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,

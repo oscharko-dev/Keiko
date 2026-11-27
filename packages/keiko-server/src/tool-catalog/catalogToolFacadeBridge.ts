@@ -609,14 +609,18 @@ type CatalogDispatchOutcome = Awaited<
 // which opens a support incident (#3615).
 type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
 
-// The two outcomes of a verification the runner EXECUTED and reported on: a red test run
-// (VERIFICATION_FAILED) and a report whose steps were skipped, denied or cancelled
-// (VERIFICATION_NOT_RUN, which the facade guides the model to act on, never a check failing). Both
-// are completed verification effects, not a broken catalog handler. Preserve the governed failed
+// The outcomes of a verification the runner EXECUTED and reported on: a red test run
+// (VERIFICATION_FAILED), a step that reached the wall-time or a resource limit
+// (VERIFICATION_TIMED_OUT, VERIFICATION_RESOURCE_EXCEEDED; the facade names the limit to the model)
+// and a report whose steps were skipped, denied or cancelled (VERIFICATION_NOT_RUN, which the facade
+// guides the model to act on, never a check failing). All are completed verification effects, not a
+// broken catalog handler: settling them as `handler-failed` opened a support incident for a verdict. Preserve the governed failed
 // result for the model while the catalog records that its handler ran successfully. Refusals before
 // the runner and infrastructure failures still take the fault path below.
 const EXECUTED_VERIFICATION_OUTCOME_CODES: ReadonlySet<string> = new Set([
   "VERIFICATION_FAILED",
+  "VERIFICATION_TIMED_OUT",
+  "VERIFICATION_RESOURCE_EXCEEDED",
   "VERIFICATION_NOT_RUN",
   "VERIFICATION_ISOLATION_UNAVAILABLE",
 ]);

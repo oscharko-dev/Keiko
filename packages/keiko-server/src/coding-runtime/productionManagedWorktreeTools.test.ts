@@ -32,7 +32,7 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { matchesOverallStatus } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import { runVerification } from "@oscharko-dev/keiko-verification";
+import { buildAppliedLimits, runVerification } from "@oscharko-dev/keiko-verification";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -2173,6 +2173,41 @@ describe("production managed worktree tools", () => {
           }),
         }),
       ).resolves.toMatchObject({ status: "failed", reasonCode });
+    },
+  );
+
+  // A step that reached a limit tells the model which one, in a closed word: the dimension the
+  // orchestrator's own appliedLimits marked breached, never a number or a path (defect V-1).
+  it.each([
+    ["resource-exceeded", "output-size", "output-limit"],
+    ["resource-exceeded", "memory", "memory-limit"],
+    ["timed-out", "wall-time", "time-limit"],
+  ] as const)(
+    "names the closed limit of a %s step that breached %s",
+    async (stepStatus, dimension, word) => {
+      const [template] = failedVerificationReport().results;
+      if (template === undefined) throw new TypeError("fixture result missing");
+      const report: VerificationReport = {
+        ...verificationReport(stepStatus),
+        results: [
+          {
+            ...template,
+            status: stepStatus,
+            exitCode: null,
+            locations: undefined,
+            appliedLimits: buildAppliedLimits(DEFAULT_VERIFICATION_LIMITS, dimension),
+          },
+        ],
+      };
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(report),
+        records: [],
+      });
+
+      await expect(executeVerification(facade, `limit-${dimension}`)).resolves.toMatchObject({
+        status: "failed",
+        detail: `Limit reached: ${word}.`,
+      });
     },
   );
 

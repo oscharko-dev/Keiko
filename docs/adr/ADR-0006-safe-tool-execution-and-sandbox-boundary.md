@@ -407,6 +407,14 @@ Tool `output` strings are redacted at two points:
    returns a constant truncated-output marker instead of a partial raw prefix, so a secret split
    across the cap boundary cannot leak.
 
+   A policy with `outputOverflow: "retain-head-tail"` (governed verification, amended 2026-11-27)
+   does not end the command for output volume: `maxOutputBytes` is the size of the retained window,
+   each stream keeps a bounded head and tail, and the middle is counted and dropped
+   (`retainedByteCount`, `discardedByteCount`). The cut is made on line boundaries and a cut side
+   without a newline is dropped whole, so a credential, which never spans a newline, lies wholly in
+   the kept text (and is redacted) or wholly in the dropped text. Only bytes past
+   `runawayOutputBytes` end the command, with the constant marker above and reason `output-cap`.
+
    Internal typed Git readers use the existing `credentials-only` output scrub when ordinary
    environment values overlap their protocol or configured identity: remote URL reads and
    machine-parsed refs, revisions, index/tree entries, commit identities and GitHub branch, pull

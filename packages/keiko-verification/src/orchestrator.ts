@@ -8,6 +8,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_RUNAWAY_OUTPUT_BYTES,
   type VerificationDependencyConsumer,
   type VerificationDependencySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
@@ -203,6 +204,8 @@ function policyForStep(step: VerificationStep, network: NetworkPolicy): SandboxP
       ? { envAllowlist: [...DEFAULT_SANDBOX_POLICY.envAllowlist, ...MAVEN_STEP_ENVIRONMENT] }
       : {}),
     maxOutputBytes: limits.maxOutputBytes,
+    outputOverflow: "retain-head-tail",
+    runawayOutputBytes: limits.runawayOutputBytes ?? VERIFICATION_RUNAWAY_OUTPUT_BYTES,
     defaultTimeoutMs: limits.wallTimeMs,
     network,
     filesystem: "execution-root",
@@ -625,6 +628,7 @@ function toResult(
     truncated: run.result?.truncated ?? false,
     redacted: true,
     outputSummary: outputDigest(run.result),
+    ...outputRetention(run.result),
     appliedLimits: buildAppliedLimits(
       step.limits,
       breached,
@@ -633,6 +637,19 @@ function toResult(
     ),
     detail: detailFor(status, run),
     ...(locations.length > 0 ? { locations } : {}),
+  };
+}
+
+// What the step kept and dropped of its output while it ran to its own end; nothing when it dropped
+// none (and for a runaway, whose output is withheld whole).
+function outputRetention(result: CommandResult | undefined): {
+  readonly outputRetainedBytes?: number;
+  readonly outputDiscardedBytes?: number;
+} {
+  if (result?.discardedByteCount === undefined) return {};
+  return {
+    outputRetainedBytes: result.retainedByteCount ?? 0,
+    outputDiscardedBytes: result.discardedByteCount,
   };
 }
 

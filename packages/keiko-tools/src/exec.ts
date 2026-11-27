@@ -814,6 +814,80 @@ interface Buffers {
   // fire after terminate(). Any positive omittedByteCount derived from it is a sufficient
   // truncation signal; the exact byte total is not claimed.
   attempted: number;
+  // Present only under `outputOverflow: "retain-head-tail"`: the bounded windows that replace the
+  // flood-guard sinks above, so output volume never ends a healthy command.
+  window?: { readonly out: StreamWindow; readonly err: StreamWindow };
+}
+
+// One stream's retained output under "retain-head-tail": its first `budget` bytes, its last
+// `budget` bytes, and a count of what lay between. Memory is bounded by 2 * budget per stream.
+interface StreamWindow {
+  readonly budget: number;
+  readonly head: Buffer[];
+  headBytes: number;
+  readonly tail: Buffer[];
+  tailBytes: number;
+  dropped: number;
+}
+
+function newStreamWindow(budget: number): StreamWindow {
+  return { budget, head: [], headBytes: 0, tail: [], tailBytes: 0, dropped: 0 };
+}
+
+// Each stream keeps a quarter of `maxOutputBytes` as head and a quarter as tail, so the two
+// streams together never retain more than `maxOutputBytes`.
+function newWindows(maxOutputBytes: number): { out: StreamWindow; err: StreamWindow } {
+  const budget = Math.max(1, Math.floor(maxOutputBytes / 4));
+  return { out: newStreamWindow(budget), err: newStreamWindow(budget) };
+}
+
+function appendWindow(window: StreamWindow, chunk: Buffer): void {
+  let rest = chunk;
+  if (window.headBytes < window.budget) {
+    const take = Math.min(window.budget - window.headBytes, rest.length);
+    window.head.push(rest.subarray(0, take));
+    window.headBytes += take;
+    rest = rest.subarray(take);
+  }
+  if (rest.length === 0) return;
+  window.tail.push(rest);
+  window.tailBytes += rest.length;
+  let excess = window.tailBytes - window.budget;
+  while (excess > 0) {
+    const first = window.tail[0];
+    if (first === undefined) break;
+    const cut = Math.min(excess, first.length);
+    if (cut === first.length) window.tail.shift();
+    else window.tail[0] = first.subarray(cut);
+    window.tailBytes -= cut;
+    window.dropped += cut;
+    excess -= cut;
+  }
+}
+
+// A window that dropped its middle is cut on LINE boundaries: the head ends after its last newline and
+// the tail starts after its first one. A credential never spans a newline, so a secret lies wholly in
+// the kept text or wholly in the dropped text, and a prefix of one never survives at a cut, where the
+// redaction patterns could not recognize it (ADR-0006 D5). A cut side with no newline is dropped whole
+// (fail closed).
+function windowParts(window: StreamWindow): { readonly head: Buffer; readonly tail: Buffer } {
+  const head = Buffer.concat(window.head);
+  const tail = Buffer.concat(window.tail);
+  if (window.dropped === 0) return { head, tail };
+  const headEnd = head.lastIndexOf(0x0a) + 1;
+  const tailStart = tail.indexOf(0x0a) + 1;
+  return {
+    head: head.subarray(0, headEnd),
+    tail: tailStart === 0 ? Buffer.alloc(0) : tail.subarray(tailStart),
+  };
+}
+
+function windowText(window: StreamWindow): Buffer {
+  const { head, tail } = windowParts(window);
+  if (window.dropped === 0) return Buffer.concat([head, tail]);
+  const omitted = window.headBytes + window.tailBytes + window.dropped - head.length - tail.length;
+  const marker = Buffer.from(`[... ${String(omitted)} bytes of output omitted ...]\n`, "utf8");
+  return Buffer.concat([head, marker, tail]);
 }
 
 const TRUNCATED_OUTPUT_MARKER = "[TRUNCATED OUTPUT REDACTED]";
@@ -1292,6 +1366,32 @@ function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: numb
   return true; // signals the caller to kill the child (flood protection)
 }
 
+// The retain-head-tail counterpart of appendCapped: every byte is counted, the retained windows stay
+// bounded, and only an absolute runaway (bytes arrived past `runawayOutputBytes`) answers true.
+function appendRetained(
+  buffers: Buffers,
+  window: StreamWindow,
+  chunk: Buffer,
+  runawayOutputBytes: number,
+): boolean {
+  buffers.attempted += chunk.length;
+  if (buffers.truncated) return false;
+  if (buffers.attempted > runawayOutputBytes) {
+    buffers.truncated = true;
+    return true;
+  }
+  appendWindow(window, chunk);
+  return false;
+}
+
+// The runaway ceiling of a retain-head-tail command that names none: 1 GiB arrived across stdout and
+// stderr. Far beyond any realistic CI log, still reached within seconds by an endless writer.
+const DEFAULT_RUNAWAY_OUTPUT_BYTES = 1_073_741_824;
+
+function runawayCeiling(policy: SandboxPolicy): number {
+  return policy.runawayOutputBytes ?? DEFAULT_RUNAWAY_OUTPUT_BYTES;
+}
+
 interface RunState {
   settled: boolean;
   // Node emits "spawn" only after the child process was created successfully. An "error" before
@@ -1406,8 +1506,12 @@ function buildResult(options: BuildResultOptions): CommandResult {
       ...attest,
     };
   }
-  const originalOut = Buffer.concat(buffers.out).toString("utf8");
-  const originalErr = Buffer.concat(buffers.err).toString("utf8");
+  const originalOut = (
+    buffers.window ? windowText(buffers.window.out) : Buffer.concat(buffers.out)
+  ).toString("utf8");
+  const originalErr = (
+    buffers.window ? windowText(buffers.window.err) : Buffer.concat(buffers.err)
+  ).toString("utf8");
   const stdout = redact(originalOut, secrets);
   const stderr = redact(originalErr, secrets);
   return {
@@ -1421,8 +1525,23 @@ function buildResult(options: BuildResultOptions): CommandResult {
     durationMs: deps.now() - startedAt,
     timedOut: state.timedOut,
     truncated: buffers.truncated,
+    ...retainedCounts(buffers),
     ...attest,
   };
+}
+
+// What "retain-head-tail" kept and dropped, only when it dropped something.
+function retainedCounts(buffers: Buffers): {
+  readonly retainedByteCount?: number;
+  readonly discardedByteCount?: number;
+} {
+  const { window } = buffers;
+  if (window === undefined || window.out.dropped + window.err.dropped === 0) return {};
+  const kept = [window.out, window.err].reduce((sum, stream) => {
+    const { head, tail } = windowParts(stream);
+    return sum + head.length + tail.length;
+  }, 0);
+  return { retainedByteCount: kept, discardedByteCount: buffers.attempted - kept };
 }
 
 function cleanup(state: RunState, signal: AbortSignal): void {
@@ -1582,15 +1701,20 @@ function wireStreams(
   state: RunState,
   input: RunCommandInput,
 ): void {
+  const { window } = buffers;
   const onData =
-    (sink: Buffer[]) =>
+    (sink: Buffer[], stream: StreamWindow | undefined) =>
     (chunk: Buffer): void => {
-      if (appendCapped(buffers, sink, chunk, deps.policy.maxOutputBytes)) {
+      const runaway =
+        stream === undefined
+          ? appendCapped(buffers, sink, chunk, deps.policy.maxOutputBytes)
+          : appendRetained(buffers, stream, chunk, runawayCeiling(deps.policy));
+      if (runaway) {
         terminate(child, deps, state, input, "output-cap"); // output flood → kill
       }
     };
-  child.stdout?.on("data", onData(buffers.out));
-  child.stderr?.on("data", onData(buffers.err));
+  child.stdout?.on("data", onData(buffers.out, window?.out));
+  child.stderr?.on("data", onData(buffers.err, window?.err));
 }
 
 interface ExecContext {
@@ -2159,7 +2283,16 @@ function startRun(
 ): Promise<CommandResult> {
   const { env, state } = prepareRun(input, deps, target, cwd, reservation);
   const child = spawnChild(input, deps, target, cwd, env, state);
-  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
+  const buffers: Buffers = {
+    out: [],
+    err: [],
+    total: 0,
+    truncated: false,
+    attempted: 0,
+    ...(deps.policy.outputOverflow === "retain-head-tail"
+      ? { window: newWindows(deps.policy.maxOutputBytes) }
+      : {}),
+  };
   const ctx: ExecContext = {
     child,
     input,

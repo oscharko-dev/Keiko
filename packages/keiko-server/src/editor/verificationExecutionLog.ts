@@ -143,6 +143,12 @@ export const VERIFICATION_COMPLETION_FIELD_CONTRACTS = {
     required: false,
     values: VERIFICATION_DEPENDENCY_STATE_VALUES,
   },
+  // Output volume never ends a healthy step: a step keeps a bounded head and tail of its output and
+  // runs to its exit code. Present only when a step dropped output, or when a runaway ended one.
+  outputRetainedBytes: { type: "integer", dataClass: "count", required: false },
+  outputDiscardedBytes: { type: "integer", dataClass: "count", required: false },
+  // True only when the absolute runaway ceiling ended a step (its status is resource-exceeded).
+  outputCapFired: { type: "boolean", dataClass: "closed-enum", required: false },
 } as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
 
 interface VerificationCompletionLogFields {
@@ -165,6 +171,9 @@ interface VerificationCompletionLogFields {
   readonly isolationEngine?: DockerEngineAnswer;
   readonly networkEnforcement?: NetworkEnforcementMode;
   readonly dependencyBootstrap?: VerificationDependencyState;
+  readonly outputRetainedBytes?: number;
+  readonly outputDiscardedBytes?: number;
+  readonly outputCapFired?: boolean;
 }
 
 type MutableFields = {
@@ -266,6 +275,27 @@ function timingFields(report: VerificationReport): VerificationCompletionLogFiel
   };
 }
 
+// Summed over the report's steps. Absent when no step dropped output and none was ended for it.
+function outputFields(report: VerificationReport): VerificationCompletionLogFields {
+  let retained: number | undefined;
+  let discarded: number | undefined;
+  for (const result of report.results) {
+    if (result.outputDiscardedBytes === undefined) continue;
+    discarded = Math.min(Number.MAX_SAFE_INTEGER, (discarded ?? 0) + result.outputDiscardedBytes);
+    retained = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (retained ?? 0) + (result.outputRetainedBytes ?? 0),
+    );
+  }
+  const capFired = report.results.some((result) => result.truncated);
+  return {
+    ...(retained === undefined || discarded === undefined
+      ? {}
+      : { outputRetainedBytes: retained, outputDiscardedBytes: discarded }),
+    ...(capFired ? { outputCapFired: true } : {}),
+  };
+}
+
 function isolationFields(execution: ExecuteVerificationResult): VerificationCompletionLogFields {
   const probeMs =
     execution.probeDurationMs === undefined
@@ -292,6 +322,7 @@ export function verificationCompletionLogFields(
   return {
     ...timingFields(report),
     ...stepFields(report),
+    ...outputFields(report),
     ...isolationFields(execution),
     ...(report.dependencies === undefined
       ? {}

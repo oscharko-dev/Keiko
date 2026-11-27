@@ -1636,6 +1636,114 @@ describe("runCommand — output flood protection (F12)", () => {
   });
 });
 
+describe("runCommand — retain-head-tail output (output volume never ends healthy work)", () => {
+  function retainDeps(
+    spawn: ReturnType<typeof recordingSpawn>,
+    overrides: { readonly runawayOutputBytes?: number } = {},
+  ): RunCommandDeps {
+    return {
+      ...fakeDeps(spawn.fn),
+      policy: {
+        ...DEFAULT_SANDBOX_POLICY,
+        maxOutputBytes: 64,
+        outputOverflow: "retain-head-tail",
+        ...overrides,
+      },
+    };
+  }
+  const input = {
+    command: "node",
+    args: ["-e", "chatty"],
+    cwd: undefined,
+    timeoutMs: undefined,
+  } as const;
+
+  it("lets a command that writes far past maxOutputBytes run to its exit code 0", async () => {
+    const kills = captureKills();
+    try {
+      const spawn = recordingSpawn();
+      const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+      for (let line = 0; line < 100; line += 1) {
+        spawn.child.stdout.emit("data", Buffer.from(`line ${String(line).padStart(3, "0")}\n`));
+      }
+      expect(kills.groupSignals).toHaveLength(0); // never terminated for output volume
+      expect(spawn.child.killed).toEqual([]);
+      spawn.child.emit("close", 0, null);
+      const result = await promise;
+      expect(result.exitCode).toBe(0);
+      expect(result.truncated).toBe(false);
+      // Head and tail are kept; the middle is counted and dropped.
+      expect(result.stdout.startsWith("line 000")).toBe(true);
+      expect(result.stdout.trimEnd().endsWith("line 099")).toBe(true);
+      expect(result.stdout).toContain("bytes of output omitted");
+      expect(result.discardedByteCount).toBeGreaterThan(0);
+      expect(result.retainedByteCount).toBeLessThanOrEqual(64);
+      expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(100 * 9);
+    } finally {
+      kills.restore();
+    }
+  });
+
+  it("cuts on line boundaries so a secret split at a cut never survives as a prefix", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    const secret = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const firstLine = `start ${secret} ${"y".repeat(200)}`;
+    // One long unterminated line starts the output: its head window ends mid-token, so the head is
+    // dropped whole rather than leaving a prefix of the credential behind.
+    spawn.child.stdout.emit("data", Buffer.from(firstLine));
+    spawn.child.stdout.emit("data", Buffer.from("\nlast line\n"));
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.stdout).not.toContain("sk-ant");
+    expect(result.stdout).not.toContain("start");
+    expect(result.stdout.endsWith("last line\n")).toBe(true);
+    expect((result.retainedByteCount ?? 0) + (result.discardedByteCount ?? 0)).toBe(
+      `${firstLine}\nlast line\n`.length,
+    );
+  });
+
+  it("reports no retention counts when the output fits", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand({ ...input, signal: controller().signal }, retainDeps(spawn));
+    spawn.child.stdout.emit("data", Buffer.from("ok\n"));
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.stdout).toBe("ok\n");
+    expect(result.discardedByteCount).toBeUndefined();
+    expect(result.retainedByteCount).toBeUndefined();
+  });
+
+  it("terminates a real runaway past runawayOutputBytes with reason output-cap", async () => {
+    const kills = captureKills();
+    try {
+      const spawn = recordingSpawn();
+      const reasons: string[] = [];
+      const promise = runCommand(
+        {
+          ...input,
+          signal: controller().signal,
+          onTerminated: (evidence): void => {
+            reasons.push(evidence.reason);
+          },
+        },
+        retainDeps(spawn, { runawayOutputBytes: 64 }),
+      );
+      spawn.child.stdout.emit("data", Buffer.from("x".repeat(40)));
+      expect(kills.groupSignals).toHaveLength(0);
+      spawn.child.stdout.emit("data", Buffer.from("x".repeat(40)));
+      expectTerminated(kills, spawn.child);
+      spawn.child.emit("close", null, "SIGTERM");
+      const result = await promise;
+      expect(result.truncated).toBe(true);
+      expect(result.stdout).toBe("[TRUNCATED OUTPUT REDACTED]");
+      expect(reasons).toEqual(["output-cap"]);
+    } finally {
+      kills.restore();
+    }
+  });
+});
+
 describe("runCommand — omittedByteCount capture (ADR-0054 D5)", () => {
   it("sets a positive omittedByteCount on truncation, bounded by total emitted", async () => {
     const kills = captureKills();
