@@ -220,7 +220,7 @@ import {
   ListFollowContext,
   useJoinedFollow,
 } from "./CodingWorkbenchJumpToLatest";
-import { answeredWithoutTools, runPhase } from "./codingWorkbenchRunFacts";
+import { answeredWithoutTools, heldChangesetCallId, runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { CodingWorkbenchModelActivation } from "./CodingWorkbenchModelActivation";
@@ -2160,6 +2160,7 @@ function WorkbenchColumns(
         pendingDecision: questions.questions.length > 0 || editorBridge.pendingReview !== null,
       })}
       failedCommandCount={failedCommandCount(activity.feed)}
+      awaitingApproval={editorBridge.pendingReview !== null}
       answeredWithoutTools={answeredWithoutTools(state, activity.feed)}
     />
   );
@@ -2267,7 +2268,14 @@ function WorkbenchColumns(
                 activity={timeline.activity}
                 questions={questions}
                 focusRef={focusRef}
-                awaitingApprovalCallId={runPendingPermission(state)?.callId}
+                awaitingApprovalCallId={
+                  runPendingPermission(state)?.callId ??
+                  heldChangesetCallId(
+                    activity.feed,
+                    state.run.value?.runId,
+                    editorBridge.pendingReview !== null,
+                  )
+                }
                 pausedForTrust={state.run.value?.pauseReason === "workspace-script-trust"}
                 onRunCheck={
                   canStartAtLocation(state, locationState, taskBranchMove) &&

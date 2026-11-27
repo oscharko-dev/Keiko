@@ -102,9 +102,33 @@ function runStateLabel(
   return t(`codingWorkbench.runState.${state}`);
 }
 
-function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {
+// What the person is waiting for when the run's own state does not say it yet. A start waits for
+// its answer from the server (the runtime is launched first) and no run is shown until it arrives:
+// the line says so at once instead of "No active coding run.". A file change held for review
+// leaves the run `running` on the server (the review travels over the editor bridge, not the
+// permission flow), so the line says what the run waits for.
+function pendingStateLabel(
+  state: CodingWorkbenchRuntimeState,
+  awaitingApproval: boolean,
+  t: CodingWorkbenchTranslate,
+): string | undefined {
+  const runState = state.run.value?.state;
+  const starting = state.mutation.kind === "start" && state.mutation.status === "pending";
+  if (starting && !activeRunState(runState)) return runStateLabel("starting", t);
+  return awaitingApproval && runState === "running"
+    ? runStateLabel("awaiting-approval", t)
+    : undefined;
+}
+
+function runAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  awaitingApproval: boolean,
+): string {
   if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
   const snapshot = state.run.value;
+  const pending = pendingStateLabel(state, awaitingApproval, t);
+  if (pending !== undefined) return pending;
   if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
   if (snapshot.state === "idle" && !state.canStart) {
     return t("codingWorkbench.header.notReady");
@@ -191,6 +215,7 @@ export function runStatusAnnouncement(
   t: CodingWorkbenchTranslate,
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
   phase: CodingWorkbenchRunPhase | null = null,
+  awaitingApproval = false,
 ): string {
   const snapshot = state.run.value;
   const recovery =
@@ -198,7 +223,7 @@ export function runStatusAnnouncement(
       ? t("codingWorkbench.announcement.recoveryComplete")
       : "";
   return joinedAnnouncements([
-    runAnnouncement(state, t),
+    runAnnouncement(state, t, awaitingApproval),
     phaseAnnouncement(phase, t),
     recovery,
     researchAnnouncement(researchGrant, t),

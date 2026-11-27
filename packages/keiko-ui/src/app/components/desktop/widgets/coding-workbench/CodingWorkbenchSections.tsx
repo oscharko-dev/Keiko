@@ -688,7 +688,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         )}
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
-        disabled={input.mutationPending}
+        readOnly={input.mutationPending}
         ariaControls={
           controller.picker.controls ?? controller.menu.controls ?? controller.skillMenu.controls
         }

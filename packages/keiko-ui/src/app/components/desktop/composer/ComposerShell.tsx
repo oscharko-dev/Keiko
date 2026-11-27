@@ -31,6 +31,8 @@ export interface ComposerShellProps {
   readonly ariaControls?: string | undefined;
   readonly ariaDescribedBy?: string | undefined;
   readonly disabled?: boolean | undefined;
+  /** Keeps the text visible and focusable but not editable (a start waiting for its answer). */
+  readonly readOnly?: boolean | undefined;
   readonly maxLength?: number | undefined;
   readonly aboveInput?: ReactNode;
   readonly belowInput?: ReactNode;
@@ -64,7 +66,12 @@ export function useComposerAutoGrow(
   }, [textareaRef, value]);
 }
 
-export function ComposerShell({
+type ComposerTextareaProps = Omit<
+  ComposerShellProps,
+  "aboveInput" | "belowInput" | "footer" | "input"
+>;
+
+function ComposerTextarea({
   value,
   placeholder,
   onChange,
@@ -76,41 +83,48 @@ export function ComposerShell({
   ariaControls,
   ariaDescribedBy,
   disabled,
+  readOnly,
   maxLength,
+}: ComposerTextareaProps): ReactNode {
+  return (
+    <textarea
+      id={id}
+      className="cmp-input"
+      ref={textareaRef}
+      rows={2}
+      value={value}
+      aria-label={ariaLabel}
+      aria-controls={ariaControls}
+      aria-describedby={ariaDescribedBy}
+      placeholder={placeholder}
+      disabled={disabled}
+      readOnly={readOnly}
+      aria-busy={readOnly === true ? true : undefined}
+      maxLength={maxLength}
+      // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
+      // hooks/useKeyboardShortcuts.ts) so Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F
+      // keep working inside the product's primary input while its own text-editing chords
+      // (Cmd/Ctrl+Z undoes typing) stay with the field.
+      data-shell-chord-bypass=""
+      onChange={onChange}
+      onSelect={onSelect}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
+export function ComposerShell({
   aboveInput,
   belowInput,
   footer,
   input,
+  ...textarea
 }: ComposerShellProps): ReactNode {
   return (
     <>
       <div className="cmp-input-stack">
         {aboveInput}
-        <div className="cmp-input-combobox">
-          {input ?? (
-            <textarea
-              id={id}
-              className="cmp-input"
-              ref={textareaRef}
-              rows={2}
-              value={value}
-              aria-label={ariaLabel}
-              aria-controls={ariaControls}
-              aria-describedby={ariaDescribedBy}
-              placeholder={placeholder}
-              disabled={disabled}
-              maxLength={maxLength}
-              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
-              // hooks/useKeyboardShortcuts.ts) so Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F
-              // keep working inside the product's primary input while its own text-editing chords
-              // (Cmd/Ctrl+Z undoes typing) stay with the field.
-              data-shell-chord-bypass=""
-              onChange={onChange}
-              onSelect={onSelect}
-              onKeyDown={onKeyDown}
-            />
-          )}
-        </div>
+        <div className="cmp-input-combobox">{input ?? <ComposerTextarea {...textarea} />}</div>
         {belowInput}
       </div>
       <div className="cmp-footer-row">{footer}</div>

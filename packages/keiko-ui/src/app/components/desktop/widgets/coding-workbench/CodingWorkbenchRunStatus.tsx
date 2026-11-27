@@ -189,6 +189,8 @@ export interface CodingWorkbenchRunStatusProps {
   readonly failedCommandCount?: number;
   /** A Build run settled successfully without one tool call (`answeredWithoutTools`). */
   readonly answeredWithoutTools?: boolean;
+  /** A file change waits for the person's review while the run itself still reads running. */
+  readonly awaitingApproval?: boolean;
 }
 
 /**
@@ -211,6 +213,7 @@ export function CodingWorkbenchRunStatus({
   phase,
   failedCommandCount = 0,
   answeredWithoutTools = false,
+  awaitingApproval = false,
 }: CodingWorkbenchRunStatusProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const elapsed = useRunElapsed(state);
@@ -224,7 +227,7 @@ export function CodingWorkbenchRunStatus({
           aria-live="polite"
           aria-atomic="true"
         >
-          {runStatusAnnouncement(state, t, researchGrant, phase)}
+          {runStatusAnnouncement(state, t, researchGrant, phase, awaitingApproval)}
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
         <ActiveAgent state={state} t={t} />

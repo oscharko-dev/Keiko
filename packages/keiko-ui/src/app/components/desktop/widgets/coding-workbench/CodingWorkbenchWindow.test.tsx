@@ -3077,6 +3077,86 @@ describe("CodingWorkbenchWindow", () => {
     expect(scrollTop.value).toBe(1720);
   });
 
+  // U-21: a file change held for the person's review travels over the editor bridge, so the run
+  // itself still reads `running` and its change-files call is `running` too. The row and the header
+  // must say what the run waits for, as they do for a held command or branch.
+  describe("a file change held for review (U-21)", (): void => {
+    const REVIEW = {
+      actionId: "action-1",
+      diff: { files: [], truncated: false, totalBytes: 0 },
+      deciding: false,
+      deliveryFailed: false,
+      deliveryFailure: null,
+    };
+
+    function renderHeld(tool: string, reviewPending: boolean): void {
+      editorBridgeHookMock.mockReturnValue({
+        pendingReview: reviewPending ? REVIEW : null,
+        approve: vi.fn(),
+        deny: vi.fn(),
+        retry: vi.fn(),
+        bridgeUnavailable: false,
+      });
+      const base = activityFeed();
+      activityHookMock.mockReturnValue({
+        ...IDLE_ACTIVITY,
+        status: "live",
+        feed: {
+          ...base,
+          turns: [
+            {
+              ...base.turns[0]!,
+              tools: [{ callId: "call-edit", tool, state: "running", occurredAt: AT }],
+            },
+          ],
+        },
+      });
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+          },
+          events: [],
+        }),
+      );
+    }
+
+    function rowTimers(): readonly HTMLElement[] {
+      return screen
+        .queryAllByRole("timer")
+        .filter((timer) => timer.dataset["testid"] !== "coding-runtime-elapsed");
+    }
+
+    it("reads waiting for approval, without a timer, and the header reads approval required", async (): Promise<void> => {
+      renderHeld("keiko_changeset_edit", true);
+
+      expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+      expect(screen.queryByText("Running")).toBeNull();
+      expect(rowTimers()).toHaveLength(0);
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+        /^Approval required$/u,
+      );
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+
+    it("keeps a change-files call running while no review is pending", (): void => {
+      renderHeld("keiko_changeset_edit", false);
+
+      expect(screen.queryByText("Waiting for approval")).toBeNull();
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Running$/u);
+      expect(rowTimers()).toHaveLength(1);
+    });
+
+    it("leaves another open call running beside a pending review", (): void => {
+      renderHeld("keiko_verification", true);
+
+      expect(screen.queryByText("Waiting for approval")).toBeNull();
+      expect(rowTimers()).toHaveLength(1);
+    });
+  });
+
   // #3897 review: a native OpenCode edit ask names no supervised action kind and no command label;
   // its explicit `nativePermission` must still bind Approve to the authenticated review facts.
   function nativeEditApprovalState(): CodingWorkbenchRuntimeState {

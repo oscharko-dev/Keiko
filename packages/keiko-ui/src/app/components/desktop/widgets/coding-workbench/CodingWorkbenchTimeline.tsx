@@ -1736,6 +1736,7 @@ function ToolSummaryEnd({
   readonly origin: CodingSafeActivityToolFailureOrigin | undefined;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const runningSince = useExecutionStart(state, tool.occurredAt);
   if (origin !== undefined) return <ToolFailureLabel tool={tool} origin={origin} t={t} />;
   if (state === "succeeded") {
     return (
@@ -1749,9 +1750,24 @@ function ToolSummaryEnd({
   return (
     <>
       <ToolStateBadge tool={tool} state={state} t={t} />
-      {state === "running" ? <RunningFor since={tool.occurredAt} t={t} /> : null}
+      {state === "running" ? <RunningFor since={runningSince} t={t} /> : null}
     </>
   );
+}
+
+// A call held for a decision is reported running from the instant it was held, so its server
+// instant includes the wait. The executing time starts when the hold ends: the client instant of
+// a call seen leaving the hold replaces the reported one.
+function useExecutionStart(state: ShownToolState, reported: string): string {
+  const [previous, setPrevious] = useState(state);
+  const [resumedAt, setResumedAt] = useState<string | null>(null);
+  if (previous !== state) {
+    setPrevious(state);
+    if (state === "running" && previous.startsWith("waiting-for-")) {
+      setResumedAt(new Date().toISOString());
+    }
+  }
+  return resumedAt !== null && state === "running" ? resumedAt : reported;
 }
 
 // How long a call has been running, from one second on. It ticks silently: a timer is no live

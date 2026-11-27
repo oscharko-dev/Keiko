@@ -113,4 +113,20 @@ describe("a tool call held back by a pending approval", () => {
     expect(busy()).toBe("true");
     expect(view.container).toHaveTextContent("Running");
   });
+
+  // The server keeps the instant a call entered `running`, which is the hold. The executing time
+  // counts from the decision, not from the wait before it.
+  it("counts the running time from the decision, not from the wait before it", () => {
+    const running = [tool("call-a", "running")];
+    const view = render(timelineOf(running, "call-a"));
+    expect(view.container.querySelector('[role="timer"]')).toBeNull();
+    view.rerender(timelineOf(running, undefined));
+    expect(states(view.container)).toEqual(["running"]);
+    expect(view.container.querySelector('[role="timer"]')).toBeNull();
+  });
+
+  it("keeps the reported instant for a call that was never held", () => {
+    const view = render(timelineOf([tool("call-a", "running")], undefined));
+    expect(view.container.querySelector('[role="timer"]')).not.toBeNull();
+  });
 });

@@ -127,6 +127,26 @@ export function runPhase(input: CodingWorkbenchRunPhaseInput): CodingWorkbenchRu
   return tool === VERIFIER_TOOL ? "verifier" : "tool";
 }
 
+// The tool whose file change the person reviews: the bridge hands the diff to the review panel
+// without naming the call, so the held call is the newest unsettled change-files call of the run.
+const CHANGESET_EDIT_TOOL = "keiko_changeset_edit";
+
+/**
+ * The call a pending changeset review holds, or undefined when no review waits or the live feed
+ * names no such open call. Only the newest turn counts, as in `unsettledTool`.
+ */
+export function heldChangesetCallId(
+  feed: AvailableCodingSafeActivityFeed | null,
+  runId: string | undefined,
+  reviewPending: boolean,
+): string | undefined {
+  if (!reviewPending || feed === null || feed.runId !== runId) return undefined;
+  const tools = feed.turns.at(-1)?.tools ?? [];
+  return tools.findLast(
+    (tool) => tool.tool === CHANGESET_EDIT_TOOL && UNSETTLED_TOOL_STATES.has(tool.state),
+  )?.callId;
+}
+
 function instant(value: string): number | null {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;

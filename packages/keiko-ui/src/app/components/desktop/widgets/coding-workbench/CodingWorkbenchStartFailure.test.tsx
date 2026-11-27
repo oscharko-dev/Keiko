@@ -7,6 +7,7 @@
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
@@ -102,6 +103,7 @@ vi.mock("../../context/ActiveWorkspaceContext", async (importOriginal) => {
 });
 
 const AT = "2026-07-13T12:00:00.000Z";
+const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
 const CORRELATION_ID = "ui-f09a-correlation";
 
 function codingModel(): ModelCapability {
@@ -310,17 +312,26 @@ function routeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respo
   return other === undefined ? routeBaseFetch(url, init) : Promise.resolve(other);
 }
 
+// U-20: the server answers a start only after it launched the runtime, which takes seconds. While
+// `hold` is set the start request stays open until `release` answers it (with the usual refusal).
+const heldStart = { hold: false, release: (): void => undefined };
+
+function refusedStartResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+      message: "Runtime request was rejected.",
+    },
+  });
+}
+
 function routeBaseFetch(url: string, init?: RequestInit): Promise<Response> {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "POST" && url.endsWith("/api/coding-workbench/runtime/runs")) {
-    return Promise.resolve(
-      jsonResponse(403, {
-        error: {
-          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
-          message: "Runtime request was rejected.",
-        },
-      }),
-    );
+    if (!heldStart.hold) return Promise.resolve(refusedStartResponse());
+    return new Promise<Response>((resolve) => {
+      heldStart.release = (): void => resolve(refusedStartResponse());
+    });
   }
   if (url.includes("/api/coding-workbench/runtime/status")) {
     return Promise.resolve(jsonResponse(200, idleSnapshot()));
@@ -367,6 +378,8 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
   });
 
   afterEach((): void => {
+    heldStart.hold = false;
+    heldStart.release = (): void => undefined;
     otherWindowRun.active = false;
     otherWindowRun.started = false;
     otherWindowRun.draft = "conflict";
@@ -374,6 +387,48 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     resetSupportReportOutcomesForTests();
+  });
+
+  // U-20: a person who pressed Start saw "No active coding run." for seconds while the server
+  // launched the runtime, and pressed again. The status line says the start is under way, the typed
+  // text stays visible but read-only, and a refused start hands the text back unchanged.
+  it("shows the start under way at once and keeps the typed text through a refusal (U-20, U-14)", async (): Promise<void> => {
+    heldStart.hold = true;
+    const user = userEvent.setup();
+    render(<CodingWorkbenchWindow />);
+    const task = screen.getByLabelText("Task instructions");
+    await user.type(task, "Fix the flaky retry loop");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+        "data-on",
+        "true",
+      );
+    });
+    expect(screen.getByTestId("coding-runtime-announcement")).not.toHaveTextContent("Starting");
+
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(/^Starting$/u);
+    });
+    expect(screen.queryByText("No active coding run.")).toBeNull();
+    expect(task).toHaveValue("Fix the flaky retry loop");
+    expect(task).toHaveAttribute("readonly");
+    expect(task).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("button", { name: "Start coding run" })).toBeNull();
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+
+    await act(async () => {
+      heldStart.release();
+      await Promise.resolve();
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
+    expect(task).toHaveValue("Fix the flaky retry loop");
+    expect(task).not.toHaveAttribute("readonly");
+    expect(task).not.toHaveAttribute("aria-busy");
+    expect(screen.getByTestId("coding-runtime-announcement")).not.toHaveTextContent("Starting");
   });
 
   it("surfaces a rejected start as a visible alert carrying the error code and correlation id", async (): Promise<void> => {
