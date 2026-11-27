@@ -361,7 +361,6 @@ export async function handleCodingSidecarToolFacade(
   }
   const disconnect = bindRouteDisconnect(ctx);
   const deadlineAtMs = Date.now() + bridge.requestDeadlineMs;
-  const keepalive = startToolKeepalive(ctx, parsed.action);
   try {
     const result = await bridge.handle({
       method: "POST",
@@ -369,95 +368,23 @@ export async function handleCodingSidecarToolFacade(
       body: JSON.stringify(parsed),
       signal: disconnect.signal,
     });
-    keepalive.stop();
-    const outcome = await deliverToolResult(ctx, parsed, result, disconnect.signal, deadlineAtMs);
-    return keepalive.committed() ? finishCommittedResponse(ctx, outcome) : outcome;
-  } catch (error) {
-    if (keepalive.committed()) ctx.res.destroy();
-    throw error;
+    if (result.nativeBytes !== undefined)
+      return await deliverNativeToolBytes(ctx, result, disconnect.signal, deadlineAtMs);
+    if (result.nativeResult === true) {
+      if (result.status !== 200)
+        logToolFacadeRejection(
+          ctx,
+          result.status,
+          parsed.action === "native-read-invocation"
+            ? "native-read-refused"
+            : "native-initialization-refused",
+        );
+      return { status: result.status, body: JSON.parse(result.body) as unknown };
+    }
+    return toolFacadeRouteResult(ctx, result);
   } finally {
-    keepalive.stop();
     disconnect.detach();
   }
-}
-
-// A governed tool can wait in place for a human decision for up to the 60-minute human-decision
-// ceiling, and the sidecar's HTTP client receives nothing until the call settles. An HTTP client
-// that bounds the wait for response headers or for body progress (undici's default is 300 s) would
-// then end a healthy human decision at about five minutes (Windows run, 2026-11-27: the sidecar
-// request was aborted at 343 s). Once such a call has been pending for one interval, the response is
-// committed as 200 JSON and one JSON whitespace byte is written per interval, so neither the header
-// nor the body clock can end the wait; the plugin parses the final body as before. Only the closed
-// set of actions that can wait on a person takes this path, so a fast refusal keeps its own status.
-export const TOOL_KEEPALIVE_INTERVAL_MS = 30_000;
-const KEEPALIVE_ACTIONS: ReadonlySet<unknown> = new Set(["verification", "git", "delivery"]);
-
-function startToolKeepalive(
-  ctx: RouteContext,
-  action: unknown,
-): { readonly committed: () => boolean; readonly stop: () => void } {
-  let committed = false;
-  if (!KEEPALIVE_ACTIONS.has(action))
-    return {
-      committed: () => false,
-      stop: (): void => {
-        /* no timer was started */
-      },
-    };
-  const timer = setInterval(() => {
-    if (ctx.res.writableEnded || ctx.res.destroyed) return;
-    if (!committed) {
-      committed = true;
-      ctx.res.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-      });
-    }
-    ctx.res.write(" ");
-  }, TOOL_KEEPALIVE_INTERVAL_MS);
-  timer.unref();
-  return {
-    committed: () => committed,
-    stop: (): void => {
-      clearInterval(timer);
-    },
-  };
-}
-
-// A committed response already sent 200: a result the plugin consumes as a body (success, or a
-// refused ask's own result) is written out; any other status ends the connection so the plugin
-// reports a failed call rather than a body it would have to guess at.
-function finishCommittedResponse(ctx: RouteContext, outcome: HandlerOutcome): HandlerOutcome {
-  if (isRouteResult(outcome) && (outcome.status === 200 || outcome.status === 409)) {
-    ctx.res.end(JSON.stringify(outcome.body));
-  } else if (!ctx.res.writableEnded) {
-    ctx.res.destroy();
-  }
-  return STREAMING;
-}
-
-async function deliverToolResult(
-  ctx: RouteContext,
-  parsed: Record<string, unknown>,
-  result: OpenCodeToolBridgeResponse,
-  signal: AbortSignal,
-  deadlineAtMs: number,
-): Promise<HandlerOutcome> {
-  if (result.nativeBytes !== undefined)
-    return await deliverNativeToolBytes(ctx, result, signal, deadlineAtMs);
-  if (result.nativeResult === true) {
-    if (result.status !== 200)
-      logToolFacadeRejection(
-        ctx,
-        result.status,
-        parsed.action === "native-read-invocation"
-          ? "native-read-refused"
-          : "native-initialization-refused",
-      );
-    return { status: result.status, body: JSON.parse(result.body) as unknown };
-  }
-  return toolFacadeRouteResult(ctx, result);
 }
 
 async function deliverNativeToolBytes(

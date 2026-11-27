@@ -23,10 +23,7 @@ import type { CodingRuntimeToolFacadeBridge } from "./coding-runtime/codingRunti
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { API_ROUTES, matchRoute, type RouteContext, type HandlerOutcome } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
-import {
-  handleCodingSidecarToolFacade,
-  TOOL_KEEPALIVE_INTERVAL_MS,
-} from "./coding-sidecar-tool-facade.js";
+import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import {
   expectActivityLogProof,
@@ -874,67 +871,4 @@ it("withholds late bridge bytes after the route has already disconnected", async
     await pending;
     write.mockRestore();
   }
-});
-
-describe("coding-sidecar tool facade keepalive for human-decision waits", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function pendingTool(action: string): {
-    readonly response: ReturnType<typeof mockResponse>;
-    readonly settle: (status: number, body: string) => void;
-    readonly outcome: Promise<HandlerOutcome>;
-  } {
-    let settleBridge: (status: number, body: string) => void = () => undefined;
-    const handle = (): ReturnType<CodingRuntimeToolFacadeBridge["handle"]> =>
-      new Promise((resolve) => {
-        settleBridge = (status, body): void => {
-          resolve({ status, body });
-        };
-      });
-    const response = mockResponse({ captureBody: true });
-    const ctx: RouteContext = {
-      ...toolFacadeContext({ body: JSON.stringify({ action }), bearer: "tool-capability" }),
-      res: response.res,
-    };
-    const outcome = handleCodingSidecarToolFacade(ctx, depsWith(bridge(handle, 3_600_000)));
-    return {
-      response,
-      settle: (status, body): void => {
-        settleBridge(status, body);
-      },
-      outcome,
-    };
-  }
-
-  it("commits a pending verification call as 200 and keeps the body alive past the client's 300 s clock", async () => {
-    vi.useFakeTimers();
-    const pending = pendingTool("verification");
-    await vi.advanceTimersByTimeAsync(TOOL_KEEPALIVE_INTERVAL_MS * 12);
-    // 360 s of silence from the facade would end the sidecar's request; bytes must have flowed.
-    expect(pending.response.writeHeadCalls).toHaveLength(1);
-    expect(pending.response.body().length).toBeGreaterThanOrEqual(12);
-    pending.settle(200, JSON.stringify({ status: "completed" }));
-    expect(await pending.outcome).toBe(STREAMING);
-    expect(JSON.parse(pending.response.body())).toEqual({ status: "completed" });
-  });
-
-  it("answers a fast call with its own status and never commits early", async () => {
-    vi.useFakeTimers();
-    const pending = pendingTool("verification");
-    await vi.advanceTimersByTimeAsync(1_000);
-    pending.settle(403, "{}");
-    expect(await pending.outcome).toMatchObject({ status: 403 });
-    expect(pending.response.writeHeadCalls).toHaveLength(0);
-  });
-
-  it("does not hold other actions open", async () => {
-    vi.useFakeTimers();
-    const pending = pendingTool("read");
-    await vi.advanceTimersByTimeAsync(TOOL_KEEPALIVE_INTERVAL_MS * 3);
-    expect(pending.response.writeHeadCalls).toHaveLength(0);
-    pending.settle(200, "{}");
-    await pending.outcome;
-  });
 });
