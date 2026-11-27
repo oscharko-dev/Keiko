@@ -3233,6 +3233,7 @@
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchSlashCommands",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchTaskBranch",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/codingWorkbenchTaskSubmission",
+    "keiko-ui/app/components/desktop/widgets/coding-workbench/useActiveRunConflictNotice",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingTaskSession",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchConnectors",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchFileReferences",

@@ -126,7 +126,29 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);
+  useRunRereadOnReturn(refreshRun);
   usePostRunDescriptionRefresh(state.run.value, refreshRun);
+}
+
+/**
+ * U-14: another paired window of the same installation can start a run while this one sits idle,
+ * and nothing pushes that to a window that follows no run. The run is therefore read again each
+ * time the person returns to this window (the window gains focus, or its tab becomes visible), so
+ * the active run is on screen, and Start is not offered, before the person types a task for it.
+ * Not a polling loop: one coalesced status read per return.
+ */
+function useRunRereadOnReturn(refreshRun: () => Promise<void>): void {
+  useEffect(() => {
+    const reread = (): void => {
+      if (document.visibilityState === "visible") void refreshRun();
+    };
+    window.addEventListener("focus", reread);
+    document.addEventListener("visibilitychange", reread);
+    return (): void => {
+      window.removeEventListener("focus", reread);
+      document.removeEventListener("visibilitychange", reread);
+    };
+  }, [refreshRun]);
 }
 
 /** How often, and for how long at most, the settled run's snapshot is re-read while its

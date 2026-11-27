@@ -21,6 +21,7 @@ import {
 } from "./useWorkbenchExecutionLocation";
 import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
 import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
+import { useActiveRunConflictNotice } from "./useActiveRunConflictNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
 import { CodingWorkbenchToolCheck } from "./CodingWorkbenchToolCheck";
@@ -449,8 +450,9 @@ function consumesTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
 /**
  * Clears the composer's draft once the draft-consuming mutation that WAS pending settles as a
  * success (`mutation-complete` → status "idle"), and only when the draft is still the text that
- * mutation consumed: a failure (`mutation-failed` → status "error") and a cancelled Start
- * (`mutation-cancelled`) keep it so the operator can fix and resend, and text added while the
+ * mutation consumed: a failure (`mutation-failed` → status "error", or a failure a newer snapshot
+ * already superseded) and a cancelled Start (`mutation-cancelled`) keep it so the operator can fix
+ * and resend, and text added while the
  * mutation was in flight (dictation) is never wiped.
  * Without this, the draft stayed put after every completed Start, Retry or paused-run Send —
  * indistinguishable from an unsent draft, and re-submittable as a brand-new follow-up by mistake.
@@ -470,7 +472,8 @@ function useClearTaskIntentOnMutationSuccess(
       return;
     }
     if (consumesTaskIntent(previous) && mutation.status === "idle") {
-      if (mutation.cancelled !== true && submittedRef.current === taskIntent) setTaskIntent("");
+      const succeeded = mutation.cancelled !== true && mutation.supersededFailure === undefined;
+      if (succeeded && submittedRef.current === taskIntent) setTaskIntent("");
       submittedRef.current = null;
     }
   }, [mutation, setTaskIntent, taskIntent]);
@@ -1140,6 +1143,7 @@ export function CodingWorkbenchWindow({
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
   const runWorkspace = useRunWorkspaceBinding(state, activeWorkspace);
   useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setTaskIntent);
+  const activeRunConflict = useActiveRunConflictNotice({ state, taskIntent, setTaskIntent });
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
   const t = useCodingWorkbenchTranslate();
@@ -1223,7 +1227,8 @@ export function CodingWorkbenchWindow({
       selectedRoot={selectedRoot}
       selectedBranch={selectedBranch}
       taskIntent={taskIntent}
-      onTaskIntentChange={setTaskIntent}
+      onTaskIntentChange={activeRunConflict.onTaskIntentChange}
+      activeRunElsewhere={activeRunConflict.visible}
       focusRef={focusRef}
       alert={alert}
       modelReadiness={modelReadiness}
@@ -1512,6 +1517,8 @@ interface WorkbenchContentProps {
   readonly locationState: WorkbenchExecutionLocationState;
   readonly taskIntent: string;
   readonly onTaskIntentChange: (taskIntent: string) => void;
+  /** Another window of this installation holds the active run; the typed task was kept (U-14). */
+  readonly activeRunElsewhere: boolean;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
   readonly alert: string | null;
   /** The not-activated / failed-check fact about the Workbench's model, and the in-place action. */
@@ -1596,6 +1603,16 @@ function TaskBranchMovedNotice({ move }: { readonly move: TaskBranchMove | null 
   return (
     <output className={styles.alert}>
       <span aria-hidden="true">!</span> {t("codingWorkbench.composer.taskBranchMoved", { ...move })}
+    </output>
+  );
+}
+
+function ActiveRunElsewhereNotice({ visible }: { readonly visible: boolean }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (!visible) return null;
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span> {t("codingWorkbench.composer.activeRunElsewhere")}
     </output>
   );
 }
@@ -1801,6 +1818,7 @@ function WorkbenchColumns({
   locationState,
   taskIntent,
   onTaskIntentChange,
+  activeRunElsewhere,
   focusRef,
   onDecision,
   research,
@@ -2218,6 +2236,7 @@ function WorkbenchColumns({
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <ActiveRunElsewhereNotice visible={activeRunElsewhere} />
         <TaskBranchMovedNotice move={taskBranchMove} />
         <DeploymentCeilingNotice state={state} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />

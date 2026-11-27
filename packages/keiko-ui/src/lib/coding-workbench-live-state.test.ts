@@ -826,6 +826,32 @@ describe("mode selection, setup plans, and mutation failures", () => {
       expect(next.mutation).toMatchObject({ status: "idle", error: null });
     });
 
+    it("remembers which action failed and why, so a superseded failure never reads as success (U-14)", () => {
+      const start = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "mutation-start",
+        mutation: "start",
+        requestId: "req-1",
+      });
+      const refused = codingWorkbenchRuntimeReducer(start, {
+        kind: "mutation-failed",
+        error: { ...failure, code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT" },
+      });
+      const next = codingWorkbenchRuntimeReducer(refused, {
+        kind: "run-set",
+        snapshot: snapshot({ runId: "run-other", revision: 2, state: "running" }),
+      });
+      expect(next.mutation).toMatchObject({
+        status: "idle",
+        supersededFailure: { kind: "start", code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT" },
+      });
+      const restarted = codingWorkbenchRuntimeReducer(next, {
+        kind: "mutation-start",
+        mutation: "start",
+        requestId: "req-2",
+      });
+      expect(restarted.mutation.supersededFailure).toBeUndefined();
+    });
+
     it("clears the error when a different run replaces the one the action targeted", () => {
       const next = codingWorkbenchRuntimeReducer(failedAt(4), {
         kind: "run-set",

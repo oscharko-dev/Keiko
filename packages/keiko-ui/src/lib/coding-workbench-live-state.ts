@@ -139,6 +139,16 @@ export interface CodingWorkbenchMutationState {
    * so nothing that reads "pending → idle" as success (clearing the composer draft) may act on it.
    */
   readonly cancelled?: true;
+  /**
+   * A newer snapshot superseded this failed action: the mutation is idle again without having
+   * succeeded. Like `cancelled`, it must never read as "pending → idle" success, and it keeps the
+   * refused kind and code, so a window that never rendered the failure (the re-read came back
+   * within the same render) still knows why its Start did not run (U-14).
+   */
+  readonly supersededFailure?: {
+    readonly kind: CodingWorkbenchMutationKind | null;
+    readonly code: string;
+  };
 }
 
 export interface CodingWorkbenchRuntimeState {
@@ -244,6 +254,11 @@ const IDLE_MUTATION: CodingWorkbenchMutationState = {
   requestId: null,
   error: null,
 };
+
+function supersededMutation(failed: CodingWorkbenchMutationState): CodingWorkbenchMutationState {
+  if (failed.error === null) return IDLE_MUTATION;
+  return { ...IDLE_MUTATION, supersededFailure: { kind: failed.kind, code: failed.error.code } };
+}
 
 const CANCELLED_MUTATION: CodingWorkbenchMutationState = { ...IDLE_MUTATION, cancelled: true };
 
@@ -614,7 +629,9 @@ function acceptSnapshot(
       run: ready(snapshot),
       stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
       ...(changedRun ? { events: [] } : {}),
-      ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
+      ...(snapshotSupersedesFailure(state.mutation, snapshot)
+        ? { mutation: supersededMutation(state.mutation) }
+        : {}),
     }),
   );
 }

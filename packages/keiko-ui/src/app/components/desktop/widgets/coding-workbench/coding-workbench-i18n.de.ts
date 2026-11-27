@@ -478,6 +478,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.disable": "Projekt-Memory für diesen Lauf ausschalten",
   "codingWorkbench.composer.help":
     "Pausiere den Lauf, um die Rückfrage zu senden. Für diesen Lauf ist keine Warteschlange verfügbar.",
+  "codingWorkbench.composer.activeRunElsewhere":
+    "In dieser Installation läuft bereits ein anderer Coding-Lauf, deshalb zeigt dieses Fenster ihn jetzt an. Dein Aufgabentext bleibt erhalten, damit du ihn starten kannst, sobald dieser Lauf beendet ist.",
   "codingWorkbench.composer.workspaceMismatch":
     "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechsle über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
