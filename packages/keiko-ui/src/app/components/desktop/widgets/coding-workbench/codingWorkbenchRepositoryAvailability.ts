@@ -17,5 +17,5 @@ export function locallyAvailable(project: ProjectWithAvailability): boolean {
  * choosing it in the picker is the person's explicit act to reconnect it (U-16).
  */
 export function needsReconnect(project: ProjectWithAvailability): boolean {
-  return project.available && project.readable !== false && project.workspaceAvailable !== true;
+  return project.available && project.readable !== false && project.workspaceAvailable === false;
 }
