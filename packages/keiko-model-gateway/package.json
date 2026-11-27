@@ -19,6 +19,10 @@
       "types": "./dist/resilience.d.ts",
       "import": "./dist/resilience.js"
     },
+    "./internal/prompt-calibration": {
+      "types": "./dist/prompt-calibration.d.ts",
+      "import": "./dist/prompt-calibration.js"
+    },
     "./internal/prompt-token-accounting": {
       "types": "./dist/prompt-token-accounting.d.ts",
       "import": "./dist/prompt-token-accounting.js"

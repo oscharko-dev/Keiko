@@ -42,11 +42,14 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  countGatewayPromptTokens,
-  type ModelTokenAccounting,
-} from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { ModelTokenAccounting } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
+import {
+  estimateRoutePrompt,
+  recordRoutePromptUsage,
+  routePromptEstimateOf,
+} from "./coding-sidecar-prompt-estimate.js";
+import type { PromptCalibrationMark } from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
 import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { renderMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
@@ -196,6 +199,8 @@ interface PromptTokenReservation {
    * call is attributed by this (#4359).
    */
   readonly conversation: CodingRuntimeConversation;
+  /** What the provider's reported prompt usage is recorded against for later calibration. */
+  readonly calibrationMark?: PromptCalibrationMark | undefined;
   settled: boolean;
   settlement?: PromptTokenSettlement;
 }
@@ -234,13 +239,15 @@ function settlePromptTokenReservation(
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
   // The run's context usage reads the prompt size the provider reported for this call: the one
   // fact every native run sends through this gateway, whatever events its runtime emits (#4359).
-  if (providerReported && !reservation.settled)
+  if (providerReported && !reservation.settled) {
+    recordRoutePromptUsage(reservation.calibrationMark, actualPromptTokens);
     runtimeCapabilityAuthenticator(deps)?.observeProviderPromptTokens?.(
       reservation.capability,
       actualPromptTokens,
       reservation.conversation,
       reservation.modelCallId,
     );
+  }
   return applyPromptTokenSettlement(deps, reservation, {
     promptTokens:
       (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
@@ -337,6 +344,31 @@ const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_
 /** A media part count on the request line: present only when the request carries such parts. */
 const MEDIA_PART_COUNT_FIELD = { type: "integer", dataClass: "count", required: false } as const;
 
+/**
+ * Where `estimatedPromptTokens` came from: the local tokenizer, or the provider's reported usage of
+ * the prefix this request extends plus the estimated growth. `localPromptTokens` is the local figure
+ * either way. Optional only because lines written before these fields existed lack them.
+ */
+const PROMPT_ESTIMATE_SOURCE_FIELDS = {
+  promptEstimateSource: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["local", "usage-calibrated"],
+  },
+  localPromptTokens: { type: "integer", dataClass: "count", required: false },
+} as const;
+
+function promptEstimateSourceEvidence(parsed: object): {
+  readonly promptEstimateSource?: "local" | "usage-calibrated";
+  readonly localPromptTokens?: number;
+} {
+  const estimate = routePromptEstimateOf(parsed);
+  return estimate === undefined
+    ? {}
+    : { promptEstimateSource: estimate.source, localPromptTokens: estimate.localTokens };
+}
+
 const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -351,6 +383,7 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    ...PROMPT_ESTIMATE_SOURCE_FIELDS,
     // #3591 (1.1.7): the output allowance sent with this request, clamped to the window that
     // remains after the prompt — the value an output-exhausted turn has to be read against.
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
@@ -596,6 +629,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    ...PROMPT_ESTIMATE_SOURCE_FIELDS,
     inputTokenLimit: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
     // #3591 review: the bound the prompt was actually admitted against — `maxPromptTokens` less
@@ -924,6 +958,8 @@ type GatewayRejectionEvidence = Partial<{
   readonly missingToolCount: number;
   readonly toolMismatchSha256: string;
   readonly estimatedPromptTokens: number;
+  readonly promptEstimateSource: "local" | "usage-calibrated";
+  readonly localPromptTokens: number;
   readonly maxPromptTokens: number;
   readonly admissiblePromptTokens: number;
   readonly inputMessageCount: number;
@@ -2306,11 +2342,13 @@ function samplingValidationMessage(
   return `Request body ${issue.message.replace("topP", "top_p")}.`;
 }
 
+// The figure a request is admitted against: calibrated from the provider's reported usage of the
+// prefix it extends when one is known, else the local estimate (see `estimateRoutePrompt`).
 function promptTokenEstimate(
   parsed: CodingSidecarGatewayChatCompletionRequest,
-  accounting: ModelTokenAccounting | undefined,
+  profile: AvailableGatewayProfile,
 ): number {
-  return countGatewayPromptTokens(parsed, accounting);
+  return estimateRoutePrompt(parsed, promptTokenAccounting(profile), profile.result.modelAlias);
 }
 
 function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAccounting | undefined {
@@ -3465,6 +3503,7 @@ function admitGatewayModelCall(
   runId: string,
   reservedPromptTokens: number,
   conversation: CodingRuntimeConversation,
+  calibrationMark?: PromptCalibrationMark,
 ): PromptTokenReservation | undefined {
   const reserved = runtimeCapabilityAuthenticator(deps)?.admitModelCall?.(
     capability,
@@ -3476,6 +3515,7 @@ function admitGatewayModelCall(
     capability,
     reservedPromptTokens,
     conversation,
+    calibrationMark,
     ...(modelCallId === undefined ? {} : { modelCallId }),
     settled: false,
   };
@@ -5528,6 +5568,7 @@ function logChatRequestRejection(
     (reason === "input-messages-exceeded" || reason === "prompt-tokens-exceeded")
       ? {
           estimatedPromptTokens: observed.estimatedPromptTokens,
+          ...promptEstimateSourceEvidence(observed.parsed),
           maxPromptTokens: observed.bounds.maxPromptTokens,
           ...declaredInputBound(observed.bounds),
           admissiblePromptTokens: admissiblePromptTokens(observed.bounds),
@@ -5634,9 +5675,7 @@ async function readValidatedChatRequest(
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
   const { parsed, resolved } = await readRoutedChatRequest(ctx, deps, runProfile, authentication);
-  const estimatedPromptTokens = isRouteResult(parsed)
-    ? 0
-    : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
+  const estimatedPromptTokens = isRouteResult(parsed) ? 0 : promptTokenEstimate(parsed, resolved);
   const validationError = validationErrorForChatRequest(
     parsed,
     resolved.result.modelAlias,
@@ -5932,7 +5971,7 @@ function withBoundRunSkill(
     return refusal;
   }
   const parsed = withSkillInstructions(validated.parsed, bound.skill);
-  const estimatedPromptTokens = promptTokenEstimate(parsed, promptTokenAccounting(resolved));
+  const estimatedPromptTokens = promptTokenEstimate(parsed, resolved);
   const validationError = validationErrorForChatRequest(
     parsed,
     resolved.result.modelAlias,
@@ -6044,6 +6083,7 @@ function logValidatedRequestBounds(
           ? {}
           : { admissiblePromptTokens: admissiblePromptTokens(bounds) }),
         estimatedPromptTokens,
+        ...promptEstimateSourceEvidence(request),
         maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,
         offeredToolCount: request.tools?.length ?? 0,
@@ -6096,6 +6136,7 @@ function executeBudgetedGatewayChat(
     authentication.runId,
     estimatedPromptTokens,
     conversationOf(parsed),
+    routePromptEstimateOf(parsed)?.mark,
   );
   if (promptTokenReservation === undefined) {
     const answer = forbiddenGatewayRequest();

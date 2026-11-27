@@ -9,6 +9,7 @@ import {
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
+import { _resetRoutePromptCalibrationForTests } from "./coding-sidecar-prompt-estimate.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
 import {
   MAX_RUNTIME_MAX_DURATION_MINUTES,
@@ -534,6 +535,8 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 
 // The consecutive-unavailable count is per run id and these tests reuse one: each starts clean.
 beforeEach(resetProviderUnavailableWindowsForTests);
+// The route's prompt calibration is process-wide state: every case starts without it.
+beforeEach(_resetRoutePromptCalibrationForTests);
 
 describe("coding-sidecar gateway", () => {
   afterEach(resetServerLogger);
@@ -6712,6 +6715,8 @@ describe("coding sidecar gateway rejection activity log", () => {
           reason: "prompt-tokens-exceeded",
           runId: "run-gateway-test",
           estimatedPromptTokens,
+          promptEstimateSource: "local",
+          localPromptTokens: estimatedPromptTokens,
           maxPromptTokens: 16,
           admissiblePromptTokens: admissible,
           inputMessageCount: 1,
@@ -6751,6 +6756,8 @@ describe("coding sidecar gateway rejection activity log", () => {
           reason: "input-messages-exceeded",
           runId: "run-gateway-test",
           estimatedPromptTokens,
+          promptEstimateSource: "local",
+          localPromptTokens: estimatedPromptTokens,
           maxPromptTokens: 128_000,
           admissiblePromptTokens: admissiblePromptTokens({
             maxPromptTokens: 128_000,
@@ -12485,4 +12492,87 @@ it("explains unavailable local continuation without calling or blaming the provi
     resetGatewayInstanceCacheForTests();
     resetServerLogger();
   }
+});
+
+// ─── O-1: route admission calibrated from the provider's reported prompt usage ──────────────────
+// The local tokenizer over-counts repetitive tool output (about +65% measured live), so the route
+// used to refuse prompts that fit. A request extending one whose real usage is known is admitted
+// against that usage plus the estimated growth; a true overflow is still refused.
+describe("coding-sidecar gateway route prompt calibration", () => {
+  afterEach(resetServerLogger);
+
+  function repetitive(tokens: number): string {
+    const line = "trace 1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
+    const sample = 2_000;
+    const perLine =
+      countGatewayPromptTokens({ messages: [{ role: "user", content: line.repeat(sample) }] }) /
+      sample;
+    return line.repeat(Math.ceil(tokens / perLine));
+  }
+
+  interface Message {
+    role: "user" | "assistant";
+    content: string;
+  }
+  const firstTurn = (): Message[] => [
+    { role: "user", content: "run the trace" },
+    { role: "assistant", content: "running" },
+    { role: "user", content: repetitive(95_000) },
+  ];
+  const extend = (messages: Message[], tokens: number): Message[] => [
+    ...messages,
+    { role: "assistant", content: "done" },
+    { role: "user", content: repetitive(tokens) },
+  ];
+
+  function send(
+    messages: Message[],
+    reportedPromptTokens: number,
+  ): ReturnType<typeof handleCodingSidecarGatewayChatCompletions> {
+    const reply = {
+      ...assistantResponse("azure-coding-model"),
+      usage: { ...assistantResponse("x").usage, promptTokens: reportedPromptTokens },
+    };
+    return handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "azure-coding-model", messages, tools: [] }),
+      depsValue(configValue(provider(), capability()), () => vi.fn(() => Promise.resolve(reply))),
+    );
+  }
+
+  it("refuses a prompt over the bound when no usage of its prefix is known", async () => {
+    const sink = captureServerLog("info");
+    const result = await send(extend(firstTurn(), 30_000), 1);
+    expect(result).toMatchObject({
+      status: 400,
+      body: { error: { code: "context_length_exceeded" } },
+    });
+    const rejected = sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+    expect(rejected?.extra).toMatchObject({
+      reason: "prompt-tokens-exceeded",
+      promptEstimateSource: "local",
+    });
+  });
+
+  it("admits the same prompt after one calibrated turn, and refuses a true overflow", async () => {
+    const sink = captureServerLog("info");
+    const first = firstTurn();
+    expect(await send(first, 60_250)).toMatchObject({ status: 200 });
+    const second = extend(first, 30_000);
+    expect(await send(second, 61_000)).toMatchObject({ status: 200 });
+    const validated = sink.events.filter(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated.at(-1)?.extra).toMatchObject({ promptEstimateSource: "usage-calibrated" });
+    const calibrated = validated.at(-1)?.extra?.estimatedPromptTokens as number;
+    expect(calibrated).toBeLessThan(validated.at(-1)?.extra?.localPromptTokens as number);
+    expect(calibrated).toBeGreaterThan(60_250);
+    const overflow = await send(extend(second, 90_000), 1);
+    expect(overflow).toMatchObject({
+      status: 400,
+      body: { error: { code: "context_length_exceeded" } },
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "prompt-tokens-exceeded", promptEstimateSource: "usage-calibrated" });
+  });
 });

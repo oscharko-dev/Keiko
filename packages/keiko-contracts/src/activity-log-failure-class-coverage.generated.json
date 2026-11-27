@@ -20321,6 +20321,12 @@
               "required": false
             },
             {
+              "name": "localPromptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "maxInputMessages",
               "type": "integer",
               "dataClass": "count",
@@ -20336,6 +20342,12 @@
               "name": "missingToolCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "promptEstimateSource",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -20585,6 +20597,12 @@
               "required": false
             },
             {
+              "name": "localPromptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "maxOutputTokens",
               "type": "integer",
               "dataClass": "count",
@@ -20606,6 +20624,12 @@
               "name": "offeredToolCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "promptEstimateSource",
+              "type": "string",
+              "dataClass": "closed-enum",
               "required": false
             },
             {
@@ -20633,7 +20657,13 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "loss-state", "opaque-id"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

@@ -83,6 +83,11 @@ export class PromptCalibrationLedger {
     this.byModel.set(mark.modelId, kept.slice(-MAX_RECORDS_PER_MODEL));
   }
 
+  /** Forgets every record; for test isolation of a process-wide instance. */
+  reset(): void {
+    this.byModel.clear();
+  }
+
   private matching(
     modelId: string,
     request: PromptCalibrationInput,

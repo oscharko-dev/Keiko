@@ -19505,6 +19505,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      promptEstimateSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["local", "usage-calibrated"],
+      },
+      localPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       inputTokenLimit: {
         type: "integer",
         dataClass: "count",
@@ -19586,6 +19597,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      promptEstimateSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["local", "usage-calibrated"],
+      },
+      localPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       maxOutputTokens: {
         type: "integer",
