@@ -4998,7 +4998,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-11-27",
         "humanApproved": true,
-        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#0",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4491#7217274296",
         "rationale": "On 2026-11-27 the repository owner ordered Keiko 1.5.10 prepared from the defects found while testing 1.5.9 as a customer (pull request #4568). The protected dev checks, resolved reviews and the exact-commit release workflow govern publication."
       }
     }
