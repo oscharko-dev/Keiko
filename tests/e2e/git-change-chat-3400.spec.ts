@@ -114,7 +114,11 @@ test.afterEach(() => {
   }
 });
 
-test.use({ viewport: { width: 1600, height: 900 } });
+// The workspace dock (added in 1.5.1, #4409) reserves the bottom of the viewport. Every window the
+// fixtures seed ends at y=844 (24 + 820), so a 1000px viewport leaves room for the dock and the Chat
+// composer stays clickable. Persisted window frames are not re-fitted to the viewport on load: that
+// product gap is handled separately in the window layer, so the fixtures size their windows instead.
+test.use({ viewport: { width: 1600, height: 1000 } });
 
 test("connects the Git window's current branch to a Chat and shows the scope pill", async ({
   page,
