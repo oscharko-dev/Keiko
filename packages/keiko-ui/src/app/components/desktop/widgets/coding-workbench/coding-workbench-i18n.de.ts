@@ -834,6 +834,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.isolation-unavailable": "Hier nicht möglich",
   "codingWorkbench.activity.toolState.dependencies-unavailable": "Abhängigkeiten fehlen",
   "codingWorkbench.activity.toolState.not-done": "Nicht durchgeführt",
+  "codingWorkbench.activity.toolState.prepared": "Vorbereitet",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
   "codingWorkbench.activity.toolState.cancelled": "Abgebrochen",
@@ -1567,6 +1568,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Verifizierung konnte auf diesem Computer nicht laufen: Für diesen Run führt Keiko Projektbefehle nur in einer Container-Laufzeit (Docker oder Podman) oder unter Windows in seiner eigenen geprüften Isolation aus, und beides ist hier nicht verfügbar. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
   "codingWorkbench.activity.verification.dependencies-unavailable":
     "Die Verifizierung ist nicht gelaufen: Keiko konnte die Abhängigkeiten des Projekts nicht installieren, deshalb lief keine Prüfung. Das ist keine fehlgeschlagene Prüfung. Installiere die Abhängigkeiten selbst im Projektordner und verifiziere dann erneut.",
+  "codingWorkbench.activity.git.prepared":
+    "Hier vorbereitet; ein späterer Schritt hat ihn übernommen.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
   "codingWorkbench.activity.git.verification-failed":

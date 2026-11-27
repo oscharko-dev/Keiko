@@ -570,6 +570,52 @@ describe("CodingWorkbenchTimeline", () => {
     expect(done[0]).not.toHaveTextContent("Keiko carried out this step.");
   });
 
+  // Seen in the 1.5.9 release walk (#4491): in Full access the governed commit first answers
+  // "approval required" with a proposal and a later step carries it out under the task's authority.
+  // The proposal's row read "Waiting for approval" for good, beside the commit that happened.
+  it("shows a Git proposal a later step took up as prepared, not as waiting for approval", () => {
+    const feed = feedWithRepeatedTools();
+    const proposal = {
+      callId: "git-commit-proposal",
+      tool: "keiko_git_commit",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome: "waiting-for-approval", bridgeDurationMs: 9 },
+    } as const;
+    const carriedOut = {
+      callId: "git-commit-execute",
+      tool: "keiko_git_execute",
+      state: "succeeded",
+      occurredAt: "2026-08-23T09:52:09.000Z",
+      presentation: { gitOutcome: "completed", bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [
+            {
+              turnId: "turn-commit",
+              messages: [],
+              tools: [proposal, carriedOut],
+              truncated: false,
+            },
+          ],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-tool-state="waiting-for-approval"]')).toBeNull();
+    const prepared = container.querySelector<HTMLDetailsElement>('[data-tool-state="prepared"]');
+    expect(prepared?.open).toBe(false);
+    expect(prepared).toHaveTextContent("Prepared");
+    expect(prepared).toHaveTextContent("Prepared here; a later step took it up.");
+    expect(prepared).not.toHaveTextContent("Succeeded");
+  });
+
   // Lab T37 audit (#4271): a refused Git step between succeeded calls must not fold into the
   // collapsed "N steps" group, where its reason would hide behind a success summary.
   it("keeps a refused Git step out of the group of succeeded steps", () => {
