@@ -386,9 +386,19 @@ describe("native policy asks", () => {
     expect(event.nativeAction).toEqual({ permission: "shell", resources: ["npm run lint"] });
     expect(event.commandLabel).toBe("native-shell");
     expect(decision.actionId).toBe("ses_native0000000000001:call_1");
+    // The ask names the tool call it holds back, so the Workbench can mark exactly that row.
+    expect(event.callId).toBe("call_1");
     expect(Date.parse(event.expiresAt)).toBeGreaterThan(NOW);
     const { nativeAction: _native, type: _type, ...projected } = event;
     expect(validateCodingWorkbenchPermissionRequest(projected)).toMatchObject({ ok: true });
+    const unbound = decideOpenCodeNativePolicy({
+      mode: "governed-assist",
+      workspaceRoot: WORKSPACE,
+      request: { ...request("shell", ["npm run lint"]), source: undefined },
+      nowMs: NOW,
+    });
+    if (unbound.effect !== "ask") throw new Error("expected an ask");
+    expect(unbound.event).not.toHaveProperty("callId");
     const edit = decide("governed-assist", "edit", ["src/a.ts", "src/b.ts"]);
     if (edit.effect !== "ask") throw new Error("expected an ask");
     expect(edit.event.kind).toBe("workspace-write");

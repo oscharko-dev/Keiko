@@ -1735,6 +1735,7 @@ function askEvent(
       ? { commandLabel: classification.label }
       : {}),
     nativeAction: { permission: request.permission, resources: request.resources },
+    ...(request.source === undefined ? {} : { callId: request.source.id }),
   };
 }
 

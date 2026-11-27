@@ -218,11 +218,20 @@ export interface CodingWorkbenchTimelineProps {
    * as "Run the check now" (#4491).
    */
   readonly onRunCheck?: (() => void) | undefined;
+  /**
+   * The id of the tool call the run's pending approval holds back (the ask's `callId`). While the
+   * run waits for the person, exactly that call's row reads "Waiting for approval" instead of
+   * "Running". Absent when no approval is pending or the ask names no call: no row is marked then,
+   * so an ambiguous guess never mislabels a tool that is really running.
+   */
+  readonly awaitingApprovalCallId?: string | undefined;
 }
 
 // The action reaches the failure card through a context: the card sits several rows below the
 // timeline, and none of those rows otherwise carries an action.
 const RunCheckContext = createContext<(() => void) | undefined>(undefined);
+// The call a pending approval holds back reaches the tool rows through a context for the same reason.
+const AwaitingApprovalCallIdContext = createContext<string | undefined>(undefined);
 
 // The complete answers read beside the bounded feed reach each message row the same way.
 // The complete model texts read beside the bounded feed reach each message row the same way, with
@@ -268,6 +277,7 @@ export function Timeline({
   questions,
   focusRef,
   onRunCheck,
+  awaitingApprovalCallId,
 }: CodingWorkbenchTimelineProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
@@ -282,27 +292,29 @@ export function Timeline({
     return null;
   return (
     <RunCheckContext.Provider value={onRunCheck}>
-      <ModelTextsContext.Provider value={modelTexts}>
-        <section className={styles.cmpConversation} aria-labelledby="timeline-title">
-          <TimelineHeading titleRef={titleRef} t={t} />
-          <ActivityStatus activity={activity} attention={attention} t={t} />
-          <RunDetailsToggle
-            visible={events.length > 0}
-            expanded={showEvents}
-            onToggle={() => setShowEvents(!showEvents)}
-            t={t}
-          />
-          <QuestionSummary questions={questions} />
-          <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
-          <TimelineContent
-            items={items}
-            timeline={timeline}
-            questions={questions}
-            restoreFocusRef={titleRef}
-            t={t}
-          />
-        </section>
-      </ModelTextsContext.Provider>
+      <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
+        <ModelTextsContext.Provider value={modelTexts}>
+          <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+            <TimelineHeading titleRef={titleRef} t={t} />
+            <ActivityStatus activity={activity} attention={attention} t={t} />
+            <RunDetailsToggle
+              visible={events.length > 0}
+              expanded={showEvents}
+              onToggle={() => setShowEvents(!showEvents)}
+              t={t}
+            />
+            <QuestionSummary questions={questions} />
+            <FirstStepWait waitKey={awaitedFirstStep(activity.feed, generating)} t={t} />
+            <TimelineContent
+              items={items}
+              timeline={timeline}
+              questions={questions}
+              restoreFocusRef={titleRef}
+              t={t}
+            />
+          </section>
+        </ModelTextsContext.Provider>
+      </AwaitingApprovalCallIdContext.Provider>
     </RunCheckContext.Provider>
   );
 }
@@ -1502,7 +1514,8 @@ function ToolRow({
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
   const { tool } = item;
-  const shownState = shownToolState(tool, item.superseded === true);
+  const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
+  const shownState = shownToolState(tool, item.superseded === true, awaitingCallId);
   const origin = toolFailureOrigin(tool);
   return (
     <li
@@ -1733,7 +1746,25 @@ function succeededToolState(tool: CodingSafeActivityTool, superseded: boolean): 
   return superseded && git === "waiting-for-approval" ? "prepared" : git;
 }
 
-function shownToolState(tool: CodingSafeActivityTool, superseded = false): ShownToolState {
+// A call that has not finished while the person's decision on it is pending is blocked on the
+// human, not executing: the ask names its call exactly (`awaitingCallId`), never a guess.
+function isHeldForApproval(
+  tool: CodingSafeActivityTool,
+  awaitingCallId: string | undefined,
+): boolean {
+  return (
+    awaitingCallId !== undefined &&
+    tool.callId === awaitingCallId &&
+    (tool.state === "running" || tool.state === "pending")
+  );
+}
+
+function shownToolState(
+  tool: CodingSafeActivityTool,
+  superseded = false,
+  awaitingCallId?: string,
+): ShownToolState {
+  if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
   if (tool.state === "succeeded") return succeededToolState(tool, superseded);
   if (tool.state !== "failed") return tool.state;
   const exitCode = tool.presentation?.exitCode;

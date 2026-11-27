@@ -4022,6 +4022,7 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     ...(event.policyReason === undefined ? {} : { policyReason: event.policyReason }),
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
+    ...(event.callId === undefined ? {} : { callId: event.callId }),
     ...(event.nativeAction === undefined
       ? {}
       : {

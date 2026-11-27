@@ -586,6 +586,20 @@ function validateNativePermission(
   }
 }
 
+/** The opaque tool call id an ask holds back: a bounded token, never content. */
+const PERMISSION_CALL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+function validatePermissionCallId(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (value.callId === undefined) return;
+  if (typeof value.callId !== "string" || !PERMISSION_CALL_ID.test(value.callId)) {
+    errors.push(`${path}.callId is invalid`);
+  }
+}
+
 function validatePermissionRequestSupervisedFields(
   value: Record<string, unknown>,
   path: string,
@@ -630,6 +644,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
       "connectorScopes",
       "commandLabel",
       "nativePermission",
+      "callId",
       "expiresAt",
     ],
     path,
@@ -643,6 +658,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
     errors.push(`${path}.actionClass is invalid`);
   }
   validatePermissionRequestOptionalFields(value, path, errors);
+  validatePermissionCallId(value, path, errors);
   if (value.kind === "command-execution" && value.commandLabel === undefined) {
     errors.push(`${path}.commandLabel is required`);
   }

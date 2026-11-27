@@ -2075,6 +2075,7 @@ function WorkbenchColumns({
                 activity={timeline.activity}
                 questions={questions}
                 focusRef={focusRef}
+                awaitingApprovalCallId={runPendingPermission(state)?.callId}
                 onRunCheck={
                   canStartAtLocation(state, locationState, taskBranchMove) &&
                   state.mutation.status !== "pending"

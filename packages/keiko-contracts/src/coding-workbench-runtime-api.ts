@@ -1134,6 +1134,7 @@ export type CodingWorkbenchRuntimePendingPermission = Pick<
   | "connectorScopes"
   | "commandLabel"
   | "nativePermission"
+  | "callId"
   | "expiresAt"
 >;
 

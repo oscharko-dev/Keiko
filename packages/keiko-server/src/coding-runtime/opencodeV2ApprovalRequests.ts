@@ -85,6 +85,7 @@ const ASK_IDENTITY_FIELDS: ReadonlySet<string> = new Set([
   "actionId",
   "idempotencyKey",
   "approvalId",
+  "callId",
   "expiresAt",
 ]);
 const ASK_KEYS: readonly string[] = ["action", "runId", "actionId", "properties"];
@@ -126,7 +127,10 @@ function parsedAsk(value: unknown, runId: string, sessionId: string): ParsedAsk 
     { id: properties.id, type: "permission.asked", properties },
     sessionId,
   );
-  return event === undefined ? undefined : { event, actionId };
+  // The ask is bound to its call (`boundActionId`), so the call's own id names the row it holds back.
+  return event === undefined
+    ? undefined
+    : { event: { ...event, callId: actionId.slice(sessionId.length + 1) }, actionId };
 }
 
 // The decision about one parsed ask, naming its call and its permission request.

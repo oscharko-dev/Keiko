@@ -687,6 +687,12 @@ export interface CodingWorkbenchPermissionRequest {
    * explicit discriminator of a native ask, present for every native action, not only commands.
    */
   readonly nativePermission?: string | undefined;
+  /**
+   * The opaque id of the model's tool call this ask holds back, the `callId` of that call's row in
+   * the safe activity feed. It lets the Workbench show exactly that row as waiting for the
+   * person's decision instead of running. Absent when the ask belongs to no tool call.
+   */
+  readonly callId?: string | undefined;
   readonly expiresAt: string;
 }
 

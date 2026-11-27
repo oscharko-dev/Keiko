@@ -38,6 +38,8 @@ export interface SidecarPermissionEvent {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  /** The tool call this ask holds back (opaque id), set by the server, never parsed from a line. */
+  readonly callId?: string | undefined;
   readonly actionId?: string | undefined;
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
