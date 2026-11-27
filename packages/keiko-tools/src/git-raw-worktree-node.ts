@@ -169,13 +169,10 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     throw new GitRawWorktreeReadError("git-raw-snapshot-drift");
   return { headSha, branch, stagedTreeDigest, opaqueUntrackedCount: opaque.length, ...scanned };
 }
-const FALSE_VALUES = /^(?:false|no|off|0)$/iu;
+// Git canonicalizes the value (`--type=bool`), so an empty value or `00` reads as Git reads it.
 function lazyFileMode(deps: NodeGitWorktreeReaderDeps): () => Promise<boolean> {
   let value: Promise<boolean> | undefined;
-  return () =>
-    (value ??= readGitConfigValue(deps, "core.filemode").then(
-      (raw) => raw === undefined || !FALSE_VALUES.test(raw),
-    ));
+  return () => (value ??= readGitConfigValue(deps, "core.filemode").then((raw) => raw !== "false"));
 }
 interface ScanInputs {
   readonly deps: NodeGitWorktreeReaderDeps;

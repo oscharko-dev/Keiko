@@ -791,19 +791,22 @@ export async function readGitHeadIfBorn(
 
 export type GitReadConfigKey = "core.filemode";
 /**
- * The repository's effective value of one closed config key, `undefined` when unset. It runs through
- * the same isolated lane as every other read (global and system scopes pinned off), so it reports
- * what the Git this reader consults would see. Read-only; the key set is closed.
+ * The repository's effective value of one closed boolean config key, canonicalized by Git to
+ * `true` or `false` (a value Git cannot read as a boolean fails), `undefined` when unset. It runs
+ * through the same isolated lane as every other read (global and system scopes pinned off), so it
+ * reports what the Git this reader consults would see. Read-only; the key set is closed.
  */
 export async function readGitConfigValue(
   deps: NodeGitWorktreeReaderDeps,
   key: GitReadConfigKey,
 ): Promise<string | undefined> {
   const ctx = metadataReadContext(deps);
-  const result = await runGuardProbe(ctx, ["config", "--get", key]).catch((error: unknown) => {
-    if (isCallerBoundaryFailure(error)) throw error;
-    throw new GitWorktreeReadError("git config failed to run");
-  });
+  const result = await runGuardProbe(ctx, ["config", "--type=bool", "--get", key]).catch(
+    (error: unknown) => {
+      if (isCallerBoundaryFailure(error)) throw error;
+      throw new GitWorktreeReadError("git config failed to run");
+    },
+  );
   if (result.truncated || (result.exitCode !== 0 && result.exitCode !== 1))
     throw new GitWorktreeReadError(`git config exited ${String(result.exitCode)}`);
   return result.exitCode === 1 ? undefined : result.stdout.trim();

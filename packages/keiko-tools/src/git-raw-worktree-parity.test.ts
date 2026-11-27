@@ -182,6 +182,24 @@ describe("conversion and mode parity with git status", () => {
     expect(porcelain(await readerStatus(root))).toEqual(porcelain([" M code.txt"]));
   });
 
+  it.each([
+    ["an empty value", ""],
+    ["a zero integer", "00"],
+  ])("reads core.fileMode as Git's boolean for %s", async (_label, value) => {
+    const root = repository();
+    git(root, ["config", "core.fileMode", value]);
+    chmodSync(join(root, "code.txt"), 0o755);
+    expect(gitStatusTracked(root)).toEqual([]);
+    expect(await readerStatus(root)).toEqual([]);
+  });
+
+  it("refuses a core.fileMode value Git cannot read as a boolean", async () => {
+    const root = repository();
+    git(root, ["config", "core.fileMode", "maybe"]);
+    chmodSync(join(root, "code.txt"), 0o755);
+    await expect(readerStatus(root)).rejects.toThrow();
+  });
+
   it("reports a chmod as modified when core.fileMode is on", async () => {
     const root = repository();
     chmodSync(join(root, "code.txt"), 0o755);
