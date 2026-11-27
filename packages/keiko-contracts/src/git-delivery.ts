@@ -475,10 +475,31 @@ export interface GitDeliveryPartialDetail {
   readonly succeededUnitCount: number;
 }
 
-// How a governed commit decided about signing, from Git's effective `commit.gpgsign` for the
-// repository (ADR-0006). `configured` signs; `not-configured` commits as Git itself would, unsigned;
-// `unknown-fail-closed` could not read a trustworthy value and therefore attempts to sign.
-export type GitCommitSigningDecision = "configured" | "not-configured" | "unknown-fail-closed";
+// How a governed commit decided about signing (ADR-0006), one source for the type, the guard and the
+// log vocabularies. `configured` signs because Git's effective `commit.gpgsign` is true;
+// `required-by-branch-protection` signs because the trusted branch-protection read says the target
+// branch requires signatures although `commit.gpgsign` is not true; `not-configured` commits as Git
+// itself would, unsigned; `unknown-fail-closed` could not read a trustworthy value and therefore
+// attempts to sign.
+export const GIT_COMMIT_SIGNING_DECISIONS = [
+  "configured",
+  "required-by-branch-protection",
+  "not-configured",
+  "unknown-fail-closed",
+] as const;
+export type GitCommitSigningDecision = (typeof GIT_COMMIT_SIGNING_DECISIONS)[number];
+
+// Why the `commit.gpgsign` read yielded no usable answer (closed, body-free).
+export const GIT_COMMIT_SIGNING_READ_FAILURES = [
+  "timeout",
+  "cancelled",
+  "denied",
+  "spawn",
+  "truncated",
+  "exit",
+  "malformed",
+] as const;
+export type GitCommitSigningReadFailure = (typeof GIT_COMMIT_SIGNING_READ_FAILURES)[number];
 
 export interface GitDeliveryExecutionResult {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -490,6 +511,8 @@ export interface GitDeliveryExecutionResult {
   readonly partialDetail?: GitDeliveryPartialDetail | undefined;
   // Set by a commit execution only: which signing branch it took. Closed value, never config text.
   readonly signing?: GitCommitSigningDecision | undefined;
+  // Set with `signing: "unknown-fail-closed"`: the closed class of the failed configuration read.
+  readonly signingReadFailure?: GitCommitSigningReadFailure | undefined;
 }
 
 // Content-free evidence reference. Never raw diffs, command output, or secrets. Field naming aligns
@@ -751,12 +774,17 @@ export function isGitDeliveryExecutionResult(value: unknown): value is GitDelive
     isUndefinedOr(isNonEmptyString)(value.externalId) &&
     isUndefinedOr(isGitDeliveryExecutionErrorCode)(value.errorCode) &&
     isUndefinedOr(isPartialDetail)(value.partialDetail) &&
-    isUndefinedOr(isCommitSigningDecision)(value.signing)
+    isUndefinedOr(isCommitSigningDecision)(value.signing) &&
+    isUndefinedOr(isCommitSigningReadFailure)(value.signingReadFailure)
   );
 }
 
 function isCommitSigningDecision(value: unknown): value is GitCommitSigningDecision {
-  return value === "configured" || value === "not-configured" || value === "unknown-fail-closed";
+  return GIT_COMMIT_SIGNING_DECISIONS.some((decision) => decision === value);
+}
+
+function isCommitSigningReadFailure(value: unknown): value is GitCommitSigningReadFailure {
+  return GIT_COMMIT_SIGNING_READ_FAILURES.some((failure) => failure === value);
 }
 
 function isActionPreview(value: unknown): value is GitDeliveryActionPreview {

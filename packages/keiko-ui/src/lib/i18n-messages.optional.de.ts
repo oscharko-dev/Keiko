@@ -3580,7 +3580,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.preflightFindings": "Prüfungen",
   "commitComposer.preflight.branchProtectionUnavailable":
     "Remote-Branch-Regeln konnten nicht gelesen werden",
-  "commitComposer.preflight.signedCommitsRequired": "Signierte Commits sind möglicherweise nötig",
+  "commitComposer.preflight.signedCommitsRequired":
+    "Dieser Branch verlangt signierte Commits. Keiko signiert diesen Commit; richte vorher die Commit-Signierung ein (Signaturschlüssel und commit.gpgsign), sonst schlägt der Commit fehl",
   "commitComposer.warning.mixed-scope": "Gemischter Umfang — Änderungen betreffen mehrere Bereiche",
   "commitComposer.warning.wip-marker": "Work-in-Progress-Markierung im Betreff",
   "commitComposer.warning.large-change": "Große Änderung — viele Dateien bereitgestellt",

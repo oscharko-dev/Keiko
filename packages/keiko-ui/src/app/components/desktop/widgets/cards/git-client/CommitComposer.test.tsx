@@ -605,7 +605,9 @@ describe("CommitComposer — preview and outcomes", () => {
     await user.type(screen.getByLabelText("Summary"), "feat: x");
 
     expect(screen.getByText("Remote branch rules could not be read")).toBeInTheDocument();
-    expect(screen.getByText("Signed commits may be required")).toBeInTheDocument();
+    expect(
+      screen.getByText(/This branch requires signed commits\. Keiko signs this commit/u),
+    ).toBeInTheDocument();
     expect(screen.getByText("custom policy check")).toBeInTheDocument();
     expect(screen.getByText("feat")).toBeInTheDocument();
     expect(screen.getByTestId("git-commit-preview")).toHaveTextContent("2 areas");

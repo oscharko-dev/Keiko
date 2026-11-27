@@ -3395,7 +3395,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.preview.qualityWarnings": "Suggestions",
   "commitComposer.preview.preflightFindings": "Checks",
   "commitComposer.preflight.branchProtectionUnavailable": "Remote branch rules could not be read",
-  "commitComposer.preflight.signedCommitsRequired": "Signed commits may be required",
+  "commitComposer.preflight.signedCommitsRequired":
+    "This branch requires signed commits. Keiko signs this commit; set up commit signing (signing key and commit.gpgsign) first or the commit fails",
   "commitComposer.warning.mixed-scope": "Mixed scope — changes span several areas",
   "commitComposer.warning.wip-marker": "Work-in-progress marker in the subject",
   "commitComposer.warning.large-change": "Large change — many files staged",

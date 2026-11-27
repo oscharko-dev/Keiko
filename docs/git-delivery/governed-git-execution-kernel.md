@@ -146,10 +146,18 @@ reset fails) reports `partial` with attempted/succeeded unit counts.
 
 Governed local commit execution follows the repository and user Git configuration for commit
 identity and signing, including SSH signing (`gpg.format=ssh`) used by regulated customer
-environments. The adapter invokes ordinary commits with `git commit --gpg-sign` and verified
-tree-bound commits with `git commit-tree -S`, preserving the same signed-commit requirement across
-both execution paths. If the configured signer cannot produce a verifiable commit, execution fails
-closed with `signature-failed` and leaves no unsigned commit behind.
+environments. The adapter decides whether to sign from Git's effective configuration, read once per
+commit as a Git boolean (`git config --type=bool --get commit.gpgsign`, honouring system, global,
+repository and included scopes). It signs when `commit.gpgsign` is true, or when the trusted
+branch-protection read for the target branch says signatures are required; ordinary commits then
+use `git commit --gpg-sign` and verified tree-bound commits use `git commit-tree -S`, across both
+execution paths. When neither applies, the commit is made exactly as Git would make it for that
+person, unsigned, with neither `--gpg-sign` nor `--no-gpg-sign`. If the configured or required
+signer cannot produce a verifiable commit, execution fails closed with `signature-failed` and
+leaves no unsigned commit behind. A `commit.gpgsign` read that fails or is malformed attempts to
+sign, and the closed class of the failure is logged. The decision is recorded as the closed
+`signing` field (`configured`, `required-by-branch-protection`, `not-configured`,
+`unknown-fail-closed`).
 
 ## 8. What this kernel does not do
 

@@ -15,6 +15,7 @@ import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type {
   GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -36,7 +37,7 @@ import {
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
 } from "./git-mutation-adapter.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import {
   type CommandTerminationEvidence,
   type ExecutableResolver,
@@ -88,7 +89,22 @@ import {
 } from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 
+/** A failed `commit.gpgsign` read, reported once with its closed class and the cause. */
+export interface GitCommitSigningReadFailureReport {
+  readonly readFailure: GitCommitSigningReadFailure;
+  readonly error: unknown;
+}
+
 export interface NodeGitMutationAdapterDeps {
+  /**
+   * The trusted branch-protection verdict for the branch a commit lands on: true only when the
+   * trusted reader says the branch requires signatures. Supplied by the server, never by model
+   * input; unknown, unavailable or no remote is `false`. A rejection propagates, so the commit is
+   * not made on a state that could not be proved (ADR-0006).
+   */
+  readonly signingRequiredByBranchProtection?: (() => Promise<boolean>) | undefined;
+  /** Injected log port for a failed `commit.gpgsign` read (frames and cause chain stay with the owner). */
+  readonly onSigningReadFailure?: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
   readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
   readonly beforeIndexUpdate?: (() => boolean) | undefined;
@@ -204,6 +220,8 @@ interface RunContext {
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
   readonly readSession: GitReadSession | undefined;
+  readonly signingRequiredByBranchProtection: (() => Promise<boolean>) | undefined;
+  readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -457,34 +475,75 @@ async function execCommit(
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
   // Contradictory verified operands are refused before any Git process starts, the signing read
-  // included.
+  // included; such a refusal carries no `signing` field because no signing decision was made.
   if (request.verified !== undefined && !validVerifiedOperands(request))
     return failureFromExit(0, 0);
-  const signing = await readCommitSigning(ctx);
-  const sign = signing !== "not-configured";
+  const read = await readCommitSigning(ctx);
+  const signing = {
+    signing: read.decision,
+    ...(read.failure === undefined ? {} : { signingReadFailure: read.failure.readFailure }),
+  };
+  const sign = read.decision !== "not-configured";
   if (request.verified !== undefined) {
-    return { ...(await execVerifiedCommit(ctx, request, sign)), signing };
+    return { ...(await execVerifiedCommit(ctx, request, sign)), ...signing };
   }
   const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
-  if (result.outcome !== "succeeded") return { ...result, signing };
+  if (result.outcome !== "succeeded") return { ...result, ...signing };
   try {
-    return { ...result, signing, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
+    return {
+      ...result,
+      ...signing,
+      externalId: await readGitRevision(commitReadDeps(ctx), "HEAD"),
+    };
   } catch (error) {
-    return { ...failureFromThrow(error, result.durationMs, 1), signing };
+    return { ...failureFromThrow(error, result.durationMs, 1), ...signing };
   }
 }
 
-// Git's effective `commit.gpgsign` for this repository, read as a Git boolean through the same
-// identity lane the commit itself runs in (system, global, repository and included scopes). Unset
-// or false means the person has not asked for signing, so the commit is made exactly as Git would
-// make it. A failed, cut-short or malformed read fails closed toward the strict behaviour: the
-// commit attempts to sign, so any failure stays a visible `signature-failed` (ADR-0006).
-async function readCommitSigning(ctx: RunContext): Promise<GitCommitSigningDecision> {
+interface CommitSigningRead {
+  readonly decision: GitCommitSigningDecision;
+  readonly failure?: GitCommitSigningReadFailureReport;
+}
+
+class GitSigningReadError extends Error {
+  public readonly readFailure: GitCommitSigningReadFailure;
+
+  public constructor(readFailure: GitCommitSigningReadFailure) {
+    super(`git-signing-read-${readFailure}`);
+    this.name = "GitSigningReadError";
+    this.readFailure = readFailure;
+  }
+}
+
+function failedSigningRead(
+  readFailure: GitCommitSigningReadFailure,
+  error: unknown = new GitSigningReadError(readFailure),
+): CommitSigningRead {
+  return { decision: "unknown-fail-closed", failure: { readFailure, error } };
+}
+
+// The signing decision (ADR-0006). Git's effective `commit.gpgsign` read as a Git boolean through
+// the identity lane the commit itself runs in (system, global, repository and included scopes):
+// true signs; unset or false means the person has not asked for signing, so the commit is made
+// exactly as Git would make it, unless the trusted branch-protection verdict for the target branch
+// requires signatures, which signs it too. A failed, cut-short or malformed read fails closed toward
+// the strict behaviour: the commit attempts to sign, so any failure stays a visible
+// `signature-failed`, and the cause is reported through the injected port.
+async function readCommitSigning(ctx: RunContext): Promise<CommitSigningRead> {
+  const configured = await readConfiguredCommitSigning(ctx);
+  if (configured.failure !== undefined) ctx.onSigningReadFailure?.(configured.failure);
+  if (configured.decision !== "not-configured") return configured;
+  return (await ctx.signingRequiredByBranchProtection?.()) === true
+    ? { decision: "required-by-branch-protection" }
+    : configured;
+}
+
+function readConfiguredCommitSigning(ctx: RunContext): Promise<CommitSigningRead> {
   const runDeps = { ...ctx.runDeps, commandRules: GIT_CONFIG_COMMAND_RULES };
   if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
-  // A read that throws (spawn failure, timeout, cancellation) is not swallowed: it becomes the
-  // closed `unknown-fail-closed` decision, which the result carries onto the activity log, and the
-  // commit that follows attempts to sign (a cancellation is reported by that commit as an abort).
+  // A read that throws (spawn failure, denial, timeout, cancellation) is not swallowed: its closed
+  // class and the error itself travel with the decision to the injected port, and the commit that
+  // follows attempts to sign (a cancellation is reported by that commit as an abort).
   return runCommand(
     {
       command: "git",
@@ -494,16 +553,27 @@ async function readCommitSigning(ctx: RunContext): Promise<GitCommitSigningDecis
       signal: ctx.signal,
     },
     runDeps,
-  ).then(commitSigningOfConfigRead, (): GitCommitSigningDecision => "unknown-fail-closed");
+  ).then(commitSigningOfConfigRead, signingReadRejected);
 }
 
-function commitSigningOfConfigRead(result: CommandResult): GitCommitSigningDecision {
-  if (result.truncated) return "unknown-fail-closed";
-  if (result.exitCode === 1) return "not-configured";
-  if (result.exitCode !== 0) return "unknown-fail-closed";
+function signingReadRejected(error: unknown): CommitSigningRead {
+  if (error instanceof CommandTimeoutError) return failedSigningRead("timeout", error);
+  if (error instanceof CommandCancelledError) return failedSigningRead("cancelled", error);
+  if (error instanceof CommandDeniedError) return failedSigningRead("denied", error);
+  return failedSigningRead("spawn", error);
+}
+
+const MALFORMED_CONFIG_PATTERN = /bad (?:boolean )?config (?:value|line)|bad numeric config/iu;
+
+function commitSigningOfConfigRead(result: CommandResult): CommitSigningRead {
+  if (result.truncated) return failedSigningRead("truncated");
+  if (result.exitCode === 1) return { decision: "not-configured" };
+  if (result.exitCode !== 0) {
+    return failedSigningRead(MALFORMED_CONFIG_PATTERN.test(result.stderr) ? "malformed" : "exit");
+  }
   const value = result.stdout.trim();
-  if (value === "true") return "configured";
-  return value === "false" ? "not-configured" : "unknown-fail-closed";
+  if (value === "true") return { decision: "configured" };
+  return value === "false" ? { decision: "not-configured" } : failedSigningRead("malformed");
 }
 
 function commitReadDeps(
@@ -804,6 +874,8 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
     beforeIndexUpdate: deps.beforeIndexUpdate,
     readSession: deps.readSession,
+    signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
+    onSigningReadFailure: deps.onSigningReadFailure,
   };
 }
 

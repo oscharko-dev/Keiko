@@ -1,3 +1,5 @@
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import type { GitDeliveryBranchProtection } from "@oscharko-dev/keiko-contracts";
 import { MAX_RUNTIME_MAX_DURATION_MINUTES } from "../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
@@ -1393,6 +1395,105 @@ describe("verified Code-task commit service", () => {
           event.extra.signing === "not-configured",
       ),
     ).toBe(true);
+  });
+  // The trusted branch-protection verdict is read on the server at execution time. A branch that
+  // requires signatures makes the commit sign even when commit.gpgsign is unset, so a signer that
+  // cannot sign fails visibly instead of producing a commit GitHub would reject.
+  function withProtection(
+    reader: NonNullable<typeof options.execution>["branchProtectionReader"],
+  ): void {
+    service.invalidate();
+    // A GitHub origin lets the trusted branch-protection verdict resolve a repository to ask about;
+    // the repository identity the run was bound to follows it.
+    git(["remote", "add", "origin", "https://github.com/example/keiko-signing.git"]);
+    const bound = options.context;
+    options = {
+      ...options,
+      context: (): ReturnType<typeof bound> => {
+        const base = bound();
+        if (base === undefined) return undefined;
+        return { ...base, repositoryDigest: codingWorkbenchRemoteDigest("example/keiko-signing") };
+      },
+    };
+    options = { ...options, execution: { ...options.execution, branchProtectionReader: reader } };
+    service = createVerifiedCommitService(options);
+  }
+  const requiresSignatures = (): Promise<{
+    readonly outcome: "protected";
+    readonly protection: GitDeliveryBranchProtection;
+  }> =>
+    Promise.resolve({
+      outcome: "protected",
+      protection: {
+        deletionAllowed: false,
+        forcePushAllowed: false,
+        linearHistoryRequired: false,
+        signaturesRequired: true,
+        requiredReviewCount: 0,
+        requiredStatusCheckCount: 0,
+      },
+    });
+  it("logs the closed class of an unreadable commit.gpgsign and still signs", async () => {
+    git(["config", "commit.gpgsign", "maybe"]);
+    const id = await verifiedProposal();
+    await expect(service.execute(id, await claim(id))).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(git(["log", "-1", "--format=%G?"])).toBe("G");
+    const failed = events.filter((event) => event.op === "git.delivery.mutation.failed");
+    expect(failed.at(-1)?.extra).toMatchObject({
+      actionKind: "commit",
+      phaseReached: "signing-read",
+      signingReadFailure: "malformed",
+    });
+    expect(failed.at(-1)?.correlationId).toBeDefined();
+    expect(
+      events.some(
+        (event) =>
+          event.extra?.phase === "result" &&
+          event.extra.signing === "unknown-fail-closed" &&
+          event.extra.signingReadFailure === "malformed",
+      ),
+    ).toBe(true);
+  });
+  it("fails visibly when branch protection requires a signature the signer cannot make", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "user.signingkey", join(signingRoot, "missing-signing-key.pub")]);
+    withProtection(requiresSignatures);
+    const id = await verifiedProposal();
+    const approval = await claim(id);
+    const head = git(["rev-parse", "HEAD"]);
+    await expect(service.execute(id, approval)).resolves.toMatchObject({
+      status: "failed",
+      reason: "signing-failed",
+    });
+    expect(git(["rev-parse", "HEAD"])).toBe(head);
+    expect(
+      events.some(
+        (event) =>
+          event.extra?.phase === "result" &&
+          event.extra.reason === "signing-failed" &&
+          event.extra.signing === "required-by-branch-protection",
+      ),
+    ).toBe(true);
+  });
+  it("signs an unset commit.gpgsign when branch protection requires signatures", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    withProtection(requiresSignatures);
+    const id = await verifiedProposal();
+    await expect(service.execute(id, await claim(id))).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(git(["log", "-1", "--format=%G?"])).toBe("G");
+  });
+  it("commits unsigned when branch protection does not require signatures", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    withProtection(() => Promise.resolve({ outcome: "unprotected" }));
+    const id = await verifiedProposal();
+    await expect(service.execute(id, await claim(id))).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(git(["log", "-1", "--format=%G?"])).toBe("N");
   });
   it("reconciles an interrupted receipt from live commit objects without replaying its approval", async () => {
     const id = await verifiedProposal();

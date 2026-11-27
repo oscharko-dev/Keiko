@@ -35979,6 +35979,12 @@
               "required": false
             },
             {
+              "name": "signingReadFailure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "status",
               "type": "string",
               "dataClass": "closed-enum",
@@ -36075,6 +36081,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "signingReadFailure",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": [
@@ -39517,6 +39529,12 @@
             },
             {
               "name": "signing",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "signingReadFailure",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false

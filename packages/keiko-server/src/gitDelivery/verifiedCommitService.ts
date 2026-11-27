@@ -14,6 +14,7 @@ import { mintProposalId } from "./proposalId.js";
 import type {
   VerificationReport,
   GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
   GitDeliveryApprovalClaim,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
@@ -40,8 +41,8 @@ import {
 } from "./approvalStore.js";
 import {
   commitSigningOf,
+  commitSigningReadFailureOf,
   executeGovernedMutation,
-  GIT_COMMIT_SIGNING_DECISIONS,
   gitDeliveryActivityCode,
   gitDeliveryActivityErrorKind,
   gitDeliveryActivityFailureKind,
@@ -246,7 +247,18 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [...GIT_COMMIT_SIGNING_DECISIONS],
+      values: [
+        "configured",
+        "required-by-branch-protection",
+        "not-configured",
+        "unknown-fail-closed",
+      ],
+    },
+    signingReadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["timeout", "cancelled", "denied", "spawn", "truncated", "exit", "malformed"],
     },
   },
   causal: "correlation",
@@ -303,6 +315,7 @@ interface VerifiedCommitActivityFields {
   readonly frames?: readonly string[];
   readonly causeChain?: readonly string[];
   readonly signing?: GitCommitSigningDecision;
+  readonly signingReadFailure?: GitCommitSigningReadFailure;
 }
 
 function verifiedCommitErrorFields(
@@ -519,9 +532,13 @@ function kernelReason(result: GitMutationLifecycleResult): VerifiedCommitReason 
 
 function signingActivity(
   result: GitMutationLifecycleResult,
-): Pick<VerifiedCommitActivityFields, "signing"> {
+): Pick<VerifiedCommitActivityFields, "signing" | "signingReadFailure"> {
   const signing = commitSigningOf(result.outcome);
-  return signing === undefined ? {} : { signing };
+  const signingReadFailure = commitSigningReadFailureOf(result.outcome);
+  return {
+    ...(signing === undefined ? {} : { signing }),
+    ...(signingReadFailure === undefined ? {} : { signingReadFailure }),
+  };
 }
 
 function kernelDetails(
@@ -1310,6 +1327,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       | "messagePolicyMode"
       | "messagePolicySource"
       | "signing"
+      | "signingReadFailure"
     > = {},
     proofAgeMs?: number,
   ): VerifiedCommitResult {

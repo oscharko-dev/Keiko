@@ -14,6 +14,7 @@ import type {
   GitDeliveryApprovalRequirement,
   GitDeliveryBlockReason,
   GitCommitSigningDecision,
+  GitCommitSigningReadFailure,
   GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
@@ -39,6 +40,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import {
   createNodeGitMutationAdapter,
+  type GitCommitSigningReadFailureReport,
   readGitStagedDiff,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
@@ -57,7 +59,12 @@ import {
 } from "../task-workspace/workspace-root-access.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
-import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPreflight.js";
+import {
+  createTrustedGitDeliveryBranchProtectionReader,
+  signatureRequirementOf,
+  type GitDeliveryBranchProtectionReader,
+  type GitDeliverySignatureRequirement,
+} from "./branchProtectionPreflight.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
@@ -145,13 +152,6 @@ const UPSTREAM_TRACKING_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-/** The closed signing branches a governed commit reports (ADR-0006), mirrored from the contract. */
-export const GIT_COMMIT_SIGNING_DECISIONS = [
-  "configured",
-  "not-configured",
-  "unknown-fail-closed",
-] as const satisfies readonly GitCommitSigningDecision[];
-
 /** The signing branch a finished commit took, when the outcome carries an execution result. */
 export function commitSigningOf(
   outcome: GitMutationLifecycleResult["outcome"],
@@ -160,6 +160,17 @@ export function commitSigningOf(
     outcome.status === "failed" ||
     outcome.status === "recovery-required"
     ? outcome.executionResult.signing
+    : undefined;
+}
+
+/** The closed class of a failed `commit.gpgsign` read, when the outcome carries one. */
+export function commitSigningReadFailureOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitCommitSigningReadFailure | undefined {
+  return outcome.status === "succeeded" ||
+    outcome.status === "failed" ||
+    outcome.status === "recovery-required"
+    ? outcome.executionResult.signingReadFailure
     : undefined;
 }
 
@@ -294,7 +305,18 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [...GIT_COMMIT_SIGNING_DECISIONS],
+      values: [
+        "configured",
+        "required-by-branch-protection",
+        "not-configured",
+        "unknown-fail-closed",
+      ],
+    },
+    signingReadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["timeout", "cancelled", "denied", "spawn", "truncated", "exit", "malformed"],
     },
   },
   causal: "correlation",
@@ -323,7 +345,13 @@ const MUTATION_FAILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["snapshot", "readiness", "post-observation", "dispatch"],
+      values: ["snapshot", "readiness", "post-observation", "dispatch", "signing-read"],
+    },
+    signingReadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["timeout", "cancelled", "denied", "spawn", "truncated", "exit", "malformed"],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
     frames: GIT_DELIVERY_FAILURE_FRAMES_FIELD,
@@ -859,6 +887,31 @@ export function readStagedConflictMarkerFileCountFor(
   });
 }
 
+export function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
+  return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
+}
+
+/**
+ * The trusted branch-protection signature verdict for the branch the snapshot is on. No branch, no
+ * remote, or a read that is unknown or unavailable is `unavailable`, which is never "required".
+ */
+export async function readSignatureRequirement(
+  workspace: WorkspaceInfo,
+  snapshot: GitWorktreeSnapshot,
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): Promise<GitDeliverySignatureRequirement> {
+  const branchName = snapshot.currentBranchName;
+  const remoteAlias = preferredRemoteAlias(snapshot);
+  if (branchName === undefined || remoteAlias === undefined) return "unavailable";
+  const reader =
+    seams.branchProtectionReader ??
+    createTrustedGitDeliveryBranchProtectionReader(
+      gitDeliveryTerminationHandler(seams, correlationId),
+    );
+  return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
+}
+
 function adapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
@@ -873,6 +926,23 @@ function adapterFor(
     workspace,
     processEnv: seams.processEnv ?? process.env,
     now,
+    // The trusted branch-protection verdict, read at execution time on the server (never from the
+    // request): a branch that requires signatures makes the commit sign even without
+    // `commit.gpgsign` (ADR-0006).
+    signingRequiredByBranchProtection: async (): Promise<boolean> =>
+      (await readSignatureRequirement(
+        workspace,
+        await readWorktreeSnapshotFor(workspace, seams, now, correlationId),
+        seams,
+        correlationId,
+      )) === "required",
+    onSigningReadFailure: (report): void => {
+      logGitDeliverySigningReadFailure(
+        seams.activityLog ?? processServerLogSink(),
+        report,
+        correlationId,
+      );
+    },
     // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
     // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged
     // with the SAME correlationId as this mutation's other log lines when the caller has one.
@@ -1254,6 +1324,7 @@ export function logGitDeliveryMutation(
   const executionErrorCode = executionErrorCodeOf(outcome);
   const blockReason = policyBlockReasonOf(outcome);
   const signing = commitSigningOf(outcome);
+  const signingReadFailure = commitSigningReadFailureOf(outcome);
   log.write(
     activityLogEvent(
       MUTATION_COMPLETED_OPERATION,
@@ -1280,6 +1351,7 @@ export function logGitDeliveryMutation(
         ...(blockReason === undefined ? {} : { blockReason }),
         ...(executionErrorCode === undefined ? {} : { executionErrorCode }),
         ...(signing === undefined ? {} : { signing }),
+        ...(signingReadFailure === undefined ? {} : { signingReadFailure }),
         ...executionFailureDetail(outcome, failureDetail),
       },
     ),
@@ -1305,13 +1377,32 @@ export function logGitDeliveryMutationFailure(
   writeGitDeliveryMutationFailure(log, actionKind, phaseReached, error, correlationId, true);
 }
 
+// A `commit.gpgsign` read that gave no usable answer: the commit attempts to sign, and this line
+// names the closed class with the structured cause so the log shows why the decision fell back.
+function logGitDeliverySigningReadFailure(
+  log: ServerLogSink,
+  report: GitCommitSigningReadFailureReport,
+  correlationId: string | undefined,
+): void {
+  writeGitDeliveryMutationFailure(
+    log,
+    "commit",
+    "signing-read",
+    report.error,
+    correlationId,
+    true,
+    report.readFailure,
+  );
+}
+
 function writeGitDeliveryMutationFailure(
   log: ServerLogSink,
   actionKind: GitDeliveryActionKind,
-  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch",
+  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch" | "signing-read",
   error: unknown,
   correlationId: string | undefined,
   includeErrorStructure: boolean,
+  signingReadFailure?: GitCommitSigningReadFailure,
 ): void {
   const failureKind = errorKindOf(error);
   const frames = keikoStackFrames(error);
@@ -1328,6 +1419,7 @@ function writeGitDeliveryMutationFailure(
         actionKind,
         phaseReached,
         failureKind,
+        ...(signingReadFailure === undefined ? {} : { signingReadFailure }),
         ...(includeErrorStructure && frames.length > 0 ? { frames } : {}),
         ...(includeErrorStructure && chain.length > 0 ? { causeChain: chain } : {}),
       },

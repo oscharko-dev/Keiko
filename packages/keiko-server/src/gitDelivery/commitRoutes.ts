@@ -92,7 +92,7 @@ import {
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
-  gitDeliveryTerminationHandler,
+  readSignatureRequirement,
   KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK,
   readStagedConflictMarkerFileCountFor,
   readStagedDiffFor,
@@ -113,11 +113,7 @@ import {
 } from "./requestGuards.js";
 import { resolveGovernedCommitMessagePolicy } from "./commitPolicySettings.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
-import {
-  createTrustedGitDeliveryBranchProtectionReader,
-  signatureRequirementOf,
-  type GitDeliverySignatureRequirement,
-} from "./branchProtectionPreflight.js";
+import type { GitDeliverySignatureRequirement } from "./branchProtectionPreflight.js";
 import { withChatContentPolicy } from "../content-redactor.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
@@ -546,10 +542,6 @@ function reportCommitMutationFailure(
   );
 }
 
-function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
-  return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
-}
-
 async function commitSignatureRequirement(
   workspace: WorkspaceInfo,
   snapshot: GitWorktreeSnapshot,
@@ -557,16 +549,8 @@ async function commitSignatureRequirement(
   correlationId: string,
   reportFailure: (error: unknown) => void,
 ): Promise<GitDeliverySignatureRequirement> {
-  const branchName = snapshot.currentBranchName;
-  const remoteAlias = preferredRemoteAlias(snapshot);
-  if (branchName === undefined || remoteAlias === undefined) return "unavailable";
-  const reader =
-    seams.branchProtectionReader ??
-    createTrustedGitDeliveryBranchProtectionReader(
-      gitDeliveryTerminationHandler(seams, correlationId),
-    );
   try {
-    return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
+    return await readSignatureRequirement(workspace, snapshot, seams, correlationId);
   } catch (error) {
     reportFailure(error);
     return "unavailable";

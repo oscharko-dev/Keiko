@@ -128,6 +128,14 @@ function adapter(
   });
 }
 
+function requiredAdapter(): ReturnType<typeof createNodeGitMutationAdapter> {
+  return createNodeGitMutationAdapter({
+    workspace,
+    processEnv: { PATH: process.env.PATH, HOME: root },
+    signingRequiredByBranchProtection: () => Promise.resolve(true),
+  });
+}
+
 describe("verified commit at the sole mutation adapter", () => {
   it("rejects index movement while collecting immutable status metadata", async () => {
     let moved = false;
@@ -284,6 +292,23 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(result.outcome).toBe("succeeded");
     expect(result.signing).toBe("not-configured");
     expect(git(["log", "-1", "--format=%G?"])).toBe("N");
+  });
+  it("signs the verified commit when commit.gpgsign is unset but branch protection requires it", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    const result = await requiredAdapter().commit(await candidate());
+    expect(result.outcome).toBe("succeeded");
+    expect(result.signing).toBe("required-by-branch-protection");
+    expectLastCommitSigned();
+  });
+  it("fails visibly when a required verified signature cannot be made", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
+    const request = await candidate();
+    const result = await requiredAdapter().commit(request);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("signature-failed");
+    expect(result.signing).toBe("required-by-branch-protection");
+    expect(git(["rev-parse", "HEAD"])).toBe(bornSha(request.verified.head));
   });
   it("still signs the verified commit when commit.gpgsign is malformed (fail closed)", async () => {
     git(["config", "commit.gpgsign", "maybe"]);

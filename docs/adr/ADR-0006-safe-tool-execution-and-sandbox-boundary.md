@@ -41,16 +41,20 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > `failed / signing-failed`, never as an uncertain outcome the model would retry (#4546).
 >
 > **Clarified by the signing-follows-configuration repair (2026-11-27, #4491).** "Git's configured
-> signing flow" means Git's effective configuration for the repository. Keiko signs when
-> `commit.gpgsign` is true, read as a Git boolean through the same identity lane the commit runs in
-> (system, global, repository and included scopes), for both the ordinary `git commit` and the
-> verified `git commit-tree`. When it is unset or false, Keiko commits unsigned exactly as Git would
-> for that person, so a machine that never set up signing can still deliver. It never passes
-> `--no-gpg-sign`, so no hook or later configuration is overridden, and it never falls back to an
-> unsigned commit after a configured signer fails: that stays `failed / signing-failed`. A
-> configuration value that cannot be read or is malformed fails closed toward signing. The decision
-> is logged as the closed `signing` field (`configured`, `not-configured`, `unknown-fail-closed`)
-> on `git.verified-commit` and `git.delivery.mutation.completed`.
+> signing flow" means Git's effective configuration for the repository. Keiko signs, for both the
+> ordinary `git commit` and the verified `git commit-tree`, when `commit.gpgsign` is true, read as a
+> Git boolean through the same identity lane the commit runs in (system, global, repository and
+> included scopes), or when the trusted branch-protection read for the target branch says
+> signatures are required (the verdict is read on the server at execution time, never taken from
+> model input; unknown, unavailable or no remote is "not required"). When neither applies, Keiko
+> commits unsigned exactly as Git would for that person, so a machine that never set up signing can
+> still deliver. It never passes `--no-gpg-sign`, so no hook or later configuration is overridden,
+> and it never falls back to an unsigned commit after a configured or required signer fails: that
+> stays `failed / signing-failed`. A configuration value that cannot be read or is malformed fails
+> closed toward signing, and the closed class of the read failure is logged with its frames and
+> cause chain. The decision is logged as the closed `signing` field (`configured`,
+> `required-by-branch-protection`, `not-configured`, `unknown-fail-closed`) on `git.verified-commit`
+> and `git.delivery.mutation.completed`.
 
 ## Context
 

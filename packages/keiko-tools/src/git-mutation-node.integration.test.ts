@@ -822,3 +822,90 @@ describe("node git mutation adapter — signing follows the effective commit.gpg
     expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 });
+
+describe("node git mutation adapter — signing scopes and branch protection", () => {
+  let scopeHome: string;
+
+  beforeEach(() => {
+    scopeHome = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-scope-home-")));
+  });
+
+  afterEach(() => {
+    rmSync(scopeHome, { recursive: true, force: true });
+  });
+
+  function scopedAdapter(required?: boolean): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "", HOME: scopeHome },
+      now: () => Date.now(),
+      ...(required === undefined
+        ? {}
+        : { signingRequiredByBranchProtection: () => Promise.resolve(required) }),
+    });
+  }
+
+  async function commitWith(
+    ad: GitLocalMutationAdapter,
+  ): Promise<Awaited<ReturnType<GitLocalMutationAdapter["commit"]>>> {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+    return ad.commit({ message: "feat: governed commit", allowEmpty: false });
+  }
+
+  it("follows Git: a repository commit.gpgsign=false beats a global true, so the commit is unsigned", async () => {
+    writeFileSync(join(scopeHome, ".gitconfig"), "[commit]\n\tgpgsign = true\n", "utf8");
+    git(["config", "commit.gpgsign", "false"]);
+
+    const committed = await commitWith(scopedAdapter());
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("N");
+  });
+
+  it("signs when the true value comes from an included file", async () => {
+    const included = join(scopeHome, "signing.inc");
+    writeFileSync(included, "[commit]\n\tgpgsign = true\n", "utf8");
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "include.path", included]);
+
+    const committed = await commitWith(scopedAdapter());
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("configured");
+    expectLastCommitSigned(root);
+  });
+
+  it("signs an unset commit.gpgsign when branch protection requires signatures", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await commitWith(scopedAdapter(true));
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("required-by-branch-protection");
+    expectLastCommitSigned(root);
+  });
+
+  it("fails visibly, and commits nothing unsigned, when a required signature cannot be made", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
+
+    const committed = await commitWith(scopedAdapter(true));
+
+    expect(committed.outcome).toBe("failed");
+    expect(committed.errorCode).toBe("signature-failed");
+    expect(committed.signing).toBe("required-by-branch-protection");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("commits unsigned when commit.gpgsign is unset and branch protection does not require it", async () => {
+    git(["config", "--unset", "commit.gpgsign"]);
+
+    const committed = await commitWith(scopedAdapter(false));
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(committed.signing).toBe("not-configured");
+    expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("N");
+  });
+});
