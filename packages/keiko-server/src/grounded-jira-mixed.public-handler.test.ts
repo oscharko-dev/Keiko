@@ -52,6 +52,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
+import { PromptCalibrationLedger } from "@oscharko-dev/keiko-model-gateway/internal/prompt-calibration";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
   AtlassianHttpBodyPort,
@@ -401,6 +402,13 @@ function runtime(
   resetServerLogger();
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "Feature.ts"), "export function Feature() { return true; }\n");
+  // The provider fixtures here report synthetic prompt usage (one token, or a whole window for a
+  // prompt of a few thousand tokens) to pin the server's own window and grant arithmetic. The
+  // gateway admits an extended prompt from the usage the provider reported for its prefix (#4491),
+  // so a synthetic report would stand in for the real prompt size and refuse or shrink the very
+  // prompts these cases measure. The usage-calibrated admission has its own pins in the gateway's
+  // prompt-calibration suite; here the gateway estimates every prompt locally.
+  vi.spyOn(PromptCalibrationLedger.prototype, "calibrate").mockReturnValue(undefined);
   const deps = buildUiHandlerDeps({
     configPath: join(state, "gateway.json"),
     evidenceDir: join(state, "evidence"),
