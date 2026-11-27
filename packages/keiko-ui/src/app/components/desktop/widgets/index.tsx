@@ -1,4 +1,5 @@
 import dynamic from "next/dynamic";
+import { isManagedTaskWorktreePath } from "../windows/managedTaskWorktreePath";
 import { gitObjectId } from "./gitObjectId";
 import { useEffect, useMemo, type ReactNode } from "react";
 import type { Chat } from "@/lib/types";
@@ -234,12 +235,6 @@ function isCodingRepositoryBinding(
   return configuredRoot !== undefined && str(cfg, "rootBinding") === CODING_REPOSITORY_BINDING;
 }
 
-function isManagedTaskWorkspaceRoot(root: string | undefined): boolean {
-  if (root === undefined || root.length === 0) return false;
-  const normalized = root.replaceAll("\\", "/");
-  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
-}
-
 function isNonEmptyRoot(root: string | undefined): root is string {
   return root !== undefined && root.length > 0;
 }
@@ -251,8 +246,8 @@ function hasManagedTaskWorkspaceDrift(
   const resolvedRoot = str(cfg, "resolvedRoot");
   return (
     isNonEmptyRoot(configuredRoot) &&
-    !isManagedTaskWorkspaceRoot(configuredRoot) &&
-    isManagedTaskWorkspaceRoot(resolvedRoot)
+    !isManagedTaskWorktreePath(configuredRoot) &&
+    isManagedTaskWorktreePath(resolvedRoot)
   );
 }
 
@@ -280,11 +275,11 @@ function gitRepositoryRoot(
   configuredRoot: string | undefined,
 ): string | undefined {
   if (isCodingRepositoryBinding(cfg, configuredRoot)) return configuredRoot;
-  if (isNonEmptyRoot(configuredRoot) && !isManagedTaskWorkspaceRoot(configuredRoot)) {
+  if (isNonEmptyRoot(configuredRoot) && !isManagedTaskWorktreePath(configuredRoot)) {
     return configuredRoot;
   }
   const contextRoot = ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
-  return isManagedTaskWorkspaceRoot(contextRoot) ? undefined : contextRoot;
+  return isManagedTaskWorktreePath(contextRoot) ? undefined : contextRoot;
 }
 
 function PersistRepositoryRootBinding({
@@ -301,7 +296,7 @@ function PersistRepositoryRootBinding({
   const needsRepair =
     root !== undefined &&
     root.length > 0 &&
-    !isManagedTaskWorkspaceRoot(root) &&
+    !isManagedTaskWorktreePath(root) &&
     (str(cfg, rootKey) !== root || str(cfg, "rootBinding") !== CODING_REPOSITORY_BINDING);
   useEffect((): void => {
     if (!needsRepair || root === undefined) return;

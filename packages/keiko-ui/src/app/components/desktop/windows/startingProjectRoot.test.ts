@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   decideGitReopen,
-  isManagedTaskWorktreePath,
   startingProjectPaths,
   startingProjectRoot,
   startingProjects,
@@ -101,13 +100,5 @@ describe("decideGitReopen", () => {
 
   it("keeps a chosen repository the shell list does not carry yet", () => {
     expect(decideGitReopen("/new", listed, "/a")).toEqual({ root: "/new" });
-  });
-});
-
-describe("isManagedTaskWorktreePath", () => {
-  it("recognizes POSIX and Windows managed worktree paths only", () => {
-    expect(isManagedTaskWorktreePath("/r/.keiko/dev/ui/task-workspaces/r/ws")).toBe(true);
-    expect(isManagedTaskWorktreePath("C:\\r\\.keiko\\x\\task-workspaces\\ws")).toBe(true);
-    expect(isManagedTaskWorktreePath("/r/task-workspaces")).toBe(false);
   });
 });

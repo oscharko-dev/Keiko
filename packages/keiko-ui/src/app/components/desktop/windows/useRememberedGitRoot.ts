@@ -6,7 +6,7 @@
 
 import { useContext, useEffect, useRef, type RefObject } from "react";
 import { WorkspaceStorageScopeContext } from "../hooks/workspace-storage";
-import { isManagedTaskWorktreePath } from "./startingProjectRoot";
+import { isManagedTaskWorktreePath } from "./managedTaskWorktreePath";
 import type { AppWindow } from "./types";
 
 /**

@@ -1,5 +1,6 @@
 "use client";
 
+import { isManagedTaskWorktreePath } from "../windows/managedTaskWorktreePath";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { canConnect, snapMap } from "../windows/connectionUtils";
@@ -585,7 +586,7 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
             cfg: {
               ...w.cfg,
               root: normalizedRoot,
-              ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+              ...(isManagedTaskWorktreePath(normalizedRoot)
                 ? {}
                 : { rootBinding: "coding-repository" }),
               ...layoutPatch,
@@ -620,7 +621,7 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
         z: ++zc.current,
         cfg: {
           root: normalizedRoot,
-          ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+          ...(isManagedTaskWorktreePath(normalizedRoot)
             ? {}
             : { rootBinding: "coding-repository" }),
           file: normalizedPath,
@@ -2288,19 +2289,13 @@ function isCodingRepositoryRootBinding(w: AppWindow): boolean {
   return w.cfg["rootBinding"] === "coding-repository";
 }
 
-function isManagedTaskWorkspaceRoot(root: unknown): root is string {
-  if (typeof root !== "string" || root.length === 0) return false;
-  const normalized = root.replaceAll("\\", "/");
-  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
-}
-
 function hasManagedTaskWorkspaceDrift(w: AppWindow): boolean {
   const configuredRoot = w.cfg["root"];
   return (
     typeof configuredRoot === "string" &&
     configuredRoot.length > 0 &&
-    !isManagedTaskWorkspaceRoot(configuredRoot) &&
-    isManagedTaskWorkspaceRoot(w.cfg["resolvedRoot"])
+    !isManagedTaskWorktreePath(configuredRoot) &&
+    isManagedTaskWorktreePath(w.cfg["resolvedRoot"])
   );
 }
 

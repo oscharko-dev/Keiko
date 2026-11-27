@@ -3092,7 +3092,7 @@ describe("AppShell grounding connections", () => {
       rootBinding: "coding-repository",
     });
     expect(reportedDiagnostics).toContainEqual({
-      message: "git-window: reopen fell back (remembered-unavailable)",
+      message: "Git window reopened on the active repository (remembered-unavailable).",
     });
   });
 
@@ -3109,9 +3109,9 @@ describe("AppShell grounding connections", () => {
 
   it("reports no fallback and no path when the chosen repository is reopened", async () => {
     await closeAndReopenGit({ projectPath: "/repo-b", rootBinding: "coding-repository" });
-    expect(reportedDiagnostics.some((entry) => entry.message.startsWith("git-window:"))).toBe(
-      false,
-    );
+    expect(
+      reportedDiagnostics.some((entry) => entry.message.startsWith("Git window reopened")),
+    ).toBe(false);
   });
 
   it("opens Git from the rail with the selected project while a task workspace is active", async () => {

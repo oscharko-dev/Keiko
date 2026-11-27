@@ -1,4 +1,5 @@
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isManagedTaskWorktreePath } from "./managedTaskWorktreePath";
 
 /**
  * The folder a window may start in when the person has chosen none: the chat session's project,
@@ -21,12 +22,6 @@ export function startingProjectPaths(
   projects: readonly ProjectWithAvailability[],
 ): readonly string[] {
   return startingProjects(projects).map((project) => project.path);
-}
-
-/** A task's managed worktree: an internal run detail that Git never shows as repository truth. */
-export function isManagedTaskWorktreePath(root: string): boolean {
-  const normalized = root.replaceAll("\\", "/");
-  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
 }
 
 /** Why a remembered Git repository was not reopened; a closed vocabulary, never a path. */

@@ -50,7 +50,7 @@ remembered: a hand-off path the window ignores is not a repository the person ch
 list marks it gone or refused; otherwise it falls back to the starting project (the active
 workspace's repository) and reports a body-free closed reason through `reportClientDiagnostic`. A
 repository the shell list does not carry yet is kept: the Git window reads it through its own list
-and refuses it visibly, running no repository operation, if it is gone. The chat session's project
+and refuses it visibly, running no mutating repository operation, if it is gone. The chat session's project
 does not override a choice made in the Git window (W-4, #4491).
 
 The memory-only revision cache is also scoped to its owning `UiStore`. Layout writes require both

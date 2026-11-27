@@ -452,15 +452,25 @@ export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefi
   dispatchWorkspaceSearchFocus();
 }
 
-// Body-free: only the closed reason is reported, never the repository path.
+// Body-free: only the closed reason is reported, never the repository path, and once per
+// remembered root rather than on every rail click.
+const reportedGitReopenFallbacks = new Set<string>();
+
 function reopenGitRoot(
   remembered: string | undefined,
   projects: Parameters<typeof decideGitReopen>[1],
   fallback: string | undefined,
 ): string | undefined {
   const decision = decideGitReopen(remembered, projects, fallback);
-  if (decision.fallbackReason !== undefined) {
-    reportClientDiagnostic(`git-window: reopen fell back (${decision.fallbackReason})`);
+  if (
+    remembered !== undefined &&
+    decision.fallbackReason !== undefined &&
+    !reportedGitReopenFallbacks.has(remembered)
+  ) {
+    reportedGitReopenFallbacks.add(remembered);
+    reportClientDiagnostic(
+      `Git window reopened on the active repository (${decision.fallbackReason}).`,
+    );
   }
   return decision.root;
 }
