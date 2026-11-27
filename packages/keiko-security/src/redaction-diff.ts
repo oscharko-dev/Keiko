@@ -540,7 +540,10 @@ function decodedPathToken(token: string): string | undefined {
  * path tokens and `rename|copy from|to` exactly one, with no tail. Each decoded path also passes
  * the credential floor, because a value spelled in escapes is a value once decoded.
  */
-function isCanonicalGitPathHeader(line: string, ports: ProjectionPorts): boolean {
+function isCanonicalGitPathHeader(
+  line: string,
+  ports: Pick<ProjectionPorts, "redactPlain">,
+): boolean {
   const match = GIT_PATH_HEADER.exec(line);
   if (match === null) return false;
   const rest = line.slice(match[0].length);
@@ -563,5 +566,30 @@ function withoutGitPathHeaderLines(text: string, ports: ProjectionPorts): string
     .filter(
       (line) => !isCanonicalGitPathHeader(line.endsWith("\n") ? line.slice(0, -1) : line, ports),
     )
+    .join("");
+}
+
+/**
+ * Path records are classified wherever they appear, in an owned header region, ahead of a file
+ * header with no `diff --git` line, or in text no patch owns. A record that spells a quoted or
+ * escaped path must be in Git's canonical spelling and its decoded path must pass the credential
+ * floor; any other line is masked whole. A plain record, which holds no quote and no backslash, is
+ * left to the ordinary floor.
+ */
+export function maskNonCanonicalGitPathRecords(
+  text: string,
+  ports: Pick<ProjectionPorts, "redactPlain">,
+): string {
+  if (!text.includes("rename ") && !text.includes("copy ") && !text.includes("diff --git ")) {
+    return text;
+  }
+  return text
+    .split(/(?<=\n)/u)
+    .map((line) => {
+      const body = line.endsWith("\n") ? line.slice(0, -1) : line;
+      const suspect = GIT_PATH_HEADER.test(body) && /["\\]/u.test(body);
+      if (!suspect || isCanonicalGitPathHeader(body, ports)) return line;
+      return `${REDACTION_PLACEHOLDER}${line.slice(body.length)}`;
+    })
     .join("");
 }

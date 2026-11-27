@@ -213,3 +213,45 @@ describe("a credential spelled in a path header never reaches the output", () =>
     });
   });
 });
+
+describe("a rename or copy record is classified wherever it appears", () => {
+  const body = "--- a/x.js\n+++ b/x.js\n@@ -1 +1 @@\n-b\n+c\n";
+  const hostile = `"\\303\\266${OCTAL_G}${TOKEN_TAIL}"`;
+
+  it.each([
+    ["an orphan rename directly before the file header", `rename to ${hostile}\n${body}`],
+    ["an orphan copy directly before the file header", `copy from ${hostile}\n${body}`],
+    [
+      "an orphan rename before an index record",
+      `rename to ${hostile}\nindex a25fe44..1d003d2 100644\n${body}`,
+    ],
+    ["an orphan rename with no patch at all", `rename to ${hostile}\n`],
+    [
+      "a rename inside a file section",
+      `diff --git a/x.js b/x.js\nrename from a.js\nrename to ${hostile}\n${body}`,
+    ],
+  ])("masks the decoded token of %s", (_label, text) => {
+    expect(redact(text)).not.toContain(TOKEN_TAIL);
+  });
+
+  it("keeps a canonical orphan rename readable", () => {
+    const text = `rename to "caf\\303\\251.js"\n${body}`;
+    expect(redact(text).split("\n")[0]).toBe('rename to "caf\\303\\251.js"');
+  });
+
+  it("masks an orphan record with a non-canonical escape, for any name", async () => {
+    await checkProperty({
+      name: "orphan rename with a non-canonical escape is masked",
+      generate: (random) => ({
+        name: fileName(random),
+        kind: random.pick(["rename to", "rename from", "copy to", "copy from"] as const),
+      }),
+      runs: 60,
+      property: ({ name, kind }: { name: string; kind: string }): void => {
+        const hostileName = `${OCTAL_G}${TOKEN_TAIL}${name.replaceAll(/["\\]/gu, "_")}`;
+        const text = `${kind} "${hostileName}\\303\\251"\n${body}`;
+        expect(redact(text)).not.toContain(TOKEN_TAIL);
+      },
+    });
+  });
+});
