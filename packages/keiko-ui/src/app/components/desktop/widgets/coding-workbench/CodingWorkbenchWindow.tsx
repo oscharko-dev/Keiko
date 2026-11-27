@@ -1812,34 +1812,39 @@ function canStartAtLocation(
   return state.canStart && locationState.ready && !locationState.unbound && taskBranchMove === null;
 }
 
-function WorkbenchColumns({
-  history,
-  state,
-  actions,
-  activeWorkspace,
-  selectedRoot,
-  selectedBranch,
-  location,
-  locationState,
-  taskIntent,
-  onTaskIntentChange,
-  activeRunElsewhere,
-  focusRef,
-  onDecision,
-  research,
-  skills,
-  codingModels,
-  onSelectedModelChange,
-  authority,
-  onOpenGit,
-  onSelectRepository,
-  onSelectBranch,
-  onSelectLocation,
-  runWorkspace,
-  repositoryRoot,
-  taskBranchMove,
-  modelReadiness,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+function WorkbenchColumns(
+  props: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">,
+): ReactNode {
+  const {
+    history,
+    state,
+    actions,
+    activeWorkspace,
+    selectedRoot,
+    selectedBranch,
+    location,
+    locationState,
+    taskIntent,
+    onTaskIntentChange,
+    activeRunElsewhere,
+    focusRef,
+    onDecision,
+  } = props;
+  const {
+    research,
+    skills,
+    codingModels,
+    onSelectedModelChange,
+    authority,
+    onOpenGit,
+    onSelectRepository,
+    onSelectBranch,
+    onSelectLocation,
+    runWorkspace,
+    repositoryRoot,
+    taskBranchMove,
+    modelReadiness,
+  } = props;
   const runIsActive = runIsActiveFrom(state);
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
