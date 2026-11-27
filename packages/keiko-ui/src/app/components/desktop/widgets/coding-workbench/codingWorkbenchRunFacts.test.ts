@@ -7,8 +7,13 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchRuntimeState,
+} from "@/lib/coding-workbench-live-state";
 import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
+  answeredWithoutTools,
   formatRunDuration,
   modelGatewayRetrying,
   nativeRunRetry,
@@ -335,5 +340,60 @@ describe("native physical retry facts", () => {
     expect(
       nativeRunRetry(snapshot(), [fact, { ...fact, nativeRetry: null, sequence: 3 }]),
     ).toBeNull();
+  });
+});
+
+// A Build run that settled successfully without one tool call answered in words only. Plan answers
+// without edits by design, a run with any tool did its work, and a feed that lost turns or belongs
+// to another run proves nothing.
+describe("answeredWithoutTools", () => {
+  function stateOf(
+    run: CodingWorkbenchRuntimeSnapshot,
+    agent: CodingWorkbenchRuntimeState["agent"] = "build",
+  ): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      agent,
+      run: { status: "ready", value: run, error: null },
+    };
+  }
+
+  const succeeded = snapshot({ state: "succeeded" });
+
+  it("is true for a succeeded Build run whose whole feed holds no tool", () => {
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[], []]))).toBe(true);
+  });
+
+  it("is false once any turn used a tool, whatever the tool did", () => {
+    expect(
+      answeredWithoutTools(stateOf(succeeded), feed([[], [tool("keiko_read", "failed")]])),
+    ).toBe(false);
+  });
+
+  it("is false for a Plan or custom agent", () => {
+    expect(answeredWithoutTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded, "reviewer"), feed([[]]))).toBe(false);
+  });
+
+  it.each(["running", "failed", "cancelled", "paused"] as const)(
+    "is false for a run in state %s",
+    (state) => {
+      expect(answeredWithoutTools(stateOf(snapshot({ state })), feed([[]]))).toBe(false);
+    },
+  );
+
+  it("is false without a feed of this run, without a turn, or with a feed that lost turns", () => {
+    expect(answeredWithoutTools(stateOf(succeeded), null)).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded), feed([[]], "run-other"))).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded), feed([]))).toBe(false);
+    expect(answeredWithoutTools(stateOf(succeeded), { ...feed([[]]), truncated: true })).toBe(
+      false,
+    );
+    expect(
+      answeredWithoutTools(stateOf(succeeded), {
+        schemaVersion: "1",
+        availability: "unavailable",
+      } as never),
+    ).toBe(false);
   });
 });

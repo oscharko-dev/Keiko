@@ -389,6 +389,11 @@ export type CodingSafeActivitySignal =
        * (#4491). Absent: the person's own message.
        */
       readonly origin?: CodingSafeActivityMessageOrigin | undefined;
+      /**
+       * An `assistant` message whose turn ended at the model's output limit, read from the runtime
+       * message's finish reason. Absent: no such finish was reported.
+       */
+      readonly outputLimit?: true | undefined;
       readonly parentMessageId?: string | undefined;
       /** Committed native metadata; the backend projects it separately without retaining bodies. */
       readonly nativeRetry?: CodingWorkbenchNativeRetry;
@@ -538,6 +543,7 @@ interface MutableMessage {
   messageId: string;
   role: CodingSafeActivityMessageRole;
   origin?: CodingSafeActivityMessageOrigin;
+  outputLimitReached?: true;
   occurredAt: string;
   segments: CodingSafeActivityTextSegment[];
   truncated: boolean;
@@ -1369,7 +1375,12 @@ function applyMessage(
 ): SignalApplication {
   if (entry.feed.availability !== "available") return "feed-unavailable";
   const knownTurn = entry.messageTurns.get(signal.messageId);
-  if (knownTurn !== undefined) return "accepted";
+  if (knownTurn !== undefined) {
+    // The finish reason arrives with a later update of a message already shown.
+    const known = signal.outputLimit === true ? locateMessage(entry, signal.messageId) : undefined;
+    if (known !== undefined) known.message.outputLimitReached = true;
+    return "accepted";
+  }
   const turn = turnForMessage(entry, signal);
   if (turn === undefined) return "parent-message-unknown";
   let application: SignalApplication = "accepted";
@@ -1423,6 +1434,7 @@ function newMessage(
     messageId: signal.messageId,
     role: signal.role,
     ...(signal.origin === undefined ? {} : { origin: signal.origin }),
+    ...(signal.outputLimit === true ? { outputLimitReached: true as const } : {}),
     occurredAt: signal.occurredAt,
     segments: [],
     truncated: false,
@@ -2387,12 +2399,22 @@ function validMessageOrigin(
   );
 }
 
+// An output limit is the finish of an assistant turn, stated as the closed word `true`.
+function validOutputLimit(
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
+): boolean {
+  return (
+    signal.outputLimit === undefined || (signal.outputLimit === true && signal.role === "assistant")
+  );
+}
+
 function validMessageSignal(
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
 ): boolean {
   return (
     safeId(signal.messageId) &&
     validMessageOrigin(signal) &&
+    validOutputLimit(signal) &&
     (signal.parentMessageId === undefined || safeId(signal.parentMessageId)) &&
     (signal.nativeRetry === undefined ||
       (signal.role === "assistant" && isCodingWorkbenchNativeRetry(signal.nativeRetry)))
@@ -2483,7 +2505,7 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 
 /** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
-  message: ["messageId", "role", "origin", "parentMessageId", "nativeRetry"],
+  message: ["messageId", "role", "origin", "outputLimit", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   "text-cut": ["messageId", "part"],

@@ -788,6 +788,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Activity truncated.",
   "codingWorkbench.activity.dropped": "{count} update(s) omitted.",
   "codingWorkbench.activity.truncationMark": "Output truncated",
+  "codingWorkbench.activity.outputLimitReached":
+    "This answer reached the model's output limit and was cut off.",
   "codingWorkbench.activity.answerLoading": "Loading the rest…",
   "codingWorkbench.activity.textReadFailed": "The rest could not be loaded.",
   "codingWorkbench.activity.textRetry": "Retry",
@@ -1296,6 +1298,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.phase.decision": "Waiting for your decision",
   "codingWorkbench.runStatus.readiness": "Readiness details",
   "codingWorkbench.runStatus.agent.plan": "Plan agent",
+  "codingWorkbench.runStatus.answeredWithoutTools":
+    "The model answered without using any tools. No files were changed and no commands were run.",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Checking the run status.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",

@@ -187,6 +187,8 @@ export interface CodingWorkbenchRunStatusProps {
   readonly phase: CodingWorkbenchRunPhase | null;
   /** The run's commands that did not finish successfully, from its live feed. */
   readonly failedCommandCount?: number;
+  /** A Build run settled successfully without one tool call (`answeredWithoutTools`). */
+  readonly answeredWithoutTools?: boolean;
 }
 
 /**
@@ -208,6 +210,7 @@ export function CodingWorkbenchRunStatus({
   researchGrant,
   phase,
   failedCommandCount = 0,
+  answeredWithoutTools = false,
 }: CodingWorkbenchRunStatusProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const elapsed = useRunElapsed(state);
@@ -229,6 +232,11 @@ export function CodingWorkbenchRunStatus({
         <FailedCommands count={failedCommandCount} t={t} />
         <NativeRetry state={state} t={t} />
       </p>
+      {answeredWithoutTools ? (
+        <p className={styles.cmpRunStatusNote} data-testid="coding-runtime-answered-without-tools">
+          {t("codingWorkbench.runStatus.answeredWithoutTools")}
+        </p>
+      ) : null}
       <ReadinessDetails state={state} t={t} />
     </div>
   );

@@ -216,7 +216,7 @@ import {
   ListFollowContext,
   useJoinedFollow,
 } from "./CodingWorkbenchJumpToLatest";
-import { runPhase } from "./codingWorkbenchRunFacts";
+import { answeredWithoutTools, runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { CodingWorkbenchModelActivation } from "./CodingWorkbenchModelActivation";
@@ -2090,6 +2090,7 @@ function WorkbenchColumns({
         pendingDecision: questions.questions.length > 0 || editorBridge.pendingReview !== null,
       })}
       failedCommandCount={failedCommandCount(activity.feed)}
+      answeredWithoutTools={answeredWithoutTools(state, activity.feed)}
     />
   );
   const showWelcome = welcomeEligible(history, state, {

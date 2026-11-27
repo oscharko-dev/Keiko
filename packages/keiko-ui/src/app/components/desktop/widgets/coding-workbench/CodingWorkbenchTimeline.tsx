@@ -1464,6 +1464,11 @@ function AssistantAnswer({
         }
         richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
+      {message.outputLimitReached === true ? (
+        <p className={styles.cmpOutputLimitNote} data-testid="coding-answer-output-limit">
+          {t("codingWorkbench.activity.outputLimitReached")}
+        </p>
+      ) : null}
       {live || shown.source.trim().length === 0 ? null : (
         <div className={styles.cmpMessageActions}>
           <WorkbenchAnswerCopyButton

@@ -813,6 +813,7 @@ function assistantCandidates(
       parentMessageId,
       occurredAt,
     }),
+    ...outputLimitCandidates(message, id, parentMessageId, occurredAt),
   ];
   if (!Array.isArray(message.content)) throw new Error("opencode-v2-content-invalid");
   // The runtime numbers the text blocks, and apart from them the reasoning blocks, of one assistant
@@ -825,6 +826,27 @@ function assistantCandidates(
     );
   }
   return result;
+}
+
+// The runtime's own finish reason for the turn: `length` is the model's output limit. A candidate of
+// its own, so the fact reaches a message already shown when the finish arrives after its text.
+function outputLimitCandidates(
+  message: Readonly<Record<string, unknown>>,
+  id: string,
+  parentMessageId: string,
+  occurredAt: string,
+): readonly Candidate[] {
+  if (message.finish !== "length") return [];
+  return [
+    candidate(`${id}:output-limit`, "observation", true, {
+      kind: "message",
+      role: "assistant",
+      messageId: id,
+      parentMessageId,
+      occurredAt,
+      outputLimit: true,
+    }),
+  ];
 }
 
 function nativeRetryFacts(value: unknown): CodingWorkbenchNativeRetry | undefined {

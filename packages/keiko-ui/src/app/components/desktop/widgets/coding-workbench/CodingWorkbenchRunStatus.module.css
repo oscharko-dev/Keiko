@@ -37,6 +37,12 @@
   overflow-wrap: anywhere;
 }
 
+.cmpRunStatusNote {
+  flex: 1 1 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .cmpRunStatusReadiness {
   flex: 0 1 auto;
   min-width: 0;

@@ -141,6 +141,73 @@ describe("coding safe-activity projection: the origin of a user message", () => 
   });
 });
 
+// An assistant turn the runtime ended at the model's output limit carries that fact in the feed,
+// also when the finish arrives after the message was first shown; nothing else carries it.
+describe("coding safe-activity projection: the output limit of an assistant turn", () => {
+  function openFeed(): ReturnType<typeof createCodingSafeActivityProjection> {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    return projection;
+  }
+
+  function assistant(
+    projection: ReturnType<typeof createCodingSafeActivityProjection>,
+  ): { readonly outputLimitReached?: true } | undefined {
+    const feed = projection.currentContent()?.feed;
+    if (feed?.availability !== "available") throw new Error("expected a feed");
+    expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    return feed.turns.flatMap((turn) => turn.messages).find(({ role }) => role === "assistant");
+  }
+
+  const limited = (id: string): CodingSafeActivitySignal => ({
+    kind: "message",
+    messageId: id,
+    role: "assistant",
+    parentMessageId: "msg_user",
+    occurredAt: "2026-07-18T17:00:00.000Z",
+    outputLimit: true,
+  });
+
+  it("marks a message that first arrives with the finish", () => {
+    const projection = openFeed();
+    expect(projection.ingest(RUN_ID, limited("msg_a"))).toBe(true);
+    expect(assistant(projection)).toMatchObject({ outputLimitReached: true });
+  });
+
+  it("marks a message already shown when the finish arrives later", () => {
+    const projection = openFeed();
+    projection.ingest(RUN_ID, message("msg_a", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_a", "Partial answer"));
+    expect(assistant(projection)).not.toHaveProperty("outputLimitReached");
+    projection.ingest(RUN_ID, limited("msg_a"));
+    expect(assistant(projection)).toMatchObject({ outputLimitReached: true });
+  });
+
+  it("leaves a message without the finish unmarked and refuses it on a user message", () => {
+    const projection = openFeed();
+    projection.ingest(RUN_ID, message("msg_a", "assistant", "msg_user"));
+    expect(assistant(projection)).not.toHaveProperty("outputLimitReached");
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "message",
+        messageId: "msg_u2",
+        role: "user",
+        occurredAt: "2026-07-18T17:00:00.000Z",
+        outputLimit: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("bounded coding safe-activity projection", () => {
   it("owns canonical tool facts across native restatement and replay without logging paths", () => {
     const log = createBufferedServerLogSink();

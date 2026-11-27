@@ -823,6 +823,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.truncated": "Aktivität gekürzt.",
   "codingWorkbench.activity.dropped": "{count} Aktualisierung(en) ausgelassen.",
   "codingWorkbench.activity.truncationMark": "Ausgabe gekürzt",
+  "codingWorkbench.activity.outputLimitReached":
+    "Diese Antwort hat das Ausgabelimit des Modells erreicht und wurde abgeschnitten.",
   "codingWorkbench.activity.answerLoading": "Der Rest wird geladen …",
   "codingWorkbench.activity.textReadFailed": "Der Rest konnte nicht geladen werden.",
   "codingWorkbench.activity.textRetry": "Erneut versuchen",
@@ -1341,6 +1343,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.phase.decision": "Wartet auf deine Entscheidung",
   "codingWorkbench.runStatus.readiness": "Bereitschaftsdetails",
   "codingWorkbench.runStatus.agent.plan": "Plan-Agent",
+  "codingWorkbench.runStatus.answeredWithoutTools":
+    "Das Modell hat geantwortet, ohne Werkzeuge zu nutzen. Es wurden keine Dateien geändert und keine Befehle ausgeführt.",
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",
   "codingWorkbench.announcement.runChecking": "Laufstatus wird geprüft.",
   "codingWorkbench.announcement.noActiveRun": "Kein aktiver Coding-Lauf.",

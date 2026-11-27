@@ -1226,6 +1226,18 @@ unbound observations cannot suppress retrieval-miss findings. The citation sibli
 A no-anchor general request can use the same validated empty pack and cumulative synthesis grants
 when the policy allows assessment; scope validation and disabled-policy clarification still apply.
 
+## How a streamed model turn ended
+
+`gateway.stream.completed` records the provider's own `finishReason` for the answer: `stop`,
+`length`, `tool_calls`, `content_filter` or `unknown`. `length` is the model reaching its output
+limit, so a cut-off answer is read off the line instead of inferred from `completionTokens`.
+`unknown` is a frame without a finish reason the gateway recognizes, an `error` or `cancelled`
+finish (those fail elsewhere) and a stream that settled no answer; it is never a guessed `stop`.
+The same finish reaches the Coding Workbench timeline as a closed fact on the assistant message
+(`outputLimitReached`), read from the runtime message's finish, never from its text. The Workbench's
+"The model answered without using any tools" line is a display fact over the run's own feed (a
+settled Build run with no tool call) and writes nothing new.
+
 ## Reasoning, tool arguments and answer repair
 
 A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the

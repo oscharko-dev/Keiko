@@ -342,6 +342,12 @@ export interface CodingSafeActivityMessage {
   readonly fullAnswer?: CodingSafeActivityFullAnswer;
   /** Assistant messages only; present when `reasoning` does not carry the whole reasoning. */
   readonly fullReasoning?: CodingSafeActivityFullAnswer;
+  /**
+   * Assistant messages only: the model's turn ended because it reached its output limit, as the
+   * runtime reported the turn's finish reason. A fact the answer was cut off, never inferred from
+   * its text. Absent otherwise.
+   */
+  readonly outputLimitReached?: true;
 }
 
 /**
@@ -631,11 +637,13 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
         "origin",
         "fullAnswer",
         "fullReasoning",
+        "outputLimitReached",
       ],
       path,
     ),
   );
   validateMessageOrigin(value, path, errors);
+  validateOutputLimit(value, path, errors);
   validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
   if (!isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES)) {
     errors.push(`${path}.role is invalid`);
@@ -664,6 +672,14 @@ function validateMessageTexts(
   if ("reasoning" in value) validateReasoning(value, path, errors);
   if ("fullAnswer" in value) validateFullAnswer(value, path, errors);
   if ("fullReasoning" in value) validateFullText(value, "fullReasoning", path, errors);
+}
+
+function validateOutputLimit(value: Record<string, unknown>, path: string, errors: string[]): void {
+  if (!("outputLimitReached" in value)) return;
+  if (value.outputLimitReached !== true) errors.push(`${path}.outputLimitReached must be true`);
+  else if (value.role !== "assistant") {
+    errors.push(`${path}.outputLimitReached is only allowed on assistant`);
+  }
 }
 
 function validateMessageOrigin(

@@ -503,3 +503,58 @@ it.each(["en", "de"] as const)(
     expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
   },
 );
+
+// A Build run that answered without any tool says so in one neutral line; nothing else changes.
+describe("CodingWorkbenchRunStatus answered without tools", () => {
+  const SENTENCE_EN =
+    "The model answered without using any tools. No files were changed and no commands were run.";
+  const SENTENCE_DE =
+    "Das Modell hat geantwortet, ohne Werkzeuge zu nutzen. Es wurden keine Dateien geändert und keine Befehle ausgeführt.";
+  const SETTLED = runState(snapshot("succeeded"), [status(0, "starting", STARTED)]);
+
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  it("shows the line when the run answered without tools and passes the audit", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus
+        state={SETTLED}
+        researchGrant={null}
+        phase={null}
+        answeredWithoutTools
+      />,
+    );
+    expect(screen.getByTestId("coding-runtime-answered-without-tools")).toHaveTextContent(
+      SENTENCE_EN,
+    );
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("shows no line otherwise", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus state={SETTLED} researchGrant={null} phase={null} />,
+    );
+    expect(screen.queryByTestId("coding-runtime-answered-without-tools")).not.toBeInTheDocument();
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("says it in German when the interface is German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const { container } = render(
+      <I18nProvider>
+        <CodingWorkbenchRunStatus
+          state={SETTLED}
+          researchGrant={null}
+          phase={null}
+          answeredWithoutTools
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId("coding-runtime-answered-without-tools")).toHaveTextContent(
+      SENTENCE_DE,
+    );
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+});

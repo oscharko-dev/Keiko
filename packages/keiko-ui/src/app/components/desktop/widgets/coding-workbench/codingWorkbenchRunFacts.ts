@@ -1,5 +1,7 @@
+import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import type {
   AvailableCodingSafeActivityFeed,
+  CodingSafeActivityFeed,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
@@ -89,6 +91,24 @@ export function nativeRunRetry(
       event.eventKind === "native-retry-changed",
   );
   return fact?.kind === "runtime-event" ? (fact.nativeRetry ?? null) : null;
+}
+
+/**
+ * True for a Build run that settled successfully although the model never used a tool: the feed of
+ * the run is whole (no turn was evicted) and holds no tool call, so no file was edited and no
+ * command ran. A display fact over counts the run already has, never a change to its outcome. A
+ * Plan or custom agent is excluded: answering without edits is what a planning turn does.
+ */
+export function answeredWithoutTools(
+  state: CodingWorkbenchRuntimeState,
+  feed: CodingSafeActivityFeed | null,
+): boolean {
+  const run = state.run.value;
+  if (run?.state !== "succeeded" || state.agent !== "build") return false;
+  if (feed?.availability !== "available" || feed.runId !== run.runId || feed.truncated) {
+    return false;
+  }
+  return feed.turns.length > 0 && feed.turns.every((turn) => turn.tools.length === 0);
 }
 
 /** The current phase of the run, or null when the run is not live or its phase is not known. */

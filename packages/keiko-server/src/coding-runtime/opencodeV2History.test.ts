@@ -1379,6 +1379,49 @@ const NATIVE_RETRY = {
   error: { type: "provider.transport", message: "PRIVATE_PROVIDER_FAILURE" },
 };
 
+function finishedHistory(finish: unknown): readonly Record<string, unknown>[] {
+  return [
+    { id: "msg_fin_user", type: "user", time: { created: 0 }, text: "Task" },
+    {
+      id: "msg_fin_assistant",
+      type: "assistant",
+      time: { created: 0 },
+      content: [{ type: "text", text: "Partial answer" }],
+      ...(finish === undefined ? {} : { finish }),
+    },
+  ];
+}
+
+describe("OpenCode V2 output limit history", () => {
+  it.each([
+    ["length", true],
+    ["stop", false],
+    [undefined, false],
+  ] as const)("projects the output limit for a finish of %s", (finish, limited) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project("ses_fin", finishedHistory(finish), undefined);
+    const signals = events.map((event) => projection.takeSignal(event)).filter(Boolean);
+    const found = signals.some(
+      (signal) => signal?.kind === "message" && signal.outputLimit === true,
+    );
+    expect(found).toBe(limited);
+  });
+
+  it("keeps the durable assistant text when the finish is projected separately", () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-finish-capture",
+      activityLog: undefined,
+      captureMessages,
+    });
+    projection.project("ses_fin", finishedHistory("length"), undefined);
+    expect(captureMessages).toHaveBeenLastCalledWith([
+      expect.objectContaining({ messageId: "msg_fin_user" }),
+      expect.objectContaining({ messageId: "msg_fin_assistant", content: "Partial answer" }),
+    ]);
+  });
+});
+
 describe("OpenCode V2 native retry history", () => {
   it("logs native schedule and clear counts once per committed page without provider bodies", () => {
     const sink = createBufferedServerLogSink();

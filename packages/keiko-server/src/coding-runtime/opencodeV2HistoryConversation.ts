@@ -18,7 +18,7 @@ export function conversationMessages(
 ): readonly CodingHistoryMessage[] {
   const messages = new Map<string, CodingHistoryMessage>();
   for (const { signal, capturedText, nativeRetryState } of candidates) {
-    if (signal?.kind === "message" && !nativeRetryState)
+    if (signal?.kind === "message" && !nativeRetryState && signal.outputLimit !== true)
       messages.set(signal.messageId, {
         messageId: signal.messageId,
         role: signal.role,

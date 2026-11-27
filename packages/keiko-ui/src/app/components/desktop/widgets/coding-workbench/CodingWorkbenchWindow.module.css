@@ -2109,6 +2109,12 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
+.cmpOutputLimitNote {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
 .cmpTextRetry {
   padding: 0;
   border: 0;

@@ -811,6 +811,32 @@ describe("coding safe-activity contract — message origin", () => {
   });
 });
 
+// The runtime's output-limit finish of an assistant turn rides on the message as the closed `true`.
+describe("coding safe-activity contract — output limit", () => {
+  function withFlag(value: unknown, which: 0 | 1): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const messages = turn.messages.map((message, index) =>
+      index === which ? { ...message, outputLimitReached: value } : message,
+    );
+    return { ...feed, turns: [{ ...turn, messages }] };
+  }
+
+  it("accepts the flag on an assistant message", () => {
+    expect(validateCodingSafeActivityFeed(withFlag(true, 1)).ok).toBe(true);
+  });
+
+  it.each([
+    ["false", false, 1],
+    ["a string", "true", 1],
+    ["on a user message", true, 0],
+  ] as const)("rejects the flag when it is %s", (_label, value, which) => {
+    expect(validateCodingSafeActivityFeed(withFlag(value, which)).ok).toBe(false);
+  });
+});
+
 function plan(): CodingSafeActivityPlan {
   return {
     revision: 1,
