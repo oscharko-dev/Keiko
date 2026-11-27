@@ -533,6 +533,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.reconnect": "Reconnect repository",
   "codingWorkbench.repository.reconnectFailed":
     "Keiko could not reconnect this repository. Open Git and reconnect it there, then choose it again.",
+  "codingWorkbench.repository.reconnectChoiceFailed":
+    "This folder could not be reconnected. It may have changed again; check it in Git.",
   "codingWorkbench.repository.changedReason":
     "Changed since it was added. Choosing it reconnects it.",
   "codingWorkbench.repository.gitUnavailableHelp":

@@ -860,7 +860,7 @@ function ReconnectNotice({
 }): ReactNode {
   return failed ? (
     <p className={styles.cmpRepositorySelectorNotice} role="alert">
-      {t("codingWorkbench.repository.reconnectFailed")}
+      {t("codingWorkbench.repository.reconnectChoiceFailed")}
     </p>
   ) : null;
 }

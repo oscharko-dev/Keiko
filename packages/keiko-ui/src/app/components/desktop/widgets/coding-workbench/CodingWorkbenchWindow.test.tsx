@@ -4167,7 +4167,7 @@ describe("CodingWorkbenchWindow", () => {
     const user = userEvent.setup();
     approvalReviewHookMock.mockReturnValue({
       status: "ready",
-      review: { ...APPROVAL_REVIEW, requestId: "permission-7" },
+      review: { ...APPROVAL_REVIEW, requestId: "permission-8" },
       retry: vi.fn(),
     });
     const liveActions = renderWorkbench(editApprovalState());
