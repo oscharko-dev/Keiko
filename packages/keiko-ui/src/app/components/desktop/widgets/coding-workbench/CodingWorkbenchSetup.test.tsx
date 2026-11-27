@@ -153,6 +153,8 @@ function liveState(
 ): CodingWorkbenchRuntimeState {
   return {
     ...createInitialCodingWorkbenchRuntimeState(),
+    // The window's run has been read and there is none: an automatic activation waits for that (U-3).
+    run: { status: "ready", value: null, error: null },
     runtime: {
       status: "ready",
       value: {
