@@ -1224,9 +1224,15 @@ describe("server-resolved git query action (#2298)", () => {
       expect(data.aspects.blame?.lines).toHaveLength(32);
       expect(data.caps.maxBlameLines).toBe(32);
       expect(data.omissions).toContainEqual({ aspect: "blame", reason: "out-of-budget" });
-      const diffCommands = runner.mock.calls
+      const gitDiffs = runner.mock.calls
         .map((call) => call[0] as readonly string[])
         .filter((args) => args.includes("diff"));
+      // The path-filtered status also reads the staged digest (PR #4568): an object-id listing,
+      // never content, so it is no content diff of the diff aspect.
+      const digestListings = gitDiffs.filter((args) => args.includes("--raw"));
+      expect(digestListings).toHaveLength(1);
+      expect(digestListings[0]).toEqual(expect.arrayContaining(["--cached", "--no-textconv"]));
+      const diffCommands = gitDiffs.filter((args) => !args.includes("--raw"));
       expect(diffCommands).toHaveLength(2);
       expect(diffCommands.some((args) => args.includes("--cached"))).toBe(true);
       expect(diffCommands.some((args) => !args.includes("--cached"))).toBe(true);

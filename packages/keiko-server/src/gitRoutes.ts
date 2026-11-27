@@ -1325,7 +1325,11 @@ export async function handleGitStatus(
         ...body,
         ...(untrackedDirectories === undefined ? {} : { untrackedDirectories }),
       });
-      return { status: 200, body: await withStagedDigest(repo, options, redactedBody) };
+      const pathFiltered = path !== undefined;
+      return {
+        status: 200,
+        body: await withStagedDigest(repo, options, redactedBody, pathFiltered),
+      };
     },
   );
 }
@@ -1334,17 +1338,18 @@ export async function handleGitStatus(
 // modes and object ids, never its content, so the same path staged again with other content gets
 // another digest (PR #4568 review). A listing Git cannot give, or one cut at its cap, yields none.
 // The digest names the whole index, which is what a commit takes. The shown `stagedCount` counts
-// only the capped, possibly folder-scoped change list, so a cut or folder-scoped status reads the
-// digest even when it shows nothing staged (PR #4568 audit); a complete repository-wide status with
-// nothing staged needs none.
+// only the capped, possibly folder- or path-scoped change list, so a cut, folder-scoped or
+// `path`-filtered status reads the digest even when it shows nothing staged (PR #4568 audit and
+// review); a complete, unfiltered repository-wide status with nothing staged needs none.
 async function withStagedDigest<
   Body extends { readonly stagedCount: number; readonly truncated: boolean },
 >(
   repo: RepositoryContext,
   options: NormalizedGitRouteOptions,
   body: Body,
+  pathFiltered: boolean,
 ): Promise<Body & { readonly stagedDigest?: string }> {
-  const partialView = body.truncated || repo.selectedRootPrefix !== "";
+  const partialView = body.truncated || pathFiltered || repo.selectedRootPrefix !== "";
   if (body.stagedCount === 0 && !partialView) return body;
   const stagedDigest = await stagedChangesDigest(repo, options);
   return stagedDigest === undefined ? body : { ...body, stagedDigest };

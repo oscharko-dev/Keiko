@@ -445,6 +445,24 @@ describe("GET /api/git/status", () => {
     expect(scoped.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
+  // PR #4568 review: a `path`-filtered status of the repository root shows no staged change of
+  // another path either, so it names the whole index's digest as well.
+  it("names the staged digest of the whole index in a path-filtered status", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await mkdir(join(root, "sub"));
+    await writeFile(join(root, "sub", "inside.md"), "inside");
+    await writeFile(join(root, "outside.md"), "outside");
+    await runRealGit(["add", "outside.md"]);
+    const filtered = (
+      await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=sub%2Finside.md`),
+        deps(defaultGitProcessRunner),
+      )
+    ).body as Record<string, unknown>;
+    expect(filtered.stagedCount).toBe(0);
+    expect(filtered.stagedDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
   it("reports selected ignored roots and derives untracked folders from real Git records", async () => {
     await runRealGit(["init", "--quiet"]);
     await mkdir(join(root, "new"));
