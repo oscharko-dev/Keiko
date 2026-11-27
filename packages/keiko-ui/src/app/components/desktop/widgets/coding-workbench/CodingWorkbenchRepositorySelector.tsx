@@ -21,7 +21,8 @@ import {
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
-import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
+import { locallyAvailable, needsReconnect } from "./codingWorkbenchRepositoryAvailability";
+import { useRepositoryReconnect } from "./useRepositoryReconnect";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -108,18 +109,30 @@ interface RepositoryOption {
   readonly badge?: string;
 }
 
+// U-16: a folder that exists but changed since it was added stays enabled — choosing it reconnects
+// it. A folder that is gone, or that the read surface refuses, is disabled with its plain badge.
+function registeredOption(
+  project: ProjectWithAvailability,
+  t: CodingWorkbenchTranslate,
+): RepositoryOption {
+  const base = {
+    value: project.path,
+    label: project.name || repositoryName(project.path),
+    description: project.path,
+  };
+  if (locallyAvailable(project)) return base;
+  if (needsReconnect(project)) {
+    return { ...base, description: t("codingWorkbench.repository.changedReason") };
+  }
+  return { ...base, disabled: true, badge: t("codingWorkbench.repository.unavailable") };
+}
+
 function repositoryOptions(
   catalog: CatalogState,
   root: string | null,
   t: CodingWorkbenchTranslate,
 ): readonly RepositoryOption[] {
-  const registered = catalog.repositories.map((project) => ({
-    value: project.path,
-    label: project.name || repositoryName(project.path),
-    description: project.path,
-    disabled: !locallyAvailable(project),
-    ...(!locallyAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
-  }));
+  const registered = catalog.repositories.map((project) => registeredOption(project, t));
   if (root === null || registered.some((project) => project.value === root)) return registered;
   return [
     {
@@ -562,6 +575,9 @@ interface RepositorySelectorState {
   // #4068: ...unless the runtime confines no work in place.
   readonly folderUnsupported: boolean;
   readonly reconnectable: boolean;
+  // U-16: choosing a changed folder reconnects it first; the failure stays visible.
+  readonly choose: (root: string) => void;
+  readonly reconnectFailed: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
@@ -574,8 +590,10 @@ function useRepositorySelectorState(
     offeredLocations: offered,
     catalogRefreshKey,
   }: Pick<CodingWorkbenchRepositorySelectorProps, "offeredLocations" | "catalogRefreshKey">,
+  onSelect: (root: string) => void,
 ): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog(catalogRefreshKey);
+  const reconnect = useRepositoryReconnect(catalog.repositories, catalog.reload, onSelect);
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
@@ -593,6 +611,8 @@ function useRepositorySelectorState(
     folderMode,
     folderUnsupported,
     reconnectable: repositoryReconnectable(root, catalog),
+    choose: reconnect.choose,
+    reconnectFailed: reconnect.failed,
   };
 }
 
@@ -831,6 +851,20 @@ function RepositorySelectorField({
   );
 }
 
+function ReconnectNotice({
+  failed,
+  t,
+}: {
+  readonly failed: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return failed ? (
+    <p className={styles.cmpRepositorySelectorNotice} role="alert">
+      {t("codingWorkbench.repository.reconnectFailed")}
+    </p>
+  ) : null;
+}
+
 export function CodingWorkbenchRepositorySelector({
   root,
   branch,
@@ -842,14 +876,14 @@ export function CodingWorkbenchRepositorySelector({
   ...work
 }: CodingWorkbenchRepositorySelectorProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const state = useRepositorySelectorState(root, locked, work);
+  const state = useRepositorySelectorState(root, locked, work, onSelect);
   return (
     <div className={placement === "setup" ? styles.cmpSetupSelector : styles.cmpRepositorySelector}>
       <RepositorySelectorField
         root={root}
         locked={locked}
         catalog={state.catalog}
-        onSelect={onSelect}
+        onSelect={state.choose}
         t={t}
         placement={placement}
       />
@@ -878,6 +912,7 @@ export function CodingWorkbenchRepositorySelector({
         onReconnected={work.onReconnected}
         t={t}
       />
+      <ReconnectNotice failed={state.reconnectFailed} t={t} />
     </div>
   );
 }

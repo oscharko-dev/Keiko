@@ -562,6 +562,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.reconnect": "Repository erneut verbinden",
   "codingWorkbench.repository.reconnectFailed":
     "Keiko konnte dieses Repository nicht erneut verbinden. Öffne Git, verbinde es dort erneut und wähle es dann noch einmal.",
+  "codingWorkbench.repository.changedReason":
+    "Seit dem Hinzufügen geändert. Die Auswahl verbindet ihn erneut.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
   "codingWorkbench.repository.folderModeHint":

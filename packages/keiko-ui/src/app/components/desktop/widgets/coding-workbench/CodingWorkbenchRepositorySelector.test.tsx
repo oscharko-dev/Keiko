@@ -14,9 +14,13 @@ const selectableRepositories = vi.hoisted(() => vi.fn());
 vi.mock("./codingWorkbenchRepositories", () => ({ selectableRepositories }));
 
 const listBranches = vi.hoisted(() => vi.fn());
+const reconnectRepository = vi.hoisted(() => vi.fn());
 vi.mock("../cards/git-client/git-client-seam", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cards/git-client/git-client-seam")>();
-  return { ...actual, DEFAULT_GIT_CLIENT: { ...actual.DEFAULT_GIT_CLIENT, listBranches } };
+  return {
+    ...actual,
+    DEFAULT_GIT_CLIENT: { ...actual.DEFAULT_GIT_CLIENT, listBranches, reconnectRepository },
+  };
 });
 
 const reportClientDiagnostic = vi.hoisted(() => vi.fn());
@@ -397,5 +401,78 @@ describe("CodingWorkbenchRepositorySelector after a folder's workspace came back
       expect(screen.queryByText(/This repository is no longer available in Git/u)).toBeNull(),
     );
     expect(selectableRepositories).toHaveBeenCalledTimes(2);
+  });
+});
+
+// U-16: a folder deleted and cloned again at the same path is refused by the server on purpose. It
+// stays an enabled option with its reason, and choosing it is the explicit act that reconnects it.
+describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)", () => {
+  const drifted = { ...project("/work/cloned"), workspaceAvailable: false };
+
+  async function openPicker(
+    overrides: Partial<Parameters<typeof renderSelector>[0]> = {},
+  ): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    listBranches.mockResolvedValue(branchList(["main"]));
+    const view = renderSelector({ placement: "composer", root: "/work/app", ...overrides });
+    const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
+    await waitFor(() => expect(repository).toBeEnabled());
+    await user.click(repository);
+    expect(view.container).toBeTruthy();
+    return user;
+  }
+
+  it("offers a changed folder as an enabled option with its reason and no call on mount", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    await openPicker();
+    const option = screen.getByRole("option", { name: /cloned, Changed since it was added/u });
+    expect(option).toBeEnabled();
+    expect(reconnectRepository).not.toHaveBeenCalled();
+  });
+
+  it("keeps a missing folder disabled as unavailable, without a reconnect", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), project("/work/gone", false)]);
+    const user = await openPicker();
+    const option = screen.getByRole("option", { name: "gone, /work/gone, unavailable" });
+    expect(option).toBeDisabled();
+    await user.click(option);
+    expect(reconnectRepository).not.toHaveBeenCalled();
+  });
+
+  it("reconnects once on choosing it, reloads the catalog and selects it", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    reconnectRepository.mockResolvedValue({ project: project("/work/cloned") });
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith("/work/cloned"));
+    expect(reconnectRepository).toHaveBeenCalledTimes(1);
+    expect(reconnectRepository).toHaveBeenCalledWith("/work/cloned");
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    // The catalog was read on mount, when the menu opened, and once more after the reconnect.
+    expect(selectableRepositories.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("shows a visible error and a body-free diagnostic when the reconnect fails", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    reconnectRepository.mockRejectedValue(new ApiError("SERVICE_UNAVAILABLE", "redacted", 503));
+    const onSelect = vi.fn();
+    const user = await openPicker({ onSelect });
+    await user.click(screen.getByRole("option", { name: /cloned, Changed since it was added/u }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be reconnected/u);
+    expect(onSelect).not.toHaveBeenCalled();
+    const call = reportClientDiagnostic.mock.calls.find(([message]) =>
+      String(message).includes("reconnect failed"),
+    );
+    expect(call).toBeDefined();
+    expect(JSON.stringify(call)).not.toContain("/work/cloned");
+  });
+
+  it("has no axe violations with a changed folder offered", async () => {
+    selectableRepositories.mockResolvedValue([project("/work/app"), drifted]);
+    await openPicker();
+    expect(
+      await axe(document.body, { rules: { region: { enabled: false } } }),
+    ).toHaveNoViolations();
   });
 });

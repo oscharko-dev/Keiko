@@ -10,3 +10,12 @@ import type { ProjectWithAvailability } from "@/lib/types";
 export function locallyAvailable(project: ProjectWithAvailability): boolean {
   return project.available && project.workspaceAvailable === true && project.readable !== false;
 }
+
+/**
+ * A registered folder that still exists and is readable but whose workspace membership is not
+ * current (deleted and cloned again at the same path): the server refuses it on purpose, and
+ * choosing it in the picker is the person's explicit act to reconnect it (U-16).
+ */
+export function needsReconnect(project: ProjectWithAvailability): boolean {
+  return project.available && project.readable !== false && project.workspaceAvailable !== true;
+}

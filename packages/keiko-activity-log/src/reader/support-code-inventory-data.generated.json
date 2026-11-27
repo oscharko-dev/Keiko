@@ -3248,6 +3248,7 @@
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useCodingWorkbenchVersionFacts",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useComposerMentions",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/usePromptDeliveryNotice",
+    "keiko-ui/app/components/desktop/widgets/coding-workbench/useRepositoryReconnect",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useSecondClock",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useSelectionMismatchRecovery",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useWorkbenchExecutionLocation",
