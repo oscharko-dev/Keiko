@@ -1630,7 +1630,7 @@ function workbenchStartBlocker(
 
 // The repository catalog reloads when the selected folder's workspace is found lost or back (#4491).
 function catalogRefreshKeyOf(locationState: WorkbenchExecutionLocationState): string {
-  return locationState.reason === "unbound" ? "unbound" : "bound";
+  return locationState.unbound ? "unbound" : "bound";
 }
 
 function locationMutationPending(

@@ -12,6 +12,7 @@ function state(
     pending: false,
     error: false,
     denied: false,
+    unbound: false,
     retry: vi.fn(),
     ...overrides,
   };

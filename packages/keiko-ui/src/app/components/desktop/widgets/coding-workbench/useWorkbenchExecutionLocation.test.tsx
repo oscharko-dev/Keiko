@@ -584,6 +584,22 @@ describe("a selection whose folder lost its workspace behind a still-held bindin
     expect(result.current.ready).toBe(false);
   });
 
+  it("says the folder is unbound until its workspace is back, with or without an error", async () => {
+    mocks.fetchProjects.mockResolvedValueOnce(project(false)).mockResolvedValue(project(true));
+    mocks.selectLocalCheckout.mockReturnValue(new Promise(() => undefined));
+    const { result } = renderHook(() => useWorkbenchExecutionLocation(input));
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(true);
+    });
+    expect(result.current.error).toBe(false);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => {
+      expect(result.current.unbound).toBe(false);
+    });
+  });
+
   it("keeps the server's own named cause over the lost workspace", async () => {
     mocks.fetchProjects.mockResolvedValue(project(false));
     mocks.selectLocalCheckout.mockRejectedValue(

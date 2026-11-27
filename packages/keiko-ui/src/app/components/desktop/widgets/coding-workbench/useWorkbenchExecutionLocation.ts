@@ -129,6 +129,11 @@ export interface WorkbenchExecutionLocationState {
    * explanation; absent for every other failure, which keeps the generic sentence (#4404).
    */
   readonly reason?: LocationFailureReason;
+  /**
+   * The selected folder has no workspace connection (a repository cloned again at the same path):
+   * the repository catalog reads again whenever this flips, so its notice follows (#4491).
+   */
+  readonly unbound: boolean;
   readonly retry: () => void;
 }
 
@@ -508,6 +513,7 @@ export function useWorkbenchExecutionLocation(
     error,
     denied: bindingDenied(error, input),
     ...failureReason(attempt, key, error, unbound),
+    unbound,
     retry: attempt.retry,
   };
 }
