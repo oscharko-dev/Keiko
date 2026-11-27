@@ -163,13 +163,19 @@ describe("production verified commit dependencies", () => {
     expect(result).toStrictEqual({
       ok: false,
       violations: ["missing-conventional-prefix"],
+      policyMode: "keiko-conventional",
+      policySource: "setting",
     });
   });
 
   it("still resolves ok:true through the real production composition for a compliant message", async () => {
     const composed = createProductionVerifiedCommitDependencies(deps, noopSnapshots);
     const result = await composed?.messageAllowed("feat: add widget (#1)", workspaceInfo(root));
-    expect(result).toStrictEqual({ ok: true });
+    expect(result).toStrictEqual({
+      ok: true,
+      policyMode: "keiko-conventional",
+      policySource: "setting",
+    });
   });
 
   it("refuses dirty buffers in a nested workspace because it overlaps the target tree", () => {

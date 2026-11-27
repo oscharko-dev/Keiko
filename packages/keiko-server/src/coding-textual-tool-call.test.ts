@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
 import {
   detectTextualToolCall,
   foldDiscardedAttempt,
@@ -13,11 +14,11 @@ import {
 } from "./coding-textual-tool-call.js";
 
 // The REAL catalog the native sidecar sees: the tool names and parameter schemas of the pinned
-// OpenCode 2.4.2 advertisement (`todowrite`, not `todo`; `path`, not `filePath`).
+// OpenCode advertisement (`todowrite`, not `todo`; `path`, not `filePath`).
 const REAL_TOOLS = JSON.parse(
   readFileSync(
     new URL(
-      "./coding-runtime/opencodeToolSchemas.opencode-2.4.2-advertised.fixture.json",
+      `./coding-runtime/opencodeToolSchemas.opencode-${OPENCODE_PINNED_VERSION}-advertised.fixture.json`,
       import.meta.url,
     ),
     "utf8",
