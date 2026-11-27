@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "af9cfdef2073f8b33e74aea58b88c34b4b3c9147f766052f3dd46904ef4e96ae",
+    "catalogDigest": "65acd25b216e31c8eaafc27779e4e403cd500bd9ee0a823c590acc48489b2064",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22442,7 +22442,7 @@
         "proofIds": ["editor.verification.windows-step-drives.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/windowsStepDrives.ts:22",
-        "emitterSites": ["packages/keiko-server/src/editor/windowsStepDrives.ts:137"]
+        "emitterSites": ["packages/keiko-server/src/editor/windowsStepDrives.ts:164"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -125349,7 +125349,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:155",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:182",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127955,7 +127955,7 @@
     {
       "op": "editor.verification.windows-step-drives.release-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:199",
+      "site": "packages/keiko-server/src/editor/windowsStepDrives.ts:227",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

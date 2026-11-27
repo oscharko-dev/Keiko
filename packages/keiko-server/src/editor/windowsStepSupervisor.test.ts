@@ -83,9 +83,9 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
   it("hands out verified private copies of the pinned supervisor and records it available", async () => {
     const defined = new Map<string, string>();
     const drives = {
-      define: (drive: string, root: string): boolean => {
+      define: (drive: string, root: string): "defined" => {
         defined.set(drive, root);
-        return true;
+        return "defined";
       },
       remove: (drive: string): boolean => defined.delete(drive),
     };
@@ -148,7 +148,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       activityLog: createActivityLogSink(stateRoot),
       correlationId: "step-refused-proof",
       runtime: () => releasedRuntime(helperPath, createHash("sha256").update(bytes).digest("hex")),
-      driveHost: { define: () => true, remove: () => true },
+      driveHost: { define: () => "defined", remove: () => true },
     });
     const copy = supervisor?.acquire([String.raw`C:\Users\dev\keiko-step-1`]);
     copy?.refused(12, false);
@@ -181,7 +181,7 @@ describe("resolveWindowsStepSupervisor (#4496)", () => {
       env: {},
       activityLog: createActivityLogSink(temporary("keiko-step-supervisor-log-")),
       runtime: () => releasedRuntime(helperPath, createHash("sha256").update(bytes).digest("hex")),
-      driveHost: { define: () => false, remove: () => true },
+      driveHost: { define: () => "refused", remove: () => true },
     });
     expect(() => supervisor?.acquire([String.raw`C:\Users\dev\keiko-step-1`])).toThrow(
       ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
