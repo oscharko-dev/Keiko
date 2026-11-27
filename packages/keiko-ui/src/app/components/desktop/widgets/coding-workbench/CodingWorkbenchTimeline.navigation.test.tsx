@@ -396,6 +396,40 @@ describe("a running call", () => {
     expect(container.querySelector('[role="timer"]')).toBeNull();
   });
 
+  // U-18: a later update of the same call carries a newer occurredAt; the timer must stay anchored
+  // at the call's first start and never run backwards.
+  it("keeps the elapsed time anchored at the first start when a later update is newer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const running = tool("call-run", "shell", "running");
+    const { container, rerender } = render(<TimelineOf feed={feedOf([running])} active />);
+    act(() => {
+      vi.advanceTimersByTime(36_000);
+    });
+    expect(container.querySelector('[role="timer"]')).toHaveTextContent(/^36 s$/u);
+    const heartbeat = { ...running, occurredAt: new Date(Date.parse(AT) + 30_000).toISOString() };
+    rerender(<TimelineOf feed={feedOf([heartbeat])} active />);
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(container.querySelector('[role="timer"]')).toHaveTextContent(/^39 s$/u);
+  });
+
+  it("shows a running verification held for the trust decision as waiting, without a timer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const held = tool("call-verify", "keiko_verify", "running", {
+      verificationOutcome: "waiting-for-trust",
+    });
+    const { container } = render(<TimelineOf feed={feedOf([held])} active />);
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(container.querySelector('[role="timer"]')).toBeNull();
+    expect(container.querySelector('[data-state="waiting-for-trust"]')).not.toBeNull();
+    expect(container.querySelector('[data-state="running"]')).toBeNull();
+  });
+
   // #4491: a call that never reported its end must not keep "Running" and a ticking clock once the
   // run is over.
   it.each(["running", "pending"] as const)(

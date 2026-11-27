@@ -5,7 +5,11 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
-import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
+import {
+  changesRefreshSignal,
+  changesSignalWithUndo,
+  succeededBranchMoveCount,
+} from "./codingWorkbenchChangesSignal";
 
 const AT = "2026-10-23T12:00:00.000Z";
 
@@ -200,5 +204,30 @@ describe("changesSignalWithUndo", () => {
     expect(undone).not.toBe(before);
     expect(changesSignalWithUndo("c-1|2", false)).toBe(before);
     expect(changesSignalWithUndo(null, true)).not.toBeNull();
+  });
+});
+
+describe("succeededBranchMoveCount", () => {
+  it("counts only branch create/switch calls that succeeded", () => {
+    expect(succeededBranchMoveCount(null)).toBe(0);
+    expect(succeededBranchMoveCount(feed([{ tool: "edit", state: "succeeded" }]))).toBe(0);
+    expect(
+      succeededBranchMoveCount(
+        feed([
+          { tool: "keiko_git_branch", state: "running" },
+          { tool: "keiko_git_branch", state: "failed" },
+          { tool: "keiko_git_branch", state: "denied" },
+        ]),
+      ),
+    ).toBe(0);
+    expect(
+      succeededBranchMoveCount(
+        feed([
+          { tool: "keiko_git_branch", state: "succeeded" },
+          { tool: "keiko_git_branch", state: "succeeded" },
+          { tool: "keiko_git_status", state: "succeeded" },
+        ]),
+      ),
+    ).toBe(2);
   });
 });

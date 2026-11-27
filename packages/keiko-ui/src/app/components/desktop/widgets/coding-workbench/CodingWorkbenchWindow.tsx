@@ -177,7 +177,11 @@ import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
 import { LocationBindingNotices, locationBlockerKey } from "./CodingWorkbenchLocationNotices";
 import { movedTaskBranch, type TaskBranchMove } from "./codingWorkbenchTaskBranch";
 import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
-import { changesRefreshSignal, changesSignalWithUndo } from "./codingWorkbenchChangesSignal";
+import {
+  changesRefreshSignal,
+  changesSignalWithUndo,
+  succeededBranchMoveCount,
+} from "./codingWorkbenchChangesSignal";
 import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
@@ -717,6 +721,35 @@ function displayedExecutionBranch(
   return selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch) ?? null;
 }
 
+/**
+ * The branch the composer names while a run is live. The run's own workspace is frozen at its
+ * submission, so a task branch the run created later shows only through the live binding; that is
+ * read only while it still names the run's workspace, never another one the pointer moved to.
+ */
+function runDisplayedBranch(
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  activeWorkspace: WorkbenchWorkspaceApi,
+): string | null {
+  const bound = runWorkspace.bound;
+  const live = activeWorkspace.activeInstance?.taskBranch ?? null;
+  if (bound?.root == null || runWorkspace.mismatched || live === null) {
+    return bound?.taskBranch ?? null;
+  }
+  return live;
+}
+
+/** Reads the workspace again each time the run's feed reports one more successful branch move. */
+function useWorkspaceReadAfterBranchMove(
+  moves: number,
+  refreshWorkspace: () => Promise<boolean>,
+): void {
+  const seen = useRef(moves);
+  useEffect(() => {
+    if (moves > seen.current) void refreshWorkspace();
+    seen.current = moves;
+  }, [moves, refreshWorkspace]);
+}
+
 function WorkbenchContextControls({
   repositoryRoot,
   selectedBranch,
@@ -749,7 +782,7 @@ function WorkbenchContextControls({
   readonly catalogRefresh: CatalogRefreshProps;
 }): ReactNode {
   const branch = runIsActive
-    ? (runWorkspace.bound?.taskBranch ?? null)
+    ? runDisplayedBranch(runWorkspace, activeWorkspace)
     : displayedExecutionBranch(activeWorkspace, repositoryRoot, selectedBranch, placement);
   return (
     <CodingWorkbenchRepositorySelector
@@ -1928,6 +1961,7 @@ function WorkbenchColumns(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
   const changesSignal = changesRefreshSignal(state.events, activity.feed);
+  useWorkspaceReadAfterBranchMove(succeededBranchMoveCount(activity.feed), activeWorkspace.refresh);
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
   // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.

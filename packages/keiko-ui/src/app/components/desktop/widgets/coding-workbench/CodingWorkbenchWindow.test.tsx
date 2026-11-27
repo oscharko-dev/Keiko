@@ -5293,6 +5293,75 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
+  // U-17: a run that creates and switches onto a task branch moves the checkout while it is still
+  // live; the composer's branch chip must follow at once, not only after the run settles.
+  describe("the branch chip while a run switches branch", () => {
+    const MOVED = "fix/zins-sup";
+
+    function branchFeed(state: "succeeded" | "failed"): AvailableCodingSafeActivityFeed {
+      const feed = activityFeed();
+      const turn = feed.turns[0];
+      if (turn === undefined) throw new Error("fixture turn missing");
+      const branch = { callId: "call-branch", tool: "keiko_git_branch", state, occurredAt: AT };
+      return { ...feed, turns: [{ ...turn, tools: [...turn.tools, branch] }] };
+    }
+
+    function movedWorkspace(): ActiveWorkspaceApi {
+      return workspaceApi({ ...WORKSPACE_A, branch: MOVED });
+    }
+
+    function renderLive(
+      workspace: ActiveWorkspaceApi,
+      feed: AvailableCodingSafeActivityFeed,
+    ): ReactElement {
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "live", feed });
+      return (
+        <ActiveWorkspaceProvider value={workspace}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>
+      );
+    }
+
+    function startLive(): void {
+      runtimeHookMock.mockReturnValue({
+        state: stateIn(WORKSPACE_A, { state: "running", runId: "run-1" }),
+        actions: actions(),
+      });
+    }
+
+    it("reads the workspace again on a successful branch move and shows the new branch", () => {
+      startLive();
+      const before = workspaceApi(WORKSPACE_A);
+      const view = render(renderLive(before, activityFeed()));
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+      expect(before.refresh).not.toHaveBeenCalled();
+
+      const after = movedWorkspace();
+      view.rerender(renderLive(after, branchFeed("succeeded")));
+
+      expect(after.refresh).toHaveBeenCalledTimes(1);
+      expect(document.body.textContent).toContain(MOVED);
+      expect(document.body.textContent).not.toContain(WORKSPACE_A.branch);
+    });
+
+    it("does not read the workspace again for a failed branch call", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      const after = workspaceApi(WORKSPACE_A);
+      view.rerender(renderLive(after, branchFeed("failed")));
+      expect(after.refresh).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+    });
+
+    it("keeps the run's own branch when the pointer names another workspace", () => {
+      startLive();
+      const view = render(renderLive(workspaceApi(WORKSPACE_A), activityFeed()));
+      view.rerender(renderLive(workspaceApi(WORKSPACE_B), activityFeed()));
+      expect(document.body.textContent).toContain(WORKSPACE_A.branch);
+      expect(document.body.textContent).not.toContain(WORKSPACE_B.branch);
+    });
+  });
+
   // U-3: the repository a run works in becomes the window's own, so no later remount or workspace
   // read can hand the window another repository (the Git window's) unasked.
   it("pins the repository of a live run that this window started", () => {

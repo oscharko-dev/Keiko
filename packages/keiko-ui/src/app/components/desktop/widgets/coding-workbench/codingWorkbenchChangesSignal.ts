@@ -29,6 +29,26 @@ function latestEventCursor(events: readonly CodingWorkbenchRuntimeSseEvent[]): s
   return null;
 }
 
+/** The native tool that creates a task branch and switches the checkout onto it. */
+const BRANCH_MOVE_TOOL = "keiko_git_branch";
+
+/**
+ * How many branch create/switch calls of the live feed succeeded. The checkout stands on another
+ * branch after each, so a change of this count is the moment the run's branch chip must be read
+ * again; a failed, denied or still pending call moves nothing (#4491).
+ */
+export function succeededBranchMoveCount(
+  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+): number {
+  let count = 0;
+  for (const turn of feed?.turns ?? []) {
+    for (const tool of turn.tools) {
+      if (tool.tool === BRANCH_MOVE_TOOL && tool.state === "succeeded") count += 1;
+    }
+  }
+  return count;
+}
+
 /** Tool calls that finished and may have changed the worktree, counted over the live feed. */
 function settledWorkspaceToolCount(feed: UseCodingWorkbenchSafeActivityResult["feed"]): number {
   let count = 0;

@@ -1737,6 +1737,23 @@ function ToolSummaryEnd({
   );
 }
 
+/**
+ * The instant a running call was first seen to start. Later updates of the same call (a progress
+ * heartbeat, a part update) carry a newer `occurredAt`; taking it would restart the timer, so the
+ * earliest instant seen for this row stands and the elapsed time never runs backwards.
+ */
+function earliestStart(earlier: number | undefined, since: string): number | undefined {
+  const parsed = Date.parse(since);
+  if (Number.isNaN(parsed)) return earlier;
+  return earlier === undefined ? parsed : Math.min(earlier, parsed);
+}
+
+function useFirstStart(since: string): number | undefined {
+  const first = useRef<number | undefined>(undefined);
+  first.current = earliestStart(first.current, since);
+  return first.current;
+}
+
 // How long a call has been running, from one second on. It ticks silently: a timer is no live
 // region, so a screen reader is never interrupted once a second.
 function RunningFor({
@@ -1747,8 +1764,8 @@ function RunningFor({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const now = useSecondClock(true);
-  const started = Date.parse(since);
-  const elapsed = Number.isNaN(started) ? 0 : now - started;
+  const started = useFirstStart(since);
+  const elapsed = started === undefined ? 0 : now - started;
   if (elapsed < 1_000) return null;
   return (
     <span className={styles.cmpToolDuration} role="timer">
@@ -1846,6 +1863,15 @@ function isHeldForApproval(
   );
 }
 
+// A verification that has not finished and already reports the package-script trust decision as its
+// outcome is blocked on the person, not executing: it shows that closed state, never a running timer.
+function isOpenWaitingForTrust(tool: CodingSafeActivityTool): boolean {
+  return (
+    (tool.state === "running" || tool.state === "pending") &&
+    tool.presentation?.verificationOutcome === "waiting-for-trust"
+  );
+}
+
 function useShownToolState(tool: CodingSafeActivityTool, superseded: boolean): ShownToolState {
   const awaitingCallId = useContext(AwaitingApprovalCallIdContext);
   const runEnded = useContext(RunEndedContext);
@@ -1859,6 +1885,7 @@ function shownToolState(
   runEnded = false,
 ): ShownToolState {
   if (isHeldForApproval(tool, awaitingCallId)) return "waiting-for-approval";
+  if (isOpenWaitingForTrust(tool)) return "waiting-for-trust";
   if (tool.state === "succeeded") return succeededToolState(tool, superseded, runEnded);
   return tool.state === "failed" ? failedToolState(tool) : tool.state;
 }
