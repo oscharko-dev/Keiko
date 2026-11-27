@@ -1131,6 +1131,7 @@ export async function startStructuredDeliveryRun(
     requestId: randomUUID(),
     taskIntent: options.taskIntent,
     requestedMode: options.requestedMode,
+    expectedWorkspace: { root: options.repositoryPath },
     issueRef: options.issueRef,
     issuePurpose: "delivery",
   };

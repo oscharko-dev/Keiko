@@ -89,7 +89,7 @@ export interface RuntimeMutationActions {
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
-  readonly retry: (taskIntent: string) => Promise<void>;
+  readonly retry: (taskIntent: string, expectedWorkspaceRoot: string) => Promise<void>;
   readonly acknowledgeRecovery: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: (requestedMode: CodingWorkbenchMode) => Promise<void>;
@@ -697,8 +697,10 @@ export function useCodingWorkbenchRuntimeMutations(
     [enqueueMutation, input.stateRef],
   );
   const retry = useCallback(
-    (taskIntent: string): Promise<void> =>
-      enqueueMutation("retry", (current) => createRetryMutation(taskIntent, current)),
+    (taskIntent: string, expectedWorkspaceRoot: string): Promise<void> =>
+      enqueueMutation("retry", (current) =>
+        createRetryMutation(taskIntent, current, expectedWorkspaceRoot),
+      ),
     [enqueueMutation],
   );
   const stop = useCallback((): Promise<void> => runBoundMutation("stop"), [runBoundMutation]);

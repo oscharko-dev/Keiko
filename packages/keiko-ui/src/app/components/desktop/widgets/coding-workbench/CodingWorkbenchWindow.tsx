@@ -218,6 +218,7 @@ import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAge
 import { useCodingWorkbenchIdentityEvidence } from "./useCodingWorkbenchIdentityEvidence";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
+import { useSelectionMismatchRecovery } from "./useSelectionMismatchRecovery";
 import { useCodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -1842,6 +1843,7 @@ function WorkbenchColumns({
     actions,
     issueIntake,
     runWorkspace,
+    expectedRoot: repositoryRoot,
     promptDelivery,
     taskIntent,
     projectMemoryEnabled,
@@ -1852,6 +1854,7 @@ function WorkbenchColumns({
     fork: history.fork,
     resumeMode,
   });
+  useSelectionMismatchRecovery(state.mutation, activeWorkspace.refresh, locationState.retry);
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -2048,6 +2051,7 @@ function WorkbenchColumns({
               state={state}
               taskIntent={taskIntent}
               actions={actions}
+              expectedRoot={repositoryRoot}
               onNewTask={() => void history.newTask()}
               newTaskPending={history.pending}
             />
@@ -3179,10 +3183,13 @@ function RecoveryPanel({
   state,
   taskIntent,
   actions,
+  expectedRoot,
   onNewTask,
   newTaskPending,
 }: LiveSectionProps & {
   readonly taskIntent: string;
+  /** The repository the Workbench shows; a retry states it like a start. */
+  readonly expectedRoot: string | null;
   readonly onNewTask: () => void;
   readonly newTaskPending: boolean;
 }): ReactNode {
@@ -3204,6 +3211,7 @@ function RecoveryPanel({
         busy={busy}
         retryDisabled={busy || !state.canRetry || intentEmpty}
         retryIntent={taskIntent}
+        expectedRoot={expectedRoot}
       />
       <button
         className={styles.button}
@@ -3216,11 +3224,17 @@ function RecoveryPanel({
       {acknowledged && intentEmpty ? (
         <p className={styles.summary}>{t("codingWorkbench.recovery.retryHint")}</p>
       ) : null}
-      <SupportReportButton
-        correlationId={isActivityLogCorrelationId(snapshot.runId) ? snapshot.runId : undefined}
-        errorKey={`coding-run-${snapshot.runId}`}
-      />
+      <RecoverySupportReport runId={snapshot.runId} />
     </section>
+  );
+}
+
+function RecoverySupportReport({ runId }: { readonly runId: string | undefined }): ReactNode {
+  return (
+    <SupportReportButton
+      correlationId={isActivityLogCorrelationId(runId) ? runId : undefined}
+      errorKey={`coding-run-${runId}`}
+    />
   );
 }
 
@@ -3232,7 +3246,9 @@ function RecoveryButtons({
   busy,
   retryDisabled,
   retryIntent,
+  expectedRoot,
 }: Pick<LiveSectionProps, "actions"> & {
+  readonly expectedRoot: string | null;
   readonly acknowledged: boolean;
   readonly busy: boolean;
   readonly retryDisabled: boolean;
@@ -3245,9 +3261,11 @@ function RecoveryButtons({
         <button
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
-          disabled={retryDisabled}
+          disabled={retryDisabled || expectedRoot === null}
           aria-busy={busy}
-          onClick={() => void actions.retry(retryIntent)}
+          onClick={() => {
+            if (expectedRoot !== null) void actions.retry(retryIntent, expectedRoot);
+          }}
         >
           {t("codingWorkbench.recovery.retry")}
         </button>

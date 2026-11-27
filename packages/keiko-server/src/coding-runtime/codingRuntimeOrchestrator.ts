@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { workspaceRootsNameSameFolder } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   CODING_WORKBENCH_RUNTIME_ORIGINS,
   DEFAULT_CODING_WORKBENCH_AGENT,
@@ -268,6 +269,7 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "verification-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
+    "workspace-selection-mismatch",
     "prompt-allowance-exhausted",
     "envelope-duration-exhausted",
     "output-exhausted-repeated",
@@ -1355,9 +1357,27 @@ function recordRuntimeStartFailure(
   });
 }
 
-/** Why a start could not resolve its workspace, principal or task history (#4492). */
+/**
+ * Why a start could not resolve its workspace, principal or task history (#4492), or why it named
+ * another repository than the active workspace (`workspace-selection-mismatch`).
+ */
 type StartScopeGap =
-  "no-active-workspace" | "no-principal" | "conversation-not-admitted" | "prior-run-missing";
+  | "no-active-workspace"
+  | "no-principal"
+  | "conversation-not-admitted"
+  | "prior-run-missing"
+  | "workspace-selection-mismatch";
+
+// A wake continues on the model its task last used, except the generic `coding` alias.
+function wakeModelSelection(modelId: string | undefined): { readonly modelId?: string } {
+  return modelId === undefined || modelId === "coding" ? {} : { modelId };
+}
+
+// The two roots a mismatch compares, named in the log by digest only: a path is never logged.
+function selectionMismatchDetail(expectedRoot: string, activeRoot: string): string {
+  const digest = (root: string): string => sha256Hex(root.toLowerCase()).slice(0, 16);
+  return `:expected=${digest(expectedRoot)}:active=${digest(activeRoot)}`;
+}
 
 // The start refusal `authority-resolution-failed` covers four different gaps; the operator's log
 // names which one, so a customer report locates it without a reproduction (#4492: a recreated
@@ -1366,6 +1386,7 @@ function recordStartScopeGap(
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string | undefined,
   gap: StartScopeGap,
+  detail = "",
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId:
@@ -1377,7 +1398,7 @@ function recordStartScopeGap(
     source: "coding-runtime-orchestrator.start",
     errorClass: "CodingRuntimeStartScopeUnresolved",
     message: "runtime-start-failed",
-    code: `stage=start-scope:reason=${gap}`,
+    code: `stage=start-scope:reason=${gap}${detail}`,
   });
 }
 
@@ -4421,14 +4442,18 @@ export class CodingRuntimeOrchestrator {
     const priorId = this.deps.history?.previousRunId(plan.taskId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
     const intent = plan.intent.trim().slice(0, CODING_WORKBENCH_TASK_INTENT_MAX_CHARS);
-    if (prior === undefined || priorId === undefined || intent === "") return undefined;
-    const modelId = this.deps.history?.forRun(priorId)?.modelId;
+    // A wake has no person looking at a repository: it continues in the workspace that is active.
+    const active = this.activeWorkspaceOrUndefined();
+    if (prior === undefined || priorId === undefined || intent === "" || active === undefined) {
+      return undefined;
+    }
     return {
       requestId: `scheduled-wake-${randomUUID()}`,
       taskIntent: intent,
       conversationId: plan.taskId,
       requestedMode: narrowerMode(plan.consentMode, prior.requestedMode),
-      ...(modelId === undefined || modelId === "coding" ? {} : { modelId }),
+      expectedWorkspace: { root: active.instance.repositoryRoot },
+      ...wakeModelSelection(this.deps.history?.forRun(priorId)?.modelId),
     };
   }
 
@@ -4444,7 +4469,7 @@ export class CodingRuntimeOrchestrator {
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
-    if ("gap" in scope) return this.refuseStartScope(scope.gap, correlationId);
+    if ("gap" in scope) return this.refuseStartScope(scope, correlationId);
     const { active, principal } = scope;
     let { request } = scope;
     const runId = this.newRunId();
@@ -4486,11 +4511,15 @@ export class CodingRuntimeOrchestrator {
   }
 
   private refuseStartScope(
-    gap: StartScopeGap,
+    scope: { readonly gap: StartScopeGap; readonly detail?: string },
     correlationId: string | undefined,
   ): CodingRuntimeOrchestratorResult {
-    recordStartScopeGap(this.deps.diagnostics, correlationId, gap);
-    return this.fail("authority-resolution-failed");
+    recordStartScopeGap(this.deps.diagnostics, correlationId, scope.gap, scope.detail);
+    return this.fail(
+      scope.gap === "workspace-selection-mismatch"
+        ? "workspace-selection-mismatch"
+        : "authority-resolution-failed",
+    );
   }
 
   /**
@@ -4648,9 +4677,22 @@ export class CodingRuntimeOrchestrator {
         readonly request: CodingWorkbenchRuntimeStartRequest;
         readonly unverifiedPredecessor?: boolean;
       }
-    | { readonly gap: StartScopeGap } {
+    | { readonly gap: StartScopeGap; readonly detail?: string } {
     const active = this.activeWorkspaceOrUndefined();
     if (!active) return { gap: "no-active-workspace" };
+    // The run starts in the repository the person sees or not at all: the request states the root
+    // the Workbench shows, and the server's global pointer is not allowed to differ from it.
+    if (
+      !workspaceRootsNameSameFolder(request.expectedWorkspace.root, active.instance.repositoryRoot)
+    ) {
+      return {
+        gap: "workspace-selection-mismatch",
+        detail: selectionMismatchDetail(
+          request.expectedWorkspace.root,
+          active.instance.repositoryRoot,
+        ),
+      };
+    }
     const principal = this.deps.serverPrincipal();
     if (!principal) return { gap: "no-principal" };
     if (request.conversationId === undefined) return { active, principal, request };

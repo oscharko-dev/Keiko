@@ -431,6 +431,7 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "verification-not-evidenced",
         "model-unavailable",
         "workspace-unqualified",
+        "workspace-selection-mismatch",
         "prompt-allowance-exhausted",
         "envelope-duration-exhausted",
         "output-exhausted-repeated",

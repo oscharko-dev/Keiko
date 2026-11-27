@@ -49,6 +49,14 @@ still identifies the configuration JSON; these configured facts do not claim pro
 An actual request through the pinned executable separately proves native base guidance plus the
 exact additive part. Legacy V1 retains its existing prompt/configuration contract.
 
+The start request also states the repository root the Workbench shows (`expectedWorkspace.root`, a
+statement and never authority). The server launches in its own global active workspace and, before
+it mints authority, a snapshot or history, compares that root with the active workspace's
+repository root by folded identity (case, separators, trailing separator); a difference refuses
+the start with `workspace-selection-mismatch` (409), so a run starts in exactly the repository the
+person sees or not at all. The Workbench answers that refusal by reading its workspace state again
+and binding the displayed repository afresh, and reads it again on every new app session.
+
 Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
 local app session and the selected checkout's existing GitHub reader grant admit preview reads.
 The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot

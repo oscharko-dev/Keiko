@@ -750,6 +750,29 @@ export interface CodingWorkbenchRuntimeForkRequest {
   readonly beforeMessageId?: string | undefined;
 }
 
+export interface CodingWorkbenchExpectedWorkspace {
+  readonly root: string;
+}
+
+const CODING_WORKBENCH_EXPECTED_WORKSPACE_ROOT_MAX_BYTES = 4096;
+
+function validateExpectedWorkspace(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("expectedWorkspace must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["root"], "expectedWorkspace"));
+  const root = value.root;
+  if (
+    typeof root !== "string" ||
+    root.trim() === "" ||
+    root.includes("\0") ||
+    new TextEncoder().encode(root).length > CODING_WORKBENCH_EXPECTED_WORKSPACE_ROOT_MAX_BYTES
+  ) {
+    errors.push("expectedWorkspace.root must be a bounded, non-empty path");
+  }
+}
+
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
@@ -759,6 +782,14 @@ export interface CodingWorkbenchRuntimeStartRequest {
   /** Forks another task into a new one; never combined with `conversationId`. */
   readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
   readonly requestedMode: CodingWorkbenchMode;
+  /**
+   * The repository the person sees when they start: the root the Workbench shows, as the client
+   * knows it. The server launches in its own active workspace and refuses the start with
+   * `workspace-selection-mismatch` when that is another folder, so a run starts in exactly the
+   * repository on screen or not at all. A statement, never authority: it cannot select, widen or
+   * replace the server's binding.
+   */
+  readonly expectedWorkspace: CodingWorkbenchExpectedWorkspace;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
@@ -1447,6 +1478,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
+  validateExpectedWorkspace(value.expectedWorkspace, errors);
   validateRuntimePreference(value.runtimePreference, errors);
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
@@ -1474,6 +1506,7 @@ const START_REQUEST_KEYS: readonly string[] = [
   "taskIntent",
   "conversationId",
   "requestedMode",
+  "expectedWorkspace",
   "runtimePreference",
   "modelId",
   "reasoningEffort",

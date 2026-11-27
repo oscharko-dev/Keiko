@@ -39,7 +39,7 @@ describe("coding runtime control plane", () => {
       evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
       workspaceLifecycle: {
         getActive: () => ({
-          instance: { workspaceId: "workspace-1" },
+          instance: { workspaceId: "workspace-1", repositoryRoot: "/repository" },
           binding: { activeRoot: "/managed/workspace" },
         }),
       } as never,
@@ -53,6 +53,7 @@ describe("coding runtime control plane", () => {
         requestId: "request-1",
         taskIntent: "bounded intent",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/repository" },
       }),
     ).resolves.toEqual({
       ok: false,

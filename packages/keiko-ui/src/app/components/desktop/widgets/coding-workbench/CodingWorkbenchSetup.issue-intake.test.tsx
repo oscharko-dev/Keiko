@@ -327,6 +327,7 @@ describe("Coding Workbench prompt issue intake", () => {
     await waitFor(() =>
       expect(runtimeActions.start).toHaveBeenCalledWith(`Implement ${ISSUE_URL}`, {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repos/keiko-checkout",
         conversationId: undefined,
         issue: {
           issueRef: ISSUE_URL.toLowerCase(),

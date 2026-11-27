@@ -995,6 +995,7 @@ async function setupWorkspace(
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-opencode-functional-")));
   roots.push(root);
   const repository = join(root, "repository");
+  startRepository = repository;
   const managedRoot = join(root, ...managedRootSegments);
   mkdirSync(repository, { recursive: true });
   git(repository, ["init", "-q", "-b", "main"]);
@@ -1052,12 +1053,21 @@ function createVerification(workspace: string): FunctionalVerificationFixture {
   return { manager, evidence, events };
 }
 
+// The repository of the workspace the test set up last: a start states the repository it expects.
+let startRepository = "";
+
 function startBody(requestId: string): {
   readonly requestId: string;
   readonly taskIntent: string;
   readonly requestedMode: "autonomous-delivery";
+  readonly expectedWorkspace: { readonly root: string };
 } {
-  return { requestId, taskIntent: SECRET, requestedMode: "autonomous-delivery" };
+  return {
+    requestId,
+    taskIntent: SECRET,
+    requestedMode: "autonomous-delivery",
+    expectedWorkspace: { root: startRepository },
+  };
 }
 
 // The paired browser's transport, with this suite's redaction canaries checked on every response.

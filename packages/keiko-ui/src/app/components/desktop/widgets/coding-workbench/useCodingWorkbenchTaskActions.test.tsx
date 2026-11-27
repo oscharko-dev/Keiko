@@ -22,6 +22,8 @@ import {
   type TaskActionsInput,
 } from "./useCodingWorkbenchTaskActions";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 type IssueIntake = ReturnType<typeof useCodingWorkbenchIssueIntake>;
 
 // ADR-0137 D10: what the Workbench window does with a prompt the composer submitted, files and
@@ -63,6 +65,7 @@ function setup(
           promptDelivery: { notice: null, begin },
           taskIntent: props.taskIntent,
           projectMemoryEnabled: true,
+          expectedRoot: EXPECTED_ROOT,
           conversationId: "conv-1",
           resumeMode: null,
           ...overrides,
@@ -92,12 +95,24 @@ describe("starting a task", () => {
     expect(captureSubmission).toHaveBeenCalledOnce();
     expect(actions.start).toHaveBeenCalledWith("fix the flaky test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       conversationId: "conv-1",
       issue: undefined,
     });
     const options = vi.mocked(actions.start).mock.calls[0]?.[1] ?? {};
     expect(options).not.toHaveProperty("references");
     expect(options).not.toHaveProperty("command");
+  });
+
+  // No repository on screen means no repository to state: the start is not made at all.
+  it("starts nothing while the window shows no repository", async () => {
+    const { result, actions, captureSubmission } = setup({ expectedRoot: null });
+
+    act(() => result.current.composer.onStart("fix the flaky test"));
+
+    await Promise.resolve();
+    expect(actions.start).not.toHaveBeenCalled();
+    expect(captureSubmission).not.toHaveBeenCalled();
   });
 
   it("sends the Jira Pod the person picked with the start, and no key when none was", async () => {
@@ -165,6 +180,7 @@ describe("starting a task", () => {
     await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
     expect(actions.start).toHaveBeenCalledWith("look at @src/app.ts", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       conversationId: "conv-1",
       issue: undefined,
       references: [{ path: "src/app.ts" }],
@@ -190,6 +206,7 @@ describe("starting a task", () => {
     await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
     expect(actions.start).toHaveBeenCalledWith("try another approach", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       fork: { taskId: "conv-1", beforeMessageId: "m-3" },
       issue: undefined,
     });
@@ -242,6 +259,7 @@ describe("starting a task", () => {
     expect(captureSubmission).toHaveBeenCalledOnce();
     expect(actions.start).toHaveBeenCalledWith("pr #13", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
       conversationId: "conv-1",
       issue: undefined,
       command: { name: "review" },

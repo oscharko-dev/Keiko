@@ -32,6 +32,8 @@ import {
   type UseCodingWorkbenchRuntimeResult,
 } from "./useCodingWorkbenchRuntime";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./coding-workbench-provider-api")>();
   return {
@@ -604,7 +606,10 @@ describe("useCodingWorkbenchRuntime", () => {
     profile.mockResolvedValue(available("verified"));
     const readsBefore = profile.mock.calls.length;
     // Outside `act`: the wait for the committed source state needs React to commit in between.
-    await view.result.current.actions.start("fix it", { projectMemoryEnabled: false });
+    await view.result.current.actions.start("fix it", {
+      projectMemoryEnabled: false,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
+    });
     expect(profile.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(profile.mock.calls[readsBefore]?.[2]).toBe(true);
     expect(startCodingWorkbenchRuntime).toHaveBeenCalledOnce();
@@ -665,7 +670,10 @@ describe("useCodingWorkbenchRuntime", () => {
     await waitFor(() => expect(view.result.current.state.source.value?.available).toBe(true));
     profile.mockResolvedValue({ status: "unavailable", reason: "conversation-not-ready" } as never);
     // Outside `act`: the wait for the committed source state needs React to commit in between.
-    await view.result.current.actions.start("fix it", { projectMemoryEnabled: false });
+    await view.result.current.actions.start("fix it", {
+      projectMemoryEnabled: false,
+      expectedWorkspaceRoot: EXPECTED_ROOT,
+    });
     expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
     expect(view.result.current.state.source.value).toMatchObject({
       available: false,
@@ -715,7 +723,10 @@ describe("useCodingWorkbenchRuntime", () => {
         status: "unavailable",
         reason: "model-verification-pending",
       } as never);
-      const first = view.result.current.actions.start("fix it", { projectMemoryEnabled: false });
+      const first = view.result.current.actions.start("fix it", {
+        projectMemoryEnabled: false,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      });
       await waitFor(() =>
         expect(view.result.current.state.source.value?.unavailableReason).toBe(
           "model-verification-pending",
@@ -727,7 +738,10 @@ describe("useCodingWorkbenchRuntime", () => {
     it("answers a second Start during the wait with the checking reason and repeats nothing", async () => {
       const { view, first } = await pendingStart();
       const reads = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.length;
-      await view.result.current.actions.start("again", { projectMemoryEnabled: false });
+      await view.result.current.actions.start("again", {
+        projectMemoryEnabled: false,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      });
       expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls).toHaveLength(reads);
       expect(startCodingWorkbenchRuntime).not.toHaveBeenCalled();
       // Not silently: the person is told that the model is still being checked.
@@ -938,6 +952,7 @@ describe("useCodingWorkbenchRuntime", () => {
       await act(async () => {
         await view.result.current.actions.start("@src/app.ts", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
           references: [{ path: "src/app.ts" }],
           command: { name: "review" },
         });
@@ -1060,6 +1075,7 @@ describe("useCodingWorkbenchRuntime", () => {
       await act(async () => {
         await planning.result.current.actions.start("outline the change", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
         });
       });
       expect(startCodingWorkbenchRuntime).toHaveBeenCalledWith(

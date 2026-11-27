@@ -25,6 +25,8 @@ import {
   takeOverCodingWorkbenchRuntime,
 } from "./coding-workbench-runtime-api";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
 
 // Keep start replay assertions scoped to their owning transport; browser renewal is tested separately.
@@ -93,6 +95,7 @@ describe("Coding Workbench runtime API", () => {
       requestId: "start-after-restart",
       taskIntent: "add a bounded test",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: EXPECTED_ROOT },
     } as const;
 
     await expect(startCodingWorkbenchRuntime(input)).resolves.toMatchObject({ runId: "run-1" });
@@ -138,6 +141,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "post-body-refusal",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
       }),
     ).rejects.toMatchObject({ status: 403 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -167,6 +171,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "non-replayable-start",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
       }),
     ).rejects.toMatchObject({ status });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -197,6 +202,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "repair-failed-start",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
       }),
     ).rejects.toMatchObject({ status: 403 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -239,6 +245,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "replay-failed-start",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
       }),
     ).rejects.toMatchObject({ status: 503 });
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -270,6 +277,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "issue-start",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
         issueRef: "#42",
         expectedIssueBindingDigest: "a".repeat(64),
       });
@@ -316,6 +324,7 @@ describe("Coding Workbench runtime API", () => {
         requestId: "model-start",
         taskIntent: "implement",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: EXPECTED_ROOT },
       });
     } catch (error) {
       failure = error;
@@ -414,6 +423,7 @@ describe("Coding Workbench runtime API", () => {
       requestId: "request-4",
       taskIntent: "outline the change",
       requestedMode: "governed-assist",
+      expectedWorkspace: { root: EXPECTED_ROOT },
       runtimePreference: "managed-gateway",
       projectMemory: { enabled: true },
       agent: "plan",
@@ -563,6 +573,7 @@ describe("Coding Workbench runtime API endpoints", () => {
       requestId: "request-1",
       taskIntent: "add a test",
       requestedMode: "governed-assist",
+      expectedWorkspace: { root: EXPECTED_ROOT },
       runtimePreference: "managed-gateway",
       projectMemory: { enabled: true },
     });
@@ -574,6 +585,7 @@ describe("Coding Workbench runtime API endpoints", () => {
           requestId: "request-1",
           taskIntent: "add a test",
           requestedMode: "governed-assist",
+          expectedWorkspace: { root: EXPECTED_ROOT },
           runtimePreference: "managed-gateway",
           projectMemory: { enabled: true },
         }),
@@ -611,6 +623,7 @@ describe("Coding Workbench runtime API endpoints", () => {
       requestId: "request-2",
       taskIntent: "retry the task",
       requestedMode: "governed-assist",
+      expectedWorkspace: { root: EXPECTED_ROOT },
       runtimePreference: "managed-gateway",
     });
     expect(fetchMock).toHaveBeenLastCalledWith(

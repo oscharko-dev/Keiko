@@ -122,6 +122,7 @@ function startRequest(
     taskIntent,
     ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     requestedMode: current.requestedMode,
+    expectedWorkspace: { root: options.expectedWorkspaceRoot },
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
@@ -428,6 +429,7 @@ export function createInboxMutation(
 export function createRetryMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  expectedWorkspaceRoot: string,
 ): CodingWorkbenchMutationCommand {
   const snapshot = current.run.value;
   const runId = snapshot?.runId;
@@ -445,6 +447,7 @@ export function createRetryMutation(
           requestId: id,
           taskIntent,
           requestedMode: current.requestedMode,
+          expectedWorkspace: { root: expectedWorkspaceRoot },
           runtimePreference: current.runtimePreference,
           ...managedGatewayModelSelection(current),
           ...startAgentSelection(current),

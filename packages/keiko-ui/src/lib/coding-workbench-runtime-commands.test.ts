@@ -6,6 +6,8 @@ import {
   submitCodingWorkbenchRuntimeFollowUp,
 } from "./coding-workbench-runtime-api";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -121,6 +123,7 @@ describe("start and follow-up bodies that carry files and a command", () => {
       requestId: "request-1",
       taskIntent: "",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: EXPECTED_ROOT },
       runtimePreference: "managed-gateway",
       projectMemory: { enabled: true },
       references: [{ path: "src/app.ts" }],

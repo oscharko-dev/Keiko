@@ -38,6 +38,8 @@ import {
   CODING_WORKBENCH_VERIFYING_REFRESH_MS,
 } from "./coding-workbench-runtime-hooks";
 
+const EXPECTED_ROOT = "/work/displayed-repository";
+
 vi.mock("./client-diagnostics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client-diagnostics")>()),
   reportClientDiagnostic: vi.fn(),
@@ -642,7 +644,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       new DOMException("The operation timed out.", "TimeoutError"),
     );
     const { mutations, refreshRun } = renderMutations(readyRunState(null, { canStart: true }));
-    await act(() => mutations.start("task", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("task", { projectMemoryEnabled: true, expectedWorkspaceRoot: EXPECTED_ROOT }),
+    );
     expect(refreshRun).toHaveBeenCalledOnce();
   });
 
@@ -650,7 +654,10 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
     await act(() =>
-      mutations.start("write the failing test first", { projectMemoryEnabled: true }),
+      mutations.start("write the failing test first", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
     );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "mutation-start", mutation: "start" }),
@@ -664,7 +671,12 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
 
   it("reports a mutation failure when the readiness gate rejects the start", async () => {
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: false }));
-    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("blocked", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
+    );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "mutation-failed",
@@ -760,7 +772,12 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       readyRunState(snapshot({ state: "running" })),
     );
     await act(() => mutations.stop());
-    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    await act(() =>
+      mutations.start("blocked", {
+        projectMemoryEnabled: true,
+        expectedWorkspaceRoot: EXPECTED_ROOT,
+      }),
+    );
     expect(refreshRun).not.toHaveBeenCalled();
   });
 
@@ -982,6 +999,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       await act(async () => {
         const start = mutations.start("write the failing test first", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
         });
         await vi.waitFor(() => {
           expect(held).toHaveLength(1);
@@ -1013,6 +1031,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
         await act(async () => {
           const start = rendered.mutations.start("write the failing test first", {
             projectMemoryEnabled: true,
+            expectedWorkspaceRoot: EXPECTED_ROOT,
           });
           await vi.waitFor(() => {
             expect(held).toHaveLength(1);
@@ -1080,6 +1099,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
       await act(async () => {
         const start = mutations.start("write the failing test first", {
           projectMemoryEnabled: true,
+          expectedWorkspaceRoot: EXPECTED_ROOT,
         });
         await vi.waitFor(() => {
           expect(held).toHaveLength(1);
@@ -1189,7 +1209,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     const { mutations: retryMutations } = renderMutations(
       readyRunState(snapshot(), { canRetry: true }),
     );
-    await act(() => retryMutations.retry("try again"));
+    await act(() => retryMutations.retry("try again", EXPECTED_ROOT));
     expect(retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
       "run-1",
       expect.objectContaining({ taskIntent: "try again" }),

@@ -1659,6 +1659,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko legt seine Worktrees auf einem anderen Laufwerk als Windows ab, auf dem die Windows-Sandbox keine Coding-Aufgabe ausführen kann ({code}). Ein Betreiber muss KEIKO_STATE_DIR auf einen Ordner auf dem Windows-Laufwerk, meist C:, setzen und Keiko neu starten.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
+  "codingWorkbench.alert.startRefusedSelectionMismatch":
+    "Das Repository, das du siehst, ist nicht das, das Keiko für diesen Start geöffnet hatte, deshalb wurde nichts gestartet und nichts geändert ({code}). Keiko öffnet jetzt das angezeigte Repository. Prüfe seinen Namen und drücke erneut auf Start.",
   "codingWorkbench.alert.startRefusedActiveRun":
     "In dieser Aufgabe läuft noch ein anderer Lauf, deshalb hat Keiko keinen zweiten gestartet ({code}). Warte, bis er beendet ist, oder stoppe ihn, und starte dann erneut.",
   "codingWorkbench.alert.startRefusedRecoveryRequired":

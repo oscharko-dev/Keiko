@@ -1332,6 +1332,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -1382,6 +1383,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Create one focused test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -1501,6 +1503,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
 
     // The mutation queue starts the "start" mutation…
@@ -4202,7 +4205,7 @@ describe("CodingWorkbenchWindow", () => {
       const liveActions = renderWorkbench(recoveryState(true));
       await user.type(screen.getByLabelText("Task instructions"), "Try again");
       await user.click(screen.getByRole("button", { name: "Retry as a fresh run" }));
-      expect(liveActions.retry).toHaveBeenCalledWith("Try again");
+      expect(liveActions.retry).toHaveBeenCalledWith("Try again", "/repo");
     });
   });
 
@@ -4236,6 +4239,7 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart", {
       projectMemoryEnabled: true,
+      expectedWorkspaceRoot: "/repo",
     });
   });
 
@@ -7170,6 +7174,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts please", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         references: [{ path: "src/app.ts" }],
       });
     });
@@ -7311,6 +7316,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
       await user.click(screen.getByRole("button", { name: "Start coding run" }));
       expect(live.start).toHaveBeenLastCalledWith("a different task", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
       });
     });
   });
@@ -7325,6 +7331,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("pr #13", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         command: { name: "review" },
       });
       expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1]).issue).toBeUndefined();
@@ -7338,6 +7345,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
         command: { name: "init" },
       });
     });
@@ -7350,6 +7358,7 @@ describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D
 
       expect(live.start).toHaveBeenCalledExactlyOnceWith("/foo bar", {
         projectMemoryEnabled: true,
+        expectedWorkspaceRoot: "/repo",
       });
       expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("command");
     });

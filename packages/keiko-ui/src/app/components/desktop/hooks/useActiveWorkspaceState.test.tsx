@@ -9,6 +9,7 @@ import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-co
 import { useActiveWorkspaceState } from "./useActiveWorkspaceState";
 import { useCodingTaskSession } from "../widgets/coding-workbench/useCodingTaskSession";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import { notifyCodingAppSessionEstablished } from "@/lib/coding-app-session-client";
 
 function instance(workspaceId: string, root: string): WorkspaceInstance {
   return {
@@ -192,6 +193,35 @@ describe("useActiveWorkspaceState", () => {
 
   // An inventory the server could not list is a diagnostic, never a silent empty panel: the
   // binding read stands, the list is empty, and the log names the failure (AGENTS.md §8).
+  // A server restart and a re-pairing in the same tab (no page load) can leave the global pointer
+  // on another workspace than the one this hook cached. A cached instance that still names the
+  // displayed repository would then pass as ready while the server starts the run elsewhere, so
+  // every new session re-reads the pointer like every other session-bound read (F65).
+  it("re-reads the active binding when a new app session is established", async () => {
+    const first = instance("ws-1", "/wt/1");
+    const second = { ...instance("ws-2", "/wt/2"), repositoryRoot: "/other-repo" };
+    const router = {
+      active: { instance: first, binding: binding("ws-1", "/wt/1"), pointer: {} },
+      instances: [first, second],
+    };
+    installRouter(router);
+    const { result } = renderHook(() => useActiveWorkspaceState());
+    await act(async (): Promise<void> => {
+      await result.current.refresh();
+    });
+    expect(result.current.activeInstance?.workspaceId).toBe("ws-1");
+
+    router.active = { instance: second, binding: binding("ws-2", "/wt/2"), pointer: {} };
+    act(() => {
+      notifyCodingAppSessionEstablished();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeInstance?.workspaceId).toBe("ws-2");
+    });
+    expect(result.current.activeInstance?.repositoryRoot).toBe("/other-repo");
+  });
+
   it("reports a failed inventory read as a diagnostic and keeps the active binding", async () => {
     const diagnostics: string[] = [];
     setClientDiagnosticWriter((message) => diagnostics.push(message));

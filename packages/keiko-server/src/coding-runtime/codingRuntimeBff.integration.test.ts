@@ -251,7 +251,7 @@ describe("production coding runtime BFF", () => {
       evidence,
       workspaceLifecycle: {
         getActive: () => ({
-          instance: { workspaceId: "workspace-1" },
+          instance: { workspaceId: "workspace-1", repositoryRoot: "/repository" },
           binding: { activeRoot },
         }),
       } as never,
@@ -281,6 +281,7 @@ describe("production coding runtime BFF", () => {
           requestId: "request-unpaired",
           taskIntent: "private task",
           requestedMode: "governed-assist",
+          expectedWorkspace: { root: "/repository" },
         }),
       },
     );
@@ -293,6 +294,7 @@ describe("production coding runtime BFF", () => {
         requestId: "request-forged",
         taskIntent: "private task",
         requestedMode: "governed-assist",
+        expectedWorkspace: { root: "/repository" },
         workspaceRoot: "/attacker",
         env: { TOKEN: "attacker" },
       },
@@ -307,6 +309,7 @@ describe("production coding runtime BFF", () => {
         requestId: "request-1",
         taskIntent: "private task",
         requestedMode: "governed-assist",
+        expectedWorkspace: { root: "/repository" },
       },
       cookie,
     );
@@ -338,6 +341,7 @@ describe("production coding runtime BFF", () => {
         requestId: "request-2",
         taskIntent: "private task",
         requestedMode: "governed-assist",
+        expectedWorkspace: { root: "/repository" },
       },
       cookie,
     );
@@ -360,6 +364,7 @@ describe("production coding runtime BFF", () => {
             requestId: "request-1",
             taskIntent: "private task",
             requestedMode: "governed-assist",
+            expectedWorkspace: { root: "/repository" },
           },
           cookie,
         )
@@ -374,6 +379,7 @@ describe("production coding runtime BFF", () => {
             requestId: "request-3",
             taskIntent: "private task",
             requestedMode: "governed-assist",
+            expectedWorkspace: { root: "/repository" },
           },
           cookie,
         )

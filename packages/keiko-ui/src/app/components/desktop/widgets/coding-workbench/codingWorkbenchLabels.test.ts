@@ -1011,6 +1011,10 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     ],
     ["CODING_RUNTIME_REPLAY_CAP_EXHAUSTED", "codingWorkbench.alert.startRefusedReplayCap"],
     ["CODING_RUNTIME_EDITS_BLOCKED", "codingWorkbench.alert.startRefusedEditsBlocked"],
+    [
+      "CODING_RUNTIME_WORKSPACE_SELECTION_MISMATCH",
+      "codingWorkbench.alert.startRefusedSelectionMismatch",
+    ],
     ["CODING_RUNTIME_INVALID_INTENT", "codingWorkbench.event.failure.invalid-intent"],
     [
       "CODING_RUNTIME_RUNTIME_SUPERVISOR_GRANTS_ACL",
@@ -1067,6 +1071,7 @@ describe("visibleAlert mutation failures (F-09a)", () => {
         "APPROVAL_ACTIVATION_FAILED",
         "REPLAY_CAP_EXHAUSTED",
         "EDITS_BLOCKED",
+        "WORKSPACE_SELECTION_MISMATCH",
         "INVALID_INTENT",
         "RUNTIME_SUPERVISOR_GRANTS_ACL",
         "RUNTIME_SUPERVISOR_GRANTS_DIRECTORY",

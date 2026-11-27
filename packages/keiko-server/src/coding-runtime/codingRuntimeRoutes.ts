@@ -123,6 +123,7 @@ const RUNTIME_REFUSAL_REASONS = [
   "verification-not-evidenced",
   "model-unavailable",
   "workspace-unqualified",
+  "workspace-selection-mismatch",
   "workspace-location-unsupported",
   "workspace-volume-unsupported",
   "start-abandoned",
@@ -191,6 +192,7 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   "issue-context-unavailable": "unavailable",
   "model-unavailable": "unavailable",
   "workspace-unqualified": "conflict",
+  "workspace-selection-mismatch": "conflict",
   "workspace-location-unsupported": "conflict",
   "workspace-volume-unsupported": "conflict",
   "active-run-conflict": "conflict",
@@ -285,6 +287,7 @@ function failureStatus(failureCode: CodingWorkbenchRuntimeStartFailureCode): num
   if (
     failureCode === "model-unavailable" ||
     failureCode === "workspace-unqualified" ||
+    failureCode === "workspace-selection-mismatch" ||
     failureCode === "workspace-location-unsupported" ||
     failureCode === "workspace-volume-unsupported"
   )

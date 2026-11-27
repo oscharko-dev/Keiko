@@ -3239,6 +3239,7 @@
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useComposerMentions",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/usePromptDeliveryNotice",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useSecondClock",
+    "keiko-ui/app/components/desktop/widgets/coding-workbench/useSelectionMismatchRecovery",
     "keiko-ui/app/components/desktop/widgets/coding-workbench/useWorkbenchExecutionLocation",
     "keiko-ui/app/components/desktop/widgets/connectors/AddConnectorForm",
     "keiko-ui/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel",

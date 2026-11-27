@@ -14,7 +14,7 @@
 // and commits that read, whether or not a newer click superseded it. The surface therefore ends on
 // the server's pointer, never on the click order (#3381 review).
 
-import { useCallback, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type {
   WorkspaceBinding,
   WorkspaceInstance,
@@ -37,6 +37,7 @@ import {
 } from "@/lib/verified-task-workspace-binding";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
@@ -375,6 +376,19 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       }),
     [mutate],
   );
+
+  // The active pointer is server state a restart can move or drop. After a server restart the
+  // browser pairs again in the same tab without a page load, and the binding cached from before
+  // would still pass for the displayed repository while the server starts a run elsewhere. Every
+  // later pairing or local restore therefore re-reads the pointer, like each session-bound read
+  // (F65); the boot-time load stays with the shell.
+  const redemptions = useCodingAppSessionRedemptions();
+  const seenRedemptions = useRef(redemptions);
+  useEffect(() => {
+    if (seenRedemptions.current === redemptions) return;
+    seenRedemptions.current = redemptions;
+    void refresh();
+  }, [redemptions, refresh]);
 
   const activeBinding: WorkspaceBinding | null = state.active?.binding ?? null;
   const activeInstance: WorkspaceInstance | null = state.active?.instance ?? null;

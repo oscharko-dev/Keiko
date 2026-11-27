@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
+import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "./coding-workbench-runtime-constants.js";
 import {
   CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
@@ -64,11 +65,43 @@ const TERMINAL_RUN_CAUSES = [
 ] as const;
 
 describe("Coding Workbench runtime API contracts", () => {
+  it("requires the repository the person sees, exact-keyed and bounded", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Fix issue",
+      requestedMode: "supervised-coding",
+    };
+    const expectedWorkspace = { root: "/work/repository-b" };
+    expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, expectedWorkspace })).toEqual({
+      ok: true,
+      value: { ...start, expectedWorkspace },
+    });
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toMatchObject({ ok: false });
+    for (const bad of [
+      {},
+      { root: "" },
+      { root: "   " },
+      { root: 7 },
+      { root: "/a\0b" },
+      { root: "/".padEnd(4097, "x") },
+      { root: "/work/b", workspaceId: "ws-1" },
+    ]) {
+      expect(
+        parseCodingWorkbenchRuntimeStartRequest({ ...start, expectedWorkspace: bad }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
+  it("knows the selection-mismatch refusal as a closed start failure code", () => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("workspace-selection-mismatch");
+  });
+
   it("accepts only a bounded preview precondition attached to an issue intent", () => {
     const start = {
       requestId: "request-1",
       taskIntent: "Fix issue",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const accepted = { ...start, issueRef: "#42", expectedIssueBindingDigest: "a".repeat(64) };
     expect(parseCodingWorkbenchRuntimeStartRequest(accepted)).toEqual({
@@ -104,6 +137,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Try another approach",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const wholeTask = { ...start, fork: { taskId: "chat-source-1" } };
     const beforeMessage = {
@@ -136,6 +170,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Try another approach",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         fork,
       }),
     ).toMatchObject({ ok: false });
@@ -147,6 +182,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Try another approach",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         conversationId: "chat-source-1",
         fork: { taskId: "chat-source-1" },
       }),
@@ -158,6 +194,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Investigate the failing unit test",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
       runtimePreference: "managed-gateway",
     };
 
@@ -225,6 +262,7 @@ describe("Coding Workbench runtime API contracts", () => {
         requestId: "request-1",
         taskIntent: "Review it",
         requestedMode: "supervised-coding",
+        expectedWorkspace: { root: "/work/repository-b" },
         agent: "reviewer",
       }),
     ).toEqual({ ok: false, errors: ["agent is invalid"] });
@@ -267,6 +305,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Plan the migration before touching a file",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     for (const agent of CODING_WORKBENCH_AGENTS) {
       expect(parseCodingWorkbenchRuntimeStartRequest({ ...start, agent })).toEqual({
@@ -294,6 +333,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Use project memory for the repository",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
       projectMemory: { enabled: true },
     };
 
@@ -323,6 +363,7 @@ describe("Coding Workbench runtime API contracts", () => {
       requestId: "request-1",
       taskIntent: "Implement the ticket and report back",
       requestedMode: "supervised-coding",
+      expectedWorkspace: { root: "/work/repository-b" },
     };
     const podId = "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10";
 
@@ -1032,6 +1073,7 @@ describe("Coding Workbench issue binding contract (#3385)", () => {
     requestId: "request-1",
     taskIntent: "Implement the accepted issue",
     requestedMode: "supervised-coding",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
   const BINDING = {
     schemaVersion: "1",
@@ -1214,6 +1256,7 @@ describe("Coding Workbench runtime API failure branches", () => {
         requestId: "request-1",
         taskIntent: "Investigate",
         requestedMode: "root-access",
+        expectedWorkspace: { root: "/work/repository-b" },
       }),
     ).toMatchObject({ ok: false, errors: ["requestedMode is invalid"] });
     expect(
@@ -2111,6 +2154,7 @@ describe("Coding Workbench slash commands and first-prompt references", () => {
     requestId: "request-1",
     taskIntent: "Look at the notes",
     requestedMode: "supervised-coding",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
   const followUp = { requestId: "request-1", expectedRevision: 4, taskIntent: "Review it" };
   const references = [{ path: "src/index.ts" }, { path: "docs/My Notes.md" }];
@@ -2358,6 +2402,7 @@ describe("Coding Workbench agent and skill mentions (#3906)", () => {
     requestId: "req_0000000000000001",
     taskIntent: "Ask @general to look at the notes.",
     requestedMode: "governed-assist",
+    expectedWorkspace: { root: "/work/repository-b" },
   };
 
   it("admits bounded agent and skill mentions with the span of the typed token", () => {
@@ -2544,6 +2589,7 @@ describe("explicit Coding Jira administrative connector scope", () => {
     requestId: "admin-start",
     taskIntent: "Review Jira administration",
     requestedMode: "autonomous-delivery",
+    expectedWorkspace: { root: "/work/repository-b" },
     jiraPodId: "0d6c5d3e-7a41-4f0e-9a52-3c1f8e4b7a10",
   };
   it("accepts only the closed additional scope with an explicitly selected Pod", () => {

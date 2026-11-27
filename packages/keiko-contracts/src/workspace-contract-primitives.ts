@@ -257,6 +257,19 @@ export function isCanonicalWorkspaceRoot(value: unknown): value is string {
   return canonicalWorkspaceRootBodyIsValid(value, style);
 }
 
+/**
+ * Whether two repository roots name the same folder as a person sees it: separators folded, a
+ * trailing separator ignored and case folded (the same fold the overlap check applies, #2615), so a
+ * Windows root written as `C:\Work\App` and as `c:/work/app/` is one folder. Empty never matches.
+ */
+export function workspaceRootsNameSameFolder(left: string, right: string): boolean {
+  const fold = (value: string): string => {
+    const separated = value.replaceAll("\\", "/").toLowerCase();
+    return separated.length > 1 ? separated.replace(/\/+$/u, "") : separated;
+  };
+  return left !== "" && right !== "" && fold(left) === fold(right);
+}
+
 export function isPortableWorkspaceRelativePath(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0) return false;
   if (utf8ByteLength(value) > WORKSPACE_PORTABLE_PATH_MAX_BYTES) return false;

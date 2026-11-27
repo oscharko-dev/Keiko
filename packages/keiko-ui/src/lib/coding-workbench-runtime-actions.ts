@@ -30,6 +30,12 @@ export interface CodingWorkbenchStartOptions {
   readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
   readonly projectMemoryEnabled: boolean;
   /**
+   * The repository root the Workbench shows when the person starts. The request states it and the
+   * server refuses the start when its active workspace is another folder, so a run never starts in
+   * a repository the person is not looking at.
+   */
+  readonly expectedWorkspaceRoot: string;
+  /**
    * Workspace files the first prompt references with `@`, by path relative to the workspace the run
    * starts in (ADR-0137 D10). The server resolves them when the first turn is dispatched.
    */

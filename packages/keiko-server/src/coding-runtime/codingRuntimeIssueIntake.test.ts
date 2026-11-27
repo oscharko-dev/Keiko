@@ -57,6 +57,7 @@ const REQUEST: CodingWorkbenchRuntimeStartRequest = {
   requestId: "request-1",
   taskIntent: "fix the bounded issue",
   requestedMode: "supervised-coding",
+  expectedWorkspace: { root: "/workspace" },
 };
 
 const ACTIVE: ActiveWorkspaceView = {

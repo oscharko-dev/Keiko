@@ -342,6 +342,36 @@ describe("workbench execution location restoration", () => {
     expect(mocks.bindVerifiedTaskWorkspace).not.toHaveBeenCalled();
   });
 
+  // The run starts in the repository on screen: a binding of another repository, or one that is
+  // being read again after a new session, never lets Start through.
+  it("is not ready while the held binding names another repository, or is being read again", () => {
+    const shown = {
+      root: "/repo-b",
+      branch: undefined,
+      location: "worktree" as const,
+      activeInstance: managed as WorkspaceInstance | null,
+      branchLoading: false,
+      branchError: false,
+      branchDenied: false,
+      workspaceLoading: false,
+      workspaceError: false,
+      runIsActive: false,
+      folderMode: false,
+      refresh,
+    };
+    const { rerender, result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: shown,
+    });
+    expect(result.current.ready).toBe(false);
+
+    const held = { ...managed, repositoryRoot: "/repo-b" } as WorkspaceInstance;
+    rerender({ ...shown, activeInstance: held });
+    expect(result.current.ready).toBe(true);
+
+    rerender({ ...shown, activeInstance: held, workspaceLoading: true });
+    expect(result.current.ready).toBe(false);
+  });
+
   it("discards a stale branch read when the selected workspace changes", async () => {
     let finishRead: ((value: unknown) => void) | undefined;
     mocks.fetchGitStatus.mockReturnValueOnce(
