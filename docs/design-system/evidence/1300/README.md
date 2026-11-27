@@ -537,3 +537,11 @@ in those version, resolved and integrity fields. No stylesheet or capture reads 
 three input digests were updated in the four proofs; the other digests, the Linux captures, the
 rendered CSS digest, the measurements, the tolerances and the accessibility records are unchanged,
 and no producer was rerun.
+
+## Release 1.5.10 input metadata — 2026-11-27
+
+The release changes the version fields of `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json` (#4491). No stylesheet or capture reads them. Only those three
+input digests were updated in the four proofs; the other digests, the Linux captures, the rendered
+CSS digest, the measurements, the tolerances and the accessibility records are unchanged, and no
+producer was rerun.
