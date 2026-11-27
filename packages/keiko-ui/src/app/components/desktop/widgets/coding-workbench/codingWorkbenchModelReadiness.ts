@@ -4,6 +4,7 @@ import {
   isCodingWorkbenchReadinessCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 
+import type { ChatSessionCatalog } from "../../context/ChatSessionContext";
 import type { CodingWorkbenchRuntimeState } from "@/lib/coding-workbench-live-state";
 import type { ModelActivationState } from "@/lib/useModelActivation";
 
@@ -19,6 +20,17 @@ export type WorkbenchModelReadiness =
       readonly kind: "check-failed" | "request-failed";
       readonly modelId: string;
     };
+
+/**
+ * Every configured model of the chat session's catalog read. `catalog.models` holds only the
+ * activated ones (the conversation picker's list), so a model nobody activated yet, which is exactly
+ * what this notice is about, lives only in the unfiltered read (live defect, 1.5.10 candidate).
+ */
+export function configuredCatalogModels(
+  catalog: Pick<ChatSessionCatalog, "models" | "modelCatalogRead"> | null,
+): readonly ModelCapability[] {
+  return catalog?.modelCatalogRead?.capabilities ?? catalog?.models ?? [];
+}
 
 /** The model the notice is about: the selected one, else the last used, else Chat's election. */
 function noticeModel(

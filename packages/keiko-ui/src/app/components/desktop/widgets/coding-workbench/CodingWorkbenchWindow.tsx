@@ -224,7 +224,10 @@ import { answeredWithoutTools, runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { CodingWorkbenchModelActivation } from "./CodingWorkbenchModelActivation";
-import type { WorkbenchModelReadiness } from "./codingWorkbenchModelReadiness";
+import {
+  configuredCatalogModels,
+  type WorkbenchModelReadiness,
+} from "./codingWorkbenchModelReadiness";
 import { useWorkbenchModelNotice } from "./useWorkbenchModelNotice";
 import type { ModelActivation } from "@/lib/useModelActivation";
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
@@ -1327,7 +1330,9 @@ function selectedConversationReadiness(
   catalog: ChatSessionCatalog | null,
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference !== "managed-gateway" || state.selectedModelId === null) return state;
-  const selected = catalog?.models.find((model) => model.id === state.selectedModelId);
+  const selected = configuredCatalogModels(catalog).find(
+    (model) => model.id === state.selectedModelId,
+  );
   if (isUsableSelectedCodingModel(selected)) return state;
   return {
     ...state,

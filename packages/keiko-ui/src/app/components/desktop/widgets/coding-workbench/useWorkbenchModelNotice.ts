@@ -5,6 +5,7 @@ import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { savedCodingModel } from "./codingModelPreference";
 import { visibleAlert } from "./codingWorkbenchLabels";
 import {
+  configuredCatalogModels,
   workbenchModelReadiness,
   type WorkbenchModelReadiness,
 } from "./codingWorkbenchModelReadiness";
@@ -33,7 +34,7 @@ export function useWorkbenchModelNotice(input: {
   const modelActivation = useModelActivation("coding-workbench");
   const modelReadiness = workbenchModelReadiness({
     state,
-    models: input.catalog?.models ?? [],
+    models: configuredCatalogModels(input.catalog),
     savedModelId: savedCodingModel(),
     activation: modelActivation.state,
   });

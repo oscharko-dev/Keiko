@@ -2720,7 +2720,8 @@ function selectSessionModel(
   };
 }
 
-function sessionCatalogState(
+/** The state a catalog read produces; exported so a test derives its fixtures from the producer. */
+export function sessionCatalogState(
   capabilities: readonly ModelCapability[],
   source: ClientModelCatalogEvidence["source"],
   correlationId: string,

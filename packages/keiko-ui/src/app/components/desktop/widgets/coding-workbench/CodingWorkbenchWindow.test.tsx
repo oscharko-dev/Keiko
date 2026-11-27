@@ -42,9 +42,11 @@ import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbench
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
 import {
+  codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
+import { sessionCatalogState } from "../../hooks/useChatSession";
 import type {
   FilesSearchResponse,
   GatewayReadinessReport,
@@ -6229,18 +6231,27 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
   describe("a model that is not activated in this session", () => {
     const NOT_ACTIVATED: ModelCapability = { ...MODEL_A, conversationReady: undefined };
     const FAILED_CHECK: ModelCapability = { ...MODEL_A, conversationReady: false };
+    // The server's own projection for a configured model nobody activated (the producer, not a copy).
     const notReadySource = (): ReturnType<typeof liveState>["source"] => ({
       status: "ready",
-      value: {
-        runtimePreference: "managed-gateway",
-        modelSource: "keiko-model-gateway",
-        runtimeSource: "keiko-sidecar",
-        available: false,
-        unavailableReason: "conversation-not-ready",
-        verification: UNVERIFIED_GATEWAY,
-      },
+      value: codingWorkbenchSourceFromManaged({
+        status: "unavailable",
+        reason: "conversation-not-ready",
+      }),
       error: null,
     });
+    // The chat session publishes only activated models in `models`; every configured model stays in
+    // the unfiltered read. The catalog is derived from that producer, never restated.
+    const publishCatalog = (capabilities: readonly ModelCapability[]): void => {
+      const published = sessionCatalogState(capabilities, "bootstrap", "corr-catalog");
+      chatCatalogMock.models = [...published.models];
+      chatCatalogMock.configuredModelIds = published.configuredModelIds;
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: published.catalogCapabilities,
+        source: published.catalogSource,
+        correlationId: "corr-catalog",
+      };
+    };
     const report = (chat: "passed" | "failed" | "skipped"): GatewayReadinessReport => ({
       modelId: "model-a",
       checkedAt: "2026-11-27T08:00:00.000Z",
@@ -6261,7 +6272,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         headers: { "Content-Type": "application/json" },
       });
     const renderNotReady = (model: ModelCapability, onOpenSettings?: () => void): void => {
-      chatCatalogMock.models = [model];
+      publishCatalog([model]);
       runtimeHookMock.mockReturnValue({
         state: liveState({
           canStart: false,
@@ -6338,7 +6349,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         window.removeEventListener("keiko:gateway-model-readiness-updated", refreshed);
       }
       // The announcement is what refreshes the catalog and the source; model them as production does.
-      chatCatalogMock.models = [MODEL_A];
+      publishCatalog([MODEL_A]);
       runtimeHookMock.mockReturnValue({
         state: liveState({ selectedModelId: "model-a" }),
         actions: actions(),
@@ -6435,10 +6446,66 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       ).toHaveRole("alert");
     });
 
+    // Live (Windows npm, fresh start): no model selected, the previous run restored as a settled
+    // failure, and the chat session publishes no activated model. The activation still shows.
+    it("offers the activation with no selected model and a restored settled failed run", async () => {
+      const fetchMock = stubReadiness(() => Promise.resolve(jsonOk(report("passed"))));
+      publishCatalog([NOT_ACTIVATED]);
+      expect(chatCatalogMock.models).toEqual([]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: null,
+          source: notReadySource(),
+          run: {
+            status: "ready",
+            value: snapshot({ state: "failed", failureCode: "delivery-not-evidenced" }),
+            error: null,
+          },
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "model-a is not activated yet in this session.",
+      );
+      await userEvent.setup().click(screen.getByRole("button", { name: "Activate model-a" }));
+      expect(JSON.parse(String((readinessCalls(fetchMock)[0]?.[1] as RequestInit).body))).toEqual({
+        modelId: "model-a",
+        options: { surface: "coding-workbench" },
+      });
+    });
+
+    it("keeps the generic alert when no configured chat model exists to activate", () => {
+      publishCatalog([]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, selectedModelId: null, source: notReadySource() }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.queryByRole("button", { name: /^Activate / })).not.toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent(/not activated or did not pass/u);
+    });
+
+    it("offers the activation for a held selection that nobody activated", () => {
+      publishCatalog([NOT_ACTIVATED]);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: "model-a",
+          source: notReadySource(),
+        }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.getByRole("button", { name: "Activate model-a" })).toBeEnabled();
+    });
+
     it("names the last used model when none is selected", () => {
       window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
       try {
-        chatCatalogMock.models = [NOT_ACTIVATED, { ...MODEL_B, conversationReady: undefined }];
+        publishCatalog([NOT_ACTIVATED, { ...MODEL_B, conversationReady: undefined }]);
         runtimeHookMock.mockReturnValue({
           state: liveState({
             canStart: false,
