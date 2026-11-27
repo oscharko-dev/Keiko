@@ -684,7 +684,7 @@ function availableHistory(
 // A page of 50 commits of a large repository lists well over the status cap in paths alone (about
 // 590 KB measured on a 10,000-file clone), so history reads under a larger multiple of that cap; the
 // bound stays, it just fits an ordinary page.
-const HISTORY_CAP_FACTOR = 16;
+export const HISTORY_CAP_FACTOR = 16;
 const HISTORY_NAME_ONLY_ARGS: readonly string[] = ["--name-only", "-z"];
 const HISTORY_SHORTSTAT_ARGS: readonly string[] = ["--shortstat"];
 

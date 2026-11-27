@@ -658,6 +658,10 @@ operation and the serialized mutation correlation.
 failure emits WARN with the existing closed `errorKind` header and bounded `errorClass`, `frames`
 and `causeChain`; the other reasons emit INFO. Inspection evidence remains body-free.
 
+## Bounded git reads
+
+`git.status.bounded` records a git read the byte cap ended or that stopped early, with counts and a closed `surface` only: `shownRecordCount`, `partialRecordDropped` and `maxBytes`. The `history` surface (the Git window History tab) writes a line only when a page ends early, either because the cap cut its last record (dropped, never counted short) or because a record could not be read; the optional `unreadableRecordCount` then holds the records left unread, and the page is reported `truncated` so the UI continuation stays exact. A whole, readable page writes nothing.
+
 ## Commit drafts and stream recovery
 
 **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and

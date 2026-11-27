@@ -44,8 +44,11 @@ A number in the tens of thousands confirms the cause. Then read the activity log
 keiko support query --correlation-id <id> --json
 ```
 
-- A `git.status.bounded` line (`surface`, `shownRecordCount`, `partialRecordDropped`, `maxBytes`)
-  means the cap cut the status and Keiko answered with the bounded view; the repository is usable.
+- A `git.status.bounded` line (`surface`, `shownRecordCount`, `partialRecordDropped`, `maxBytes`,
+  and for `surface` `history` also `unreadableRecordCount`) means the cap cut the status and Keiko
+  answered with the bounded view; the repository is usable. On the `history` surface it means a
+  History page ended early: the cap cut its last record, or `unreadableRecordCount` records could
+  not be read and the page stopped there.
 - A `git.process.failed` line for the `status` subcommand with `errorKind` `output-truncated` on a
   1.5.3 or earlier release confirms this entry. Any other `errorKind` (`unsafe-repository`,
   `timeout`, `git-missing`) belongs to a different cause.

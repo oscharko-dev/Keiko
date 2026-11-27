@@ -19,6 +19,7 @@ import {
   handleGitRemotes,
   handleGitSummary,
   invalidateGitSummaryCache,
+  HISTORY_CAP_FACTOR,
   parseHistory,
   parseShortstatHistory,
   parseRemotes,
@@ -33,6 +34,9 @@ import {
 } from "./gitRoutes.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
+// The status cap the History reads below run under (scaled by HISTORY_CAP_FACTOR for history).
+const DEFAULT_TEST_STATUS_BYTES = 4096;
+
 let root: string;
 let store: UiStore;
 
@@ -46,7 +50,12 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    gitRouteOptions: { runner, maxDiffBytes: 64, maxStatusBytes: 4096, maxChanges: 10 },
+    gitRouteOptions: {
+      runner,
+      maxDiffBytes: 64,
+      maxStatusBytes: DEFAULT_TEST_STATUS_BYTES,
+      maxChanges: 10,
+    },
   };
 }
 
@@ -1844,6 +1853,7 @@ describe("GET /api/git/history — bounded page evidence", () => {
   async function historyActivity(
     historyStdout: string,
     truncated: boolean,
+    correlationId?: string,
   ): Promise<ReturnType<typeof captureActivityLog>> {
     const activity = captureActivityLog();
     const runner: GitProcessRunner = (args) =>
@@ -1853,10 +1863,14 @@ describe("GET /api/git/history — bounded page evidence", () => {
           : { ...ok(historyStdout), exitCode: truncated ? null : 0, truncated },
       );
     const base = deps(runner, (value) => value);
-    await handleGitHistory(ctx(`/api/git/history?root=${encodeURIComponent(root)}`), {
-      ...base,
-      gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog: activity.sink },
-    });
+    const context = ctx(`/api/git/history?root=${encodeURIComponent(root)}`);
+    await handleGitHistory(
+      { ...context, correlationId },
+      {
+        ...base,
+        gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog: activity.sink },
+      },
+    );
     return activity;
   }
 
@@ -1872,7 +1886,7 @@ describe("GET /api/git/history — bounded page evidence", () => {
         shownRecordCount: 1,
         partialRecordDropped: true,
         unreadableRecordCount: 0,
-        maxBytes: 4096 * 16,
+        maxBytes: DEFAULT_TEST_STATUS_BYTES * HISTORY_CAP_FACTOR,
       },
     });
   });
@@ -1896,6 +1910,16 @@ describe("GET /api/git/history — bounded page evidence", () => {
       },
     });
     expect(JSON.stringify(lines[0])).not.toContain("SECRET");
+  });
+
+  it("carries the request correlation id on the bounded history line", async () => {
+    const stdout = `${syntheticHead("one")}\nf\0\0${syntheticHead("two")}\ng`;
+
+    const activity = await historyActivity(stdout, true, "corr-history-cut-01");
+
+    expect(activity.withOp("git.status.bounded")[0]).toMatchObject({
+      correlationId: "corr-history-cut-01",
+    });
   });
 
   it("writes no bounded line for a whole, readable page", async () => {
