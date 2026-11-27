@@ -210,6 +210,7 @@ export function CodingWorkbenchWindowHost({
         onSelectBranch={(branch, shownRoot) => {
           context.updateCfg(branchSelectionPatch(branch, root, shownRoot));
         }}
+        onPinRepository={(repositoryPath) => context.updateCfg({ repositoryPath })}
         onSelectLocation={(executionLocation) => context.updateCfg({ executionLocation })}
         onOpenGit={(target) => openGit(context, target)}
       />

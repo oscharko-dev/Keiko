@@ -5168,6 +5168,45 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
+  // U-3: the repository a run works in becomes the window's own, so no later remount or workspace
+  // read can hand the window another repository (the Git window's) unasked.
+  it("pins the repository of a live run that the window only followed", () => {
+    const onPinRepository = vi.fn();
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-pin" }),
+      actions: actions(),
+    });
+    render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(onPinRepository).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot);
+  });
+
+  it("does not pin while idle or when the window already has its own repository", () => {
+    const onPinRepository = vi.fn();
+    runtimeHookMock.mockReturnValue({ state: stateIn(WORKSPACE_A), actions: actions() });
+    const idle = render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot={undefined} onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+    idle.unmount();
+    runtimeHookMock.mockReturnValue({
+      state: stateIn(WORKSPACE_A, { state: "running", runId: "run-own" }),
+      actions: actions(),
+    });
+    render(
+      <ActiveWorkspaceProvider value={workspaceApi(WORKSPACE_A)}>
+        <CodingWorkbenchWindow selectedRoot="/repos/own" onPinRepository={onPinRepository} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(onPinRepository).not.toHaveBeenCalled();
+  });
+
   it("keeps the context bar on the run's workspace after a live pointer switch", async () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);

@@ -28,6 +28,7 @@ interface WindowProps {
   readonly onOpenGit?: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository?: (root: string) => void;
   readonly onSelectBranch?: (branch: string, repositoryRoot: string | null) => void;
+  readonly onPinRepository?: (root: string) => void;
   readonly leftRun?: string | undefined;
   readonly onLeftRun?: (runId: string | undefined) => void;
 }
@@ -315,6 +316,34 @@ describe("CodingWorkbenchWindowHost", () => {
     );
     expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/cfg");
     expect(diagnostics.writes).toEqual([]);
+  });
+
+  // U-3: a window that follows the active workspace ran in repository A while another window (Git)
+  // had B selected; the shell's project followed B. Remounting the window after the run (the
+  // workspace read can be unreadable then) re-seeded B and the Workbench activated it unasked. The
+  // repository a run works in is pinned into the window's own configuration, so no re-seed happens.
+  it("keeps the repository a run worked in when the window mounts again against another shell project", () => {
+    windowRendered.mockClear();
+    const context = contextFixture({ selectedRoot: "/repos/git-window", activeBinding: BOUND });
+    let cfg: WindowCfgRecord = {};
+    vi.mocked(context.updateCfg).mockImplementation((patch) => {
+      cfg = { ...cfg, ...patch };
+    });
+    const first = render(<CodingWorkbenchWindowHost cfg={cfg} context={context} />);
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+
+    windowRendered.mock.calls.at(-1)?.[0]?.onPinRepository?.("/repos/bound");
+    expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith({ repositoryPath: "/repos/bound" });
+    first.unmount();
+
+    // The remount finds no readable binding and the shell on the Git window's repository.
+    render(
+      <ActiveWorkspaceProvider value={workspaceState({})}>
+        <CodingWorkbenchWindowHost cfg={cfg} context={{ ...context, activeBinding: null }} />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/bound");
   });
 
   it("persists the bound repository through onSelectRepository without a client diagnostic (#A)", () => {

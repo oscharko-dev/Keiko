@@ -981,6 +981,26 @@ function useWorkspaceReadAfterRun(
 }
 
 /**
+ * A window that follows the active workspace has no repository of its own, so a remount of the
+ * window would seed it again from the shell's project - which can be another repository the person
+ * only looked at elsewhere (the Git window). Once a run works in a repository the window keeps it:
+ * the run's repository is pinned into the window's configuration, so settlement, a remount or an
+ * unreadable workspace read can never move the Workbench onto a different one. Only an explicit
+ * selection changes it afterwards.
+ */
+function useRunRepositoryPin(
+  runIsActive: boolean,
+  selectedRoot: string | undefined,
+  repositoryRoot: string | null,
+  onPinRepository: ((root: string) => void) | undefined,
+): void {
+  useEffect(() => {
+    if (runIsActive && selectedRoot === undefined && repositoryRoot !== null)
+      onPinRepository?.(repositoryRoot);
+  }, [runIsActive, selectedRoot, repositoryRoot, onPinRepository]);
+}
+
+/**
  * The composer's task and follow-up text lives in the window's private server draft (#4271), so a
  * reload while a start is in flight, or before a follow-up is sent, restores what was typed. Without
  * a window identity the server keeps drafts for (an embedded or test render, or a window restored
@@ -1005,6 +1025,7 @@ export function CodingWorkbenchWindow({
   onSelectRepository = noopSelectRepository,
   onSelectBranch = noopSelectRepository,
   onSelectLocation = (): void => undefined,
+  onPinRepository,
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
@@ -1027,6 +1048,8 @@ export function CodingWorkbenchWindow({
   readonly onSelectRepository?: ((root: string) => void) | undefined;
   readonly onSelectBranch?: ((branch: string, repositoryRoot: string | null) => void) | undefined;
   readonly onSelectLocation?: ((location: WorkbenchExecutionLocation) => void) | undefined;
+  /** Keeps the repository a run works in as this window's own, without any other selection reset. */
+  readonly onPinRepository?: ((root: string) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -1105,6 +1128,7 @@ export function CodingWorkbenchWindow({
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   useWorkspaceReadAfterRun(runIsActive, activeWorkspace.refresh);
+  useRunRepositoryPin(runIsActive, selectedRoot, repositoryRoot, onPinRepository);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
