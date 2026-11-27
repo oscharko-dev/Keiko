@@ -41,6 +41,10 @@ export interface SessionStreamFlowCounts {
   readonly drainWaitCount: number;
   /** Snapshots replaced by a newer one while a frame drained; the newest is the one written. */
   readonly coalescedSnapshotCount: number;
+  /** Delta pieces that travelled in a newer snapshot; a piece re-carried by a later replacement counts again. */
+  readonly carriedTextDeltaCount: number;
+  /** Replacements whose older text deltas did not fit the delta count or frame budget. */
+  readonly carryFallbackCount: number;
 }
 
 export interface SessionStreamWriter {
@@ -138,6 +142,14 @@ function appendDelta(
   }
 }
 
+export interface CarriedSnapshot {
+  readonly snapshot: CodingAppSessionChannelSnapshot;
+  /** How many of the replaced snapshot's deltas the snapshot carries. */
+  readonly carried: number;
+  /** The replaced snapshot's deltas were left out: the reader reads them as pages. */
+  readonly fellBack: boolean;
+}
+
 /**
  * A snapshot's text deltas are consume-once: the producer advances its published offset as it takes
  * them, so a snapshot replaced while a frame drains would take its deltas with it and leave the
@@ -148,16 +160,21 @@ function appendDelta(
 export function carryReplacedTextDeltas(
   replaced: CodingAppSessionChannelSnapshot,
   newest: CodingAppSessionChannelSnapshot,
-): CodingAppSessionChannelSnapshot {
+): CarriedSnapshot {
   const dropped = textDeltasOf(replaced);
   const { content } = newest;
-  if (dropped.length === 0 || content === null || !("feed" in content)) return newest;
+  if (dropped.length === 0 || content === null || !("feed" in content)) {
+    return { snapshot: newest, carried: 0, fellBack: false };
+  }
   const merged: CodingSafeActivityTextDelta[] = [];
   for (const delta of [...dropped, ...textDeltasOf(newest)]) appendDelta(merged, delta);
-  if (merged.length > CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS) return newest;
   const carried = { ...newest, content: { ...content, textDeltas: merged } };
-  const bytes = Buffer.byteLength(JSON.stringify(carried), "utf8");
-  return bytes > CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES ? newest : carried;
+  const fits =
+    merged.length <= CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS &&
+    Buffer.byteLength(JSON.stringify(carried), "utf8") <= CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES;
+  return fits
+    ? { snapshot: carried, carried: dropped.length, fellBack: false }
+    : { snapshot: newest, carried: 0, fellBack: true };
 }
 
 /** A stream without a composed channel serves one content-free snapshot and ends. */
@@ -191,6 +208,8 @@ class AppSessionStreamWriter implements SessionStreamWriter {
   private stallTimer: ReturnType<typeof setTimeout> | undefined;
   private drainWaitCount = 0;
   private coalescedSnapshotCount = 0;
+  private carriedTextDeltaCount = 0;
+  private carryFallbackCount = 0;
   private readonly onDrain = (): void => {
     this.drained();
   };
@@ -216,7 +235,7 @@ class AppSessionStreamWriter implements SessionStreamWriter {
     if (this.draining) {
       if (this.pending !== undefined) this.coalescedSnapshotCount += 1;
       this.pending =
-        this.pending === undefined ? snapshot : carryReplacedTextDeltas(this.pending, snapshot);
+        this.pending === undefined ? snapshot : this.carryPending(this.pending, snapshot);
       return true;
     }
     try {
@@ -260,7 +279,19 @@ class AppSessionStreamWriter implements SessionStreamWriter {
   public readonly flowCounts = (): SessionStreamFlowCounts => ({
     drainWaitCount: this.drainWaitCount,
     coalescedSnapshotCount: this.coalescedSnapshotCount,
+    carriedTextDeltaCount: this.carriedTextDeltaCount,
+    carryFallbackCount: this.carryFallbackCount,
   });
+
+  private carryPending(
+    replaced: CodingAppSessionChannelSnapshot,
+    newest: CodingAppSessionChannelSnapshot,
+  ): CodingAppSessionChannelSnapshot {
+    const result = carryReplacedTextDeltas(replaced, newest);
+    this.carriedTextDeltaCount += result.carried;
+    if (result.fellBack) this.carryFallbackCount += 1;
+    return result.snapshot;
+  }
 
   // A written frame either went out, waits for its drain, or ends the stream when it was terminal.
   private settleWrite(outcome: "sent" | "queued", snapshot: CodingAppSessionChannelSnapshot): void {

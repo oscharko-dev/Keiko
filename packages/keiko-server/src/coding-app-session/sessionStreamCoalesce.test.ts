@@ -10,11 +10,12 @@ import {
   type CodingAppSessionChannelSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
+  CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS,
   type CodingSafeActivityFeed,
   type CodingSafeActivityTextDelta,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
-import { createSessionStreamWriter } from "./sessionStreamWriter.js";
+import { createSessionStreamWriter, type SessionStreamFlowCounts } from "./sessionStreamWriter.js";
 
 class FakeResponse extends EventEmitter {
   public destroyed = false;
@@ -55,6 +56,7 @@ interface Harness {
   readonly res: FakeResponse;
   readonly publish: (s: CodingAppSessionChannelSnapshot) => void;
   readonly drain: () => void;
+  readonly counts: () => SessionStreamFlowCounts;
 }
 
 // The first snapshot is written and leaves the buffer above its high-water mark: the writer drains.
@@ -71,6 +73,7 @@ function harness(): Harness {
   return {
     res,
     publish: (s) => void writer.publish(s),
+    counts: () => writer.flowCounts(),
     drain: (): void => {
       res.accept = true;
       res.emit("drain");
@@ -100,7 +103,7 @@ function readerText(snapshots: readonly CodingAppSessionChannelSnapshot[]): Reco
 
 describe("coalesced text deltas", () => {
   it("keeps every text delta of snapshots replaced while a frame drains", () => {
-    const { res, publish, drain } = harness();
+    const { res, publish, drain, counts } = harness();
     publish(snapshot([delta("answer", 2, "cd"), delta("reasoning", 0, "r1")]));
     publish(snapshot([delta("answer", 4, "ef")]));
     publish(snapshot([delta("reasoning", 2, "r2")]));
@@ -108,6 +111,7 @@ describe("coalesced text deltas", () => {
     const sent = sentSnapshots(res);
     expect(sent).toHaveLength(2);
     expect(readerText(sent)).toEqual({ answer: "abcdef", reasoning: "r1r2" });
+    expect(counts()).toMatchObject({ carriedTextDeltaCount: 4, carryFallbackCount: 0 });
   });
 
   it("keeps the newest feed when only the older snapshot has deltas", () => {
@@ -121,7 +125,7 @@ describe("coalesced text deltas", () => {
   });
 
   it("falls back to the newest deltas when the merge would pass the frame budget", () => {
-    const { res, publish, drain } = harness();
+    const { res, publish, drain, counts } = harness();
     const big = "x".repeat(30_000);
     publish(snapshot([delta("answer", 2, big)]));
     publish(snapshot([delta("answer", 2 + big.length, big)]));
@@ -133,6 +137,7 @@ describe("coalesced text deltas", () => {
       CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES + 64,
     );
     expect(last?.content).toMatchObject({ textDeltas: [{ offset: 2 + 2 * big.length }] });
+    expect(counts()).toMatchObject({ carriedTextDeltaCount: 1, carryFallbackCount: 1 });
   });
 
   it("never passes the delta count of the contract", () => {
@@ -156,5 +161,65 @@ describe("coalesced text deltas", () => {
         ? (content.textDeltas?.length ?? 0)
         : 0;
     expect(count).toBeLessThanOrEqual(CODING_SAFE_ACTIVITY_MAX_TEXT_DELTAS);
+  });
+
+  it("still carries two deltas that fit just below the frame limit", () => {
+    const { res, publish, drain, counts } = harness();
+    const half = "x".repeat(32_000);
+    publish(snapshot([delta("answer", 2, half)]));
+    publish(snapshot([delta("answer", 2 + half.length, half)]));
+    drain();
+    const frame = res.frames[1] ?? "";
+    expect(Buffer.byteLength(frame, "utf8")).toBeLessThanOrEqual(
+      CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES + 64,
+    );
+    expect(readerText(sentSnapshots(res)).answer).toHaveLength(2 + 2 * half.length);
+    expect(counts()).toMatchObject({ carriedTextDeltaCount: 1, carryFallbackCount: 0 });
+  });
+
+  it("falls back when UTF-8 bytes pass the limit although the characters do not", () => {
+    const { res, publish, drain, counts } = harness();
+    const twoBytes = "\u00e9".repeat(25_000);
+    expect(twoBytes.length).toBeLessThan(CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES);
+    publish(snapshot([delta("answer", 2, twoBytes)]));
+    publish(snapshot([delta("answer", 2 + twoBytes.length, twoBytes)]));
+    drain();
+    expect(sentSnapshots(res)[1]?.content).toMatchObject({
+      textDeltas: [{ offset: 2 + twoBytes.length }],
+    });
+    expect(counts()).toMatchObject({ carriedTextDeltaCount: 0, carryFallbackCount: 1 });
+  });
+
+  it("keeps non-contiguous and repeated-offset deltas separate and in order", () => {
+    const { res, publish, drain } = harness();
+    publish(snapshot([delta("answer", 2, "cd"), delta("answer", 10, "zz")]));
+    publish(snapshot([delta("answer", 10, "zz"), delta("answer", 4, "ef")]));
+    drain();
+    const content = sentSnapshots(res)[1]?.content;
+    expect(content !== null && content !== undefined && "feed" in content).toBe(true);
+    const deltas =
+      content !== null && content !== undefined && "feed" in content ? content.textDeltas : [];
+    expect(deltas).toEqual([
+      delta("answer", 2, "cd"),
+      delta("answer", 10, "zz"),
+      delta("answer", 10, "zz"),
+      delta("answer", 4, "ef"),
+    ]);
+  });
+
+  it("joins contiguous deltas up to the delta length limit and no further", () => {
+    const limit = CODING_SAFE_ACTIVITY_MAX_TEXT_DELTA_CHARS;
+    const deltasAfter = (firstLength: number): readonly CodingSafeActivityTextDelta[] => {
+      const { res, publish, drain } = harness();
+      publish(snapshot([delta("answer", 2, "x".repeat(firstLength))]));
+      publish(snapshot([delta("answer", 2 + firstLength, "y")]));
+      drain();
+      const content = sentSnapshots(res)[1]?.content;
+      return content !== null && content !== undefined && "feed" in content
+        ? (content.textDeltas ?? [])
+        : [];
+    };
+    expect(deltasAfter(limit - 1).map((d) => d.text.length)).toEqual([limit]);
+    expect(deltasAfter(limit).map((d) => d.text.length)).toEqual([limit, 1]);
   });
 });

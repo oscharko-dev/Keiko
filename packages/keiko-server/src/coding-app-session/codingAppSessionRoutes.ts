@@ -133,6 +133,8 @@ const CODING_APP_SESSION_ANSWER_PAGE_OPERATION = defineActivityLogOperation({
 const SESSION_STREAM_FLOW_FIELDS = {
   drainWaitCount: { type: "integer", dataClass: "count", required: true },
   coalescedSnapshotCount: { type: "integer", dataClass: "count", required: true },
+  carriedTextDeltaCount: { type: "integer", dataClass: "count", required: true },
+  carryFallbackCount: { type: "integer", dataClass: "count", required: true },
 } as const;
 
 const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
@@ -470,6 +472,8 @@ function channelOpened(
         {
           drainWaitCount: flow.drainWaitCount,
           coalescedSnapshotCount: flow.coalescedSnapshotCount,
+          carriedTextDeltaCount: flow.carriedTextDeltaCount,
+          carryFallbackCount: flow.carryFallbackCount,
         },
       ),
     );
