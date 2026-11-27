@@ -11,7 +11,7 @@
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   Dispatch,
@@ -1484,7 +1484,7 @@ export function GitClientWindow({
   // The repository the user is looking at now, read when a staging call settles so a call that
   // outlives a repository switch never moves the newly selected repository's draft revision.
   const currentRepositoryRef = useRef(selectedPath);
-  useEffect((): void => {
+  useLayoutEffect((): void => {
     currentRepositoryRef.current = selectedPath;
   }, [selectedPath]);
   const runStagingMutation = useCallback(
@@ -1494,14 +1494,20 @@ export function GitClientWindow({
       // follows already sees the new epoch. A refused click (blocked, approval required) staged
       // nothing and keeps an unedited generated draft.
       const originRepository = selectedPath;
-      runStaging(async () => {
-        const outcome = await op();
-        if (
-          INDEX_MAY_HAVE_CHANGED.has(outcome.status) &&
-          currentRepositoryRef.current === originRepository
-        )
+      const moveEpoch = (): void => {
+        if (currentRepositoryRef.current === originRepository)
           setStagingEpoch((epoch): number => epoch + 1);
-        return outcome;
+      };
+      runStaging(async () => {
+        try {
+          const outcome = await op();
+          if (INDEX_MAY_HAVE_CHANGED.has(outcome.status)) moveEpoch();
+          return outcome;
+        } catch (error) {
+          // A transport failure or timeout may follow a server that already changed the index.
+          moveEpoch();
+          throw error;
+        }
       });
     },
     [runStaging, selectedPath],

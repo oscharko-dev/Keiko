@@ -406,8 +406,13 @@ export function useCodingAppSessionEstablishments(): number {
   );
 }
 
-/** Notify readers that the browser session was restored without a page load. */
+/** Notify readers that the browser session changed without a page load; it re-inspects only. */
 export function notifyCodingAppSessionChanged(): void {
+  publishSessionRefresh();
+}
+
+/** Notify readers that this window received a NEW app session; a refusal given before it is stale. */
+export function notifyCodingAppSessionEstablished(): void {
   publishSessionEstablished();
 }
 

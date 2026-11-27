@@ -4868,6 +4868,26 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 
     await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
   });
+
+  it("clears an unedited generated draft when the staging request rejects in the active repository", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => {
+        throw new Error("network timeout after the server changed the index");
+      }),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
+
+    await user.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+  });
 });
 
 describe("GitClientWindow — commit composer (Issue #1575)", () => {

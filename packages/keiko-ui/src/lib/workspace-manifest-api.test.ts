@@ -20,7 +20,7 @@ const notifySessionChanged = vi.hoisted(() => vi.fn());
 vi.mock("./coding-app-session-client", () => ({
   codingAppSessionPairingSettled: pairingSettled,
   ensureLocalCodingAppSession: ensureLocalSession,
-  notifyCodingAppSessionChanged: notifySessionChanged,
+  notifyCodingAppSessionEstablished: notifySessionChanged,
 }));
 
 function root(rootRef: string, canonicalRoot: string): WorkspaceRootDescriptor {

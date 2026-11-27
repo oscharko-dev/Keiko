@@ -15,6 +15,7 @@ import {
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
   notifyCodingAppSessionChanged,
+  notifyCodingAppSessionEstablished,
   redeemCodingAppSessionPairingNavigation,
   requestCodingAppSessionReinspection,
   type CodingAppSessionPairingSeams,
@@ -590,9 +591,18 @@ describe("useCodingWorkbenchSessionRenewalEffect", () => {
     });
   });
 
-  it("drops the refusal of the previous session once a new session arrives", async () => {
+  it("keeps a refusal when a browser approval changes the session without a new one", () => {
     const window_ = refusedWindow();
     act(() => notifyCodingAppSessionChanged());
+    expect(window_.mutation()).toMatchObject({
+      status: "error",
+      error: { correlationId: "corr-previous-session" },
+    });
+  });
+
+  it("drops the refusal of the previous session once a new session arrives", async () => {
+    const window_ = refusedWindow();
+    act(() => notifyCodingAppSessionEstablished());
     await waitFor(() => expect(window_.mutation()).toMatchObject({ status: "idle", error: null }));
   });
 });
