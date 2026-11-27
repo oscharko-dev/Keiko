@@ -583,6 +583,8 @@ interface ProjectionEntry {
   readonly expiresAtMs: number;
   readonly signalIds: Set<string>;
   readonly messageTurns: Map<string, string>;
+  /** The message each tool row belongs to (callId to messageId), so a message leaves with its calls. */
+  readonly toolOwners: Map<string, string>;
   /** The complete text of every assistant answer and reasoning the feed lists, beside the feed. */
   readonly texts: RetainedTexts;
   /** The run's failed tool calls: repeated-failure counts and which failures were logged. */
@@ -674,6 +676,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs,
       signalIds: new Set(),
       messageTurns: new Map(),
+      toolOwners: new Map(),
       texts: createRetainedTexts(this.limits.maxRetainedAnswerChars),
       toolFailures: createToolFailureLedger(),
       feed: emptyFeed(input.runId, instant(now)),
@@ -923,6 +926,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       expiresAtMs: this.now() + this.ttlMs,
       signalIds: new Set(),
       messageTurns: new Map(),
+      toolOwners: new Map(),
       texts: createRetainedTexts(0),
       toolFailures: createToolFailureLedger(),
       feed,
@@ -1688,8 +1692,9 @@ function insertTool(
   const saturated = turn.tools.length >= limits.maxToolsPerTurn;
   if (saturated) {
     turn.truncated = true;
-    if (!evictOldestSettledTool(turn)) return "capacity-dropped";
+    if (!evictOldestSettledTool(entry, turn)) return "capacity-dropped";
   }
+  if (signal.messageId !== undefined) entry.toolOwners.set(signal.callId, signal.messageId);
   turn.tools.push({
     callId: signal.callId,
     tool,
@@ -1793,10 +1798,11 @@ function cancelOpenTools(turns: readonly MutableTurn[], occurredAt: string): num
  * displacement is a capacity drop, so the feed's bounded loss counter keeps advancing; a call that
  * has not settled is never displaced.
  */
-function evictOldestSettledTool(turn: MutableTurn): boolean {
+function evictOldestSettledTool(entry: ProjectionEntry, turn: MutableTurn): boolean {
   const index = turn.tools.findIndex(({ state }) => state !== "pending" && state !== "running");
   if (index < 0) return false;
-  turn.tools.splice(index, 1);
+  const removed = turn.tools.splice(index, 1)[0];
+  if (removed !== undefined) entry.toolOwners.delete(removed.callId);
   return true;
 }
 
@@ -2090,29 +2096,40 @@ function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number)
       turn.truncated = true;
     }
   }
-  while (bytes(turn) > maxBytes && turn.tools.length > 0) {
-    turn.tools.shift();
+  // Last, whole events go, oldest first and one message at a time: an assistant message leaves
+  // together with its own tool rows, so the newest message and its running call outlive every
+  // older step (#4491). The user anchor stays.
+  while (bytes(turn) > maxBytes) {
+    const evicted = evictOldestStep(entry, turn);
+    if (evicted === 0) break;
     turn.truncated = true;
-    lost += 1;
-  }
-  // Last, a turn of many steps whose message shells alone exceed the bound gives up its oldest
-  // assistant messages (the user anchor and the newest message stay, as the count cap does).
-  while (bytes(turn) > maxBytes && evictOldestAssistantShell(entry, turn)) {
-    turn.truncated = true;
-    lost += 1;
+    lost += evicted;
   }
   return lost;
 }
 
-function evictOldestAssistantShell(entry: ProjectionEntry, turn: MutableTurn): boolean {
+// Removes the oldest assistant message but the newest (preferring one without a running call) with
+// its tool rows; once only the newest message is left, the oldest settled call goes. Returns how
+// many events (messages plus tool rows) it removed.
+function evictOldestStep(entry: ProjectionEntry, turn: MutableTurn): number {
   const newest = turn.messages.at(-1);
-  const index = turn.messages.findIndex(
+  const older = turn.messages.filter(
     (message) => message.role === "assistant" && message !== newest,
   );
-  if (index < 0) return false;
-  const removed = turn.messages.splice(index, 1)[0];
-  if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
-  return true;
+  const owned = (message: MutableMessage): CodingSafeActivityTool[] =>
+    turn.tools.filter(({ callId }) => entry.toolOwners.get(callId) === message.messageId);
+  const victim = older.find((message) => owned(message).every(settledTool)) ?? older[0];
+  if (victim === undefined) return evictOldestSettledTool(entry, turn) ? 1 : 0;
+  const calls = owned(victim);
+  turn.tools = turn.tools.filter((tool) => !calls.includes(tool));
+  for (const { callId } of calls) entry.toolOwners.delete(callId);
+  turn.messages.splice(turn.messages.indexOf(victim), 1);
+  entry.messageTurns.delete(victim.messageId);
+  return 1 + calls.length;
+}
+
+function settledTool({ state }: CodingSafeActivityTool): boolean {
+  return state !== "pending" && state !== "running";
 }
 
 function enforceTurnCount(entry: ProjectionEntry, maxTurns: number): void {
@@ -2126,6 +2143,7 @@ function enforceTurnCount(entry: ProjectionEntry, maxTurns: number): void {
 
 function releaseTurn(entry: ProjectionEntry, turn: MutableTurn): void {
   for (const message of turn.messages) entry.messageTurns.delete(message.messageId);
+  for (const { callId } of turn.tools) entry.toolOwners.delete(callId);
 }
 
 function markMessageTruncated(message: MutableMessage, turn: MutableTurn): void {

@@ -80,11 +80,11 @@ binding and shows only the human text.
 The safe-activity feed (`CodingSafeActivityFeed`) is bounded by bytes, not by step counts (#4491).
 OpenCode opens one assistant message per agent step and a run calls a tool per action, so a fixed
 16-message or 64-call turn cap evicted the earliest output of every ordinary run ("Activity
-truncated."). The per-turn message and tool counts are now 256 each, above what the 32 KiB turn
+truncated."). The per-turn message and tool counts are now 512 each (a message or call serializes to more than 64 bytes, so 512 exceed the 32 KiB turn bound), above what the 32 KiB turn
 bound admits, so the byte bounds (message 16 KiB, turn 32 KiB, feed 60 KiB, reasoning 8 KiB) are the
 memory guard and the counts only stop a runaway producer of empty shells. A turn still over its byte
 bound after retained answer text, tool detail, reasoning, segments and calls were shed gives up its
-oldest assistant message (never the user anchor or the newest message) and reads as truncated. The
+oldest assistant message together with its own tool rows, one message at a time (never the user anchor, the newest message or a running call while an older message remains), and reads as truncated. The
 correlation caps in the OpenCode backend (2,048 entries, 128 KiB) hold only calls that
 have not settled and remain a memory guard.
 
