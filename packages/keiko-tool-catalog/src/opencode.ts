@@ -441,7 +441,10 @@ function verificationSpec(): OpenCodeToolSpec {
       'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
       "untracked paths under commit.blocking stay outside it. For that workflow, " +
       "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
-      "the intended paths or ignore generated output deliberately before verifying again.",
+      "the intended paths or ignore generated output deliberately before verifying again. " +
+      "An unavailable commit proof names its nextAction: resolve-then-verify means the cause " +
+      "it names (an unborn HEAD, a denied path or link, an unreadable entry) must change " +
+      "first, because verifying again unchanged repeats the same answer.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {
