@@ -1,3 +1,5 @@
+import type { VerificationCommandPreview } from "../editor/verificationRunner.js";
+import { verificationPlanDigest } from "./verificationApprovalPreview.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createHash } from "node:crypto";
@@ -1883,6 +1885,130 @@ describe("production managed worktree tools", () => {
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("server-side workspace trust");
+  });
+
+  // ADR-0124 D6: the person approved the command lines the card showed. The run plans the call
+  // again; a project that changed after approval (another script body, another package folder) is
+  // refused with a closed reason, and nothing runs.
+  describe("a verification approved on a shown plan", () => {
+    const stepsOf = (scriptBody: string): VerificationCommandPreview => ({
+      kind: "steps",
+      probeFailures: 0,
+      steps: [{ command: "npm", args: ["run", "test"], scriptName: "test", scriptBody }],
+    });
+
+    async function runApproved(options: {
+      readonly approved: string;
+      readonly now: string;
+      readonly packageDir?: string;
+    }): Promise<{
+      readonly result: unknown;
+      readonly runToReport: ReturnType<typeof vi.fn>;
+      readonly records: ServerDiagnosticRecord[];
+      readonly replanned: Parameters<
+        NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
+      >[0][];
+    }> {
+      const records: ServerDiagnosticRecord[] = [];
+      const replanned: Parameters<
+        NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
+      >[0][] = [];
+      const runToReport = vi.fn(() =>
+        Promise.reject(new VerificationRunnerError("NO_RUNNABLE_STEPS", "stop after the check")),
+      );
+      const digest = verificationPlanDigest(
+        (stepsOf(options.approved) as Extract<VerificationCommandPreview, { kind: "steps" }>).steps,
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-verification-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: "autonomous-delivery",
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => ({
+          ...FACTS,
+          actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+        }),
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        approvalProofVerifier: {
+          matches: () => false,
+          consume: () => false,
+          takeVerificationPlan: (runId, actionId) =>
+            runId === "run-verification-1" && actionId === "verification-1" ? digest : undefined,
+        },
+        verificationRunner: {
+          runToReport,
+          previewCommands: (input) => {
+            replanned.push(input);
+            return stepsOf(options.now);
+          },
+        },
+        diagnostics: { record: (record): void => void records.push(record) },
+        onRuntimeEvent: vi.fn(),
+      });
+      const result = await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-1",
+          idempotencyKey: "verification-key",
+          verifierId: "test",
+          ...(options.packageDir === undefined ? {} : { packageDir: options.packageDir }),
+        }),
+      });
+      return { result, runToReport, records, replanned };
+    }
+
+    it("refuses when package.json changed after approval, runs nothing and logs body-free", async () => {
+      const { result, runToReport, records } = await runApproved({
+        approved: "vitest run",
+        now: "rm -rf / && vitest run",
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
+      expect(runToReport).not.toHaveBeenCalled();
+      expect(records).toEqual([
+        expect.objectContaining({
+          operation: "coding-runtime.verification",
+          message: "verification-refused",
+          errorClass: "verification-plan-changed",
+          correlationId: "run-verification-1",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("rm -rf");
+    });
+
+    it("re-plans with the package folder the call names and runs when nothing changed", async () => {
+      const { runToReport, replanned } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        packageDir: "packages/app",
+      });
+      expect(replanned).toEqual([
+        { projectId: "/managed/worktree", kinds: ["test"], packageDir: "packages/app" },
+      ]);
+      expect(runToReport).toHaveBeenCalledOnce();
+    });
   });
 
   // The two refusals BEFORE the runner is called. Both returned a bare `{ status: "failed" }` with

@@ -412,6 +412,7 @@ export interface VerificationPreviewInput {
   readonly projectId: string;
   readonly kinds: readonly VerificationKind[];
   readonly packageDir?: string | undefined;
+  readonly targetPath?: string | undefined;
 }
 
 export interface VerificationPreviewStep {
@@ -419,12 +420,25 @@ export interface VerificationPreviewStep {
   readonly args: readonly string[];
   /** Workspace-relative folder of a nested package; absent for the workspace root. */
   readonly cwd?: string | undefined;
+  /** The package script behind the step and its body, so the person sees what `npm run x` runs. */
+  readonly scriptName?: string | undefined;
+  readonly scriptBody?: string | undefined;
 }
 
+/**
+ * `probeFailures` counts package folders the planning could not read; the preview itself writes no
+ * log line, so its caller reports the count. `host-dependent` is a Maven project: whether Maven
+ * runs depends on the isolation backend of this computer, which only a spawning probe can tell.
+ */
 export type VerificationCommandPreview =
-  | { readonly kind: "steps"; readonly steps: readonly VerificationPreviewStep[] }
-  | { readonly kind: "package-selection-required" }
-  | { readonly kind: "unresolved" };
+  | {
+      readonly kind: "steps";
+      readonly steps: readonly VerificationPreviewStep[];
+      readonly probeFailures: number;
+    }
+  | { readonly kind: "package-selection-required"; readonly probeFailures: number }
+  | { readonly kind: "host-dependent"; readonly probeFailures: number }
+  | { readonly kind: "unresolved"; readonly probeFailures: number };
 
 export interface VerificationRunnerManagerOptions {
   readonly store: UiStore;
@@ -860,20 +874,14 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const { workspace } = resolved;
     const fs = resolved.access.fs;
     const pkg = this.resolvePackage(workspace, input, fs);
-    const scriptKinds = input.kinds.filter(isScriptBackedKind);
     const maven = pkg === undefined && this.runsMaven(workspace, fs, isolation);
-    const scriptSteps = maven
-      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
-          cacheRepository: this.mavenCacheRepository(),
-        })
-      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    const { script: scriptSteps, all: steps } = this.plannedSteps(workspace, fs, input, pkg, maven);
     const trust = this.assertWorkspaceTrustForSteps(
       resolved,
       scriptSteps,
       input.autonomyMode,
       isolation?.probe.available,
     );
-    const steps = [...scriptSteps, ...this.targetedSteps(workspace, input, fs, pkg)];
     return {
       plan: {
         workspaceRoot: workspace.root,
@@ -883,6 +891,26 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       trust,
       runnerWorkspace: maven ? MAVEN_RUNNER : (pkg?.workspace ?? workspace),
     };
+  }
+
+  // The ONE place the steps of a verification are planned. `execute` and the approval preview both
+  // call it, so a command shown for approval is the command a run plans, by construction. `script`
+  // holds the package-script (or Maven) steps the trust decision is asked about; `all` adds the
+  // targeted-test steps.
+  private plannedSteps(
+    workspace: WorkspaceInfo,
+    fs: WorkspaceFs,
+    input: Pick<VerificationRunInput, "kinds" | "targetPath">,
+    pkg: VerificationPackage | undefined,
+    maven: boolean,
+  ): { readonly script: VerificationPlan["steps"]; readonly all: VerificationPlan["steps"] } {
+    const scriptKinds = input.kinds.filter(isScriptBackedKind);
+    const script = maven
+      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
+          cacheRepository: this.mavenCacheRepository(),
+        })
+      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    return { script, all: [...script, ...this.targetedSteps(workspace, input, fs, pkg)] };
   }
 
   private mavenCacheRepository(): string | undefined {
@@ -912,12 +940,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     input: VerificationRunInput,
     fs: WorkspaceFs,
   ): VerificationPackage | undefined {
-    const resolution = resolveVerificationPackage(workspace, fs, {
-      packageDir: input.packageDir,
-      targetPath: input.targetPath,
-      onProbeFailure: (error) => {
-        this.recordPackageProbeFailure(input.correlationId, error);
-      },
+    const resolution = this.packageResolution(workspace, input, fs, (error) => {
+      this.recordPackageProbeFailure(input.correlationId, error);
     });
     switch (resolution.kind) {
       case "root":
@@ -932,6 +956,21 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           "The requested package folder is not a package of this workspace.",
         );
     }
+  }
+
+  // The package a verification resolves to, as an outcome rather than a throw; `execute` turns the
+  // two closed refusals into errors, the approval preview into a plain sentence.
+  private packageResolution(
+    workspace: WorkspaceInfo,
+    input: Pick<VerificationRunInput, "packageDir" | "targetPath">,
+    fs: WorkspaceFs,
+    onProbeFailure: (error: unknown) => void,
+  ): ReturnType<typeof resolveVerificationPackage> {
+    return resolveVerificationPackage(workspace, fs, {
+      packageDir: input.packageDir,
+      targetPath: input.targetPath,
+      onProbeFailure,
+    });
   }
 
   // Asked at plan time and again at effect. A host whose isolation verdict refuses every script
@@ -975,7 +1014,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   private targetedSteps(
     workspace: WorkspaceInfo,
-    input: VerificationRunInput,
+    input: Pick<VerificationRunInput, "kinds" | "targetPath">,
     fs: WorkspaceFs,
     pkg: VerificationPackage | undefined,
   ): VerificationPlan["steps"] {
@@ -1399,31 +1438,35 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const resolved = this.resolveWorkspace(input.projectId);
     const { workspace } = resolved;
     const fs = resolved.access.fs;
-    const resolution = resolveVerificationPackage(workspace, fs, {
-      packageDir: input.packageDir,
-      onProbeFailure: (): void => undefined,
+    let probeFailures = 0;
+    const resolution = this.packageResolution(workspace, input, fs, () => {
+      probeFailures += 1;
     });
-    if (resolution.kind === "ambiguous") return { kind: "package-selection-required" };
-    if (resolution.kind === "refused") return { kind: "unresolved" };
+    if (resolution.kind === "ambiguous") {
+      return { kind: "package-selection-required", probeFailures };
+    }
+    if (resolution.kind === "refused") return { kind: "unresolved", probeFailures };
     const pkg = resolution.kind === "package" ? resolution.package : undefined;
-    const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    // Maven runs on the Windows step backend only (#4492); the preview reads the host platform
-    // instead of probing isolation, because a probe spawns a process.
-    const maven =
-      pkg === undefined && process.platform === "win32" && isMavenProject(workspace, fs);
-    const steps = maven
-      ? planMavenSteps(scriptKinds, DEFAULT_VERIFICATION_LIMITS, {
-          cacheRepository: this.mavenCacheRepository(),
-        })
-      : this.scriptSteps(workspace, scriptKinds, fs, pkg);
+    // Whether a Maven project runs Maven turns on the isolation backend (`runsMaven`), which only a
+    // probe can answer and a probe spawns a process. The preview never guesses: it says the answer
+    // depends on this computer's setup.
+    if (pkg === undefined && isMavenProject(workspace, fs)) {
+      return { kind: "host-dependent", probeFailures };
+    }
+    const { all } = this.plannedSteps(workspace, fs, input, pkg, false);
+    const scripts = detectScripts(workspace, fs, pkg?.dir).scripts;
     return {
       kind: "steps",
-      steps: steps
+      probeFailures,
+      steps: all
         .filter((step) => step.skipReason === undefined)
         .map((step) => ({
           command: step.command,
           args: step.args,
           ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+          ...(step.scriptName === undefined || scripts[step.scriptName] === undefined
+            ? {}
+            : { scriptName: step.scriptName, scriptBody: scripts[step.scriptName] }),
         })),
     };
   };

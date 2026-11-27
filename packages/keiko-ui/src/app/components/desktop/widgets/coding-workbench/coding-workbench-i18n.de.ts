@@ -1227,6 +1227,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko führt nach der Freigabe die Tests für die geänderte Datei aus.",
   "codingWorkbench.approval.verification.deferred.package-selection":
     "Keiko wählt nach der Freigabe den Testbefehl des Pakets.",
+  "codingWorkbench.approval.verification.deferred.host-setup":
+    "Was hier ausgeführt wird, hängt von der Einrichtung dieses Computers ab; Keiko entscheidet nach der Freigabe.",
   "codingWorkbench.approval.verification.unavailable":
     "Keiko konnte den Befehl nicht ermitteln, daher wird nur die Art der Prüfung gezeigt.",
   "codingWorkbench.approval.native.title": "Was der Agent ausführen möchte",

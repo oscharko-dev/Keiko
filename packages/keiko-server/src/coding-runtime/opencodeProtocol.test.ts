@@ -1339,6 +1339,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
             idempotencyKey: "session:call",
             approvalId: "session:call",
             approvalDigest: "a".repeat(64),
+            packageDir: "packages/app",
           },
         },
       },
@@ -1348,7 +1349,42 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       type: "permission-request",
       kind: "command-execution",
       actionKind: "verification-command",
+      packageDir: "packages/app",
     });
+    // The ask names the package folder the call asked for, validated like any contained path: a
+    // missing key, an escaping folder or a non-string is not a governed verification ask (ADR-0124 D6).
+    const verificationAsk = (packageDir: unknown, omit = false): unknown =>
+      projectOpenCodePermissionEvent(
+        {
+          ...base,
+          properties: {
+            ...base.properties,
+            patterns: ["typecheck"],
+            metadata: {
+              kind: "command-execution",
+              actionClass: "command-execution",
+              reasonCode: "approval-required",
+              expiresAt: "2026-07-23T14:05:00.000Z",
+              actionKind: "verification-command",
+              scopeLabel: "workspace-scope",
+              risk: "low",
+              policyReason: "approval-required",
+              commandLabel: "typecheck",
+              actionId: "session:call",
+              idempotencyKey: "session:call",
+              approvalId: "session:call",
+              approvalDigest: "a".repeat(64),
+              ...(omit ? {} : { packageDir }),
+            },
+          },
+        },
+        "ses_1",
+      );
+    expect(verificationAsk("")).toBeDefined();
+    expect(verificationAsk(undefined, true)).toBeUndefined();
+    expect(verificationAsk("../outside")).toBeUndefined();
+    expect(verificationAsk("C:/abs")).toBeUndefined();
+    expect(verificationAsk(7)).toBeUndefined();
     expect(projectedVerification?.requestId).toMatch(/^permission-[0-9]+$/u);
     const projectedTargeted = projectOpenCodePermissionEvent(
       {
@@ -1371,6 +1407,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
             approvalId: "session:targeted",
             approvalDigest: "b".repeat(64),
             targetPathHash: "c".repeat(64),
+            packageDir: "",
           },
         },
       },

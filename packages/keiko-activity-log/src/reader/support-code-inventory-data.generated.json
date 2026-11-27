@@ -1725,6 +1725,7 @@
     "keiko-server/coding-runtime/codingToolReadEditPorts",
     "keiko-server/coding-runtime/codingToolReplacementEdits",
     "keiko-server/coding-runtime/codingToolReplayFilter",
+    "keiko-server/coding-runtime/commandLineRedaction",
     "keiko-server/coding-runtime/darwinProcessTable",
     "keiko-server/coding-runtime/darwinRuntimeDescendants",
     "keiko-server/coding-runtime/darwinSandboxMembership",

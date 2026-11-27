@@ -2046,7 +2046,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     "function verificationPermission(args, approvalProof) {",
     '  if (typeof args.verifierId !== "string" || !approvalProof) throw new Error("keiko-tool-invalid");',
     "  return {",
-    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
+    '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, packageDir: typeof args.packageDir === "string" ? args.packageDir : "", ...approvalProof },',
     "  };",
     "}",
     ...toolApprovalProofSource(),

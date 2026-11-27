@@ -46,6 +46,8 @@ export interface SidecarPermissionEvent {
   readonly approvalDigest?: string | undefined;
   readonly targetPathHash?: string | undefined;
   readonly targetPath?: string | undefined;
+  /** The package folder a governed verification ask named; absent means the workspace root. */
+  readonly packageDir?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
   readonly fileCount?: number | undefined;
   readonly addedLines?: number | undefined;
@@ -204,6 +206,7 @@ function optionalVerificationMetadata(
   record: Record<string, unknown>,
 ): Partial<SidecarPermissionEvent> {
   return {
+    ...optionalStringField(record, "packageDir"),
     ...optionalStringField(record, "executable"),
     ...optionalStringArrayField(record, "args"),
     ...optionalIntegerField(record, "passedCount"),

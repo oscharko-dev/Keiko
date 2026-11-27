@@ -473,6 +473,7 @@ describe("verification preview review (ADR-0124 D6)", () => {
     ["commands", { status: "commands", commands: ["mvn -B test"], truncated: false }],
     ["a targeted-test deferral", { status: "deferred", reason: "targeted-test" }],
     ["a package-selection deferral", { status: "deferred", reason: "package-selection" }],
+    ["a host-setup deferral", { status: "deferred", reason: "host-setup" }],
     ["an unavailable lookup", { status: "unavailable", reason: "preview-failed" }],
   ])("accepts %s", (_label, preview) => {
     expect(errorsFor(review(preview))).toEqual([]);

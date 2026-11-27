@@ -3305,6 +3305,10 @@ describe("CodingWorkbenchWindow", () => {
       { status: "deferred", reason: "package-selection" } as const,
       "Keiko picks the package's test command",
     ],
+    [
+      { status: "deferred", reason: "host-setup" } as const,
+      "depends on how this computer is set up",
+    ],
     [{ status: "unavailable", reason: "preview-failed" } as const, "could not look up the command"],
   ])(
     "ADR-0124 D6: %j says so in a plain sentence and never blocks Approve",

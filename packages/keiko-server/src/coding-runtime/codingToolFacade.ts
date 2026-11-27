@@ -120,6 +120,7 @@ export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
 const GOVERNED_VERIFICATION_REASON_CODES = [
   "verification-authority-revoked",
   "verification-verifier-unsupported",
+  "verification-plan-changed",
   "VERIFICATION_FAILED",
   "VERIFICATION_TIMED_OUT",
   "VERIFICATION_RESOURCE_EXCEEDED",
@@ -1057,6 +1058,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
       "This discovery ran out of time before it finished. Narrow it with a directory or a more specific query instead of retrying the same call.",
   },
   verification: {
+    // ADR-0124 D6: the person approved the command lines the card showed; the project planned
+    // something else when the call ran, so nothing ran.
+    "verification-plan-changed":
+      "The project changed after the person approved this verification, so the commands it would run are no longer the ones they saw, and nothing ran. Call the same verifier again so the person can approve the current commands; do not work around it or run the check another way.",
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
     // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the

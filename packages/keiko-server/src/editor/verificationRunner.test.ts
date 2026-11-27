@@ -33,7 +33,9 @@ import {
 import {
   createVerificationRunnerManager,
   decideScriptTrust,
+  type VerificationCommandPreview,
   type VerificationExecutePort,
+  type VerificationPreviewInput,
   type VerificationRunInput,
   type VerificationRunnerManager,
   type VerificationRunnerManagerOptions,
@@ -2766,8 +2768,40 @@ describe("VerificationRunnerManager — previewCommands for the approval card (A
     expect(preview.steps).toHaveLength(1);
     expect(preview.steps[0]?.command).toBe("npm");
     expect(preview.steps[0]?.args).toContain("typecheck");
+    expect(preview.probeFailures).toBe(0);
     expect(touched).toEqual([]);
     expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("carries the script body behind npm run, read from the same package.json", () => {
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ name: "x", scripts: { typecheck: "tsc --noEmit -p tsconfig.app.json" } }),
+    );
+    const preview = silentPreview({ kinds: ["typecheck"] });
+    if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+    expect(preview.steps[0]).toMatchObject({
+      scriptName: "typecheck",
+      scriptBody: "tsc --noEmit -p tsconfig.app.json",
+    });
+  });
+
+  it("sees a package.json rewritten between preview and run: the planned script body changes", () => {
+    const bodyOf = (): string | undefined => {
+      const preview = silentPreview({ kinds: ["typecheck"] });
+      return preview.kind === "steps" ? preview.steps[0]?.scriptBody : undefined;
+    };
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ scripts: { typecheck: "tsc --noEmit" } }),
+    );
+    const shown = bodyOf();
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({ scripts: { typecheck: "node steal.js && tsc --noEmit" } }),
+    );
+    expect(shown).toBe("tsc --noEmit");
+    expect(bodyOf()).toBe("node steal.js && tsc --noEmit");
   });
 
   it("throws the runner's own not-found for an unknown workspace, still silently", () => {
@@ -2788,9 +2822,96 @@ describe("VerificationRunnerManager — previewCommands for the approval card (A
       );
     }
     const { manager, touched } = silent();
-    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toEqual({
+    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toMatchObject({
       kind: "package-selection-required",
     });
     expect(touched).toEqual([]);
+  });
+
+  it("does not guess whether Maven runs: a Maven project is host-dependent, never a probe", () => {
+    rmSync(join(workspaceRoot, "package.json"));
+    writeFileSync(join(workspaceRoot, "pom.xml"), "<project/>", "utf8");
+    const { manager, touched } = silent();
+    expect(manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"] })).toMatchObject({
+      kind: "host-dependent",
+    });
+    expect(touched).toEqual([]);
+  });
+
+  it("counts a package folder it could not read, without writing a line", () => {
+    const { manager, touched } = silent();
+    expect(
+      manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"], packageDir: "nope" }),
+    ).toMatchObject({ kind: "unresolved" });
+    expect(touched).toEqual([]);
+  });
+
+  function silentPreview(over: Partial<VerificationPreviewInput>): VerificationCommandPreview {
+    return silent().manager.previewCommands({ projectId: workspaceRoot, kinds: ["test"], ...over });
+  }
+
+  describe("equals what execute plans", () => {
+    const NESTED = "web/app";
+
+    function nestedWorkspace(): void {
+      rmSync(join(workspaceRoot, "package.json"));
+      for (const dir of [NESTED, "tools"]) {
+        mkdirSync(join(workspaceRoot, dir), { recursive: true });
+        writeFileSync(
+          join(workspaceRoot, dir, "package.json"),
+          JSON.stringify({
+            name: dir,
+            scripts: { test: `vitest run ${dir}` },
+            devDependencies: { vitest: "4.1.11" },
+          }),
+        );
+        mkdirSync(join(workspaceRoot, dir, "node_modules"));
+      }
+    }
+
+    async function plannedByExecute(
+      over: Partial<VerificationRunInput>,
+    ): Promise<readonly { command: string; args: readonly string[]; cwd?: string | undefined }[]> {
+      const plans: Parameters<VerificationExecutePort>[0]["plan"][] = [];
+      const manager = makeManager({
+        isWorkspaceTrustedForPackageScripts: () => true,
+        execute: (args) => {
+          plans.push(args.plan);
+          return Promise.resolve({
+            report: report(["test"]),
+            probe: { available: true, backend: "test-backend" },
+          });
+        },
+      });
+      await manager.runToReport(input({ kinds: ["test"], ...over }), new AbortController().signal);
+      return (plans[0]?.steps ?? []).filter((step) => step.skipReason === undefined);
+    }
+
+    it.each([["web/app"], ["tools"]])(
+      "plans the same steps for packageDir %s as the run does",
+      async (packageDir) => {
+        nestedWorkspace();
+        const planned = await plannedByExecute({ packageDir });
+        const preview = silentPreview({ kinds: ["test"], packageDir });
+        if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+        expect(planned.length).toBeGreaterThan(0);
+        expect(preview.steps.map(({ command, args, cwd }) => ({ command, args, cwd }))).toEqual(
+          planned.map(({ command, args, cwd }) => ({ command, args, cwd })),
+        );
+      },
+    );
+
+    it("plans a targeted test through the package that holds it, as the run does", async () => {
+      nestedWorkspace();
+      mkdirSync(join(workspaceRoot, NESTED, "src"));
+      writeFileSync(join(workspaceRoot, NESTED, "src", "a.test.ts"), "");
+      const target = `${NESTED}/src/a.test.ts`;
+      const planned = await plannedByExecute({ kinds: ["targeted-test"], targetPath: target });
+      const preview = silentPreview({ kinds: ["targeted-test"], targetPath: target });
+      if (preview.kind !== "steps") throw new TypeError("expected planned steps");
+      expect(preview.steps.map(({ command, args }) => ({ command, args }))).toEqual(
+        planned.map(({ command, args }) => ({ command, args })),
+      );
+    });
   });
 });

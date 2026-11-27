@@ -94,6 +94,7 @@ export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS = 2_048;
 export const CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS = [
   "targeted-test",
   "package-selection",
+  "host-setup",
 ] as const;
 export type CodingWorkbenchVerificationPreviewDeferral =
   (typeof CODING_WORKBENCH_VERIFICATION_PREVIEW_DEFERRALS)[number];

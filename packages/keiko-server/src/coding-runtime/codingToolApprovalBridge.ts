@@ -114,6 +114,8 @@ export interface CodingToolApprovalActivation {
 
 export type CommitToolRequest = Extract<CodingToolActionRequest, { readonly action: "delivery" }>;
 export interface CodingToolApprovalProofVerifier {
+  /** Hands out, once, the plan digest the person approved for this tool call; absent when none. */
+  readonly takeVerificationPlan?: (runId: string, actionId: string) => string | undefined;
   readonly matchesDelivery?: (runId: string, request: CommitToolRequest) => boolean;
   readonly consumeDelivery?: (runId: string, request: CommitToolRequest) => object | undefined;
   readonly matchesStage?: (runId: string, proposalId: string) => boolean;
@@ -155,6 +157,11 @@ export interface CodingToolApprovalBridge extends CodingToolApprovalProofVerifie
    * wait reads (ADR-0124 D6). A decline grants nothing: it only ends that run's wait for that id.
    */
   readonly declineProposal?: (runId: string, proposalId: string) => void;
+  /**
+   * Binds the digest of the command lines a governed verification ask showed the person to that
+   * ask's tool call (ADR-0124 D6). A later run of the call re-plans and refuses on a mismatch.
+   */
+  readonly bindVerificationPlan: (runId: string, actionId: string, planDigest: string) => void;
   readonly observePermission: (input: CodingToolApprovalObservation) => boolean;
   readonly activatePermission: (input: CodingToolApprovalActivation) => boolean;
   readonly invalidateRun: (runId: string) => void;
@@ -210,7 +217,17 @@ export function createCodingToolApprovalBridge(
   const approved = new Map<string, ApprovedAction>();
   const bindings = new Map<string, number>();
   const declined = new Set<string>();
+  const plans = new Map<string, string>();
   return {
+    bindVerificationPlan: (runId, actionId, planDigest): void => {
+      rememberPlan(plans, permissionKey(runId, actionId), planDigest);
+    },
+    takeVerificationPlan: (runId, actionId): string | undefined => {
+      const key = permissionKey(runId, actionId);
+      const digest = plans.get(key);
+      plans.delete(key);
+      return digest;
+    },
     ...(commitService === undefined ? {} : commitApprovalMethods(commitService)),
     ...(gitService === undefined ? {} : stageApprovalMethods(gitService)),
     ...(deliveryService === undefined ? {} : deliveryApprovalMethods(deliveryService)),
@@ -225,6 +242,7 @@ export function createCodingToolApprovalBridge(
     consume: (input): boolean => consumeApprovedAction(approved, input),
     invalidateRun: (runId): void => {
       invalidateRun(pending, approved, bindings, runId);
+      forgetRunPlans(plans, runId);
       forgetRunKeys(declined, runId);
       commitService?.invalidate();
       gitService?.invalidate();
@@ -470,6 +488,24 @@ function forgetRunKeys(keys: Set<string>, runId: string): void {
   const prefix = `${runId}\u0000`;
   for (const key of keys) {
     if (key.startsWith(prefix)) keys.delete(key);
+  }
+}
+
+const MAX_PLAN_BINDINGS = 256;
+
+function forgetRunPlans(plans: Map<string, string>, runId: string): void {
+  const prefix = `${runId}\u0000`;
+  for (const key of plans.keys()) {
+    if (key.startsWith(prefix)) plans.delete(key);
+  }
+}
+
+function rememberPlan(plans: Map<string, string>, key: string, digest: string): void {
+  plans.delete(key);
+  plans.set(key, digest);
+  for (const oldest of plans.keys()) {
+    if (plans.size <= MAX_PLAN_BINDINGS) break;
+    plans.delete(oldest);
   }
 }
 

@@ -475,3 +475,25 @@ describe("coding tool approval bridge records declined proposals", () => {
     expect(bridge.proposalDeclined?.(RUN_ID, "stage-64")).toBe(true);
   });
 });
+
+describe("verification plan binding (ADR-0124 D6)", () => {
+  it("hands a bound plan digest out once, per run and tool call", () => {
+    const bridge = createCodingToolApprovalBridge();
+    bridge.bindVerificationPlan("run-a", "call-1", "d".repeat(64));
+    expect(bridge.takeVerificationPlan?.("run-b", "call-1")).toBeUndefined();
+    expect(bridge.takeVerificationPlan?.("run-a", "call-1")).toBe("d".repeat(64));
+    expect(bridge.takeVerificationPlan?.("run-a", "call-1")).toBeUndefined();
+  });
+
+  it("forgets a run's bindings with the run and bounds how many it keeps", () => {
+    const bridge = createCodingToolApprovalBridge();
+    bridge.bindVerificationPlan("run-a", "call-1", "d".repeat(64));
+    bridge.invalidateRun("run-a");
+    expect(bridge.takeVerificationPlan?.("run-a", "call-1")).toBeUndefined();
+    for (let index = 0; index < 300; index += 1) {
+      bridge.bindVerificationPlan("run-a", `call-${String(index)}`, "e".repeat(64));
+    }
+    expect(bridge.takeVerificationPlan?.("run-a", "call-0")).toBeUndefined();
+    expect(bridge.takeVerificationPlan?.("run-a", "call-299")).toBe("e".repeat(64));
+  });
+});

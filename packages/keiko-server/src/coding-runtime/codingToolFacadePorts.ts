@@ -180,6 +180,7 @@ export const CODING_VERIFICATION_BLOCKED_REASONS = [
   "verification-command-denied",
   "verification-authority-revoked",
   "verification-verifier-unsupported",
+  "verification-plan-changed",
   "PROJECT_NOT_FOUND",
   "WORKSPACE_TRUST_REQUIRED",
   "NO_RUNNABLE_STEPS",

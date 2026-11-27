@@ -161,6 +161,7 @@ import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
+import { verificationPlanDigest } from "./verificationApprovalPreview.js";
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
 
@@ -1816,6 +1817,53 @@ async function runVerificationCall(
   return verificationOutcome(input, attempt, guard, signal);
 }
 
+/**
+ * ADR-0124 D6: the person approved the command lines the card showed. The call is planned again
+ * here, exactly as the runner plans it, and any difference (a changed package.json, another package
+ * folder, a plan that can no longer be made) refuses it with a closed reason instead of running
+ * something the person never saw. An ask that showed no command line bound nothing.
+ */
+function verificationPlanChanged(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+): VerificationPortResult | undefined {
+  const bound = input.approvalProofVerifier?.takeVerificationPlan?.(
+    input.authorityRef.runId,
+    request.actionId,
+  );
+  const preview = input.verificationRunner.previewCommands;
+  if (bound === undefined || preview === undefined) return undefined;
+  if (verificationPlanDigestOf(input, preview, request, kind) === bound) return undefined;
+  return verificationPortRefusal(input, "verification-plan-changed");
+}
+
+function verificationPlanDigestOf(
+  input: ProductionManagedWorktreeToolInput,
+  preview: NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+): string | undefined {
+  try {
+    const plan = preview({
+      projectId: input.workspaceRoot,
+      kinds: [kind],
+      ...(request.packageDir === undefined ? {} : { packageDir: request.packageDir }),
+      ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+    });
+    return plan.kind === "steps" ? verificationPlanDigest(plan.steps) : undefined;
+  } catch (error) {
+    emitVerificationDiagnostic(input, "verification-plan-changed", "verification-failed", error);
+    return undefined;
+  }
+}
+
 function verificationRunnerEntry(
   input: ProductionManagedWorktreeToolInput,
   request: Extract<
@@ -1830,7 +1878,7 @@ function verificationRunnerEntry(
     return verificationPortRefusal(input, "verification-authority-revoked", refusal);
   }
   const kind = verificationKind(request.verifierId);
-  if (kind !== undefined) return kind;
+  if (kind !== undefined) return verificationPlanChanged(input, request, kind) ?? kind;
   input.verificationBlocked?.(
     "verification-verifier-unsupported",
     codingVerificationTargetDigest(request.verifierId, request.targetPath),
@@ -2638,7 +2686,10 @@ function verificationCorrelationId(input: ProductionManagedWorktreeToolInput): s
 
 function verificationPortRefusal(
   input: ProductionManagedWorktreeToolInput,
-  reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
+  reasonCode:
+    | "verification-authority-revoked"
+    | "verification-verifier-unsupported"
+    | "verification-plan-changed",
   condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
   if (reasonCode === "verification-authority-revoked") input.verificationBlocked?.(reasonCode);

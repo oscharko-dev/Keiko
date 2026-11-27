@@ -6,32 +6,53 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
-import type { VerificationCommandPreview } from "../editor/verificationRunner.js";
+import type {
+  VerificationCommandPreview,
+  VerificationPreviewInput,
+} from "../editor/verificationRunner.js";
 import {
   createVerificationApprovalPreview,
+  cutVisibly,
   previewFromSteps,
+  verificationPlanDigest,
 } from "./verificationApprovalPreview.js";
 
 const RUN_ID = "3f2b8c1e-5d4a-4e6f-9a1b-0c2d3e4f5a6b";
 const BEARER = "Bearer abcdefghijklmnop1234567890";
 const PASSWORD = "hunter2-very-secret";
 
-function port(
-  plan: VerificationCommandPreview | Error,
-  records: ServerDiagnosticRecord[] = [],
-): ReturnType<typeof createVerificationApprovalPreview> {
-  return createVerificationApprovalPreview({
+interface Fixture {
+  readonly port: ReturnType<typeof createVerificationApprovalPreview>;
+  readonly records: ServerDiagnosticRecord[];
+  readonly bound: [string, string, string][];
+  readonly asked: VerificationPreviewInput[];
+}
+
+function fixture(plan: VerificationCommandPreview | Error): Fixture {
+  const records: ServerDiagnosticRecord[] = [];
+  const bound: [string, string, string][] = [];
+  const asked: VerificationPreviewInput[] = [];
+  const port = createVerificationApprovalPreview({
     workspaceRoot: "/work/tree",
     runner: {
-      previewCommands: (): VerificationCommandPreview => {
+      previewCommands: (input): VerificationCommandPreview => {
+        asked.push(input);
         if (plan instanceof Error) throw plan;
         return plan;
       },
     },
+    bindPlan: (runId, actionId, digest): void => void bound.push([runId, actionId, digest]),
     diagnostics: { record: (record): void => void records.push(record) },
     now: () => new Date("2026-11-27T10:00:00.000Z"),
   });
+  return { port, records, bound, asked };
 }
+
+const steps = (...entries: readonly string[][]): VerificationCommandPreview => ({
+  kind: "steps",
+  probeFailures: 0,
+  steps: entries.map(([command = "", ...args]) => ({ command, args })),
+});
 
 function validReview(preview: unknown): boolean {
   return validateCodingWorkbenchRuntimeApprovalReviewChannelPayload({
@@ -50,10 +71,8 @@ function validReview(preview: unknown): boolean {
 
 describe("verification approval preview", () => {
   it("shows the command the verification would run, as the person would type it", () => {
-    const preview = port({
-      kind: "steps",
-      steps: [{ command: "mvn", args: ["-B", "test", "-Dtest=My Test"] }],
-    })("test", RUN_ID);
+    const { port } = fixture(steps(["mvn", "-B", "test", "-Dtest=My Test"]));
+    const preview = port("test", RUN_ID, {});
     expect(preview).toEqual({
       status: "commands",
       commands: ['mvn -B test "-Dtest=My Test"'],
@@ -62,16 +81,47 @@ describe("verification approval preview", () => {
     expect(validReview(preview)).toBe(true);
   });
 
-  it("masks credentials with the existing redactors: an Authorization header and a --password flag", () => {
+  it("plans with the package folder the ask named", () => {
+    const { port, asked } = fixture(steps(["npm", "run", "test"]));
+    port("test", RUN_ID, { packageDir: "packages/app" });
+    expect(asked).toEqual([
+      { projectId: "/work/tree", kinds: ["test"], packageDir: "packages/app" },
+    ]);
+  });
+
+  it("shows the script body behind npm run, redacted and bounded", () => {
+    const { port } = fixture({
+      kind: "steps",
+      probeFailures: 0,
+      steps: [
+        {
+          command: "npm",
+          args: ["run", "test"],
+          scriptName: "test",
+          scriptBody: `vitest run --token=${PASSWORD} ${"x".repeat(2_000)}`,
+        },
+      ],
+    });
+    const preview = port("test", RUN_ID, {});
+    if (preview.status !== "commands") throw new TypeError("expected commands");
+    const [line] = preview.commands;
+    expect(line).toContain('npm run test\n  runs the project\'s own "test" script: vitest run');
+    expect(line).not.toContain(PASSWORD);
+    expect(line?.length).toBeLessThanOrEqual(
+      CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
+    );
+    expect(validReview(preview)).toBe(true);
+  });
+
+  it("masks credentials: an Authorization header, a --password flag and a -D system property", () => {
     const preview = previewFromSteps([
       { command: "curl", args: ["-H", `Authorization: ${BEARER}`, "https://example.test"] },
-      { command: "mvn", args: ["test", `--password=${PASSWORD}`] },
+      { command: "mvn", args: ["test", `--password=${PASSWORD}`, `-Dapi.token=${PASSWORD}`] },
     ]);
     const text = JSON.stringify(preview);
     expect(text).not.toContain("abcdefghijklmnop1234567890");
     expect(text).not.toContain(PASSWORD);
-    expect(text).toContain("[REDACTED]");
-    expect(text).toContain("mvn test --password=");
+    expect(text).toContain("--password=[REDACTED]");
   });
 
   it("cuts a very long command visibly, within the contract bound", () => {
@@ -84,40 +134,52 @@ describe("verification approval preview", () => {
     expect(validReview(preview)).toBe(true);
   });
 
+  it("never splits a surrogate pair when it cuts", () => {
+    for (const max of [10, 11, 12]) {
+      const { text, cut } = cutVisibly("a".repeat(8) + "😀".repeat(10), max);
+      expect(cut).toBe(true);
+      expect(text.endsWith("…")).toBe(true);
+      expect(text).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
+      expect(text.length).toBeLessThanOrEqual(max);
+    }
+  });
+
   it("caps the number of lines and says the list is cut", () => {
-    const steps = Array.from(
+    const many = Array.from(
       { length: CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS + 3 },
-      (_, index) => ({ command: "npm", args: ["run", `s${String(index)}`] }),
+      (_, index) => ["npm", "run", `s${String(index)}`],
     );
-    const preview = previewFromSteps(steps);
+    const preview = previewFromSteps(many.map(([command = "", ...args]) => ({ command, args })));
     if (preview.status !== "commands") throw new TypeError("expected commands");
     expect(preview.commands).toHaveLength(CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS);
     expect(preview.truncated).toBe(true);
   });
 
-  it("names no command for a targeted test or an unresolved package, with a reason, never empty", () => {
-    expect(port({ kind: "steps", steps: [] })("targeted-test", RUN_ID)).toEqual({
+  it("names no command for a targeted test, an unresolved package or a Maven project, and says why", () => {
+    expect(fixture(steps()).port("targeted-test", RUN_ID, {})).toEqual({
       status: "deferred",
       reason: "targeted-test",
     });
-    expect(port({ kind: "package-selection-required" })("test", RUN_ID)).toEqual({
+    expect(
+      fixture({ kind: "package-selection-required", probeFailures: 0 }).port("test", RUN_ID, {}),
+    ).toEqual({ status: "deferred", reason: "package-selection" });
+    expect(fixture({ kind: "host-dependent", probeFailures: 0 }).port("test", RUN_ID, {})).toEqual({
       status: "deferred",
-      reason: "package-selection",
+      reason: "host-setup",
     });
     expect(validReview({ status: "commands", commands: [], truncated: false })).toBe(false);
   });
 
   it.each([
-    [{ kind: "unresolved" } as const, "workspace-unresolved"],
+    [{ kind: "unresolved", probeFailures: 0 } as const, "workspace-unresolved"],
+    [{ kind: "steps", steps: [], probeFailures: 0 } as const, "no-runnable-step"],
     [new VerificationRunnerError("PROJECT_NOT_FOUND", "gone /secret/path"), "workspace-unresolved"],
-    [{ kind: "steps", steps: [] } as const, "no-runnable-step"],
     [new Error(`boom ${BEARER} at /secret/path`), "preview-failed"],
   ])(
     "falls back to the class label with a closed reason and a body-free log line",
     (plan, reason) => {
-      const records: ServerDiagnosticRecord[] = [];
-      const preview = port(plan, records)("test", RUN_ID);
-      expect(preview).toEqual({ status: "unavailable", reason });
+      const { port, records } = fixture(plan);
+      expect(port("test", RUN_ID, {})).toEqual({ status: "unavailable", reason });
       expect(records).toHaveLength(1);
       expect(records[0]).toMatchObject({
         correlationId: RUN_ID,
@@ -131,9 +193,50 @@ describe("verification approval preview", () => {
     },
   );
 
+  it("logs a count of package folders the planning could not read, and nothing else", () => {
+    const { port, records } = fixture({
+      kind: "steps",
+      probeFailures: 2,
+      steps: [{ command: "npm", args: ["run", "test"] }],
+    });
+    port("test", RUN_ID, {});
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ errorClass: "package-probe-failed", code: "failures=2" });
+  });
+
   it("writes no log line when a command is shown, and never a command in any log", () => {
-    const records: ServerDiagnosticRecord[] = [];
-    port({ kind: "steps", steps: [{ command: "mvn", args: ["test"] }] }, records)("test", RUN_ID);
+    const { port, records } = fixture(steps(["mvn", "test"]));
+    port("test", RUN_ID, {});
     expect(records).toEqual([]);
+  });
+
+  describe("binds the approval to the plan it showed (ADR-0124 D6)", () => {
+    it("binds the digest of the planned steps to the ask's tool call", () => {
+      const planned = steps(["npm", "run", "test"]);
+      const { port, bound } = fixture(planned);
+      port("test", RUN_ID, { actionId: "session:call-1" });
+      expect(bound).toEqual([
+        [
+          RUN_ID,
+          "session:call-1",
+          verificationPlanDigest(planned.kind === "steps" ? planned.steps : []),
+        ],
+      ]);
+    });
+
+    it("binds nothing when no command is shown", () => {
+      const { port, bound } = fixture({ kind: "host-dependent", probeFailures: 0 });
+      port("test", RUN_ID, { actionId: "session:call-1" });
+      expect(bound).toEqual([]);
+    });
+
+    it("digests command, arguments, folder and script body, so a rewritten script changes it", () => {
+      const base = { command: "npm", args: ["run", "test"], scriptName: "test" };
+      const digest = (scriptBody: string, cwd?: string): string =>
+        verificationPlanDigest([{ ...base, scriptBody, ...(cwd === undefined ? {} : { cwd }) }]);
+      expect(digest("vitest run")).toBe(digest("vitest run"));
+      expect(digest("vitest run")).not.toBe(digest("rm -rf / && vitest run"));
+      expect(digest("vitest run")).not.toBe(digest("vitest run", "packages/a"));
+    });
   });
 });

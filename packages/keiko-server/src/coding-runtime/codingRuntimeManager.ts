@@ -308,7 +308,13 @@ export type CodingRuntimeApprovalIssueResult =
 /** Maps a verifier id and the run's correlation id to the approval card's preview. */
 export type CodingVerificationPreviewPort = (
   verifierId: string,
-  correlationId: string,
+  runId: string,
+  ask: {
+    /** The ask's own tool call, which a shown command is bound to. */
+    readonly actionId?: string | undefined;
+    /** The package folder the ask named; absent means the workspace root. */
+    readonly packageDir?: string | undefined;
+  },
 ) => CodingWorkbenchVerificationPreview;
 
 export interface CodingRuntimeManagerDeps {
@@ -3477,7 +3483,10 @@ function verificationReviewFacts(
   if (port === undefined || event.commandLabel === undefined) return undefined;
   return {
     requestId: event.requestId,
-    verificationPreview: port(event.commandLabel, active.context.runId),
+    verificationPreview: port(event.commandLabel, active.context.runId, {
+      actionId: event.actionId,
+      packageDir: event.packageDir,
+    }),
     paths: [],
     pathsTruncated: false,
     fileCount: 0,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CodingWorkbenchVerificationPreview } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
@@ -6,28 +7,31 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { redact, redactContent } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type {
   VerificationCommandPreview,
+  VerificationPreviewInput,
   VerificationPreviewStep,
 } from "../editor/verificationRunner.js";
-import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
 import type { CodingVerificationPreviewPort } from "./codingRuntimeManager.js";
+import { redactCommandLineCredentials } from "./commandLineRedaction.js";
 
 /** The verifier ids whose command lines come from the project's own scripts. */
 const SCRIPT_VERIFIERS = ["test", "typecheck", "lint", "build"] as const;
 type ScriptVerifier = (typeof SCRIPT_VERIFIERS)[number];
 
 const ELLIPSIS = "…";
+/** The script body shown beside `npm run x`; the whole step line is cut again at the line bound. */
+const SCRIPT_BODY_MAX_CHARS = 400;
 
 export interface VerificationApprovalPreviewInput {
   /** The run's workspace root: the project the governed verification would run in. */
   readonly workspaceRoot: string;
   readonly runner: {
-    readonly previewCommands: (input: {
-      readonly projectId: string;
-      readonly kinds: readonly ScriptVerifier[];
-    }) => VerificationCommandPreview;
+    readonly previewCommands: (input: VerificationPreviewInput) => VerificationCommandPreview;
   };
+  /** Remembers the digest of what the person is shown, for the run to compare (ADR-0124 D6). */
+  readonly bindPlan?: ((runId: string, actionId: string, planDigest: string) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly now?: (() => Date) | undefined;
 }
@@ -41,25 +45,49 @@ function shellWord(word: string): string {
   return /^[\w@%+=:,./-]+$/u.test(word) ? word : JSON.stringify(word);
 }
 
-function commandLine(step: VerificationPreviewStep): string {
-  const line = [step.command, ...step.args].map(shellWord).join(" ");
-  return step.cwd === undefined ? line : `${line}  (in ${step.cwd})`;
+/**
+ * The digest of what a plan runs: command, arguments, folder and script body of every step, in order. The
+ * approval card's preview and the run's own re-plan both digest through here.
+ */
+export function verificationPlanDigest(steps: readonly VerificationPreviewStep[]): string {
+  // The script body is part of what runs: `npm run test` is the same words for any body.
+  const canonical = steps.map((step) => [
+    step.command,
+    [...step.args],
+    step.cwd ?? null,
+    step.scriptBody ?? null,
+  ]);
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
 }
 
 /**
- * The person reads this line, so it loses only the credential floor (owner decision 2026-11-04);
- * the strict projection then masks the flag shapes the floor leaves (`--password=`, `--token=`).
- * Both are the existing redactors. Never evidence: the preview lives on the review channel only.
+ * The person reads this text, so it loses only the credential floor (owner decision 2026-11-04);
+ * the credential-named options are masked first, and the strict projection then covers the shapes
+ * left. Never evidence: the preview lives on the review channel only.
  */
-function projectLine(line: string): string {
-  return redact(redactContent(line, "preserve"));
+function projectText(text: string): string {
+  return redact(redactContent(redactCommandLineCredentials(text), "preserve"));
 }
 
-function cutVisibly(line: string): { readonly text: string; readonly cut: boolean } {
-  const max = CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS;
-  return line.length <= max
-    ? { text: line, cut: false }
-    : { text: `${line.slice(0, max - ELLIPSIS.length)}${ELLIPSIS}`, cut: true };
+/** Cuts at a code point, never inside a surrogate pair, and ends the cut text in an ellipsis. */
+export function cutVisibly(
+  text: string,
+  max: number,
+): { readonly text: string; readonly cut: boolean } {
+  if (text.length <= max) return { text, cut: false };
+  let end = max - ELLIPSIS.length;
+  const last = text.charCodeAt(end - 1);
+  // A high surrogate at the cut has lost its low half: drop it with it.
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return { text: `${text.slice(0, end)}${ELLIPSIS}`, cut: true };
+}
+
+function stepText(step: VerificationPreviewStep): string {
+  const line = [step.command, ...step.args].map(shellWord).join(" ");
+  const where = step.cwd === undefined ? line : `${line}  (in ${step.cwd})`;
+  if (step.scriptName === undefined || step.scriptBody === undefined) return where;
+  const body = cutVisibly(step.scriptBody, SCRIPT_BODY_MAX_CHARS).text;
+  return `${where}\n  runs the project's own "${step.scriptName}" script: ${body}`;
 }
 
 /** Pure projection of a planned set of steps into the card's bounded, redacted lines. */
@@ -68,7 +96,12 @@ export function previewFromSteps(
 ): CodingWorkbenchVerificationPreview {
   if (steps.length === 0) return { status: "unavailable", reason: "no-runnable-step" };
   const kept = steps.slice(0, CODING_WORKBENCH_VERIFICATION_PREVIEW_MAX_COMMANDS);
-  const lines = kept.map((step) => cutVisibly(projectLine(commandLine(step))));
+  const lines = kept.map((step) =>
+    cutVisibly(
+      projectText(stepText(step)),
+      CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
+    ),
+  );
   return {
     status: "commands",
     commands: lines.map((line) => line.text),
@@ -82,6 +115,8 @@ function previewFromPlan(plan: VerificationCommandPreview): CodingWorkbenchVerif
       return previewFromSteps(plan.steps);
     case "package-selection-required":
       return { status: "deferred", reason: "package-selection" };
+    case "host-dependent":
+      return { status: "deferred", reason: "host-setup" };
     case "unresolved":
       return { status: "unavailable", reason: "workspace-unresolved" };
   }
@@ -93,43 +128,66 @@ function failureReason(error: unknown): CodingWorkbenchVerificationPreviewUnavai
     : "preview-failed";
 }
 
-function reportUnavailable(
+function reportPreview(
   input: VerificationApprovalPreviewInput,
   correlationId: string,
-  reason: CodingWorkbenchVerificationPreviewUnavailableReason,
+  errorClass: string,
+  code?: string,
 ): void {
-  // Body-free: a closed reason and the run's correlation id; never a command line or a path.
+  // Body-free: a closed reason, a count and the run's correlation id; never a command or a path.
   emitServerDiagnostic(input.diagnostics, {
     correlationId,
     timestamp: (input.now?.() ?? new Date()).toISOString(),
     operation: "coding-runtime.approval",
     source: "verification-approval-preview",
-    errorClass: reason,
+    errorClass,
     message: "approval-preview-unavailable",
+    ...(code === undefined ? {} : { code }),
   });
 }
 
 /**
- * Builds the preview the approval card shows for a pending governed verification (ADR-0124 D6). A
- * targeted test and an unresolved monorepo package name no command yet and say so; a failing or
- * empty plan falls back to the class label with a closed, logged reason.
+ * Builds the preview the approval card shows for a pending governed verification (ADR-0124 D6). The
+ * ask names the verifier and the package folder the call asked for, so the plan is the one the
+ * runner will make. A targeted test, an unresolved package and a Maven project (whether Maven runs
+ * depends on this computer's isolation backend) name no command and say so; a failing or empty plan
+ * falls back to the class label with a closed, logged reason. A shown command binds its digest to
+ * the ask's tool call, so the run refuses a project that changed after approval.
  */
 export function createVerificationApprovalPreview(
   input: VerificationApprovalPreviewInput,
 ): CodingVerificationPreviewPort {
-  return (verifierId, correlationId): CodingWorkbenchVerificationPreview => {
+  return (verifierId, runId, ask): CodingWorkbenchVerificationPreview => {
     if (!isScriptVerifier(verifierId)) return { status: "deferred", reason: "targeted-test" };
-    let preview: CodingWorkbenchVerificationPreview;
+    let plan: VerificationCommandPreview;
     try {
-      preview = previewFromPlan(
-        input.runner.previewCommands({ projectId: input.workspaceRoot, kinds: [verifierId] }),
-      );
+      plan = input.runner.previewCommands({
+        projectId: input.workspaceRoot,
+        kinds: [verifierId],
+        ...(ask.packageDir === undefined ? {} : { packageDir: ask.packageDir }),
+      });
     } catch (error) {
-      preview = { status: "unavailable", reason: failureReason(error) };
-      reportUnavailable(input, correlationId, preview.reason);
-      return preview;
+      const reason = failureReason(error);
+      reportPreview(input, runId, reason);
+      return { status: "unavailable", reason };
     }
-    if (preview.status === "unavailable") reportUnavailable(input, correlationId, preview.reason);
-    return preview;
+    return previewOf(input, runId, ask.actionId, plan);
   };
+}
+
+function previewOf(
+  input: VerificationApprovalPreviewInput,
+  runId: string,
+  actionId: string | undefined,
+  plan: VerificationCommandPreview,
+): CodingWorkbenchVerificationPreview {
+  const failures = plan.probeFailures;
+  if (failures > 0)
+    reportPreview(input, runId, "package-probe-failed", `failures=${String(failures)}`);
+  const preview = previewFromPlan(plan);
+  if (preview.status === "unavailable") reportPreview(input, runId, preview.reason);
+  if (plan.kind === "steps" && preview.status === "commands" && actionId !== undefined) {
+    input.bindPlan?.(runId, actionId, verificationPlanDigest(plan.steps));
+  }
+  return preview;
 }

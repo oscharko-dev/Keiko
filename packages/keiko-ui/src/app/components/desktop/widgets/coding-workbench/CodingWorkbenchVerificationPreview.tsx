@@ -11,6 +11,7 @@ import styles from "./CodingWorkbenchWindow.module.css";
 const DEFERRED_KEYS = {
   "targeted-test": "codingWorkbench.approval.verification.deferred.targeted-test",
   "package-selection": "codingWorkbench.approval.verification.deferred.package-selection",
+  "host-setup": "codingWorkbench.approval.verification.deferred.host-setup",
 } as const satisfies Record<string, CodingWorkbenchMessageKey>;
 
 function noteKey(
@@ -40,10 +41,8 @@ export function CodingWorkbenchVerificationPreviewReview({
   const preview = state.review?.verificationPreview;
   const note = noteKey(state, preview);
   return (
-    <fieldset
-      className={styles.approvalResearch}
-      aria-label={t("codingWorkbench.approval.verification.title")}
-    >
+    <fieldset className={styles.approvalResearch}>
+      <legend className="sr-only">{t("codingWorkbench.approval.verification.title")}</legend>
       {preview?.status === "commands" ? (
         <>
           <ul

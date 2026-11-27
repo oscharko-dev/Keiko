@@ -1185,6 +1185,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko runs the tests for the changed file after you approve.",
   "codingWorkbench.approval.verification.deferred.package-selection":
     "Keiko picks the package's test command after you approve.",
+  "codingWorkbench.approval.verification.deferred.host-setup":
+    "What this runs depends on how this computer is set up; Keiko decides after you approve.",
   "codingWorkbench.approval.verification.unavailable":
     "Keiko could not look up the command, so only the kind of check is shown.",
   "codingWorkbench.approval.native.title": "What the agent wants to do",
