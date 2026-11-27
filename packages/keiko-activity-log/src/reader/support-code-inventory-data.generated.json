@@ -3853,6 +3853,7 @@
     "GitPublishArgvError",
     "GitRawWorktreeReadError",
     "GitRouteReadError",
+    "GitSigningReadError",
     "GitSnapshotReadError",
     "GitSnapshotUnavailableError",
     "GitWorktreeOperandError",
