@@ -488,7 +488,12 @@ const CODING_RUNTIME_APPROVAL_RETIRED_OPERATION = defineActivityLogOperation({
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     revision: { type: "integer", dataClass: "count", required: true },
     requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    reason: { type: "string", dataClass: "closed-enum", required: true, values: ["expired"] },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["expired", "queue-full"],
+    },
     replaced: { type: "boolean", dataClass: "closed-enum", required: true },
   },
   causal: "correlation",
@@ -1629,12 +1634,13 @@ function recordRuntimeApprovalRetired(
   revision: number,
   requestId: string,
   replaced: boolean,
+  reason: "expired" | "queue-full" = "expired",
 ): void {
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_APPROVAL_RETIRED_OPERATION,
       { correlationId: runtimeDiagnosticCorrelationId(runId) },
-      { runId, revision, requestId, reason: "expired", replaced },
+      { runId, revision, requestId, reason, replaced },
     ),
   );
 }
@@ -3494,7 +3500,7 @@ export class CodingRuntimeOrchestrator {
       return this.fail("invalid-intent");
     }
     if (queued.length >= MAX_QUEUED_APPROVALS_PER_RUN) {
-      return this.stopAfterApprovalFailure(current);
+      return await this.refuseOverflowApproval(current, challenge);
     }
     queued.push(challenge);
     this.queuedApprovals.set(current.runId, queued);
@@ -3506,6 +3512,30 @@ export class CodingRuntimeOrchestrator {
       queued.length,
     );
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+  }
+
+  // The queue bound protects memory only: the one ask past it is refused as a denial the model
+  // reads like any rejected step, and the healthy run keeps going. Only a refusal that cannot be
+  // settled with the runtime fails closed, as every other unsettled decision does.
+  private async refuseOverflowApproval(
+    current: CodingRuntimeSnapshot,
+    challenge: ApprovalChallenge,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const { requestId, actionKind } = challenge.permission;
+    if (actionKind !== undefined) this.declineServerRaisedAsk(current.runId, challenge, actionKind);
+    const settled = await this.resolveRuntimePermission(current.runId, requestId, "denied");
+    const live = this.current();
+    if (live?.runId !== current.runId) return this.fail("invalid-intent");
+    if (!settled) return this.stopAfterApprovalFailure(live);
+    recordRuntimeApprovalRetired(
+      this.deps.activityLog,
+      live.runId,
+      live.revision,
+      requestId,
+      false,
+      "queue-full",
+    );
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(live) };
   }
 
   private promoteQueuedApproval(current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult {

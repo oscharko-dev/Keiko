@@ -2367,6 +2367,79 @@ describe("coding runtime manager", () => {
     expect(manager.health()).toEqual({ status: "stopped" });
   });
 
+  it.each(["revokeRuntime", "abortInFlightActions"] as const)(
+    "names the %s step in a body-free diagnostic when it throws and still terminates",
+    async (failingStep) => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      const diagnostics = { record: vi.fn() };
+      const throwing = (): never => {
+        throw new TypeError("SENTINEL_STEP_BODY");
+      };
+      const manager = createProductionCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
+        processEnv: {},
+        diagnostics,
+        revokeRuntime: failingStep === "revokeRuntime" ? throwing : (): true => true,
+        abortInFlightActions: failingStep === "abortInFlightActions" ? throwing : (): true => true,
+        markRuntimeRecoveryRequired: (): true => true,
+        releaseRuntimeAfterReap: (): true => true,
+        portableRuntimeResolver: () => ({
+          verification: portable.verification,
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+        }),
+      });
+
+      expect(
+        await manager.start(
+          launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        ),
+      ).toMatchObject({ ok: true });
+      await expect(manager.stop("run-1988")).resolves.toMatchObject({ ok: false });
+      expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          correlationId: "run-1988",
+          operation: "coding-runtime.lifecycle-step",
+          errorClass: "TypeError",
+          code: `step=${failingStep === "revokeRuntime" ? "revoke-runtime" : "abort-in-flight-actions"}`,
+        }),
+      );
+      expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("SENTINEL_STEP_BODY");
+    },
+  );
+
+  it("names the egress qualification step in a body-free diagnostic when it throws", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn() };
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      diagnostics,
+      supervisor: testSupervisor(harness.spawn),
+      codexLifecycleAdapter: qualifiedCodexAdapter(),
+      qualifyCodexEgress: () => {
+        throw new TypeError("SENTINEL_EGRESS_BODY");
+      },
+    });
+
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "coding-runtime.lifecycle-step",
+        errorClass: "TypeError",
+        code: "step=qualify-codex-egress",
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("SENTINEL_EGRESS_BODY");
+  });
+
   it("fails closed but still terminates when the mandatory revocation barrier denies", async () => {
     const fixture = createManagedFixture();
     const portable = createPortableRuntimeFixture();

@@ -1129,6 +1129,7 @@ describe("production coding runtime turn ports", () => {
 
   it("aborts the run signal even when backend interruption rejects", async () => {
     const controller = new AbortController();
+    const diagnostics: ServerDiagnosticRecord[] = [];
     const dispatcher = createProductionRuntimeTaskDispatcher(
       new Map([
         [
@@ -1144,12 +1145,17 @@ describe("production coding runtime turn ports", () => {
           },
         ],
       ]),
+      { record: (diagnostic): void => void diagnostics.push(diagnostic) },
     );
 
     await expect(
       dispatcher.abort({ runId: "run-failed-abort", requestId: "abort-1", expectedRevision: 1 }),
     ).resolves.toBe(false);
     expect(controller.signal.aborted).toBe(true);
+    expect(diagnostics).toMatchObject([
+      { correlationId: "run-failed-abort", code: "stage=dispatch:reason=abort-exception" },
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("private backend failure");
   });
 
   it("releases a rejected adapter attempt for retry at the unchanged revision", async () => {

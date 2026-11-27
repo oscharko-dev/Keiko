@@ -10119,7 +10119,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["expired"],
+        values: ["expired", "queue-full"],
       },
       replaced: {
         type: "boolean",

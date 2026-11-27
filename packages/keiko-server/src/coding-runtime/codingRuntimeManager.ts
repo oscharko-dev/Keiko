@@ -1543,7 +1543,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     let barrierComplete = true;
     try {
       if (!(await this.deps.revokeRuntime(active.context.runId))) barrierComplete = false;
-    } catch {
+    } catch (error) {
+      recordLaunchStepFailure(this.deps, active.context.runId, "revoke-runtime", error);
       barrierComplete = false;
     }
     const supervisedApprovalsInvalidated = invalidateApprovalBarrier(
@@ -1571,7 +1572,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     try {
       if (!(await this.deps.abortInFlightActions(active.context.runId))) barrierComplete = false;
-    } catch {
+    } catch (error) {
+      recordLaunchStepFailure(this.deps, active.context.runId, "abort-in-flight-actions", error);
       barrierComplete = false;
     }
     if (!this.disposeLifecycleMonitor(active)) barrierComplete = false;
@@ -2887,16 +2889,38 @@ function validatePreparedCodexStateRoot(
 
 function qualifyCodexEgress(
   request: CodingRuntimeLaunchRequest,
-  deps: Pick<NormalizedCodingRuntimeManagerDeps, "qualifyCodexEgress">,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "qualifyCodexEgress" | "diagnostics" | "now">,
 ): { readonly ok: true; readonly value: ReviewedCodexEgressPolicy } | FailureResult {
   try {
     const policy = deps.qualifyCodexEgress?.(request);
     return policy !== undefined && validCodexEgressPolicy(policy)
       ? { ok: true, value: policy }
       : failure("egress-unqualified", false);
-  } catch {
+  } catch (error) {
+    recordLaunchStepFailure(deps, request.runId, "qualify-codex-egress", error);
     return failure("egress-unqualified", false);
   }
+}
+
+/** The step of a launch or shutdown that threw, body-free, so the refusal it caused is explained. */
+function recordLaunchStepFailure(
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "diagnostics" | "now">,
+  runId: string,
+  step: "revoke-runtime" | "abort-in-flight-actions" | "qualify-codex-egress",
+  error: unknown,
+): void {
+  const detail = describeError(error);
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(deps.now()).toISOString(),
+    operation: "coding-runtime.lifecycle-step",
+    source: "coding-runtime-manager.lifecycle-step",
+    errorClass: contentFreeErrorClass(error),
+    message: "server-operation-failed",
+    code: `step=${step}`,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
 }
 
 function validCodexEgressPolicy(policy: ReviewedCodexEgressPolicy): boolean {

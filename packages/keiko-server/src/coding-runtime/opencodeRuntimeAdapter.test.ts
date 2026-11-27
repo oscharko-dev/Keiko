@@ -1716,6 +1716,36 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(failures).toEqual([]);
   });
 
+  it("records the cause of a reconciliation that throws, body-free, under the run's correlation", async () => {
+    const harness = readinessPorts();
+    const records: ServerDiagnosticRecord[] = [];
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      correlationId: "run-reconcile-1",
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>
+      Promise.reject(new Error("SENTINEL_HISTORY_BODY"));
+
+    await expect(adapter.reconcile()).resolves.toEqual({
+      ok: false,
+      phase: "sse-history-reconciliation",
+      reason: "readiness-failed",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-reconcile-1",
+        operation: "coding-runtime.monitor",
+        source: "opencode.reconcile",
+        code: "stage=reconcile:reason=history-reconcile-failed",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("SENTINEL_HISTORY_BODY");
+    await adapter.close();
+  });
+
   it("records each reconnect decision as a body-free diagnostic under the run's correlation", async () => {
     const harness = readinessPorts();
     failStreamAfterReady(harness);

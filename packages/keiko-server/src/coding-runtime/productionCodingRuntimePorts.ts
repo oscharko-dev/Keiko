@@ -792,7 +792,7 @@ export function createProductionRuntimeTaskDispatcher(
   return {
     dispatch: (request) => dispatchRuntimeTask(runs, request, diagnostics),
     replace: (request) => replaceRuntimeTask(runs, request, diagnostics),
-    abort: (request) => abortRuntimeTask(runs, request),
+    abort: (request) => abortRuntimeTask(runs, request, diagnostics),
     deliver: (request) => deliverRuntimePrompt(runs, request, diagnostics),
     commands: (runId, correlationId) =>
       runs.get(runId)?.turnPort.listCommands?.(runId, correlationId) ?? Promise.resolve(undefined),
@@ -1216,7 +1216,7 @@ type ReplacementFailureReason =
  * the inputs its prompt carries (a delivery, referenced files) are refused.
  */
 type RuntimeDispatchFailureReason =
-  ReplacementFailureReason | "agent-unsupported" | "inputs-refused";
+  ReplacementFailureReason | "abort-exception" | "agent-unsupported" | "inputs-refused";
 
 function recordRuntimeDispatchFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1423,6 +1423,7 @@ function inboxRuntimeAction(
 async function abortRuntimeTask(
   runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
   request: CodingRuntimeRunOperation,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<boolean> {
   const record = runs.get(request.runId);
   const reservation = record?.operationGuard.reserve(request);
@@ -1434,7 +1435,8 @@ async function abortRuntimeTask(
       return false;
     }
     return reservation.commit();
-  } catch {
+  } catch (error) {
+    recordRuntimeDispatchFailure(diagnostics, request.runId, "abort-exception", error);
     reservation.release();
     return false;
   } finally {

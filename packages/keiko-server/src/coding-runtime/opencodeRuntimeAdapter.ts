@@ -550,7 +550,8 @@ export function createOpenCodeRuntimeAdapter(
     try {
       const reconciled = await reconcileHistory(ports, state, new AbortController().signal);
       return reconciled ? ready : fail("sse-history-reconciliation");
-    } catch {
+    } catch (error) {
+      recordReconcileFailure(ports, error);
       return fail("sse-history-reconciliation");
     }
   };
@@ -1333,6 +1334,24 @@ function recordTurnPollFailure(
     errorClass,
     message: "runtime-lifecycle-failed",
     code: `stage=turn-poll:reason=status-failed:streak=${String(streak)}`,
+    frames,
+    causeChain,
+  });
+}
+
+function recordReconcileFailure(
+  ports: Pick<OpenCodeRuntimeAdapterPorts, "diagnostics" | "correlationId">,
+  cause: unknown,
+): void {
+  const { errorClass, frames, causeChain } = describeError(cause);
+  emitServerDiagnostic(ports.diagnostics, {
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.monitor",
+    source: "opencode.reconcile",
+    errorClass,
+    message: "runtime-lifecycle-failed",
+    code: "stage=reconcile:reason=history-reconcile-failed",
     frames,
     causeChain,
   });

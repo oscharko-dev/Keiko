@@ -4405,8 +4405,9 @@ describe("CodingRuntimeOrchestrator", () => {
     ).toMatchObject({ queuePosition: 1 });
   });
 
-  it("preserves the active challenge on duplicates and contains queue overflow", async () => {
-    const f = fixture();
+  it("preserves the active challenge on duplicates and refuses only the ask past the queue bound", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
     await f.orchestrator.start(start);
     await f.orchestrator.ingest(verificationPermission("permission-1"));
     expect(await f.orchestrator.ingest(verificationPermission("permission-1"))).toEqual({
@@ -4419,15 +4420,25 @@ describe("CodingRuntimeOrchestrator", () => {
         (await f.orchestrator.ingest(verificationPermission(`permission-${String(index + 2)}`))).ok,
       ).toBe(true);
     }
-    expect(
-      await f.orchestrator.ingest(
-        verificationPermission(`permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`),
-      ),
-    ).toMatchObject({
+    const overflowId = `permission-${String(MAX_QUEUED_APPROVALS_PER_RUN + 2)}`;
+    expect(await f.orchestrator.ingest(verificationPermission(overflowId))).toMatchObject({
       ok: true,
-      snapshot: { state: "failed", failureCode: "authority-resolution-failed" },
+      snapshot: { state: "awaiting-approval" },
     });
-    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: overflowId,
+      decision: "denied",
+    });
+    expect(
+      captured.records.find((event) => event.op === "coding-runtime.approval.retired"),
+    ).toMatchObject({
+      correlationId: captured.records.find(
+        (event) => event.op === "coding-runtime.approval.waiting",
+      )?.correlationId,
+      extra: { runId: "run-1", requestId: overflowId, reason: "queue-full", replaced: false },
+    });
   });
 
   // Relocated pin (PR #3625 review): an expired queued ask is still never exposed as an undecidable

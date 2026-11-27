@@ -1307,7 +1307,7 @@ function createRunPort(
     diagnostics,
     activityLog,
   );
-  const abortTask = createAbortTask(readyRun, activityLog, withdrawPendingInbox);
+  const abortTask = createAbortTask(readyRun, diagnostics, activityLog, withdrawPendingInbox);
   return {
     submitTask: createSubmitTask(
       readyRun,
@@ -1853,6 +1853,7 @@ async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
 
 function createAbortTask(
   readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
   withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"],
 ): OpenCodeRunPort["abortTask"] {
@@ -1883,7 +1884,8 @@ function createAbortTask(
         run.runtimeAdapter.cancelTurn();
       }
       return stopped.settled && run.ready;
-    } catch {
+    } catch (error) {
+      recordCompositionDisposalFailure(diagnostics, runId, "task-abort", error);
       run.runtimeAdapter.cancelTurn();
       return false;
     } finally {
@@ -2072,7 +2074,13 @@ function currentDisposal(
 function recordCompositionDisposalFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
-  operation: "prepare-bridge-close" | "prepare-run-root-remove" | "run-dispose",
+  operation:
+    | "prepare-bridge-close"
+    | "prepare-run-root-remove"
+    | "run-dispose"
+    | "task-abort"
+    | "handshake"
+    | "handshake-adapter-close",
   error: unknown,
 ): void {
   const detail = describeError(error);
@@ -2082,7 +2090,10 @@ function recordCompositionDisposalFailure(
     operation: "coding-runtime.opencode-composition",
     source: `opencode-runtime-composition.${operation}`,
     errorClass: contentFreeErrorClass(error),
-    message: operation === "run-dispose" ? "server-operation-failed" : operation,
+    message:
+      operation === "prepare-bridge-close" || operation === "prepare-run-root-remove"
+        ? operation
+        : "server-operation-failed",
     code: operation,
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
@@ -2876,6 +2887,9 @@ async function handshake(
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
   run.onPermission = request.onPermission;
+  // Held outside the try so a throw after `start()` succeeded still closes it: its event
+  // subscription and reconnect loop would otherwise outlive the failed handshake.
+  let adapter: ReturnType<typeof createOpenCodeRuntimeAdapter> | undefined;
   try {
     const endpoint = parseOpenCodeV2ChildEndpoint(
       await request.startupOutput.nextLine(request.signal),
@@ -2887,7 +2901,7 @@ async function handshake(
       fetch: input.fetch,
       timeoutMs: request.timeoutMs,
     });
-    const adapter = createOpenCodeRuntimeAdapter({
+    adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
       maxTurnWaitMs: input.maxTurnWaitMs,
       contextGeometry: input.contextGeometry,
@@ -2930,8 +2944,22 @@ async function handshake(
     run.ready = true;
     run.revertReady = true;
     return { ok: true };
-  } catch {
+  } catch (error) {
+    recordCompositionDisposalFailure(input.diagnostics, request.runId, "handshake", error);
+    await closeFailedHandshakeAdapter(input.diagnostics, request.runId, adapter);
     return { ok: false, reason: "readiness-failed" };
+  }
+}
+
+async function closeFailedHandshakeAdapter(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  adapter: { readonly close: () => Promise<void> } | undefined,
+): Promise<void> {
+  try {
+    await adapter?.close();
+  } catch (error) {
+    recordCompositionDisposalFailure(diagnostics, runId, "handshake-adapter-close", error);
   }
 }
 

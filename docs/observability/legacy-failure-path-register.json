@@ -2337,12 +2337,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "CodingRuntimeManagerImpl.runShutdownBarrier",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "CodingRuntimeManagerImpl.startLifecycleMonitor",
       "kind": "unregistered-catch",
       "count": 1
@@ -2374,12 +2368,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
       "owner": "proveSpawnWorkspaceRoot",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts",
-      "owner": "qualifyCodexEgress",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2619,12 +2607,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
-      "owner": "reconcile",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
       "owner": "runCleanup",
       "kind": "unregistered-catch",
       "count": 1
@@ -2638,18 +2620,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "configMaterialized",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "createAbortTask",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "handshake",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2692,12 +2662,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePermissionPort.ts",
       "owner": "resolveRuntimePermission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
-      "owner": "abortRuntimeTask",
       "kind": "unregistered-catch",
       "count": 1
     },

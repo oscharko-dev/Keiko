@@ -894,6 +894,8 @@ interface StartBridgeControl {
       staged: unknown;
     };
     readonly abortSessions: string[];
+    /** When set, `POST .../interrupt` answers this failing status instead of settling. */
+    readonly interruptFailureStatus?: number;
     readonly statusResponses: unknown[];
     /** What `GET /api/shell` lists (#3901 AC3); absent lists no running job. */
     readonly shellResponses?: () => unknown[];
@@ -1581,8 +1583,16 @@ async function startBridgeFixture(
       );
     }
     if (path.endsWith("/interrupt")) {
-      if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
+      const readiness = readinessChallengePhase === "prompt-pending";
+      if (readiness) readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
+      if (!readiness && control?.runControl?.interruptFailureStatus !== undefined) {
+        return Promise.resolve(
+          new Response("SENTINEL_INTERRUPT_BODY", {
+            status: control.runControl.interruptFailureStatus,
+          }),
+        );
+      }
       return Promise.resolve(v2Envelope({}));
     }
     // #3901 AC3: the background shell jobs the runtime lists; none unless the control names some.
@@ -3270,6 +3280,86 @@ describe("private OpenCode run control", () => {
       runControl.statusResponses.push({});
       await expect(aborting).resolves.toBe(true);
       await expect(terminal).resolves.toBe(true);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records a body-free diagnostic when the interrupt of a stopping task throws", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const runControl = {
+      promptBodies: [] as string[],
+      abortSessions: [] as string[],
+      interruptFailureStatus: 500,
+      statusResponses: [{}, { ses_tool: { type: "busy" } }] as unknown[],
+    };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl,
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope(completedTurnHistory().slice(0, 1).reverse())),
+    });
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded abort task"),
+      ).resolves.toBe(true);
+      await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(false);
+      expect(records).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode-runtime-composition.task-abort",
+          message: "server-operation-failed",
+          code: "task-abort",
+        }),
+      ]);
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_INTERRUPT_BODY");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("closes the adapter and records the cause when the handshake throws after the adapter started", async () => {
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let sseCancellations = 0;
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        safeActivity: {
+          arm: (): void => {
+            throw new Error("SENTINEL_ARM_BODY");
+          },
+          clear: vi.fn(),
+          ingest: () => true,
+          recordDrops: vi.fn(),
+          settleTool: vi.fn(),
+        },
+        onSseCancel: (): void => {
+          sseCancellations += 1;
+        },
+      },
+    );
+    try {
+      expect(sseCancellations).toBe(1);
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode-runtime-composition.handshake",
+        }),
+      );
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_ARM_BODY");
     } finally {
       await fixture.stop();
     }
