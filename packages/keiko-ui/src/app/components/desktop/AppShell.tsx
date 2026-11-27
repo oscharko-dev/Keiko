@@ -53,7 +53,6 @@ import {
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   totalSourceCap,
-  panelIsBehindAnotherWindow,
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
 import {
@@ -97,7 +96,12 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
-import type { ChatBindingTarget, ChatUnbindTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type {
+  ChatBindingTarget,
+  ChatUnbindTarget,
+  ToolToggleOutcome,
+  WorkspaceApi,
+} from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
@@ -491,19 +495,19 @@ function openShellTool(
   opensProjectGit: boolean,
   searchRoot: string | undefined,
   projectRoot: string | undefined,
-): void {
+): ToolToggleOutcome {
   if (opensSearch) {
     openOrFocusSearchWindow(api, searchRoot);
-    return;
+    return "open";
   }
   if (opensProjectGit) {
     api.add("governedGit", {
       projectPath: projectRoot,
       rootBinding: projectRoot === undefined ? undefined : "coding-repository",
     });
-    return;
+    return "open";
   }
-  api.toggleTool(panel);
+  return api.toggleTool(panel);
 }
 
 // GEN-PERF-WORKSPACE-008 — cheap signature of exactly the window fields the
@@ -3120,10 +3124,17 @@ function AppShellInner(): ReactNode {
           ? panelBindingRoot(ws.wins, "governedGit")
           : reopenGitRoot(rememberedGitRoot.current, sessionProjects, startingRoot);
       }
-      openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
+      const outcome = openShellTool(
+        ws.api,
+        panel,
+        opensSearch,
+        opensProjectGit,
+        searchRoot,
+        projectRoot,
+      );
       // An open window behind another one is only raised: nothing opened or closed, so there is
       // nothing for undo to reverse.
-      pushPanelToggleUnlessRaised(undoStack, panelIsBehindAnotherWindow(ws.wins, panel), {
+      pushPanelToggleUnlessRaised(undoStack, outcome === "raise", {
         kind: "ui.panel.toggle",
         panel,
         before,

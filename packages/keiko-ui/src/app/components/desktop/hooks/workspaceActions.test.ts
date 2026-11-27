@@ -46,7 +46,7 @@ import {
   hasOtherFilesScopeOwner,
   restoredConnectionScope,
   toggleWorkspaceSelection,
-  panelIsBehindAnotherWindow,
+  classifyToolToggle,
   totalSourceCap,
 } from "./workspaceActions";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
@@ -2618,15 +2618,42 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     expect(wins?.find((w) => w.id === "governedGit")?.minimized).not.toBe(true);
   });
 
-  it("reports only an open window beneath a visible one as behind another window", () => {
+  it("classifies a launcher click from one list: open, restore, raise or minimize", () => {
     const back = { ...win("governedGit", {}, "governedGit"), z: 1 };
     const front = { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 };
-    expect(panelIsBehindAnotherWindow([back, front], "governedGit")).toBe(true);
-    expect(panelIsBehindAnotherWindow([back, front], "chat")).toBe(false);
-    expect(panelIsBehindAnotherWindow([{ ...back, minimized: true }, front], "governedGit")).toBe(
-      false,
+    expect(classifyToolToggle([back, front], "governedGit")).toBe("raise");
+    expect(classifyToolToggle([back, front], "chat")).toBe("minimize");
+    expect(classifyToolToggle([{ ...back, minimized: true }, front], "governedGit")).toBe(
+      "restore",
     );
-    expect(panelIsBehindAnotherWindow(null, "governedGit")).toBe(false);
+    expect(classifyToolToggle(null, "governedGit")).toBe("open");
+    // A z tie is never frontmost, so the click raises rather than closing.
+    expect(classifyToolToggle([back, { ...front, z: 1 }], "governedGit")).toBe("raise");
+  });
+
+  it("setToolOpen sets an explicit state regardless of stacking", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("governedGit", {}, "governedGit"), z: 1 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 5 },
+    ];
+    const { setToolOpen } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 5 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    setToolOpen("governedGit", false);
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    setToolOpen("governedGit", false);
+    expect(wins?.find((w) => w.id === "governedGit")?.minimized).toBe(true);
+    setToolOpen("governedGit", true);
+    expect(wins?.find((w) => w.id === "governedGit")).toMatchObject({ minimized: false, z: 6 });
+    setToolOpen("governedGit", true);
+    expect(wins?.find((w) => w.id === "governedGit")?.z).toBe(6);
+    setToolOpen("settings", false);
+    expect(wins?.some((w) => w.id === "settings")).toBe(false);
   });
 
   it("treats a window beneath only minimized windows as frontmost and minimizes it", () => {

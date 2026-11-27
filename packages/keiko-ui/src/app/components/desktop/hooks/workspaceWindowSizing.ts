@@ -150,17 +150,38 @@ export function applyDisplayFits(
   return changed ? next : windows;
 }
 
-/** Recomputes display fits on layout restore and whenever the workspace changes size. */
-export function useDisplayFittedWindows(
-  wsRef: RefObject<HTMLElement | null>,
-  windows: readonly AppWindow[] | null,
+function isHiddenWindow(window: AppWindow): boolean {
+  return window.max || window.minimized === true;
+}
+
+function worldViewport(
+  size: { readonly w: number; readonly h: number },
   view: { readonly x: number; readonly y: number; readonly zoom: number },
-): readonly AppWindow[] | null {
-  const [fits, setFits] = useState<ReadonlyMap<string, DisplayFit>>(new Map());
+): ViewportWorld {
+  return {
+    x: -view.x / view.zoom,
+    y: -view.y / view.zoom,
+    w: size.w / view.zoom,
+    h: size.h / view.zoom,
+  };
+}
+
+function mergeFits(
+  current: ReadonlyMap<string, DisplayFit>,
+  ids: readonly string[],
+  next: ReadonlyMap<string, DisplayFit>,
+): ReadonlyMap<string, DisplayFit> {
+  const merged = new Map(current);
+  for (const id of ids) merged.delete(id);
+  for (const [id, fit] of next) merged.set(id, fit);
+  return merged;
+}
+
+function useObservedSize(wsRef: RefObject<HTMLElement | null>): {
+  readonly w: number;
+  readonly h: number;
+} {
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const latest = useRef({ windows, view });
-  latest.current = { windows, view };
-  const restored = windows !== null;
   useEffect(() => {
     const el = wsRef.current;
     if (el === null || typeof ResizeObserver === "undefined") return undefined;
@@ -175,12 +196,46 @@ export function useDisplayFittedWindows(
       observer.disconnect();
     };
   }, [wsRef]);
+  return size;
+}
+
+/**
+ * Display fits are computed only at three moments: layout restore, workspace resize (every
+ * window), and when a window reappears (un-minimized or un-maximized, that window only). Pan and
+ * zoom never recompute them, so a window the person deliberately panned below the fold stays put.
+ */
+export function useDisplayFittedWindows(
+  wsRef: RefObject<HTMLElement | null>,
+  windows: readonly AppWindow[] | null,
+  view: { readonly x: number; readonly y: number; readonly zoom: number },
+): readonly AppWindow[] | null {
+  const [fits, setFits] = useState<ReadonlyMap<string, DisplayFit>>(new Map());
+  const size = useObservedSize(wsRef);
+  const latest = useRef({ windows, view, size });
+  latest.current = { windows, view, size };
+  const hidden = useRef(new Map<string, boolean>());
+  const restored = windows !== null;
   useEffect(() => {
     const { windows: current, view: v } = latest.current;
     if (current === null || size.w <= 0 || size.h <= 0) return;
-    const vp = { x: -v.x / v.zoom, y: -v.y / v.zoom, w: size.w / v.zoom, h: size.h / v.zoom };
-    setFits(computeDisplayFits(current, vp, v.zoom));
+    setFits(computeDisplayFits(current, worldViewport(size, v), v.zoom));
   }, [size, restored]);
+  useEffect(() => {
+    if (windows === null) return;
+    const previous = hidden.current;
+    hidden.current = new Map(windows.map((w) => [w.id, isHiddenWindow(w)]));
+    const reappeared = windows.filter((w) => previous.get(w.id) === true && !isHiddenWindow(w));
+    const { size: s, view: v } = latest.current;
+    if (reappeared.length === 0 || s.w <= 0 || s.h <= 0) return;
+    const next = computeDisplayFits(reappeared, worldViewport(s, v), v.zoom);
+    setFits((current) =>
+      mergeFits(
+        current,
+        reappeared.map((w) => w.id),
+        next,
+      ),
+    );
+  }, [windows]);
   return useMemo(
     () => (windows === null ? null : applyDisplayFits(windows, fits)),
     [windows, fits],

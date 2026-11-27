@@ -989,7 +989,7 @@ export function Workspace({
     () => (displayWindows === null ? null : displayWindows.filter((w) => w.minimized !== true)),
     [displayWindows],
   );
-  const linkRevision = useLinkRevision(wins, conns);
+  const linkRevision = useLinkRevision(displayWindows, conns);
   const top = topWindow(visibleWins);
   const selectedWindowIds = useMemo(
     () => new Set(selection.selectedWindowIds),
@@ -1260,8 +1260,8 @@ export function Workspace({
     (
       sourceWindowId: string,
     ): readonly { readonly connId: string; readonly qualityId: string }[] => {
-      if (wins === null) return [];
-      const byId = new Map(wins.map((win) => [win.id, win]));
+      if (displayWindows === null) return [];
+      const byId = new Map(displayWindows.map((win) => [win.id, win]));
       const result: { connId: string; qualityId: string }[] = [];
       for (const conn of conns) {
         const otherId = otherConnectionEndpoint(conn, sourceWindowId);
@@ -1272,7 +1272,7 @@ export function Workspace({
       }
       return result;
     },
-    [conns, wins],
+    [conns, displayWindows],
   );
 
   const addFigmaJsonNode = useCallback(

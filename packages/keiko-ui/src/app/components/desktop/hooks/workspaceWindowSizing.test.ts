@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppWindow } from "../windows/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import { applyDisplayFits, computeDisplayFits } from "./workspaceWindowSizing";
+import {
+  applyDisplayFits,
+  computeDisplayFits,
+  useDisplayFittedWindows,
+} from "./workspaceWindowSizing";
 
 // A 1400x824 visible workspace (the viewport already ends above the 76px dock).
 const vp = { x: 0, y: 0, w: 1400, h: 824 };
@@ -60,5 +65,74 @@ describe("display fits for restored window frames", () => {
     const stored = chat();
     const larger = { x: 0, y: 0, w: 1800, h: 1100 };
     expect(applyDisplayFits([stored], computeDisplayFits([stored], larger, 1))[0]).toBe(stored);
+  });
+});
+
+describe("useDisplayFittedWindows", () => {
+  let fireResize: () => void = () => undefined;
+  let height = 824;
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          fireResize = callback;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    height = 824;
+  });
+
+  function render(initial: readonly AppWindow[] | null): {
+    readonly result: { current: readonly AppWindow[] | null };
+    readonly rerender: (wins: readonly AppWindow[] | null) => void;
+  } {
+    const el = document.createElement("div");
+    el.getBoundingClientRect = (): DOMRect => ({ width: 1400, height }) as DOMRect;
+    const wsRef = { current: el };
+    const view = { x: 0, y: 0, zoom: 1 };
+    const hook = renderHook(
+      ({ wins }: { wins: readonly AppWindow[] | null }) =>
+        useDisplayFittedWindows(wsRef, wins, view),
+      { initialProps: { wins: initial } },
+    );
+    return { result: hook.result, rerender: (wins) => hook.rerender({ wins }) };
+  }
+
+  it("fits a restored overflowing window once the workspace is measured, then follows resize", () => {
+    const stored = chat();
+    const { result, rerender } = render(null);
+    rerender([stored]);
+    act(() => {
+      fireResize();
+    });
+    expect(result.current?.[0]).toMatchObject({ y: 4, h: 820 });
+    expect(stored.y).toBe(24);
+
+    height = 1100;
+    act(() => {
+      fireResize();
+    });
+    expect(result.current?.[0]).toBe(stored);
+  });
+
+  it("fits a window again when it is un-minimized, but not a window the person left alone", () => {
+    const panned = chat({ id: "panned", y: 700, h: 400 });
+    const hidden = chat({ id: "hidden", minimized: true });
+    const { result, rerender } = render([hidden]);
+    act(() => {
+      fireResize();
+    });
+    rerender([{ ...hidden, minimized: false }]);
+    expect(result.current?.[0]).toMatchObject({ y: 4, h: 820 });
+    // Windows that never reappear are not re-fitted by later list changes.
+    rerender([{ ...hidden, minimized: false }, panned]);
+    expect(result.current?.[1]).toBe(panned);
   });
 });

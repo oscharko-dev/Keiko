@@ -30,6 +30,7 @@ function fakeApi(overrides: Partial<WorkspaceApi> = {}): WorkspaceApi {
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
+    setToolOpen: vi.fn(),
     activateWindow: vi.fn(),
     focus: vi.fn(),
     currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
@@ -83,7 +84,7 @@ function panelWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">)
 }
 
 describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-0028)", () => {
-  it("delegates ui.panel.toggle to api.toggleTool with the recorded panel id", () => {
+  it("applies ui.panel.toggle as an explicit set-state on the recorded panel id", () => {
     const api = fakeApi();
     const action: WorkspaceUiAction = {
       kind: "ui.panel.toggle",
@@ -92,8 +93,9 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       after: true,
     };
     applyShellUndoAction(target(false, api), action);
-    expect(api.toggleTool).toHaveBeenCalledTimes(1);
-    expect(api.toggleTool).toHaveBeenCalledWith("project");
+    expect(api.setToolOpen).toHaveBeenCalledTimes(1);
+    expect(api.setToolOpen).toHaveBeenCalledWith("project", true);
+    expect(api.toggleTool).not.toHaveBeenCalled();
   });
 
   it("replays a Search open with its recorded workspace root", (): void => {
@@ -109,7 +111,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
     applyShellUndoAction(target(false, api), action);
 
     expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/a" });
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("uses the normal toggle when replaying a legacy rootless Search open", (): void => {
@@ -123,7 +125,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(false, api), action);
 
-    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.setToolOpen).toHaveBeenCalledWith("search", true);
     expect(api.add).not.toHaveBeenCalled();
   });
 
@@ -141,7 +143,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     expect(api.add).toHaveBeenCalledWith("search", { root: undefined });
     expect(api.activateWindow).not.toHaveBeenCalled();
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("replays a Git open with its recorded project root", (): void => {
@@ -161,7 +163,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       rootBinding: "coding-repository",
     });
     expect(api.activateWindow).not.toHaveBeenCalled();
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("replays an explicitly rootless Git open without inheriting a stale project", (): void => {
@@ -181,7 +183,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       rootBinding: undefined,
     });
     expect(api.activateWindow).not.toHaveBeenCalled();
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("uses the normal toggle when undo closes a rooted Git window", (): void => {
@@ -196,7 +198,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(true, api), action);
 
-    expect(api.toggleTool).toHaveBeenCalledWith("governedGit");
+    expect(api.setToolOpen).toHaveBeenCalledWith("governedGit", false);
     expect(api.add).not.toHaveBeenCalled();
   });
 
@@ -212,7 +214,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(true, api), action);
 
-    expect(api.toggleTool).toHaveBeenCalledWith("search");
+    expect(api.setToolOpen).toHaveBeenCalledWith("search", false);
     expect(api.add).not.toHaveBeenCalled();
   });
 
@@ -230,7 +232,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(false, api), inverseOfOpen);
 
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
     expect(api.add).not.toHaveBeenCalled();
   });
 
@@ -247,7 +249,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(true, api), redoOfOpen);
 
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
     expect(api.add).not.toHaveBeenCalled();
   });
 
@@ -264,7 +266,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
     applyShellUndoAction(target(true, api), action);
 
     expect(api.add).not.toHaveBeenCalled();
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("closes a panel that is open while the record says closed", () => {
@@ -278,8 +280,9 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 
     applyShellUndoAction(target(true, api), action);
 
-    expect(api.toggleTool).toHaveBeenCalledTimes(1);
-    expect(api.toggleTool).toHaveBeenCalledWith("project");
+    expect(api.setToolOpen).toHaveBeenCalledTimes(1);
+    expect(api.setToolOpen).toHaveBeenCalledWith("project", false);
+    expect(api.toggleTool).not.toHaveBeenCalled();
   });
 
   it("ignores ui.panel.toggle actions for unknown panel ids", () => {
@@ -291,7 +294,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       after: true,
     };
     applyShellUndoAction(target(false, api), action);
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
   });
 
   it("is a no-op for action kinds the shell does not yet wire (forward-compatible)", () => {
@@ -302,7 +305,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       after: { zoom: 1, x: 10, y: 20 },
     };
     applyShellUndoAction(target(false, api), action);
-    expect(api.toggleTool).not.toHaveBeenCalled();
+    expect(api.setToolOpen).not.toHaveBeenCalled();
     expect(api.panBy).not.toHaveBeenCalled();
   });
 });

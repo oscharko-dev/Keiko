@@ -26,6 +26,7 @@ import type {
   FilesWindowContext,
   FilesScopeBindReply,
   OpenEditorFileResult,
+  ToolToggleOutcome,
   ViewportWorld,
   WorkspaceApi,
   WorkspaceLinkedGitChangeComparison,
@@ -101,6 +102,7 @@ type Mutations = Pick<
   | "add"
   | "openEditorFile"
   | "toggleTool"
+  | "setToolOpen"
 >;
 
 // `/\/+$/u` looks harmless (one quantified atom anchored at `$`) but on a string that does NOT
@@ -654,54 +656,69 @@ function nextWorkspaceZ(list: readonly AppWindow[], zc: MutateArgs["zc"]): numbe
   return zc.current;
 }
 
-/** A visible window is frontmost when no other visible window sits above it. */
+/** A visible window is frontmost when no other visible window sits above it (a z tie is not frontmost). */
 export function isFrontmostWindow(list: readonly AppWindow[], target: AppWindow): boolean {
   if (target.minimized === true) return false;
   return list.every((w) => w.minimized === true || w.id === target.id || w.z < target.z);
 }
 
 /**
- * Launcher click on a tool whose window exists. Minimized: restore and raise. Behind another
- * window: raise only. Frontmost: minimize rather than close, so an unsent prompt or draft held in
- * the window is never lost to a mis-click; the next click restores it.
+ * The single rule for a launcher click on a tool type, read by the mutation and by the undo
+ * recording so both see the same answer from the same list: no window opens one, a minimized one
+ * restores, one behind another raises, and only the frontmost one minimizes.
  */
-/** True when the panel's window is open (not minimized) but another visible window sits above it. */
-export function panelIsBehindAnotherWindow(
-  wins: readonly AppWindow[] | null,
-  panel: WindowType,
-): boolean {
-  const existing = wins?.find((w) => w.type === panel);
-  return (
-    existing !== undefined &&
-    existing.minimized !== true &&
-    !isFrontmostWindow(wins ?? [], existing)
-  );
+export function classifyToolToggle(
+  list: readonly AppWindow[] | null,
+  type: WindowType,
+): ToolToggleOutcome {
+  const existing = list?.find((w) => w.type === type);
+  if (existing === undefined) return "open";
+  if (existing.minimized === true) return "restore";
+  return isFrontmostWindow(list ?? [], existing) ? "minimize" : "raise";
 }
 
-function toggleExistingTool(
+type ToolMode = "toggle" | "open" | "close";
+
+/**
+ * Applies a launcher click (`toggle`) or an explicit target state (`open` / `close`, used by undo
+ * and redo) to an existing tool window. Closing minimizes: the window and any unsent input in it
+ * survive, and `shellPanelIsOpen` already counts a minimized window as closed.
+ */
+function applyToolMode(
   list: readonly AppWindow[],
   existing: AppWindow,
   zc: MutateArgs["zc"],
+  mode: ToolMode,
 ): AppWindow[] {
-  if (existing.minimized !== true && isFrontmostWindow(list, existing)) {
-    return list.map((w) => (w.id === existing.id ? { ...w, minimized: true } : w));
-  }
+  const outcome = classifyToolToggle(list, existing.type);
+  const minimize =
+    mode === "close" ? existing.minimized !== true : mode === "toggle" && outcome === "minimize";
+  if (minimize) return list.map((w) => (w.id === existing.id ? { ...w, minimized: true } : w));
+  if (mode === "close" || (mode === "open" && outcome === "minimize")) return [...list];
   const nextZ = nextWorkspaceZ(list, zc);
   return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
 }
 
-function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
+function wouldExceedWindowLimit(
+  currentWins: readonly AppWindow[] | undefined,
+  type: WindowType,
+): boolean {
+  return (
+    currentWins !== undefined &&
+    currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+    !currentWins.some((window) => window.type === type)
+  );
+}
+
+function makeToolMutation(args: MutateArgs, mode: ToolMode): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
     const t = WIN_TYPES[type];
     const currentWins = args.winsRef?.current;
-    if (
-      currentWins !== undefined &&
-      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
-      !currentWins.some((window) => window.type === type)
-    ) {
+    const outcome = classifyToolToggle(currentWins ?? null, type);
+    if (mode !== "close" && wouldExceedWindowLimit(currentWins, type)) {
       if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
-      return;
+      return outcome;
     }
     let windowLimitReached = false;
     setWins((ws) => {
@@ -709,7 +726,8 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (vp === null) return ws;
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
-      if (existing !== undefined) return toggleExistingTool(list, existing, zc);
+      if (existing !== undefined) return applyToolMode(list, existing, zc, mode);
+      if (mode === "close") return list;
       if (list.length >= MAX_WORKSPACE_WINDOWS) {
         windowLimitReached = true;
         return list;
@@ -730,6 +748,7 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       return [...list, window];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+    return outcome;
   };
 }
 
@@ -743,7 +762,10 @@ export function makeMutations(args: MutateArgs): Mutations {
     maximize: makeMaximize(args),
     add: makeAdd(args),
     openEditorFile: makeOpenEditorFile(args),
-    toggleTool: makeToggleTool(args),
+    toggleTool: makeToolMutation(args, "toggle"),
+    setToolOpen: (type, open): void => {
+      makeToolMutation(args, open ? "open" : "close")(type);
+    },
   };
 }
 

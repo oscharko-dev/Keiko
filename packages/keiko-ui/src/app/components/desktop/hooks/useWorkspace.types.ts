@@ -88,11 +88,16 @@ export interface WorkspaceClipboardPasteResult {
   readonly limitReached: boolean;
 }
 
+/** What a launcher click did to a tool window: open a new one, restore, raise, or minimize it. */
+export type ToolToggleOutcome = "open" | "restore" | "raise" | "minimize";
+
 export interface WorkspaceApi {
   readonly toggleLayoutLock: () => void;
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
-  readonly toggleTool: (type: WindowType) => void;
+  readonly toggleTool: (type: WindowType) => ToolToggleOutcome;
+  /** Explicit target state for undo/redo: open restores and raises, closed minimizes. */
+  readonly setToolOpen: (type: WindowType, open: boolean) => void;
   /** Raises and focuses on primary activation; also selects when layout is unlocked. */
   readonly activateWindow: (id: string) => void;
   /** Raises and focuses without changing an intentional workspace selection. */

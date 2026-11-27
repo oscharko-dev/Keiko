@@ -42,6 +42,7 @@ import {
   duplicateWorkspaceClipboardWindows,
 } from "./workspaceClipboard";
 import {
+  classifyToolToggle,
   boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
   filesVisibleScope,
@@ -667,7 +668,7 @@ function toolToggleActivationWindowId(
 ): string | null {
   const existing = wins.find((win) => win.type === type);
   if (existing === undefined) return wins.length >= MAX_WORKSPACE_WINDOWS ? null : type;
-  return existing.minimized === true ? existing.id : null;
+  return classifyToolToggle(wins, type) === "minimize" ? null : existing.id;
 }
 
 type ReusableWindowIdentity = {
@@ -2904,7 +2905,16 @@ export function useWorkspace(
   const toggleToolWithActivation = useCallback<WorkspaceApi["toggleTool"]>(
     (type) => {
       const ownerId = toolToggleActivationWindowId(winsRef.current, type);
-      mutations.toggleTool(type);
+      const outcome = mutations.toggleTool(type);
+      activateLayoutOwner(ownerId);
+      return outcome;
+    },
+    [activateLayoutOwner, mutations, winsRef],
+  );
+  const setToolOpenWithActivation = useCallback<WorkspaceApi["setToolOpen"]>(
+    (type, open) => {
+      const ownerId = open ? toolToggleActivationWindowId(winsRef.current, type) : null;
+      mutations.setToolOpen(type, open);
       activateLayoutOwner(ownerId);
     },
     [activateLayoutOwner, mutations, winsRef],
@@ -3326,6 +3336,7 @@ export function useWorkspace(
       add: addWithActivation,
       openEditorFile: mutations.openEditorFile,
       toggleTool: toggleToolWithActivation,
+      setToolOpen: setToolOpenWithActivation,
       activateWindow,
       focus: focusWindow,
       currentWindowStack,
@@ -3376,6 +3387,7 @@ export function useWorkspace(
       snap,
       addWithActivation,
       toggleToolWithActivation,
+      setToolOpenWithActivation,
       tileAllWithActivation,
       splitFrontWithActivation,
       cascadeWithActivation,
