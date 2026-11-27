@@ -243,6 +243,15 @@ bridge admits it for the same, and the generated plugin client waits one grace a
 a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagnostic naming the
 deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
 off long before its own five-minute ceiling (F43/F44, PR #3452).
+The governed Git read tools (`keiko_git_status`, `keiko_git_diff`) declare
+`GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS` (ten minutes) in `maxDurationMs`. A raw status is a
+sequence of Git processes, and on a host with slow process creation (Windows with a real-time
+scanner) a six-file status took 14 s, so the fixed 30 s default ended healthy work (#4491, W-4).
+Hang protection is unchanged where it belongs: every Git process keeps its own sandbox timeout and
+the scan is bounded in paths and bytes, so the budget only caps a runaway sequence of healthy reads.
+Because the budget exceeds the sandbox default, these tools join the long-hold lane of the facade
+and the bridge. When such a call ends under the run, the `git.runtime-action` line names the cause
+(`deadline-exceeded`, `signal-aborted` or `authority-revoked`); the model-facing refusal is unchanged.
 A Chat write tool waits the same way: Jira and external MCP write descriptors declare their own work
 budget plus the approval lifetime (`ATLASSIAN_ACTION_APPROVAL_TTL_MS`, sixty minutes since the
 2026-11-24 owner decision, ten before) in `maxDurationMs`, and a read tool keeps its work budget (an

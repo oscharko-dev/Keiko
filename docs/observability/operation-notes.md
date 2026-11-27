@@ -909,6 +909,14 @@ its step on the `coding-runtime.exit` diagnostic, for example `supervisor-no-des
 an SSH or service session); the refusal words are one per supervisor error code and
 `nativeRuntimeProcessTree.refusal-codes.test.ts` fails when a code lacks its own.
 
+A runtime Git `status` reads the repository once: its facts and its answer come from the same raw
+scan. `git.raw-status.conversion-settled` (and `.conversion-failed`) additionally carry `listingMs`,
+`scanMs`, `settleMs` and `gitSpawnCount`: where the scan's time went and how many Git processes the
+operation had started by the settlement. The promisor probe that guards every read runs once per
+operation (a read session), not once per read. `git.runtime-action` names a read that ended under the
+run as `deadline-exceeded` (the tool's own budget), `signal-aborted` (a Stop while authority held) or
+`authority-revoked` (authority lapsed); the model-facing refusal stays `authority-revoked`.
+
 ## Coding Workbench request deadlines, Editor and window binding
 
 `client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime

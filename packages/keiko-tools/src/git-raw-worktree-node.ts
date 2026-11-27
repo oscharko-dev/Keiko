@@ -175,6 +175,7 @@ async function headBranch(deps: NodeGitWorktreeReaderDeps, head: GitHeadState): 
 export async function readGitRawChangesAtHead(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitRawChangesAtHead> {
+  const startedAt = Date.now();
   const head = await readGitHeadState(deps);
   const branch = await headBranch(deps, head);
   const index = new Map((await readGitIndexEntries(deps)).map((entry) => [entry.path, entry]));
@@ -195,6 +196,8 @@ export async function readGitRawChangesAtHead(
       stats: parseGitIndexStat(await readGitIndexStat(deps)),
       indexWriteTimeNs: readGitIndexWriteTimeNs(deps.workspace.root, workspaceFsOf(deps)),
       fileMode: lazyFileMode(deps),
+      startedAt,
+      scanStartedAt: Date.now(),
     },
     paths,
   );
@@ -230,6 +233,9 @@ interface ScanInputs {
   readonly indexWriteTimeNs: string | undefined;
   // `core.fileMode`, read once and only when a changed regular file needs the verdict.
   readonly fileMode: () => Promise<boolean>;
+  // Wall-clock marks for the settlement evidence: the read began, and its path scan began.
+  readonly startedAt: number;
+  readonly scanStartedAt: number;
 }
 async function scanPaths(
   scan: ScanInputs,
@@ -392,6 +398,7 @@ async function settleConvertedFiles(
     stats: { attributeSplitCount: 0, hashBudgetExhaustedCount: 0 },
   };
   let batches = 0;
+  const settleStartedAt = Date.now();
   for (let at = 0; at < files.length; at += CONVERTIBLE_BATCH_SIZE) {
     throwIfCancelled(scan);
     await settleBatch(scan, port, files.slice(at, at + CONVERTIBLE_BATCH_SIZE), tally); // NOSONAR typescript:S9382 -- sequential batches keep the process count and memory bounded
@@ -408,6 +415,12 @@ async function settleConvertedFiles(
       ? { reason: tally.reason }
       : {}),
     ...(tally.outcome === "error" ? { error: tally.error } : {}),
+    timing: {
+      listingMs: scan.scanStartedAt - scan.startedAt,
+      scanMs: settleStartedAt - scan.scanStartedAt,
+      settleMs: Date.now() - settleStartedAt,
+      gitSpawnCount: scan.deps.readSession?.spawnCount ?? 0,
+    },
   });
   return changes.flatMap((change) => {
     if (!tally.clean.has(change.path)) return [change];

@@ -202,6 +202,14 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
 // 30 s budget cut a waiting approval off long before its own approval ceiling (PR #3452, F44).
 export const GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS = 60 * 60 * 1_000; // Owner decision 2026-11-24: 60 minutes.
 export const GOVERNED_TOOL_SETTLEMENT_GRACE_MS = 15_000;
+// The settlement budget of the governed Git read tools (`keiko_git_status`, `keiko_git_diff`). A raw
+// status is a sequence of Git processes (one per index, tree, attribute and hash read), and on a
+// host whose process creation is slow (Windows with a real-time scanner, W-4: ~14 s for one status
+// of a six-file repository) the fixed 30 s sandbox default ended healthy work. Hang protection is
+// unchanged where it belongs: every single Git process keeps its own `defaultTimeoutMs`, and the
+// scan is bounded in paths and bytes, so this budget only caps a runaway sequence of healthy reads.
+export const GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS = 10 * 60 * 1_000;
+
 export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
   DEFAULT_SANDBOX_POLICY.defaultTimeoutMs +
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS +

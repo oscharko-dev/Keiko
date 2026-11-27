@@ -25,6 +25,7 @@ import {
   gitBlobObjectId,
   readGitRawChangesAtHead,
   createGitStagedObjectIdPort,
+  createGitReadSession,
   type GitStagedConversionEvidence,
   type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
@@ -82,6 +83,10 @@ const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
     settledClean: { type: "integer", dataClass: "count", required: true },
     attributeSplitCount: { type: "integer", dataClass: "count", required: true },
     hashBudgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
+    listingMs: { type: "integer", dataClass: "duration", required: false },
+    scanMs: { type: "integer", dataClass: "duration", required: false },
+    settleMs: { type: "integer", dataClass: "duration", required: false },
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -119,6 +124,10 @@ const STAGED_CONVERSION_FAILED_OPERATION = defineActivityLogOperation({
     // Partial sums over the batches up to the failure.
     attributeSplitCount: { type: "integer", dataClass: "count", required: true },
     hashBudgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
+    listingMs: { type: "integer", dataClass: "duration", required: false },
+    scanMs: { type: "integer", dataClass: "duration", required: false },
+    settleMs: { type: "integer", dataClass: "duration", required: false },
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: {
       type: "string-array",
@@ -249,6 +258,7 @@ export function logStagedConversion(
     settledClean: evidence.settledClean,
     attributeSplitCount: evidence.attributeSplitCount,
     hashBudgetExhaustedCount: evidence.hashBudgetExhaustedCount,
+    ...evidence.timing,
   };
   const correlation = { correlationId: correlationIdOrUnknown(correlationId) };
   const sink = seams.activityLog ?? processServerLogSink();
@@ -283,9 +293,11 @@ export function withStagedConversion(
   seams: GitDeliveryTerminationLogSeam,
   correlationId: string | undefined,
 ): NodeGitWorktreeReaderDeps {
+  // One session per logical operation: its processes are counted and the promisor probe runs once.
+  const scoped = { ...base, readSession: base.readSession ?? createGitReadSession() };
   return {
-    ...base,
-    stagedObjectIds: createGitStagedObjectIdPort(base),
+    ...scoped,
+    stagedObjectIds: createGitStagedObjectIdPort(scoped),
     onStagedConversion: (evidence: GitStagedConversionEvidence): void => {
       logStagedConversion(seams, correlationId, evidence);
     },
@@ -302,12 +314,10 @@ export function runtimeGitReadDeps(
   };
   return withStagedConversion(base, execution, context.correlationId);
 }
-export async function runtimeGitStatus(
-  context: VerifiedCommitRunContext,
-  execution: GitDeliveryExecutionSeams,
-): Promise<CodingRuntimeGitStatus> {
-  const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution));
-  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
+/** The status answer from a raw read the caller already made (denied paths were logged by it). */
+export function runtimeGitStatusOfRaw(
+  raw: Awaited<ReturnType<typeof readGitRawChangesAtHead>>,
+): CodingRuntimeGitStatus {
   return {
     kind: "status",
     ...(raw.head.kind === "born"

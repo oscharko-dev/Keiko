@@ -149,6 +149,32 @@ export interface GitStagedConversionEvidence {
   // Why an undecidable port could not answer (the first batch that said so), when it said.
   readonly reason?: GitStagedUndecidableReason;
   readonly error?: unknown;
+  // Where the scan's time went up to the settlement (#4491, W-4: a status of six files took 14 s on
+  // a host whose process creation is slow): the listing reads before the path scan, the path scan,
+  // and the settlement itself, in whole milliseconds, with the Git processes the operation had
+  // started by then (its session's count; 0 without a session).
+  readonly timing?: {
+    readonly listingMs: number;
+    readonly scanMs: number;
+    readonly settleMs: number;
+    readonly gitSpawnCount: number;
+  };
+}
+
+/**
+ * The scope of ONE logical read operation (a status action, a facts read): it counts the Git
+ * processes the operation starts and holds the repository's promisor verdict for its duration, so
+ * the probe that guards every read runs once per operation instead of once per read (#4491, W-4:
+ * half of a status's processes were that probe). A later operation has a session of its own and
+ * probes again, so an earlier verdict never authorizes a later, riskier one.
+ */
+export interface GitReadSession {
+  spawnCount: number;
+  promisorAtRisk?: Promise<boolean> | undefined;
+}
+
+export function createGitReadSession(): GitReadSession {
+  return { spawnCount: 0 };
 }
 
 export interface NodeGitWorktreeReaderDeps {
@@ -174,6 +200,9 @@ export interface NodeGitWorktreeReaderDeps {
   readonly stagedObjectIds?: GitStagedObjectIdPort | undefined;
   // Receives one body-free evidence record per scan that offered files to the port.
   readonly onStagedConversion?: ((evidence: GitStagedConversionEvidence) => void) | undefined;
+  // The operation scope every read of this lane counts its processes in and shares its promisor
+  // verdict through. Absent: each read probes on its own, as before.
+  readonly readSession?: GitReadSession | undefined;
 }
 
 interface ReadContext {
@@ -181,6 +210,7 @@ interface ReadContext {
   readonly signal: AbortSignal;
   readonly timeoutMs: number | undefined;
   readonly rejectRedactedMetadata?: boolean;
+  readonly session?: GitReadSession | undefined;
 }
 
 // #4068 (W7): Git for Windows opens no path of MAX_PATH or more unless core.longpaths is set, and a
@@ -227,6 +257,7 @@ function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,
+    session: deps.readSession,
   };
 }
 
@@ -331,6 +362,7 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
     commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  countProcess(ctx);
   return runCommand(
     {
       command: "git",
@@ -356,7 +388,23 @@ async function runGuardProbe(ctx: ReadContext, argv: readonly string[]): Promise
 // strict version gate instead of silently skipping it. This is re-evaluated on EVERY call, never
 // cached: the repository's own config can change while Keiko runs, and an earlier safe verdict must
 // never authorize a later, riskier one (reviewer 3941943603).
-async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
+function countProcess(ctx: ReadContext): void {
+  if (ctx.session !== undefined) ctx.session.spawnCount += 1;
+}
+
+function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
+  const session = ctx.session;
+  if (session === undefined) return probePromisorRemote(ctx);
+  // One verdict per logical operation. A failed probe (a cancelled caller) is evicted so the next
+  // read of the session probes again instead of replaying the rejection.
+  session.promisorAtRisk ??= probePromisorRemote(ctx).catch((error: unknown) => {
+    session.promisorAtRisk = undefined;
+    throw error;
+  });
+  return session.promisorAtRisk;
+}
+
+async function probePromisorRemote(ctx: ReadContext): Promise<boolean> {
   let result: CommandResult;
   try {
     result = await runGuardProbe(ctx, [
@@ -425,6 +473,7 @@ async function runVersionProbe(ctx: ReadContext): Promise<CommandResult> {
     commandRules: GIT_LAZY_FETCH_GUARD_PROBE_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  countProcess(ctx);
   return runCommand(
     {
       command: "git",
@@ -535,6 +584,7 @@ async function runReadResult(
   }
   const runDeps: RunCommandDeps = { ...ctx.runDeps, onTerminated: ctx.runDeps.onTerminated };
   let result: CommandResult;
+  countProcess(ctx);
   try {
     // No `--no-lazy-fetch` / `--no-replace-objects` CLI flags here: git's own docs state each is
     // "equivalent to setting the GIT_NO_(LAZY_FETCH|REPLACE_OBJECTS) environment variable", and

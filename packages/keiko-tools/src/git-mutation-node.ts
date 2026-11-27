@@ -64,6 +64,7 @@ import {
   readGitBaseState,
   readGitWorktreeSnapshot,
   type NodeGitWorktreeReaderDeps,
+  type GitReadSession,
   type GitStagedObjectIdPort,
 } from "./git-worktree-snapshot-node.js";
 import {
@@ -111,6 +112,8 @@ export interface NodeGitMutationAdapterDeps {
   // Optional cancellation signal threaded into every governed git invocation.
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The operation scope the governed reads of this adapter count their processes in.
+  readonly readSession?: GitReadSession | undefined;
 }
 
 function executionResult(
@@ -199,6 +202,7 @@ interface RunContext {
   readonly timeoutMs: number | undefined;
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
+  readonly readSession: GitReadSession | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -246,6 +250,7 @@ async function runOne(
   stdin?: string | Uint8Array,
 ): Promise<CommandResult> {
   await ensureGitLazyFetchGuardSupported(commitReadDeps(ctx));
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
   return runCommand(
     {
       command: "git",
@@ -290,6 +295,7 @@ async function readStageConfig(ctx: RunContext): Promise<StageConfig | undefined
     commandRules: GIT_CONFIG_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
+  if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
   const result = await runCommand(
     {
       command: "git",
@@ -462,7 +468,12 @@ async function execCommit(
 function commitReadDeps(
   ctx: RunContext,
 ): import("./git-worktree-snapshot-node.js").NodeGitWorktreeReaderDeps {
-  return { ...ctx.runDeps, signal: ctx.signal, timeoutMs: ctx.timeoutMs };
+  return {
+    ...ctx.runDeps,
+    signal: ctx.signal,
+    timeoutMs: ctx.timeoutMs,
+    readSession: ctx.readSession,
+  };
 }
 
 type VerifiedCommitExecRequest = GitCommitExecRequest & {
@@ -749,6 +760,7 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     timeoutMs: deps.timeoutMs,
     beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
     beforeIndexUpdate: deps.beforeIndexUpdate,
+    readSession: deps.readSession,
   };
 }
 
@@ -845,7 +857,9 @@ export {
   readGitStagedDiff,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
+  createGitReadSession,
   type NodeGitWorktreeReaderDeps,
+  type GitReadSession,
   type GitStagedObjectIdPort,
   type GitStagedConversionEvidence,
 } from "./git-worktree-snapshot-node.js";

@@ -27,7 +27,12 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
 import { readGitRawChanges } from "./git-raw-worktree-node.js";
-import type { NodeGitWorktreeReaderDeps } from "./git-worktree-snapshot-node.js";
+import {
+  createGitReadSession,
+  type GitReadSession,
+  type GitStagedConversionEvidence,
+  type NodeGitWorktreeReaderDeps,
+} from "./git-worktree-snapshot-node.js";
 import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
 import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
@@ -194,6 +199,8 @@ describe("exact-file staging inside a root below an always-denied segment", () =
 // checks text files out with CRLF, so every governed stage there was refused and no Workbench run
 // could commit. A file Git converts is now staged as Git's own built-in conversion, but only when
 // that conversion checks the verified bytes out again exactly; every other case stays refused.
+const anyNumber = expect.any(Number) as number;
+
 describe("exact-file staging under the effective core.autocrlf", () => {
   function plainRepository(
     worktree: Uint8Array | string,
@@ -395,6 +402,75 @@ describe("exact-file staging under the effective core.autocrlf", () => {
     expect(await rawFlags(repo, factoryPort(repo))).toEqual([["a.txt", true, true]]);
   });
 
+  // #4491 W-4 (Windows 1.5.10 lab): one status of a six-file repository took 14 s because every read
+  // of the scan was preceded by its own promisor probe, half of its Git processes.
+  describe("the Git processes of one raw read", () => {
+    function convertibleRepository(): string {
+      const repo = plainRepository("v1\r\nv2\r\n");
+      git(repo, ["config", "core.autocrlf", "true"]);
+      git(repo, ["add", "a.txt"]);
+      touchLater(repo);
+      return repo;
+    }
+    const isPromisorProbe = (argv: readonly string[]): boolean =>
+      argv[0] === "config" && argv.some((arg) => arg.includes("promisor"));
+
+    async function countedRead(
+      repo: string,
+      session: GitReadSession | undefined,
+    ): Promise<{
+      argvs: string[][];
+      evidence: GitStagedConversionEvidence[];
+      raw: Awaited<ReturnType<typeof readGitRawChanges>>;
+    }> {
+      const argvs: string[][] = [];
+      const evidence: GitStagedConversionEvidence[] = [];
+      const deps = {
+        workspace: workspaceInfo(repo),
+        processEnv: readerEnv(),
+        spawn: countingSpawn(argvs),
+        ...(session === undefined ? {} : { readSession: session }),
+      };
+      const raw = await readGitRawChanges({
+        ...deps,
+        stagedObjectIds: createGitStagedObjectIdPort(deps),
+        onStagedConversion: (e) => evidence.push(e),
+      });
+      return { argvs, evidence, raw };
+    }
+
+    it("probes for a promisor remote once per operation and counts every process it starts", async () => {
+      const repo = convertibleRepository();
+      const session = createGitReadSession();
+      const scoped = await countedRead(repo, session);
+
+      expect(scoped.raw.changes).toEqual([
+        expect.objectContaining({ staged: true, unstaged: false }),
+      ]);
+      expect(scoped.argvs.filter(isPromisorProbe)).toHaveLength(1);
+      expect(session.spawnCount).toBe(scoped.argvs.length);
+      const timing = scoped.evidence[0]?.timing;
+      expect(timing?.gitSpawnCount).toBeGreaterThan(0);
+      expect(timing?.gitSpawnCount).toBeLessThanOrEqual(scoped.argvs.length);
+
+      // The same read without an operation scope probes before every read: strictly more processes.
+      const unscoped = await countedRead(convertibleRepository(), undefined);
+      expect(unscoped.argvs.filter(isPromisorProbe).length).toBeGreaterThan(5);
+      expect(unscoped.argvs.length - scoped.argvs.length).toBe(
+        unscoped.argvs.filter(isPromisorProbe).length - 1,
+      );
+      expect(unscoped.evidence[0]?.timing?.gitSpawnCount).toBe(0);
+    });
+
+    it("probes again in a later operation, so an earlier verdict never authorizes a later one", async () => {
+      const repo = convertibleRepository();
+      const first = await countedRead(repo, createGitReadSession());
+      const second = await countedRead(repo, createGitReadSession());
+      expect(first.argvs.filter(isPromisorProbe)).toHaveLength(1);
+      expect(second.argvs.filter(isPromisorProbe)).toHaveLength(1);
+    });
+  });
+
   describe("when the port cannot settle a file", () => {
     function stagedCrlfRepository(): string {
       const repo = plainRepository("v1\r\nv2\r\n");
@@ -430,6 +506,12 @@ describe("exact-file staging under the effective core.autocrlf", () => {
           attributeSplitCount: 0,
           hashBudgetExhaustedCount: 0,
           outcome: "undecidable",
+          timing: {
+            listingMs: anyNumber,
+            scanMs: anyNumber,
+            settleMs: anyNumber,
+            gitSpawnCount: 0,
+          },
         },
       ]);
     });
@@ -516,6 +598,12 @@ describe("exact-file staging under the effective core.autocrlf", () => {
           attributeSplitCount: 0,
           hashBudgetExhaustedCount: 0,
           outcome: "answered",
+          timing: {
+            listingMs: anyNumber,
+            scanMs: anyNumber,
+            settleMs: anyNumber,
+            gitSpawnCount: 0,
+          },
         },
       ]);
     });

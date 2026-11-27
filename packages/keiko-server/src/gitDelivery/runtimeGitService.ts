@@ -23,6 +23,7 @@ import {
 import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
 import {
   readVerifiedCommitFacts,
+  readVerifiedCommitRead,
   verifiedBaseObjectId,
   verifiedHeadObjectId,
 } from "./verifiedCommitFacts.js";
@@ -49,7 +50,7 @@ import {
   admitUnstageSelection,
   reviewStageSelection,
   runtimeGitDiff,
-  runtimeGitStatus,
+  runtimeGitStatusOfRaw,
   runtimeGitReadDeps,
   runtimeWorkspaceFs,
   type StageSelectionReview,
@@ -118,6 +119,7 @@ const RUNTIME_GIT_REASON_FIELD = {
     "authority-revoked",
     "proposal-unknown",
     "signal-aborted",
+    "deadline-exceeded",
     "run-not-live",
     "guard-rejected",
     "mode-unavailable",
@@ -244,7 +246,8 @@ interface RuntimeGitActivityFields {
     | CodingRuntimeGitStage["reason"]
     | CodingRuntimeGitBranch["reason"]
     | RuntimeGitRefusalReason
-    | RuntimeGitRefusalCondition;
+    | RuntimeGitRefusalCondition
+    | "deadline-exceeded";
   readonly proposalId?: string;
   readonly pathCount?: number;
   readonly fileCount?: number;
@@ -558,10 +561,15 @@ export class RuntimeGitService {
           throw new Error("git-runtime-result-invalid");
         this.log(context, phase, resultEvidence(result), resultOutcome(result));
         if (context.stillAuthorized()) return result;
-        this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
+        this.log(
+          context,
+          phase,
+          { state: "withheld", reason: this.closedReason(context, guard) },
+          "refused",
+        );
         return REFUSED_AUTHORITY;
       } catch (error) {
-        return this.failed(context, phase, error);
+        return this.failed(context, phase, error, guard);
       }
     } finally {
       release?.();
@@ -586,9 +594,15 @@ export class RuntimeGitService {
     context: VerifiedCommitRunContext,
     phase: RuntimeGitPhase,
     error: unknown,
+    guard: CodingToolMutationGuard,
   ): RuntimeGitOutcome {
     if (context.signal?.aborted === true || !context.stillAuthorized()) {
-      this.log(context, phase, { state: "refused", reason: "authority-revoked" }, "refused");
+      this.log(
+        context,
+        phase,
+        { state: "refused", reason: this.closedReason(context, guard) },
+        "refused",
+      );
       return REFUSED_AUTHORITY;
     }
     const cause = error instanceof StageEffectFailure ? error.cause : error;
@@ -610,6 +624,23 @@ export class RuntimeGitService {
     return error instanceof StageEffectFailure
       ? this.result(error.proposal, "failed", "execution-failed")
       : REFUSED_EXECUTION;
+  }
+  /**
+   * What the activity log names for a run whose read ended under it. The model-facing answer stays
+   * `authority-revoked`, but the log tells the truth: a signal closed by the tool's own deadline is
+   * `deadline-exceeded`, one closed while the run's authority still holds is a cancellation, and only
+   * a lapsed authority is a revocation (W-4: a deadline was logged as a revoked authority).
+   */
+  private closedReason(
+    context: VerifiedCommitRunContext,
+    guard: CodingToolMutationGuard,
+  ): "deadline-exceeded" | "signal-aborted" | "authority-revoked" {
+    if (context.signal?.aborted !== true) return "authority-revoked";
+    const budget = guard.executionBudget;
+    if (budget !== undefined && budget.nowMs() >= budget.deadlineAtMs) return "deadline-exceeded";
+    return this.options.context()?.stillAuthorized() === true
+      ? "signal-aborted"
+      : "authority-revoked";
   }
   private guardedContext(
     guard: CodingToolMutationGuard,
@@ -657,8 +688,10 @@ export class RuntimeGitService {
     guard: CodingToolMutationGuard,
   ): Promise<RuntimeGitOutcome> {
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    if (request.operation === "status") return runtimeGitStatus(context, execution);
+    // One scan serves the facts and the status answer: a second raw read per status action
+    // doubled its Git process count (#4491, W-4).
+    const { facts, raw } = await readVerifiedCommitRead(context, execution);
+    if (request.operation === "status") return runtimeGitStatusOfRaw(raw);
     if (request.operation === "branch")
       // An unborn head passes its all-zero object id: the branch step re-points HEAD instead of
       // branching from a commit (#4491).

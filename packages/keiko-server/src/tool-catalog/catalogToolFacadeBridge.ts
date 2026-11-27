@@ -303,7 +303,8 @@ export function openCodeCatalogSettlementBudgetMs(
 /**
  * Whether the tool a request dispatches to may hold its slot for minutes: exactly the tools whose
  * settlement budget exceeds the sandbox default (verification at its derived budget, the proposal
- * tools, which add the operator's approval wait, and the governed command at its 30-minute ceiling).
+ * tools, which add the operator's approval wait, the governed command at its 30-minute ceiling and
+ * the Git reads, whose budget outlasts a host with slow process creation).
  * The facade and the tool bridge count them in a lane of their own, so a read or search is never
  * refused `busy` because eight approvals or long builds are pending (audit 2026-11-06, finding 9).
  */

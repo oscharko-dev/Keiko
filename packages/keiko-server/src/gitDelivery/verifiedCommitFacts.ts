@@ -61,10 +61,24 @@ export function verifiedCommitMessageDigest(message: string): string {
   return gitCommitMessageDigest(message);
 }
 
+export type VerifiedRawRead = Awaited<ReturnType<typeof readGitRawChangesAtHead>>;
+
 export async function readVerifiedCommitFacts(
   context: VerifiedCommitRunContext,
   seams: GitDeliveryExecutionSeams,
 ): Promise<VerifiedCommitFacts> {
+  return (await readVerifiedCommitRead(context, seams)).facts;
+}
+
+/**
+ * The facts together with the raw read they were derived from, so a caller that also answers from
+ * the raw changes (the runtime `status` action) reuses this one scan instead of running a second
+ * (#4491, W-4: a second scan doubled the Git process count of every status).
+ */
+export async function readVerifiedCommitRead(
+  context: VerifiedCommitRunContext,
+  seams: GitDeliveryExecutionSeams,
+): Promise<{ readonly facts: VerifiedCommitFacts; readonly raw: VerifiedRawRead }> {
   if (!context.stillAuthorized() || context.signal?.aborted === true)
     throw new Error("verified-commit-authority-unavailable");
   const readBase = {
@@ -91,12 +105,15 @@ export async function readVerifiedCommitFacts(
     throw new Error("verified-commit-repository-drift");
   const clean = cleanCandidate(context, raw.changes);
   return {
-    head: raw.head,
-    base,
-    stagedTreeDigest: raw.stagedTreeDigest,
-    repositoryDigest,
-    clean,
-    ...(clean ? {} : { blocking: blockingPathsOf(raw.changes) }),
+    raw,
+    facts: {
+      head: raw.head,
+      base,
+      stagedTreeDigest: raw.stagedTreeDigest,
+      repositoryDigest,
+      clean,
+      ...(clean ? {} : { blocking: blockingPathsOf(raw.changes) }),
+    },
   };
 }
 

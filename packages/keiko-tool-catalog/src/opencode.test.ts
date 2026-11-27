@@ -4,6 +4,7 @@ import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/gove
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -126,8 +127,18 @@ describe("opencode registration set", () => {
         GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
       );
     }
+    // W-4 (Windows 1.5.10 lab): a six-file status took 14 s on a host with slow process creation, so
+    // the two Git read tools, and only they, declare a budget that outlasts it. Each Git process keeps
+    // its own sandbox timeout against a hang.
+    const gitReads = new Set(["keiko.git.status", "keiko.git.diff"]);
+    for (const id of gitReads) {
+      expect(byId.get(id as CanonicalToolId)?.bounds.maxDurationMs).toBe(
+        GOVERNED_GIT_READ_TOOL_MAX_DURATION_MS,
+      );
+    }
     for (const [id, tool] of byId) {
-      if (id === "keiko.verification.run" || APPROVAL_WAITING_TOOL_IDS.has(id)) continue;
+      if (id === "keiko.verification.run" || APPROVAL_WAITING_TOOL_IDS.has(id) || gitReads.has(id))
+        continue;
       expect(tool.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
     }
   });

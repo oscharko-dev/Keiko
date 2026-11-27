@@ -1,10 +1,12 @@
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import {
   admitStageSelection,
+  logDeniedPathExclusion,
   logStagedConversion,
   reviewStageSelection,
   runtimeGitDiff,
-  runtimeGitStatus,
+  runtimeGitReadDeps,
+  runtimeGitStatusOfRaw,
 } from "./runtimeGitRead.js";
 import {
   gitZeroObjectId,
@@ -106,6 +108,15 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
     ),
   };
 });
+// One direct raw read answered as a status, without the facts read the service puts before it.
+async function runtimeGitStatus(
+  runContext: VerifiedCommitRunContext,
+  execution: NonNullable<VerifiedCommitServiceOptions["execution"]>,
+): Promise<ReturnType<typeof runtimeGitStatusOfRaw>> {
+  const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(runContext, execution));
+  logDeniedPathExclusion(execution, runContext.correlationId, raw.deniedPathCount);
+  return runtimeGitStatusOfRaw(raw);
+}
 let root: string;
 let signingRoot: string;
 let db: DatabaseSync;
@@ -1084,6 +1095,77 @@ describe("verified Code-task commit service", () => {
       },
     });
     expect(rawReads.mock.calls.length + snapshotReads.mock.calls.length).toBe(1);
+  });
+  describe("a runtime status action", () => {
+    const statusRequest = {
+      action: "git",
+      actionId: "status",
+      idempotencyKey: "status",
+      operation: "status",
+    } as const;
+    function statusService(): RuntimeGitService {
+      return new RuntimeGitService({
+        ...options,
+        mode: (): "supervised-coding" => "supervised-coding",
+        invalidateVerification: (): void => {
+          service.invalidate();
+        },
+      });
+    }
+
+    // #4491 W-4 (Windows 1.5.10 lab): the action read the facts, then read the same repository again
+    // for its own answer. On a host with slow process creation that doubled a 14 s status.
+    it("answers from the one raw read its facts came from", async () => {
+      const rawReads = vi.mocked(readGitRawChangesAtHead);
+      rawReads.mockClear();
+
+      const status = await statusService().execute(statusRequest, { check: () => true });
+
+      expect(status).toMatchObject({ kind: "status", branch: "codex/task" });
+      expect(rawReads).toHaveBeenCalledTimes(1);
+    });
+
+    // The model-facing answer stays `authority-revoked`; the log names what ended the read (W-4: a
+    // tool deadline was logged as a revoked authority).
+    async function endedRead(
+      executionBudget: { nowMs: () => number; deadlineAtMs: number } | undefined,
+      lapse: boolean,
+    ): Promise<{ outcome: unknown; reason: unknown }> {
+      const controller = new AbortController();
+      // Like the catalog's own settlement: the guard answers false once the invocation has ended.
+      let ended = false;
+      vi.mocked(readGitRawChangesAtHead).mockImplementationOnce(() => {
+        ended = true;
+        if (lapse) live = false;
+        controller.abort();
+        return Promise.reject(new Error("read cancelled"));
+      });
+      events.length = 0;
+      const outcome = await statusService().execute(
+        statusRequest,
+        { check: () => !ended, ...(executionBudget === undefined ? {} : { executionBudget }) },
+        controller.signal,
+      );
+      const line = events.find(
+        (event) => event.op === "git.runtime-action" && event.extra?.phase === "status",
+      );
+      return { outcome, reason: line?.extra?.reason };
+    }
+
+    it.each([
+      [
+        "the tool's own deadline",
+        { nowMs: (): number => 2_000, deadlineAtMs: 2_000 },
+        false,
+        "deadline-exceeded",
+      ],
+      ["a cancellation while the run's authority holds", undefined, false, "signal-aborted"],
+      ["a lapsed authority", undefined, true, "authority-revoked"],
+    ] as const)("logs %s as %s", async (_name, budget, lapse, reason): Promise<void> => {
+      const ended = await endedRead(budget, lapse);
+      expect(ended.outcome).toEqual({ kind: "refused", reason: "authority-revoked" });
+      expect(ended.reason).toBe(reason);
+    });
   });
   it("names the paths that keep an unclean candidate from commit proof and logs only their counts", async () => {
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
@@ -2849,6 +2931,10 @@ describe("a converted file staged without stat data", () => {
       formatActivityLogProofLine(settled[0] ?? {}),
     );
     expect(persisted).toMatchObject({ convertible: 1, settledClean: 1, outcome: "answered" });
+    // W-4: where the time went, and how many Git processes the operation had started by then.
+    expect(persisted.gitSpawnCount).toBeGreaterThan(0);
+    for (const field of ["listingMs", "scanMs", "settleMs"])
+      expect(persisted[field]).toEqual(expect.any(Number));
   });
 });
 
