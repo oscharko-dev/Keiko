@@ -807,6 +807,23 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
       expect(plans[0]?.steps.map((step) => step.command)).not.toContain("mvn");
     });
 
+    // #4491: with no enforcing backend (a Windows host whose step supervisor did not resolve) the
+    // project used to be planned as "no test script detected in package.json", so the model read a
+    // missing script. Planned as its own Maven step, the run denies it as isolation unavailable.
+    it("plans the Maven step when no backend can enforce, so the denial names isolation", async () => {
+      mavenProject();
+      const { manager, plans, events } = planned({
+        probe: { available: false, backend: "none" },
+        durationMs: 1,
+      });
+
+      await manager.runToReport(input({ kinds: ["test"] }), new AbortController().signal);
+
+      expect(plans[0]?.steps.map((step) => step.command)).toEqual(["mvn"]);
+      const lines = events.filter((event) => event.op === "editor.verification.execute");
+      expect(lines.map((event) => event.extra?.runnerId)).toEqual(["maven", "maven"]);
+    });
+
     it("leaves a project with a package.json to npm, pom.xml or not", async () => {
       writeFileSync(join(workspaceRoot, "pom.xml"), "<project/>\n", "utf8");
       const { manager, plans } = planned(windows);

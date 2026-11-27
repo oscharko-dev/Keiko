@@ -52,9 +52,8 @@ import {
   configuredCodingRuntimeRepositoryItemsEnabled,
   KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV,
 } from "./codingRuntimeRepositoryItems.js";
+import { discoverRuntimeLane } from "./runtimeLaneDiscovery.js";
 import {
-  discoverDevLaneOpenCode,
-  discoverNpmLaneOpenCode,
   npmLaneRuntimePackageExpected,
   type DevLaneName,
   type DevLaneOpenCodeDiscovery,
@@ -74,10 +73,7 @@ import type {
 } from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
-import {
-  discoverPortableOpenCode,
-  portableInstallLayoutPresent,
-} from "./productionPortableCodingRuntime.js";
+import { portableInstallLayoutPresent } from "./productionPortableCodingRuntime.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -546,28 +542,25 @@ function resolveRuntime(
     arch: input.arch,
     diagnostics: input.diagnostics,
   };
-  const packaged = discoverPortableOpenCode(host);
-  if (packaged !== undefined) {
+  const found = discoverRuntimeLane(host);
+  if (found?.lane === "packaged") {
     // A portable install whose folder the volume check refuses is still a portable install: it
     // reports that reason instead of falling through to the checkout and npm lanes.
-    return "runtime" in packaged
-      ? { portable: packaged.runtime }
-      : { unavailableReason: packaged.unavailableReason };
+    return "runtime" in found.discovery
+      ? { portable: found.discovery.runtime }
+      : { unavailableReason: found.discovery.unavailableReason };
+  }
+  if (found !== undefined) {
+    // The trusted dev launcher's checkout selection (refusal included) outranks an optional npm
+    // dependency left from a released installation; a normal npm install keeps its own outcome.
+    recordDevLaneDiscovery(
+      input.activityLog ?? processServerLogSink(),
+      found.discovery,
+      found.lane,
+    );
+    return devLaneRuntime(found.discovery);
   }
   const activityLog = input.activityLog ?? processServerLogSink();
-  // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
-  // (including its refusal) before an optional npm dependency left from a released installation.
-  const discovery = discoverDevLaneOpenCode(host);
-  if (discovery.outcome !== "inactive") {
-    recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
-    return devLaneRuntime(discovery);
-  }
-  // Normal npm installs keep their installed package's outcome, refusal included.
-  const npmLane = discoverNpmLaneOpenCode(host);
-  if (npmLane.outcome !== "inactive") {
-    recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
-    return devLaneRuntime(npmLane);
-  }
   const unavailableReason = unqualifiedInstallReason(host);
   recordUnqualifiedInstall(activityLog, unavailableReason);
   return { unavailableReason };

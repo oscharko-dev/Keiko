@@ -865,14 +865,18 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   // A Maven project's tests run on the Windows step backend only (#4492, ADR-0043 D20): it reads the
-  // person's Maven and Java offline from their own folders. Every other backend's image carries no
-  // Maven, so there the project keeps its closed "no script" skip, exactly as before.
+  // person's Maven and Java offline from their own folders. Every other enforcing backend's image
+  // carries no Maven, so there the project keeps its closed "no script" skip, exactly as before.
+  // With no enforcing backend at all (#4491) the step is planned too, so the run denies it as
+  // isolation unavailable instead of reporting a script that was never missing.
   private runsMaven(
     workspace: WorkspaceInfo,
     fs: WorkspaceFs,
     isolation: TimedNetworkIsolationProbe | undefined,
   ): boolean {
-    return isolation?.probe.backend === "windows-appcontainer" && isMavenProject(workspace, fs);
+    if (isolation === undefined) return false;
+    const { available, backend } = isolation.probe;
+    return (backend === "windows-appcontainer" || !available) && isMavenProject(workspace, fs);
   }
 
   // The nested package the run verifies, or undefined for the workspace root (the unchanged path).

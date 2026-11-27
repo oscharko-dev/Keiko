@@ -111,6 +111,12 @@ Windows credential and DPAPI folders under `AppData`, compared named and resolve
 such as `.netrc` through a file link as well as a folder through a junction); and the step's
 execution root is refused when its real path cannot be resolved, never granted by its spelling.
 
+1.19 — #4491 amends D20/D21 (2026-11-27): the step supervisor resolves the runtime through the same
+ordered discovery as the Coding activation (packaged release, dev checkout, then the npm runtime
+package), so an npm installation's steps are governed by the runtime package it starts its Coding
+runs from. A Maven project (1.16) is also planned when no backend can enforce at all, so the run
+denies it as isolation unavailable instead of reporting a missing script.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a

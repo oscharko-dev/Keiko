@@ -18,7 +18,7 @@ import type {
   WindowsStepSupervisorCopy,
 } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { discoverDevLaneOpenCode } from "../coding-runtime/devLanePortableCodingRuntime.js";
+import { discoverActivatedRuntime } from "../coding-runtime/runtimeLaneDiscovery.js";
 import {
   discardVerifiedHelperCopy,
   verifiedHelperExecutionCopy,
@@ -27,7 +27,6 @@ import {
   windowsGatewayHelperPin,
   type ResolvedPortableOpenCodeRuntime,
 } from "../coding-runtime/productionOpenCodeBackend.js";
-import { discoverQualifiedPortableOpenCode } from "../coding-runtime/productionPortableCodingRuntime.js";
 import { NATIVE_HOME_DENIED_LOCATIONS } from "@oscharko-dev/keiko-sandbox";
 import { CommandDeniedError } from "@oscharko-dev/keiko-security";
 import { isCredentialNamedSegment } from "@oscharko-dev/keiko-workspace";
@@ -364,11 +363,10 @@ export function windowsMavenRepository(
   return isDirectory(repository) ? repository : undefined;
 }
 
+// The runtime found the way the Coding activation finds it: packaged release, dev checkout, then the
+// npm runtime package (#4491), so an installation whose Coding runs start has governed steps too.
 function discoveredRuntime(env: NodeJS.ProcessEnv): ResolvedPortableOpenCodeRuntime | undefined {
-  const portable = discoverQualifiedPortableOpenCode({ env });
-  if (portable !== undefined) return portable;
-  const development = discoverDevLaneOpenCode({ env });
-  return development.outcome === "activated" ? development.runtime : undefined;
+  return discoverActivatedRuntime({ env });
 }
 
 export interface WindowsStepSupervisorInput {
@@ -376,7 +374,7 @@ export interface WindowsStepSupervisorInput {
   readonly platform?: NodeJS.Platform | undefined;
   readonly activityLog: ServerLogSink;
   readonly correlationId?: string | undefined;
-  /** Injectable for tests; defaults to the installed or development runtime. */
+  /** Injectable for tests; defaults to the runtime the Coding activation finds. */
   readonly runtime?: (() => ResolvedPortableOpenCodeRuntime | undefined) | undefined;
   /** Injectable for tests; defaults to the person's `.m2\repository` when it is a real folder. */
   readonly mavenRepository?: ((env: NodeJS.ProcessEnv) => string | undefined) | undefined;
