@@ -347,21 +347,39 @@ describe("native physical retry facts", () => {
 // without edits by design, a run with any tool did its work, and a feed that lost turns or belongs
 // to another run proves nothing.
 describe("answeredWithoutTools", () => {
+  // The picker is the agent of the next turn and is free once a run settles; only the run's own
+  // agent says what the settled run was.
   function stateOf(
     run: CodingWorkbenchRuntimeSnapshot,
-    agent: CodingWorkbenchRuntimeState["agent"] = "build",
+    picker: CodingWorkbenchRuntimeState["agent"] = "build",
   ): CodingWorkbenchRuntimeState {
     return {
       ...createInitialCodingWorkbenchRuntimeState(),
-      agent,
+      agent: picker,
       run: { status: "ready", value: run, error: null },
     };
   }
 
-  const succeeded = snapshot({ state: "succeeded" });
+  const succeeded = snapshot({ state: "succeeded", agent: "build" });
 
   it("is true for a succeeded Build run whose whole feed holds no tool", () => {
     expect(answeredWithoutTools(stateOf(succeeded), feed([[], []]))).toBe(true);
+  });
+
+  it("follows the run's agent, not the picker, in both directions", () => {
+    expect(answeredWithoutTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(true);
+    const planRun = snapshot({ state: "succeeded", agent: "plan" });
+    expect(answeredWithoutTools(stateOf(planRun, "build"), feed([[]]))).toBe(false);
+  });
+
+  it("is false for a custom agent and for a run that reports no agent", () => {
+    expect(
+      answeredWithoutTools(
+        stateOf(snapshot({ state: "succeeded", agent: "reviewer" })),
+        feed([[]]),
+      ),
+    ).toBe(false);
+    expect(answeredWithoutTools(stateOf(snapshot({ state: "succeeded" })), feed([[]]))).toBe(false);
   });
 
   it("is false once any turn used a tool, whatever the tool did", () => {
@@ -370,15 +388,32 @@ describe("answeredWithoutTools", () => {
     ).toBe(false);
   });
 
-  it("is false for a Plan or custom agent", () => {
-    expect(answeredWithoutTools(stateOf(succeeded, "plan"), feed([[]]))).toBe(false);
-    expect(answeredWithoutTools(stateOf(succeeded, "reviewer"), feed([[]]))).toBe(false);
+  it("is false when signals were dropped, whose tools would be missing from the feed", () => {
+    expect(answeredWithoutTools(stateOf(succeeded), { ...feed([[]]), droppedEventCount: 2 })).toBe(
+      false,
+    );
+  });
+
+  it("is false when the run planned, because a plan tool becomes a plan and not a tool", () => {
+    const planned = {
+      ...feed([[]]),
+      plan: {
+        revision: 1,
+        anchorMessageId: "msg",
+        updatedAt: STARTED,
+        steps: [],
+        truncated: false,
+      },
+    } as AvailableCodingSafeActivityFeed;
+    expect(answeredWithoutTools(stateOf(succeeded), planned)).toBe(false);
   });
 
   it.each(["running", "failed", "cancelled", "paused"] as const)(
     "is false for a run in state %s",
     (state) => {
-      expect(answeredWithoutTools(stateOf(snapshot({ state })), feed([[]]))).toBe(false);
+      expect(answeredWithoutTools(stateOf(snapshot({ state, agent: "build" })), feed([[]]))).toBe(
+        false,
+      );
     },
   );
 

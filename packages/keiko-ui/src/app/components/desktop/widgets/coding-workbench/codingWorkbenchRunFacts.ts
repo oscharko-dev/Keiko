@@ -95,19 +95,25 @@ export function nativeRunRetry(
 
 /**
  * True for a Build run that settled successfully although the model never used a tool: the feed of
- * the run is whole (no turn was evicted) and holds no tool call, so no file was edited and no
- * command ran. A display fact over counts the run already has, never a change to its outcome. A
- * Plan or custom agent is excluded: answering without edits is what a planning turn does.
+ * the run is whole and holds no tool call and no plan, so no file was edited and no command ran. A
+ * display fact over counts the run already has, never a change to its outcome. The agent is the
+ * run's own, never the picker for the next turn, and an unreported agent counts as not Build. A
+ * Plan or custom agent is excluded: answering without edits is what a planning turn does. A feed
+ * that lost turns or dropped signals proves nothing, and a plan tool becomes a plan, not a tool.
  */
 export function answeredWithoutTools(
   state: CodingWorkbenchRuntimeState,
   feed: CodingSafeActivityFeed | null,
 ): boolean {
   const run = state.run.value;
-  if (run?.state !== "succeeded" || state.agent !== "build") return false;
-  if (feed?.availability !== "available" || feed.runId !== run.runId || feed.truncated) {
-    return false;
-  }
+  if (run?.state !== "succeeded" || run.agent !== "build") return false;
+  if (feed?.availability !== "available" || feed.runId !== run.runId) return false;
+  return feedProvesNoTools(feed);
+}
+
+// A whole feed (no evicted turn, no dropped signal) with turns, no plan and no tool in any turn.
+function feedProvesNoTools(feed: AvailableCodingSafeActivityFeed): boolean {
+  if (feed.truncated || feed.droppedEventCount !== 0 || feed.plan !== undefined) return false;
   return feed.turns.length > 0 && feed.turns.every((turn) => turn.tools.length === 0);
 }
 
