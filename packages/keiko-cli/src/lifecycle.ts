@@ -1502,6 +1502,25 @@ async function cmdStart(
   return code;
 }
 
+// #4491 (PR #4568 review): the UI process refuses a state directory inside the folder it starts
+// from, so a start that launches one refuses it first and names the reason. A healthy Keiko that is
+// reused keeps the folder it was started from, so the caller's folder does not bind it.
+function stateDirPlacementRefused(
+  options: LifecycleOptions,
+  io: CliIo,
+  env: EnvSource,
+  cwd: string,
+): boolean {
+  try {
+    assertStateDirOutsideStartFolder(cwd, options.stateDir, env);
+    return false;
+  } catch (e) {
+    if (!(e instanceof LauncherError)) throw e;
+    io.err(`${e.message}\n`);
+    return true;
+  }
+}
+
 async function startOrReuseUi(
   options: LifecycleOptions,
   io: CliIo,
@@ -1518,6 +1537,7 @@ async function startOrReuseUi(
     }
   }
 
+  if (stateDirPlacementRefused(options, io, env, cwd)) return 1;
   if (!(await ensureStartPortAvailable(options, io, deps))) return startFailed(deps, "port-in-use");
   if (!clearStaleShutdownRequest(options.stateDir, io)) {
     return startFailed(deps, "stale-shutdown-request");
@@ -1980,8 +2000,9 @@ function parseWithStateDirGuard(
 ): ParseOutcome {
   try {
     const parsed = parseLifecycleArgs(args, cwd, env, home);
-    // #4491: only a start would hand the UI process a state directory it refuses.
-    if (parsed.kind === "options" && (command === "start" || command === "restart")) {
+    // #4491: only a start would hand the UI process a state directory it refuses. A restart checks
+    // before it stops Keiko; a start checks once it knows it launches a new UI process.
+    if (parsed.kind === "options" && command === "restart") {
       assertStateDirOutsideStartFolder(cwd, parsed.value.stateDir, env);
     }
     return parsed;

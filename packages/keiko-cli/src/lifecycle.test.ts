@@ -739,6 +739,74 @@ describe("runLifecycleCli", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  // PR #4568 review: the running UI keeps the folder it was started from, so a healthy Keiko is
+  // reused from any folder; only a start that launches a new UI process checks the placement.
+  it("reuses a healthy Keiko when called from a folder that contains its state directory", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, "lab-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycle(
+      "start",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn,
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              { status: "ok", version: SDK_VERSION, launchId: TEST_LAUNCH_ID },
+              { status: 200 },
+            ),
+          ),
+        isProcessAlive: () => true,
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).not.toContain("inside the folder Keiko starts from");
+    expect(c.out()).toContain("already running");
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a restart into a state directory inside the start folder before stopping Keiko", async () => {
+    const root = makeRoot();
+    const stateDir = join(root, "lab-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    const c = makeIo();
+    const killProcess = vi.fn();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycle(
+      "restart",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn,
+        isProcessAlive: () => true,
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("inside the folder Keiko starts from");
+    expect(killProcess).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("refuses a KEIKO_CLI_BIN_PATH that is not absolute — falls back to the packaged entry", async () => {
     // #KEIKO-0285 must-fail-before-fix: cliEntryPath used to return
     // process.env.KEIKO_CLI_BIN_PATH verbatim, so a relative value was spawned as
