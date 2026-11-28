@@ -52,8 +52,13 @@ function copyOf(response: Response): Response {
   return typeof response.clone === "function" ? response.clone() : response;
 }
 
-/** Ends every join window; a request that may change server state calls it before and after. */
+/**
+ * Ends every join window; a request that may change server state calls it before and after. A
+ * read already in flight keeps serving the joiners that joined it, but its lifetime timer is
+ * released with the window: nothing is left running once the windows are gone.
+ */
 export function endInflightReads(): void {
+  for (const entry of sharedReads.values()) clearTimeout(entry.timer);
   sharedReads.clear();
 }
 
@@ -61,7 +66,8 @@ export function endInflightReads(): void {
  * How long a shared read may stay joinable (U-45). A read that never settles (a request the BFF
  * accepted and never answered) used to keep its entry for good, so every later identical read
  * joined it and no request ever reached the network again. After this bound the entry is evicted
- * and every joiner still waiting reads for itself. A status-class read answers in milliseconds.
+ * and the joiners still waiting start ONE replacement read between them (the first to expire
+ * starts it, the others join it), so a hung server sees one duplicate request, not one per joiner.
  * The bound evicts; it does not abort the request: a caller that opts in must also carry its own
  * deadline or signal on the read (a read with its own signal is never shared at all), or the hung
  * request itself stays open.
@@ -71,6 +77,7 @@ export const INFLIGHT_READ_MAX_MS = 15_000;
 interface SharedRead {
   readonly response: Promise<Response>;
   readonly expired: Promise<void>;
+  readonly timer: ReturnType<typeof setTimeout>;
 }
 
 const sharedReads = new Map<string, SharedRead>();
@@ -81,7 +88,7 @@ function share(key: string, read: Promise<Response>): void {
     evict = resolve;
   });
   const timer = setTimeout(evict, INFLIGHT_READ_MAX_MS);
-  const entry: SharedRead = { response: read, expired };
+  const entry: SharedRead = { response: read, expired, timer };
   sharedReads.set(key, entry);
   const release = (): void => {
     clearTimeout(timer);
@@ -91,13 +98,48 @@ function share(key: string, read: Promise<Response>): void {
   void expired.then(release);
 }
 
-// A joiner waits for the shared read, but never longer than that read may live.
+// The read a joiner starts once the one it joined has outlived its bound: the first joiner to
+// expire starts it and shares it, every later one joins that replacement.
+function replacementRead(
+  key: string,
+  path: string,
+  init: RequestInit | undefined,
+): Promise<Response> {
+  const current = sharedReads.get(key);
+  if (current !== undefined) return joinSharedRead(key, path, init, current);
+  const read = Promise.resolve(fetch(path, init));
+  share(key, read);
+  return read.then(copyOf);
+}
+
+// A joiner waits for the shared read, but never longer than that read may live. Whichever side
+// loses the race is ignored: a response that settles after the bound is never cloned for nobody.
 function joinSharedRead(
+  key: string,
   path: string,
   init: RequestInit | undefined,
   shared: SharedRead,
 ): Promise<Response> {
-  return Promise.race([shared.response.then(copyOf), shared.expired.then(() => fetch(path, init))]);
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    shared.response.then(
+      (response) => {
+        if (settled) return;
+        settled = true;
+        resolve(copyOf(response));
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+    void shared.expired.then(() => {
+      if (settled) return;
+      settled = true;
+      replacementRead(key, path, init).then(resolve, reject);
+    });
+  });
 }
 
 export function coalescedFetch(
@@ -117,7 +159,7 @@ export function coalescedFetch(
   if (!options.joinable) return Promise.resolve(fetch(path, init));
   const key = readKey(path, init);
   const shared = sharedReads.get(key);
-  if (shared !== undefined) return joinSharedRead(path, init, shared);
+  if (shared !== undefined) return joinSharedRead(key, path, init, shared);
   const read = Promise.resolve(fetch(path, init));
   share(key, read);
   return read.then(copyOf);

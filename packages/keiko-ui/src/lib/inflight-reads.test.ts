@@ -188,4 +188,47 @@ describe("coalescedFetch bounded lifetime", () => {
     void coalescedFetch("/api/x", { cache: "no-store" }, options);
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
+
+  it("starts one replacement read for every joiner of a hung read, not one each", async () => {
+    vi.useFakeTimers();
+    const hung = deferredResponse();
+    const replacement = deferredResponse();
+    const fetchMock = mockFetchWith(hung, replacement);
+    const options = { joinable: true };
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    const joiners = [1, 2, 3].map(() => coalescedFetch("/api/x", { cache: "no-store" }, options));
+    await vi.advanceTimersByTimeAsync(INFLIGHT_READ_MAX_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    replacement.respond({ ok: true });
+    for (const joiner of joiners) {
+      await expect((await joiner).json()).resolves.toEqual({ ok: true });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not clone a response that settles after its joiners moved on", async () => {
+    vi.useFakeTimers();
+    const hung = deferredResponse();
+    mockFetchWith(hung, deferredResponse());
+    const options = { joinable: true };
+    const first = coalescedFetch("/api/x", { cache: "no-store" }, options);
+    void coalescedFetch("/api/x", { cache: "no-store" }, options);
+    await vi.advanceTimersByTimeAsync(INFLIGHT_READ_MAX_MS);
+    const cloneSpy = vi.spyOn(Response.prototype, "clone");
+    hung.respond({ late: true });
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    // Only the first caller's own copy is made; the expired joiner makes none.
+    expect(cloneSpy).toHaveBeenCalledTimes(1);
+    cloneSpy.mockRestore();
+  });
+
+  it("leaves no lifetime timer running once the join windows end", () => {
+    vi.useFakeTimers();
+    mockFetchWith(deferredResponse());
+    void coalescedFetch("/api/x", { cache: "no-store" }, { joinable: true });
+    expect(vi.getTimerCount()).toBe(1);
+    endInflightReads();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
