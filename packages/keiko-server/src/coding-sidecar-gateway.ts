@@ -4534,7 +4534,7 @@ function createStreamTextualRecovery(dispatch: GatewayChatDispatchContext): Stre
   const { deps, binding, modelAlias, textualRecovery } = dispatch;
   return {
     state: textualRecovery,
-    hold: new LiveTextHold(textualRecovery.tools.size > 0),
+    hold: new LiveTextHold(textualRecovery.tools.size > 0, textualRecovery.tools),
     restart: (request) =>
       chatStreamFactoryFor(deps, binding.gateway)(
         binding.config,

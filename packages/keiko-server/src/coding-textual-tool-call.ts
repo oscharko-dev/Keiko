@@ -460,37 +460,52 @@ export function withDiscardedAttempts(
 }
 
 /**
- * Holds back the part of a live answer that may turn out to be tool-call markup. Text that cannot
- * start markup streams through at once; from the first character that can start it (`<`, or a
- * line-leading code fence, `{` or `[`) the rest of the attempt is held until the attempt finishes, so
- * a retry can discard it before the runtime ever receives it. A hold that grows past its bound is
- * released unexamined. A hold that is switched off passes everything through.
+ * Holds back a live answer that may turn out to be a tool call written as text. A detected call must
+ * be essentially the whole answer (`MIN_MARKUP_SHARE`), and a turn whose prose already reached the
+ * runtime is never retried (`retry-skipped`), so only an answer that BEGINS with markup is held: its
+ * first non-whitespace text is a code fence, a `{` or `[`, or a `<` naming an advertised tool, a
+ * wrapper tag or `function=`. The rest of that attempt is held until it finishes, so a retry can
+ * discard it before the runtime ever receives it; anything else, and everything after forwarded
+ * prose, streams through at once. A hold that grows past its bound is released unexamined. A hold
+ * that is switched off passes everything through.
  */
 export class LiveTextHold {
   private held = "";
-  // A trailing `<` whose next character has not arrived: it starts a tag only if a letter or `/` follows.
+  // The start of an answer whose first characters do not yet decide: a `<` whose tag name is still
+  // arriving, or one or two backticks of a possible code fence.
   private carry = "";
   private holding = false;
   private released = false;
-  private atLineStart = true;
+  // Whether text other than whitespace was forwarded: from then on nothing is held.
+  private prose = false;
+  private readonly names: readonly string[];
 
-  constructor(private enabled: boolean) {}
+  constructor(
+    private enabled: boolean,
+    tools: ToolIndex,
+  ) {
+    this.names = [...tools.keys(), ...WRAPPER_TAGS];
+  }
 
   /** The text to forward now for one provider delta. */
   push(token: string): string {
-    if (!this.enabled || this.released) return token;
+    if (!this.enabled || this.released || this.prose) return token;
     if (this.holding) return this.hold(token);
     const text = this.carry + token;
     this.carry = "";
-    const scan = scanMarkupStart(text, this.atLineStart);
-    if (scan.cut !== -1) {
+    const start = text.search(/\S/u);
+    if (start === -1) return text;
+    const verdict = classifyAnswerStart(text.slice(start), this.names);
+    if (verdict === "markup") {
       this.holding = true;
-      return text.slice(0, scan.cut) + this.hold(text.slice(scan.cut));
+      return text.slice(0, start) + this.hold(text.slice(start));
     }
-    this.atLineStart = scan.lineStart;
-    if (!text.endsWith("<")) return text;
-    this.carry = "<";
-    return text.slice(0, -1);
+    if (verdict === "pending") {
+      this.carry = text.slice(start);
+      return text.slice(0, start);
+    }
+    this.prose = true;
+    return text;
   }
 
   private hold(token: string): string {
@@ -519,34 +534,36 @@ export class LiveTextHold {
     this.carry = "";
     this.holding = false;
     this.released = false;
-    this.atLineStart = true;
+    this.prose = false;
     this.enabled = enabled;
   }
 }
 
-function isTagStart(next: string): boolean {
-  return /^[A-Za-z/]$/u.test(next);
+type AnswerStart = "markup" | "text" | "pending";
+
+const TAG_NAME_AT_START = /^\/?([a-z0-9_.:-]*)/u;
+const MAX_TAG_LOOKAHEAD_CHARS = 96;
+
+// A `<` starts tool-call markup only when the name after it can be (a prefix of) an advertised tool
+// or wrapper tag, or is `function=`. A name still arriving (the text ends inside it) is undecided.
+function classifyTagStart(afterAngle: string, names: readonly string[]): AnswerStart {
+  const rest = afterAngle.slice(0, MAX_TAG_LOOKAHEAD_CHARS).toLowerCase();
+  const match = TAG_NAME_AT_START.exec(rest);
+  const candidate = match?.[1] ?? "";
+  const next = rest.charAt(match?.[0].length ?? 0);
+  const plausible = names.some((name) => name.startsWith(candidate));
+  if (next === "") return plausible ? "pending" : "text";
+  if (candidate === "function" && next === "=") return "markup";
+  return plausible && candidate !== "" && /[\s>/]/u.test(next) ? "markup" : "text";
 }
 
-function startsMarkup(text: string, index: number, lineStart: boolean): boolean {
-  const char = text.charAt(index);
-  if (char === "<") return isTagStart(text.charAt(index + 1));
-  return lineStart && (char === "{" || char === "[" || char === "`");
-}
-
-// Where in `text` markup may start (a `<` followed by a letter or `/`, or a line-leading code fence,
-// `{` or `[`), and whether the text ends at the start of a line. A comparison or a generic such as
-// `a < b` never starts markup.
-function scanMarkupStart(
-  text: string,
-  atLineStart: boolean,
-): { readonly cut: number; readonly lineStart: boolean } {
-  let lineStart = atLineStart;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text.charAt(index);
-    if (startsMarkup(text, index, lineStart)) return { cut: index, lineStart };
-    if (char === "\n") lineStart = true;
-    else if (char !== " " && char !== "\t") lineStart = false;
-  }
-  return { cut: -1, lineStart };
+// What the first non-whitespace text of an answer says: a code fence, `{` or `[` or a tool-named
+// tag begins markup; a possible fence or tag that is not complete yet is undecided.
+function classifyAnswerStart(text: string, names: readonly string[]): AnswerStart {
+  const first = text.charAt(0);
+  if (first === "<") return classifyTagStart(text.slice(1), names);
+  if (first === "{" || first === "[") return "markup";
+  if (first !== "`") return "text";
+  if (text.startsWith("```")) return "markup";
+  return /^`{1,2}$/u.test(text) ? "pending" : "text";
 }

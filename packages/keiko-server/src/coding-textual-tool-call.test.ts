@@ -243,66 +243,109 @@ describe("withDiscardedAttempts", () => {
 });
 
 describe("LiveTextHold", () => {
-  it("streams prose through and holds from the first tag start", () => {
-    const hold = new LiveTextHold(true);
-    expect(hold.push("Running ")).toBe("Running ");
-    expect(hold.push("the tests: <sh")).toBe("the tests: ");
-    expect(hold.isHolding).toBe(true);
+  it("holds an answer that begins with a tag naming an advertised tool", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("<sh")).toBe("");
     expect(hold.push('ell command="x" />')).toBe("");
+    expect(hold.isHolding).toBe(true);
     expect(hold.release()).toBe('<shell command="x" />');
     expect(hold.push("later")).toBe("later");
   });
 
-  it("does not hold a comparison or a generic", () => {
-    const hold = new LiveTextHold(true);
-    expect(hold.push("if a < b and x<3 then ")).toBe("if a < b and x<3 then ");
-    expect(hold.push("List<string> is fine")).toBe("List");
-    expect(hold.isHolding).toBe(true);
+  it("holds the observed plan-then-call answer and a wrapper tag from the first character", () => {
+    const observed = new LiveTextHold(true, TOOLS);
+    expect(observed.push(OBSERVED_ANSWER.slice(0, 20))).toBe("");
+    expect(observed.push(OBSERVED_ANSWER.slice(20))).toBe("");
+    expect(observed.release()).toBe(OBSERVED_ANSWER);
+    const wrapper = new LiveTextHold(true, TOOLS);
+    expect(wrapper.push("\n <tool_call>")).toBe("\n ");
+    expect(wrapper.isHolding).toBe(true);
+    const named = new LiveTextHold(true, TOOLS);
+    expect(named.push("<function=shell>")).toBe("");
+    expect(named.isHolding).toBe(true);
   });
 
-  it("carries a trailing angle bracket until its next character decides", () => {
-    const comparison = new LiveTextHold(true);
-    expect(comparison.push("a <")).toBe("a ");
+  it("streams an answer that starts with prose, however much markup follows", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Running ")).toBe("Running ");
+    expect(hold.push('the tests: <shell command="x" />')).toBe('the tests: <shell command="x" />');
+    expect(hold.push("\n```json\n{}\n```")).toBe("\n```json\n{}\n```");
+    expect(hold.isHolding).toBe(false);
+  });
+
+  it.each([
+    ["a generic type", "List<string> is fine"],
+    ["a markup tag that no tool is named after", "<div>hello</div>"],
+    ["a comparison", "a < b"],
+    ["an inline code span", "`npm test` runs it"],
+    ["a closing tag that no tool is named after", "</div>"],
+  ])("does not hold an answer that begins with %s", (_label, answer) => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push(answer)).toBe(answer);
+    expect(hold.isHolding).toBe(false);
+  });
+
+  it("carries a tag name or a fence that is still arriving until the next characters decide", () => {
+    const comparison = new LiveTextHold(true, TOOLS);
+    expect(comparison.push("<")).toBe("");
     expect(comparison.push(" b")).toBe("< b");
     expect(comparison.isHolding).toBe(false);
-    const tag = new LiveTextHold(true);
-    expect(tag.push("go <")).toBe("go ");
-    expect(tag.push("shell />")).toBe("");
-    expect(tag.release()).toBe("<shell />");
-    const closing = new LiveTextHold(true);
-    expect(closing.push("end <")).toBe("end ");
+    const html = new LiveTextHold(true, TOOLS);
+    expect(html.push("<s")).toBe("");
+    expect(html.push("tyle>")).toBe("<style>");
+    const fence = new LiveTextHold(true, TOOLS);
+    expect(fence.push("``")).toBe("");
+    expect(fence.push("`json")).toBe("");
+    expect(fence.isHolding).toBe(true);
+    const code = new LiveTextHold(true, TOOLS);
+    expect(code.push("`")).toBe("");
+    expect(code.push("x` is")).toBe("`x` is");
+    const closing = new LiveTextHold(true, TOOLS);
+    expect(closing.push("<")).toBe("");
     expect(closing.release()).toBe("<");
   });
 
-  it("holds a line-leading JSON object and a code fence but not an inline brace or backtick", () => {
-    const braces = new LiveTextHold(true);
-    expect(braces.push("a {b} c")).toBe("a {b} c");
+  it("holds an answer that begins with a JSON object, an array or a code fence", () => {
+    const braces = new LiveTextHold(true, TOOLS);
     expect(braces.push("\n{")).toBe("\n");
-    const fence = new LiveTextHold(true);
+    expect(braces.isHolding).toBe(true);
+    const array = new LiveTextHold(true, TOOLS);
+    expect(array.push("[")).toBe("");
+    const fence = new LiveTextHold(true, TOOLS);
     expect(fence.push("```json")).toBe("");
-    const inline = new LiveTextHold(true);
+    expect(fence.isHolding).toBe(true);
+  });
+
+  it("streams a brace, a fence or an inline backtick that follows prose", () => {
+    const braces = new LiveTextHold(true, TOOLS);
+    expect(braces.push("a {b} c")).toBe("a {b} c");
+    expect(braces.push("\n{")).toBe("\n{");
+    expect(braces.isHolding).toBe(false);
+    const inline = new LiveTextHold(true, TOOLS);
     expect(inline.push("Run `npm test` now")).toBe("Run `npm test` now");
-    const afterProse = new LiveTextHold(true);
+    const afterProse = new LiveTextHold(true, TOOLS);
     expect(afterProse.push('Sure: {"a":1} and ```x```')).toBe('Sure: {"a":1} and ```x```');
   });
 
   it("passes everything through when disabled and after the hold is released by size", () => {
-    const off = new LiveTextHold(false);
+    const off = new LiveTextHold(false, TOOLS);
     expect(off.push("<shell />")).toBe("<shell />");
-    const bounded = new LiveTextHold(true);
-    expect(bounded.push("<a")).toBe("");
+    const bounded = new LiveTextHold(true, TOOLS);
+    expect(bounded.push("<shell ")).toBe("");
     const flood = "x".repeat(TEXTUAL_TOOL_CALL_HOLD_LIMIT_CHARS);
-    expect(bounded.push(flood)).toBe(`<a${flood}`);
+    expect(bounded.push(flood)).toBe(`<shell ${flood}`);
     expect(bounded.push("<more")).toBe("<more");
   });
 
   it("discards what it held when restarted for the next attempt", () => {
-    const hold = new LiveTextHold(true);
+    const hold = new LiveTextHold(true, TOOLS);
     hold.push("<shell />");
     hold.restart(true);
     expect(hold.isHolding).toBe(false);
     expect(hold.release()).toBe("");
     hold.restart(true);
     expect(hold.push("plain")).toBe("plain");
+    hold.restart(true);
+    expect(hold.push("<shell />")).toBe("");
   });
 });
