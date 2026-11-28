@@ -273,16 +273,24 @@ export async function readCodingPerformanceFirstEvent(
     firstByteMs ??= now() - started;
     buffer += decoder.decode(chunk.value, { stream: true });
     if (Buffer.byteLength(buffer) > 65_536) throw new Error("fixture-sse-too-large");
-    const boundary = buffer.indexOf("\n\n");
-    if (boundary < 0) continue;
-    const data = buffer
-      .slice(0, boundary)
-      .split("\n")
-      .find((line) => line.startsWith("data: "));
-    if (data === undefined || !validateCodingWorkbenchRuntimeSseEvent(JSON.parse(data.slice(6))).ok)
-      throw new Error("fixture-sse-invalid");
-    return firstByteMs;
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const data = buffer
+        .slice(0, boundary)
+        .split("\n")
+        .find((line) => line.startsWith("data: "));
+      buffer = buffer.slice(boundary + 2);
+      // A block without data, such as the server's `: open` comment, dispatches no event (SSE).
+      if (data !== undefined) return validatedFirstEvent(data, firstByteMs);
+      boundary = buffer.indexOf("\n\n");
+    }
   }
+}
+
+function validatedFirstEvent(data, firstByteMs) {
+  if (!validateCodingWorkbenchRuntimeSseEvent(JSON.parse(data.slice(6))).ok)
+    throw new Error("fixture-sse-invalid");
+  return firstByteMs;
 }
 
 async function finished(context, runId, observed) {

@@ -57,6 +57,31 @@ describe("native coding performance stream admission", () => {
     await expect(readCodingPerformanceFirstEvent(reader([frame]), 10, () => 15)).rejects.toThrow();
   });
 
+  it("measures the first byte at the open comment and validates the first event after it", async () => {
+    const frame = `event: status\ndata: ${JSON.stringify(event())}\n\n`;
+    let clock = 12;
+    const now = () => clock;
+    const parts = [": open\n\n", frame];
+    const read = reader(parts);
+    const timed = {
+      read: async () => {
+        const part = await read.read();
+        clock += 3;
+        return part;
+      },
+    };
+    await expect(readCodingPerformanceFirstEvent(timed, 10, now)).resolves.toBe(5);
+    await expect(
+      readCodingPerformanceFirstEvent(reader([`: open\n\n${frame}`]), 10, () => 15),
+    ).resolves.toBe(5);
+  });
+
+  it("refuses a stream that only ever sends comments", async () => {
+    await expect(
+      readCodingPerformanceFirstEvent(reader([": open\n\n", ": keep\n\n"]), 10, () => 15),
+    ).rejects.toThrow("fixture-sse-empty-or-incomplete");
+  });
+
   it("refuses an empty or unbounded initial event", async () => {
     await expect(readCodingPerformanceFirstEvent(reader([]), 10, () => 15)).rejects.toThrow();
     await expect(
