@@ -38,6 +38,9 @@ export interface AmbientRefresh {
   // True while the window is not rendered (minimized, or under a hidden ancestor) although the
   // document itself is visible; nothing is probed then.
   readonly isPaused?: () => boolean;
+  // Restoring a minimized window fires neither focus nor visibilitychange: the window announces
+  // that it is rendered again, and the hook checks at once. Returns its teardown.
+  readonly watchRendered?: (onRendered: () => void) => () => void;
 }
 
 export function statusFingerprintDiffers(
@@ -155,7 +158,10 @@ class ProbeLoop {
     if (this.disposed) return;
     this.failureReported = false;
     if (!changed) {
-      this.backOff();
+      // A "no difference" answered while a read or mutation started meanwhile is not an answer:
+      // check again once the window is quiet instead of backing off.
+      if (this.ambientRef.current?.isBusy() === true) this.pending = true;
+      else this.backOff();
       return;
     }
     this.delay = AMBIENT_BASE_INTERVAL_MS;
@@ -218,11 +224,15 @@ function watchRepositoryFromOutside(
     if (documentVisible()) checkSoon();
     else loop.stop();
   };
+  const stopWatchingRendered = ambientRef.current?.watchRendered?.((): void => {
+    if (documentVisible()) loop.requestCheck();
+  });
   window.addEventListener("focus", checkSoon);
   document.addEventListener("visibilitychange", onVisibility);
   loop.schedule();
   return (): void => {
     loop.dispose();
+    stopWatchingRendered?.();
     if (debounce !== undefined) clearTimeout(debounce);
     window.removeEventListener("focus", checkSoon);
     document.removeEventListener("visibilitychange", onVisibility);

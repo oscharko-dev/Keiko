@@ -29,6 +29,7 @@ interface Harness {
   readonly refresh: Mock<() => void>;
   readonly probe: Mock<() => Promise<boolean>>;
   readonly state: { busy: boolean; paused: boolean; changed: boolean };
+  readonly restore: () => void;
   readonly unmount: () => void;
 }
 
@@ -39,14 +40,21 @@ function mount(overrides: { path?: string | null; probe?: () => Promise<boolean>
     overrides.probe ?? (async (): Promise<boolean> => state.changed),
   );
   const path = overrides.path === undefined ? "/repos/alpha" : overrides.path;
+  let onRendered: () => void = (): void => undefined;
   const { unmount } = renderHook((): void =>
     useRepositoryStatusRefresh(path, undefined, refresh, {
       probe,
       isBusy: (): boolean => state.busy,
       isPaused: (): boolean => state.paused,
+      watchRendered: (callback): (() => void) => {
+        onRendered = callback;
+        return (): void => {
+          onRendered = (): void => undefined;
+        };
+      },
     }),
   );
-  return { refresh, probe, state, unmount };
+  return { refresh, probe, state, unmount, restore: (): void => onRendered() };
 }
 
 async function advance(ms: number): Promise<void> {
@@ -168,6 +176,42 @@ describe("useRepositoryStatusRefresh ambient refresh (U-35)", () => {
     state.paused = false;
     await advance(AMBIENT_BASE_INTERVAL_MS);
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks at once when a minimized window is restored, without waiting for the backoff", async (): Promise<void> => {
+    const { probe, refresh, state, restore } = mount();
+    await advance(AMBIENT_MAX_INTERVAL_MS * 10);
+    const before = probe.mock.calls.length;
+    state.changed = true;
+    act((): void => restore());
+    await advance(0);
+    expect(probe.mock.calls).toHaveLength(before + 1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks once the window is quiet when the probe answered while it became busy", async (): Promise<void> => {
+    let release!: (changed: boolean) => void;
+    const { probe, refresh, state } = mount({
+      probe: () =>
+        new Promise<boolean>((resolve): void => {
+          release = resolve;
+        }),
+    });
+    await advance(AMBIENT_BASE_INTERVAL_MS);
+    expect(probe).toHaveBeenCalledTimes(1);
+    state.busy = true;
+    await act(async (): Promise<void> => {
+      release(false);
+      await Promise.resolve();
+    });
+    state.busy = false;
+    await advance(AMBIENT_BUSY_RETRY_MS);
+    expect(probe).toHaveBeenCalledTimes(2);
+    await act(async (): Promise<void> => {
+      release(true);
+      await Promise.resolve();
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("never overlaps probes", async (): Promise<void> => {

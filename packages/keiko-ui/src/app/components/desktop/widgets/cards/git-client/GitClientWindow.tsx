@@ -1766,6 +1766,18 @@ export function GitClientWindow({
       isBusy: (): boolean => windowBusyRef.current,
       // A minimized window stays mounted under a hidden ancestor while the document is visible.
       isPaused: (): boolean => workspaceRef.current?.checkVisibility?.() === false,
+      watchRendered: (onRendered: () => void): (() => void) => {
+        const root = workspaceRef.current;
+        if (root === null || typeof ResizeObserver === "undefined") return (): void => undefined;
+        let wasRendered = root.checkVisibility?.() !== false;
+        const observer = new ResizeObserver((): void => {
+          const rendered = root.checkVisibility?.() !== false;
+          if (rendered && !wasRendered) onRendered();
+          wasRendered = rendered;
+        });
+        observer.observe(root);
+        return (): void => observer.disconnect();
+      },
       probe: async (): Promise<boolean> => {
         if (selectedPath === null) return false;
         const fresh = await client.getStatus(selectedPath);
