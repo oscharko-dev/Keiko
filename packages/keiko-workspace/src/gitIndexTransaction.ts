@@ -60,6 +60,7 @@ export async function withGitIndexTransaction<T>(
   mutate: (transaction: GitIndexTransaction) => Promise<T>,
   accept: (result: T) => boolean,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  onCleanupFailure?: (failed: number) => void,
 ): Promise<T> {
   const base = await resolveGitdir(fs, workspaceRoot);
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
@@ -74,6 +75,7 @@ export async function withGitIndexTransaction<T>(
   const check = (): boolean => sameDirectory(base.path, directory) && sameLock(lock, descriptor);
   const temporary = { owned: false };
   const quarantines: GitObjectQuarantine[] = [];
+  const held = { base: base.path, directory, lock, descriptor, temporaryIndexPath, temporary };
   try {
     if (!check()) throw new Error("git-index-metadata-drift");
     const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
@@ -94,14 +96,37 @@ export async function withGitIndexTransaction<T>(
     }
     return result;
   } finally {
-    removeQuarantines(quarantines);
-    cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
+    releaseTransaction(held, quarantines, onCleanupFailure);
   }
 }
-// Every quarantine goes on every outcome; what was published already lives in the store.
-function removeQuarantines(quarantines: readonly GitObjectQuarantine[]): void {
-  for (const quarantine of quarantines)
-    rmSync(quarantine.directory, { recursive: true, force: true });
+// The lock and its descriptor are released whatever the quarantine removal does: a transient sharing
+// violation on a quarantine must never leave index.lock blocking every later write. A leftover
+// quarantine is an invisible private directory, so its failure is counted for the caller's log port
+// and never replaces the outcome the transaction already settled.
+function releaseTransaction(
+  held: HeldIndexTransaction,
+  quarantines: readonly GitObjectQuarantine[],
+  onCleanupFailure: ((failed: number) => void) | undefined,
+): void {
+  try {
+    const failed = removeQuarantines(quarantines);
+    if (failed > 0) onCleanupFailure?.(failed);
+  } finally {
+    cleanupIndexTransaction(held);
+  }
+}
+// Every quarantine goes on every outcome (what was published already lives in the store). One that
+// cannot be removed is counted and does not stop the others; the number of failures is returned.
+function removeQuarantines(quarantines: readonly GitObjectQuarantine[]): number {
+  let failed = 0;
+  for (const quarantine of quarantines) {
+    try {
+      rmSync(quarantine.directory, { recursive: true, force: true });
+    } catch {
+      failed += 1;
+    }
+  }
+  return failed;
 }
 const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
 // The live object directory a gitdir writes to: a linked worktree shares its main repository's.
@@ -312,14 +337,16 @@ function releaseRefLock(lock: { readonly path: string; readonly descriptor: numb
   }
 }
 
-function cleanupIndexTransaction(
-  base: string,
-  directory: NonNullable<ReturnType<typeof lstatSync>>,
-  lock: string,
-  descriptor: number,
-  temporaryIndexPath: string,
-  temporary: { readonly owned: boolean },
-): void {
+interface HeldIndexTransaction {
+  readonly base: string;
+  readonly directory: NonNullable<ReturnType<typeof lstatSync>>;
+  readonly lock: string;
+  readonly descriptor: number;
+  readonly temporaryIndexPath: string;
+  readonly temporary: { readonly owned: boolean };
+}
+function cleanupIndexTransaction(held: HeldIndexTransaction): void {
+  const { base, directory, lock, descriptor, temporaryIndexPath, temporary } = held;
   try {
     if (!sameDirectory(base, directory)) return;
     if (temporary.owned) rmSync(temporaryIndexPath, { force: true });

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -465,5 +466,36 @@ describe("the object quarantine of an index transaction", () => {
       (accepted) => accepted,
     );
     expect(git(["cat-file", "-p", id])).toBe("accepted");
+  });
+  it("releases the index lock and descriptor when a quarantine cannot be removed", async () => {
+    const lock = join(root, ".git", "index.lock");
+    const failures: number[] = [];
+    let blocked = "";
+    const refused = await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        const directory = transaction.openObjectQuarantine(40).directory;
+        mkdirSync(join(directory, "sub"));
+        writeFileSync(join(directory, "sub", "kept"), "x");
+        // A directory that cannot be emptied stands for a transient sharing violation on removal.
+        chmodSync(join(directory, "sub"), 0o500);
+        blocked = join(directory, "sub");
+        return Promise.resolve(false);
+      },
+      (accepted) => accepted,
+      nodeWorkspaceFs,
+      (failed) => failures.push(failed),
+    );
+    chmodSync(blocked, 0o700);
+    expect(refused).toBe(false);
+    expect(failures).toEqual([1]);
+    expect(existsSync(lock)).toBe(false);
+    await expect(
+      withGitIndexTransaction(
+        root,
+        () => Promise.resolve(true),
+        (accepted) => accepted,
+      ),
+    ).resolves.toBe(true);
   });
 });
