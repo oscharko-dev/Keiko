@@ -2736,6 +2736,7 @@
     "keiko-tools/registry",
     "keiko-tools/sandbox",
     "keiko-tools/schemas",
+    "keiko-tools/sequential",
     "keiko-tools/terminal-policy",
     "keiko-tools/types",
     "keiko-tools/version",

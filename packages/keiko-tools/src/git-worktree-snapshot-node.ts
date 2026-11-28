@@ -37,6 +37,7 @@ import {
   type CommandTerminationEvidence,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { eachInSequence } from "./sequential.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import type { GitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -819,15 +820,16 @@ export async function readGitIndexLineBreaks(
   paths: readonly string[],
 ): Promise<ReadonlyMap<string, string>> {
   const classes = new Map<string, string>();
-  for (const chunk of pathspecChunks(paths)) {
+  // Sequential chunks keep the spawn count and memory bounded.
+  await eachInSequence(pathspecChunks(paths), async (chunk) => {
     const output = await runRead(metadataReadContext(deps), [
       "ls-files",
       "--eol",
       "-z",
       "--",
       ...chunk,
-    ]); // NOSONAR typescript:S9382 -- sequential chunks keep the spawn count and memory bounded
-    if (output === "") continue;
+    ]);
+    if (output === "") return;
     if (!output.endsWith("\0")) throw new GitWorktreeReadError("git eol listing is incomplete");
     for (const line of output.slice(0, -1).split("\0")) {
       const match = INDEX_EOL_ENTRY.exec(line);
@@ -835,7 +837,7 @@ export async function readGitIndexLineBreaks(
         throw new GitWorktreeReadError("git eol listing is malformed");
       classes.set(match[2], classes.has(match[2]) ? "conflict" : match[1]);
     }
-  }
+  });
   return classes;
 }
 export async function readGitTreeEntries(
@@ -988,20 +990,25 @@ async function readBlobSizes(
   shas: readonly string[],
 ): Promise<readonly BlobSize[]> {
   const sizes = new Map<string, number>();
-  for (let from = 0; from < shas.length; from += BLOB_SIZE_CHECK_MAX_OBJECTS) {
+  const starts = Array.from(
+    { length: Math.ceil(shas.length / BLOB_SIZE_CHECK_MAX_OBJECTS) },
+    (_, at) => at * BLOB_SIZE_CHECK_MAX_OBJECTS,
+  );
+  // The checks run one after the other.
+  await eachInSequence(starts, async (from) => {
     const checked = await runRead(
       machineReadContext(deps),
       ["cat-file", "--batch-check"],
       new TextEncoder().encode(
         `${shas.slice(from, from + BLOB_SIZE_CHECK_MAX_OBJECTS).join("\n")}\n`,
       ),
-    ); // NOSONAR typescript:S9382 -- the checks run one after the other
+    );
     for (const line of parseLines(checked)) {
       const [sha, type, size] = line.split(" ");
       if (sha !== undefined && type === "blob" && /^\d+$/u.test(size ?? ""))
         sizes.set(sha, Number(size));
     }
-  }
+  });
   return shas.map((sha) => {
     const size = sizes.get(sha);
     if (size === undefined)

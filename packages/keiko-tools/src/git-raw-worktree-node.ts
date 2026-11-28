@@ -44,6 +44,7 @@ import {
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { workspaceFsOf } from "./exec.js";
+import { eachInSequence } from "./sequential.js";
 import { CommandCancelledError } from "./errors.js";
 import type { GitStagedConversionStats, GitStagedUndecidableReason } from "./git-stage-node.js";
 import { sameGitHeadState, type GitHeadState } from "./git-head-state.js";
@@ -302,6 +303,42 @@ interface ScanInputs {
   // Large files met and the bytes streamed for them, counted for the evidence line.
   readonly large: { count: number; bytes: number };
 }
+interface PathTally {
+  total: number;
+  deniedPathCount: number;
+  truncated: boolean;
+  stopped: boolean;
+}
+async function scanOnePath(
+  scan: ScanInputs,
+  path: string,
+  tally: PathTally,
+  pending: Map<string, GitStageContent>,
+  changes: GitChangedFile[],
+): Promise<void> {
+  if (tally.stopped) return;
+  if (scan.deps.signal?.aborted === true)
+    throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+  if (!representablePath(path)) {
+    tally.truncated = true;
+    return;
+  }
+  if (isDenied(path)) {
+    tally.deniedPathCount += 1;
+    return;
+  }
+  if (tally.total >= MAX_CONTENT_BYTES) {
+    tally.truncated = true;
+    tally.stopped = true;
+    return;
+  }
+  const working = await workingStatus(scan, path, MAX_CONTENT_BYTES - tally.total);
+  tally.total += working.bytes;
+  collectConvertible(pending, path, working);
+  const staged = indexStatus(scan.head.get(path), scan.index.get(path));
+  if (staged !== " " || working.status !== " " || working.untracked)
+    changes.push(changed(path, staged, working.status, working.untracked));
+}
 async function scanPaths(
   scan: ScanInputs,
   paths: readonly string[],
@@ -313,35 +350,20 @@ async function scanPaths(
 > {
   const changes: GitChangedFile[] = [];
   const pending = new Map<string, GitStageContent>();
-  let total = 0;
-  let deniedPathCount = 0;
-  let truncated = paths.length > MAX_INSPECTED_PATHS;
-  for (const path of paths.slice(0, MAX_INSPECTED_PATHS)) {
-    if (scan.deps.signal?.aborted === true)
-      throw new GitRawWorktreeReadError("git-raw-read-cancelled");
-    if (!representablePath(path)) {
-      truncated = true;
-      continue;
-    }
-    if (isDenied(path)) {
-      deniedPathCount += 1;
-      continue;
-    }
-    if (total >= MAX_CONTENT_BYTES) {
-      truncated = true;
-      break;
-    }
-    const working = await workingStatus(scan, path, MAX_CONTENT_BYTES - total);
-    total += working.bytes;
-    collectConvertible(pending, path, working);
-    const staged = indexStatus(scan.head.get(path), scan.index.get(path));
-    if (staged !== " " || working.status !== " " || working.untracked)
-      changes.push(changed(path, staged, working.status, working.untracked));
-  }
+  const tally: PathTally = {
+    total: 0,
+    deniedPathCount: 0,
+    truncated: paths.length > MAX_INSPECTED_PATHS,
+    stopped: false,
+  };
+  // Sequential: each path's read spends the content budget the next one sees.
+  await eachInSequence(paths.slice(0, MAX_INSPECTED_PATHS), (path) =>
+    scanOnePath(scan, path, tally, pending, changes),
+  );
   return {
     changes: await settleConvertedFiles(scan, changes, pending),
-    truncated,
-    deniedPathCount,
+    truncated: tally.truncated,
+    deniedPathCount: tally.deniedPathCount,
     largeFileCount: scan.large.count,
     streamedBytes: scan.large.bytes,
   };

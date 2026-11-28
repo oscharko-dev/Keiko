@@ -18,6 +18,7 @@ import {
 } from "./git-stage-stream.js";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
+import { eachInSequence } from "./sequential.js";
 import { gitHeadObjectIdLength } from "./git-head-state.js";
 import { gitBlobObjectId } from "./git-index-identity.js";
 import type { GitMutationArgvPlan, GitStageExecRequest } from "./git-mutation-adapter.js";
@@ -659,22 +660,26 @@ async function writeUnconvertedObjects(
   );
   const written = new Map<string, string>();
   const byPath = new Map(eligible.map((file) => [file.path, file]));
-  for (const paths of boundedChunks([...byPath.keys()], () => 0, HASH_BATCH_PATHS)) {
-    const batch = paths.flatMap((path) => byPath.get(path) ?? []);
-    const result = await ctx.run(
-      ["hash-object", "--no-filters", "-w", "--stdin-paths"],
-      utf8.encode(`${batch.map((file) => file.path).join("\n")}\n`),
-    ); // NOSONAR typescript:S9382 -- batches run one after the other
-    const ids = result.stdout.split("\n").filter((line) => line !== "");
-    const expected = batch.map((file) => gitBlobObjectId(file.bytes, hashLength));
-    if (
-      result.exitCode === 0 &&
-      !result.truncated &&
-      ids.length === batch.length &&
-      ids.every((id, at) => id === expected[at])
-    )
-      batch.forEach((file, at) => written.set(file.path, expected[at] ?? ""));
-  }
+  // Batches run one after the other.
+  await eachInSequence(
+    boundedChunks([...byPath.keys()], () => 0, HASH_BATCH_PATHS),
+    async (paths) => {
+      const batch = paths.flatMap((path) => byPath.get(path) ?? []);
+      const result = await ctx.run(
+        ["hash-object", "--no-filters", "-w", "--stdin-paths"],
+        utf8.encode(`${batch.map((file) => file.path).join("\n")}\n`),
+      );
+      const ids = result.stdout.split("\n").filter((line) => line !== "");
+      const expected = batch.map((file) => gitBlobObjectId(file.bytes, hashLength));
+      if (
+        result.exitCode === 0 &&
+        !result.truncated &&
+        ids.length === batch.length &&
+        ids.every((id, at) => id === expected[at])
+      )
+        batch.forEach((file, at) => written.set(file.path, expected[at] ?? ""));
+    },
+  );
   return written;
 }
 /** Whether every named file can be staged under `lineEndings` (the proposal's admission check). */
@@ -825,10 +830,11 @@ async function hashPathsBisecting(
   if (paths.length === 1) return unanswered(paths);
   const answers = new Map<string, string | undefined>();
   const middle = Math.ceil(paths.length / 2);
-  for (const half of [paths.slice(0, middle), paths.slice(middle)])
+  // The halves run one after the other inside the run budget.
+  await eachInSequence([paths.slice(0, middle), paths.slice(middle)], async (half) => {
     for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, half, runs))
-      // NOSONAR typescript:S9382 -- halves run one after the other inside the run budget
       answers.set(path, id);
+  });
   return answers;
 }
 async function hashPathsUnderConversion(
@@ -841,10 +847,14 @@ async function hashPathsUnderConversion(
   const answers = new Map<string, string | undefined>();
   const runs: HashRuns = { remaining: HASH_RUN_BUDGET, skipped: 0, sizes };
   // The answer is one short line per path, so the stdin bound decides the part size.
-  for (const part of boundedChunks(paths, () => 0, HASH_BATCH_PATHS))
-    for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs, true))
-      // NOSONAR typescript:S9382 -- sequential parts keep each run under the stdin and output caps
-      answers.set(path, id);
+  // Sequential parts keep each run under the stdin and output caps.
+  await eachInSequence(
+    boundedChunks(paths, () => 0, HASH_BATCH_PATHS),
+    async (part) => {
+      for (const [path, id] of await hashPathsBisecting(ctx, lineEndings, part, runs, true))
+        answers.set(path, id);
+    },
+  );
   if (stats !== undefined) stats.hashBudgetExhaustedCount += runs.skipped;
   return answers;
 }
