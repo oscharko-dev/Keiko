@@ -4452,6 +4452,7 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
+    await flushPrefaceBeforeFailure(session);
     const failureCode = gatewayStreamFailureCode(error);
     const runtimeRetry = runtimeRetryForRun(
       session.runId,
@@ -4480,6 +4481,20 @@ async function pumpGatewayStreamWithCancellation(
   } finally {
     stopHeartbeat();
     cancellationSignal.removeEventListener("abort", cancelIterator);
+  }
+}
+
+// A short first line held while the attempt could still turn out to be a tool call is prose the
+// attempt had already produced: when the attempt fails, it reaches the runtime before the failure
+// frame, exactly as if it had streamed, so the retry semantics do not depend on the hold. Held
+// tool-call markup is never forwarded.
+async function flushPrefaceBeforeFailure(session: GatewayStreamSession): Promise<void> {
+  const { hold } = session.recovery;
+  if (hold.isHolding || session.cancellation.signal.aborted) return;
+  const text = hold.release();
+  if (text.length === 0) return;
+  if ((await forwardStreamText(session, { content: text }, undefined)) && text.trim().length > 0) {
+    session.recovery.proseForwarded = true;
   }
 }
 

@@ -5992,6 +5992,46 @@ describe("coding sidecar gateway turn failure projection", () => {
         runtimeRetry: "refused",
       });
     });
+    it("ends a malformed invocation after delivered text without an identical runtime retry when the answer is a single line", async () => {
+      const sink = captureServerLog("warn");
+      const response = mockResponse({ captureBody: true });
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "I will search now." };
+        throw new MalformedToolCallError("private-malformed-invocation-canary");
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-malformed-single" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain("I will search now.");
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain("private-malformed-invocation-canary");
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "invalid-tool-call",
+        runtimeRetry: "refused",
+      });
+    });
 
     it.each([
       [rejection, 400, "refused"],
@@ -8443,6 +8483,39 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
     ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
+  });
+  it("ends a live turn whose provider failed after answer text with an error the runtime may retry when the answer is a single line", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text-single" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).toContain("partial");
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "failed", repairAttempted: false });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runId: "run-after-text-single", runtimeRetry: "allowed" });
   });
 
   // An oversized or unparseable provider answer is the same answer on every attempt: the runtime
@@ -12521,6 +12594,54 @@ it("explains unavailable continuation after a live stream has opened", async () 
     const deps = {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-live-history-unavailable" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 5 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          tools: modelVisibleTools(),
+          messages: [{ role: "user", content: "synthetic" }],
+        }),
+        res: response.res,
+      },
+      deps,
+    );
+    expect(result).toBe(STREAMING);
+    expect(response.body()).toContain("Visible partial answer.");
+    expect(response.body()).toContain(
+      "Model continuation is unavailable. Start a new coding task.",
+    );
+    expect(response.body()).not.toContain("The model provider rejected this turn.");
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runtimeRetry: "refused" });
+  } finally {
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  }
+});
+it("explains unavailable continuation after a live stream has opened when the answer is a single line", async () => {
+  const sink = captureServerLog("warn");
+  const response = mockResponse({ captureBody: true });
+  const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield { type: "delta", token: "Visible partial answer." };
+    throw new ReasoningHistoryUnavailableError();
+  };
+  try {
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-live-history-unavailable-single" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
