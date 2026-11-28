@@ -1563,7 +1563,12 @@ async function dispatchWorkbenchDescription(
   const capture = await deps.snapshots.capture(captureInput);
   const captured = capture.snapshot;
   if (captured.outcome === "failed") return { reason: "provider-failed" };
-  if (captured.outcome === "unavailable") return { reason: "generation-unavailable" };
+  if (captured.outcome === "unavailable") {
+    // A HEAD or ref that moved during the capture is proven drift, not a missing capability: it
+    // keeps its stale reason so the card shows it. Every other unavailable reason has no draft.
+    const drifted = captured.reason === "head-mismatch" || captured.reason === "revision-mismatch";
+    return { reason: drifted ? "stale-snapshot" : "generation-unavailable" };
+  }
   if (capture.reference === undefined) return { reason: "generation-unavailable" };
   if (captured.remoteDigest !== scope.remoteDigest) return { reason: "stale-snapshot" };
   if (captured.baseSha !== scope.baseSha || captured.headSha !== scope.headSha) {

@@ -2015,6 +2015,30 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(outcome).toEqual({ reason: "generation-unavailable" });
   });
 
+  it.each(["head-mismatch", "revision-mismatch"] as const)(
+    "keeps the proven drift %s as stale-snapshot instead of generation-unavailable",
+    async (reason) => {
+      const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+        fakeDeps({
+          snapshots: fakeSnapshots(() =>
+            Promise.resolve({
+              snapshot: {
+                schemaVersion: GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+                repositoryId: "repo_fixture",
+                capturedAt: "2026-01-01T00:00:00.000Z",
+                outcome: "unavailable",
+                reason,
+                headSha: "a".repeat(40),
+              },
+            }),
+          ),
+        }),
+      );
+      const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+      expect(outcome).toEqual({ reason: "stale-snapshot" });
+    },
+  );
+
   it("maps a complete capture that carries no snapshot reference to generation-unavailable", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
