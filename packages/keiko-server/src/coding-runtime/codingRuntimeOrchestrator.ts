@@ -3312,6 +3312,11 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
     if (current.state !== "paused" || terminal) return undefined;
+    // Pause gates new actions; it does not stop the sessions already working. The port reports a
+    // changed subagent count once, so an absorbed count would stay lost after Resume.
+    if (event.kind === "native-subagents-changed") {
+      return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
+    }
     // A run paused FOR a decision is resumed by that decision settling, so this one event is the
     // exception to a paused run absorbing its runtime events.
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);

@@ -6389,6 +6389,31 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.resume).not.toHaveBeenCalled();
   });
 
+  it("keeps showing a subagent count that changed while the run was paused", async () => {
+    const f = await runningFixture();
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    f.eventHub.publish.mockClear();
+
+    const absorbed = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-subagents-paused",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:03.000Z",
+      kind: "native-subagents-changed",
+      activeSubagentCount: 1,
+    });
+
+    expect(successfulSnapshot(absorbed).state).toBe("paused");
+    expect(f.eventHub.publish).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        kind: "runtime-event",
+        state: "paused",
+        eventKind: "native-subagents-changed",
+        activeSubagentCount: 1,
+      }),
+    );
+  });
+
   it("still terminates a paused run on a redacted runtime failure", async () => {
     const captured = captureDiagnostics();
     const f = await runningFixture(undefined, captured.diagnostics);
