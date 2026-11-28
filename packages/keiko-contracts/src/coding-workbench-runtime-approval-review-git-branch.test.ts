@@ -28,7 +28,7 @@ describe("approval review channel: governed task branch (U-27)", () => {
   it.each([
     ["an empty name", { gitBranch: { branchName: "" } }],
     ["an over-long name", { gitBranch: { branchName: "b".repeat(256) } }],
-    ["a control-character name", { gitBranch: { branchName: "a‮b" } }],
+    ["a control-character name", { gitBranch: { branchName: "a\u202Eb" } }],
     ["an extra key", { gitBranch: { branchName: "a", remote: "origin" } }],
     ["a non-object", { gitBranch: "feature/x" }],
     ["a path list beside the branch", { paths: ["a.ts"], fileCount: 1 }],
