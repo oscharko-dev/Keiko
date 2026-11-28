@@ -814,6 +814,8 @@ interface CleanedMessage {
 
 async function cleanedByGit(ctx: RunContext, raw: string): Promise<CleanedMessage> {
   const config = await readCommitCleanupConfig(ctx);
+  // Git refuses `auto` for a message that starts a line with every candidate in every mode.
+  if (config.comment === "auto") autoCommentCharacter(raw);
   if (config.mode === "verbatim")
     return { text: raw.endsWith("\n") ? raw : `${raw}\n`, verbatim: true };
   const result = await runOne(

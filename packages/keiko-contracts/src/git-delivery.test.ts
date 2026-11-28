@@ -27,6 +27,7 @@ import {
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryExecutionOutcome,
   isGitDeliveryExecutionResult,
+  GIT_DELIVERY_EXECUTION_NOTES,
   isGitDeliveryMergeBlockReason,
   isGitDeliveryMergeStrategyHint,
   isGitDeliveryPolicyDecision,
@@ -319,6 +320,20 @@ describe("git-delivery approval / policy-decision / evidence / execution-result 
     expect(
       isGitDeliveryEvidenceRef({ sourceGroundedRunId: "", evidenceManifestStableIdHash: "x" }),
     ).toBe(false);
+  });
+
+  it("isGitDeliveryExecutionResult accepts only the closed completion notes", () => {
+    const base = {
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      outcome: "succeeded",
+      durationMs: 5,
+    };
+    expect(GIT_DELIVERY_EXECUTION_NOTES).toEqual(["recorded-despite-late-error"]);
+    for (const note of GIT_DELIVERY_EXECUTION_NOTES)
+      expect(isGitDeliveryExecutionResult({ ...base, completionNote: note })).toBe(true);
+    expect(isGitDeliveryExecutionResult(base)).toBe(true);
+    for (const unknown of ["", "late error", "RECORDED-DESPITE-LATE-ERROR", 1, null, {}])
+      expect(isGitDeliveryExecutionResult({ ...base, completionNote: unknown })).toBe(false);
   });
 
   it("isGitDeliveryExecutionResult validates outcome, errorCode, and partialDetail", () => {

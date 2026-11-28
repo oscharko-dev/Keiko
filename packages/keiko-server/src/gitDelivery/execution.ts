@@ -16,6 +16,7 @@ import type {
   GitCommitSigningDecision,
   GitCommitSigningReadFailure,
   GitDeliveryExecutionErrorCode,
+  GitDeliveryExecutionNote,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
   GitSyncOperation,
@@ -1623,7 +1624,7 @@ export interface GitDeliveryMutationResponseBody {
   readonly requiredApprovers?: readonly string[];
   readonly executionErrorCode?: string;
   /** A closed note on a success (a commit recorded despite a late Git error). */
-  readonly executionNote?: string;
+  readonly executionNote?: GitDeliveryExecutionNote;
 }
 
 export function gitDeliveryMutationResponse(

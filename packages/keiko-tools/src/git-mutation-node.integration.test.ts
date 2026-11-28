@@ -538,21 +538,44 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       .map((sha) => gitIn(repo, ["cat-file", "commit", sha]).split("\n\n").slice(1).join("\n\n"));
   }
 
-  const CLEANUP_CASES: readonly (readonly [string, readonly [string, string] | undefined])[] = [
-    ["default", undefined],
-    ["whitespace", undefined],
-    ["scissors", undefined],
-    ["strip", undefined],
-    ["strip", ["core.commentChar", ";"]],
-    ["strip", ["core.commentChar", "auto"]],
-    ["strip", ["core.commentString", "auto"]],
-    ["strip", ["core.commentString", "//"]],
-    ["verbatim", undefined],
+  type CommentSettings = readonly (readonly [string, string])[];
+  const CLEANUP_CASES: readonly (readonly [string, CommentSettings])[] = [
+    ["default", []],
+    ["whitespace", []],
+    ["scissors", []],
+    ["strip", []],
+    ["strip", [["core.commentChar", ";"]]],
+    ["strip", [["core.commentChar", "auto"]]],
+    ["default", [["core.commentChar", "auto"]]],
+    ["verbatim", [["core.commentChar", "auto"]]],
+    ["strip", [["core.commentString", "auto"]]],
+    ["strip", [["core.commentString", "//"]]],
+    // Git 2.56 reads a multi-character core.commentChar as a comment string.
+    ["strip", [["core.commentChar", "ab"]]],
+    ["default", [["core.commentChar", "ab"]]],
+    // Both keys set: the one defined last wins.
+    [
+      "strip",
+      [
+        ["core.commentString", "//"],
+        ["core.commentChar", ";"],
+      ],
+    ],
+    [
+      "strip",
+      [
+        ["core.commentChar", ";"],
+        ["core.commentString", "//"],
+      ],
+    ],
+    ["verbatim", []],
   ];
+  const INDENTED_COMMENT_MESSAGE = "a\n  #x\n ;y\nb";
+  const MARKER_MESSAGES = ["xab-less", "a\nabx\nb"];
 
   it.each(CLEANUP_CASES)(
-    "records the message bytes of git commit -m for commit.cleanup=%s (comment marker %j)",
-    async (mode, comment) => {
+    "records the message bytes of git commit -m for commit.cleanup=%s (comment settings %j)",
+    async (mode, settings) => {
       // The oracle is real `git commit -m` run directly, so the lanes cannot agree on a wrong answer.
       const gitRepo = newRepo();
       const plainRepo = newRepo();
@@ -560,11 +583,13 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       for (const repo of [gitRepo, plainRepo, boundRepo]) {
         seedBase(repo);
         gitIn(repo, ["config", "commit.cleanup", mode]);
-        if (comment !== undefined) gitIn(repo, ["config", ...comment]);
+        for (const setting of settings) gitIn(repo, ["config", ...setting]);
       }
       const messages = [
         ...CLEANUP_MESSAGES,
-        ...(comment?.[1] === "auto" ? AUTO_ONLY_MESSAGES : []),
+        INDENTED_COMMENT_MESSAGE,
+        ...MARKER_MESSAGES,
+        ...(settings.some(([, value]) => value === "auto") ? AUTO_ONLY_MESSAGES : []),
       ];
       for (const [index, message] of messages.entries()) {
         writeFileSync(join(gitRepo, "a.txt"), `${String(index)}\n`, "utf8");
@@ -581,33 +606,91 @@ describe("node git mutation adapter — the bound commit leaves the repository a
     },
   );
 
-  it("refuses like git when every candidate comment character starts a line (auto)", async () => {
-    const message = ["x", "#a", ";b", "@c", "!d", "$e", "%f", "^g", "&h", "|i", ":j", "k"].join(
-      "\n",
-    );
-    const gitRepo = newRepo();
-    const boundRepo = newRepo();
-    for (const repo of [gitRepo, boundRepo]) {
-      seedBase(repo);
-      gitIn(repo, ["config", "commit.cleanup", "strip"]);
-      gitIn(repo, ["config", "core.commentChar", "auto"]);
-    }
-    writeFileSync(join(gitRepo, "a.txt"), "x\n", "utf8");
-    gitIn(gitRepo, ["add", "a.txt"]);
-    expect(() => gitIn(gitRepo, ["commit", "-q", "-m", message])).toThrow();
+  // Refusals Git itself makes (exit 128) in every cleanup mode, whatever the mode would clean. A
+  // config Git cannot parse breaks every Git command, so the lane fails on its first read, before it
+  // ever reaches the cleanup: it still refuses and writes nothing, but with no cleanup cause.
+  const ALL_TEN = ["x", "#a", ";b", "@c", "!d", "$e", "%f", "^g", "&h", "|i", ":j", "k"].join("\n");
+  const MODES = ["default", "whitespace", "scissors", "verbatim", "strip"];
+  const REFUSED_SETTINGS: readonly (readonly [string, (repo: string) => void, string, boolean])[] =
+    [
+      [
+        "auto with all ten candidates used (commentChar)",
+        (r): void => {
+          gitIn(r, ["config", "core.commentChar", "auto"]);
+        },
+        ALL_TEN,
+        true,
+      ],
+      [
+        "auto with all ten candidates used (commentString)",
+        (r): void => {
+          gitIn(r, ["config", "core.commentString", "auto"]);
+        },
+        ALL_TEN,
+        true,
+      ],
+      [
+        "a core.commentChar with no value",
+        (r): void => {
+          appendFileSync(join(r, ".git", "config"), "[core]\n\tcommentChar\n");
+        },
+        "a\n#x\nb",
+        false,
+      ],
+      [
+        "an empty core.commentChar",
+        (r): void => {
+          gitIn(r, ["config", "core.commentChar", ""]);
+        },
+        "a\n#x\nb",
+        false,
+      ],
+      [
+        "an empty core.commentString",
+        (r): void => {
+          gitIn(r, ["config", "core.commentString", ""]);
+        },
+        "a\n#x\nb",
+        false,
+      ],
+    ];
 
-    const causes: string[] = [];
-    const refused = await commitOn(boundRepo, true, message, {
-      onCommitRefused: (report) => {
-        causes.push(report.cause);
-      },
-    });
+  it.each(
+    REFUSED_SETTINGS.flatMap(([name, setup, message, cleanupCause]) =>
+      MODES.map((mode) => [name, mode, setup, message, cleanupCause] as const),
+    ),
+  )(
+    "refuses like git for %s under commit.cleanup=%s",
+    async (_name, mode, setup, message, cleanupCause) => {
+      const gitRepo = newRepo();
+      const boundRepo = newRepo();
+      for (const repo of [gitRepo, boundRepo]) {
+        seedBase(repo);
+        gitIn(repo, ["config", "commit.cleanup", mode]);
+        writeFileSync(join(repo, "a.txt"), "x\n", "utf8");
+        gitIn(repo, ["add", "a.txt"]);
+        setup(repo);
+      }
+      expect(() => gitIn(gitRepo, ["commit", "-q", "-m", message])).toThrow();
 
-    expect(refused.outcome).toBe("failed");
-    expect(refused.errorCode).toBe("precondition-failed");
-    expect(causes).toEqual(["cleanup-unavailable"]);
-    expect(gitIn(boundRepo, ["rev-list", "--count", "HEAD"]).trim()).toBe("1");
-  });
+      const tipOf = (repo: string): string =>
+        readFileSync(join(repo, ".git", "refs", "heads", "main"), "utf8");
+      const tipBefore = tipOf(boundRepo);
+      const causes: string[] = [];
+      const refused = await adapterFor(boundRepo, true, {
+        onCommitRefused: (report) => {
+          causes.push(report.cause);
+        },
+      }).commit({ message, allowEmpty: false });
+
+      expect(refused.outcome).toBe("failed");
+      if (cleanupCause) {
+        expect(refused.errorCode).toBe("precondition-failed");
+        expect(causes).toEqual(["cleanup-unavailable"]);
+      }
+      expect(tipOf(boundRepo)).toBe(tipBefore);
+    },
+  );
 
   it("refuses an invalid commit.cleanup on both lanes without writing anything", async () => {
     for (const bound of [false, true]) {

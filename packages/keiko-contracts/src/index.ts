@@ -4047,6 +4047,7 @@ export type {
   GitDeliveryExecutionResult,
   GitCommitSigningDecision,
   GitCommitSigningReadFailure,
+  GitDeliveryExecutionNote,
   GitDeliveryEvidenceRef,
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,

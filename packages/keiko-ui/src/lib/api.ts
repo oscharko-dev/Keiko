@@ -113,6 +113,7 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
+  GitDeliveryExecutionNote,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
@@ -3107,7 +3108,7 @@ export interface GitDeliveryMutationResponse {
   readonly preflightFindingCodes?: readonly string[];
   readonly requiredApprovers?: readonly string[];
   readonly executionErrorCode?: string;
-  readonly executionNote?: string;
+  readonly executionNote?: GitDeliveryExecutionNote;
   readonly messageViolations?: readonly GitCommitMessageViolationCode[];
 }
 

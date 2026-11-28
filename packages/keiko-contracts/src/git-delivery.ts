@@ -508,7 +508,8 @@ export type GitCommitSigningReadFailure = (typeof GIT_COMMIT_SIGNING_READ_FAILUR
  * A closed note on a success the person should still see: `recorded-despite-late-error` means the
  * commit is on the branch although Git reported a late error after writing the ref.
  */
-export type GitDeliveryExecutionNote = "recorded-despite-late-error";
+export const GIT_DELIVERY_EXECUTION_NOTES = ["recorded-despite-late-error"] as const;
+export type GitDeliveryExecutionNote = (typeof GIT_DELIVERY_EXECUTION_NOTES)[number];
 
 export interface GitDeliveryExecutionResult {
   readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
@@ -786,8 +787,13 @@ export function isGitDeliveryExecutionResult(value: unknown): value is GitDelive
     isUndefinedOr(isGitDeliveryExecutionErrorCode)(value.errorCode) &&
     isUndefinedOr(isPartialDetail)(value.partialDetail) &&
     isUndefinedOr(isCommitSigningDecision)(value.signing) &&
-    isUndefinedOr(isCommitSigningReadFailure)(value.signingReadFailure)
+    isUndefinedOr(isCommitSigningReadFailure)(value.signingReadFailure) &&
+    isUndefinedOr(isExecutionNote)(value.completionNote)
   );
+}
+
+function isExecutionNote(value: unknown): value is GitDeliveryExecutionNote {
+  return (GIT_DELIVERY_EXECUTION_NOTES as readonly unknown[]).includes(value);
 }
 
 function isCommitSigningDecision(value: unknown): value is GitCommitSigningDecision {
