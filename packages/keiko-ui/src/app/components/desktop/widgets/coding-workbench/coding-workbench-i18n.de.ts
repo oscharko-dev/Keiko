@@ -1629,6 +1629,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Nicht committet: Im Editor geöffnete Dateien enthalten ungespeicherte Änderungen. Speichere sie, verifiziere die vorgemerkte Änderung und committe dann.",
   "codingWorkbench.activity.git.blocked":
     "Nicht durchgeführt: Die Richtlinien- oder Berechtigungsprüfung von Keiko hat diesen Schritt abgelehnt.",
+  "codingWorkbench.activity.git.branch-invalid-name":
+    "Nicht durchgeführt: Dies ist kein Branch-Name, den Keiko anlegt. Verwende Buchstaben, Ziffern, '-', '_', '.' und '/'.",
+  "codingWorkbench.activity.git.branch-protected-name":
+    "Nicht durchgeführt: Keiko legt keinen Aufgaben-Branch mit geschütztem Namen wie main oder dev an.",
+  "codingWorkbench.activity.git.branch-exists":
+    "Nicht durchgeführt: Ein Branch mit diesem Namen existiert bereits. Keiko verschiebt, setzt zurück oder löscht keinen bestehenden Branch.",
+  "codingWorkbench.activity.git.branch-not-on-base":
+    "Nicht durchgeführt: Dieser Lauf arbeitet bereits auf einem Aufgaben-Branch. Keiko legt einen Aufgaben-Branch nur vom Basis-Branch aus an.",
+  "codingWorkbench.activity.git.branch-not-local-checkout":
+    "Nicht durchgeführt: Keiko legt einen Aufgaben-Branch nur in einem lokalen Checkout an, und dieser Arbeitsbereich ist keiner.",
+  "codingWorkbench.activity.git.branch-executable-filters":
+    "Nicht durchgeführt: Dieser Checkout hat ausführbare Git-Filter, daher wechselt Keiko seinen Branch nicht.",
+  "codingWorkbench.activity.git.branch-preflight":
+    "Nicht durchgeführt: Git meldet einen Repository-Zustand, der den Branch blockiert, zum Beispiel einen laufenden Merge.",
   "codingWorkbench.activity.git.changed":
     "Nicht durchgeführt: Die Änderung oder das Repository hat sich verändert, nachdem dieser Schritt vorgeschlagen wurde.",
   "codingWorkbench.activity.git.not-done":

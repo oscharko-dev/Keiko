@@ -1570,6 +1570,20 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Not committed: files open in the editor hold unsaved changes. Save them, verify the staged change, then commit.",
   "codingWorkbench.activity.git.blocked":
     "Not done: Keiko's policy or authority checks refused this step.",
+  "codingWorkbench.activity.git.branch-invalid-name":
+    "Not done: that is not a branch name Keiko will create. Use letters, digits, '-', '_', '.' and '/'.",
+  "codingWorkbench.activity.git.branch-protected-name":
+    "Not done: Keiko never creates a task branch with a protected name such as main or dev.",
+  "codingWorkbench.activity.git.branch-exists":
+    "Not done: a branch with that name already exists. Keiko never moves, resets or deletes an existing branch.",
+  "codingWorkbench.activity.git.branch-not-on-base":
+    "Not done: this run is already on a task branch. Keiko only creates a task branch from the base branch.",
+  "codingWorkbench.activity.git.branch-not-local-checkout":
+    "Not done: Keiko creates a task branch only in a Local checkout, and this workspace is not one.",
+  "codingWorkbench.activity.git.branch-executable-filters":
+    "Not done: this checkout has executable Git filters, so Keiko will not switch its branch.",
+  "codingWorkbench.activity.git.branch-preflight":
+    "Not done: Git reports a repository condition that blocks the branch, for example a merge in progress.",
   "codingWorkbench.activity.git.changed":
     "Not done: the change or the repository changed after this step was proposed.",
   "codingWorkbench.activity.git.not-done": "Not done: the step failed or its result is uncertain.",

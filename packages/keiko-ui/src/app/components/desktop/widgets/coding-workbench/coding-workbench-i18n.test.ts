@@ -194,6 +194,13 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.activity.git.not-staged",
     "codingWorkbench.activity.git.unsaved-changes",
     "codingWorkbench.activity.git.blocked",
+    "codingWorkbench.activity.git.branch-invalid-name",
+    "codingWorkbench.activity.git.branch-protected-name",
+    "codingWorkbench.activity.git.branch-exists",
+    "codingWorkbench.activity.git.branch-not-on-base",
+    "codingWorkbench.activity.git.branch-not-local-checkout",
+    "codingWorkbench.activity.git.branch-executable-filters",
+    "codingWorkbench.activity.git.branch-preflight",
     "codingWorkbench.activity.git.changed",
     "codingWorkbench.activity.git.not-done",
   ] as const)("localizes the reasoning label %s in both catalogs", (key) => {

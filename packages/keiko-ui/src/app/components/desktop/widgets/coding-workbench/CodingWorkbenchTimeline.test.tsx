@@ -527,6 +527,41 @@ describe("CodingWorkbenchTimeline", () => {
     expect(passed).toHaveTextContent("Every requested verification check passed.");
   });
 
+  // Lab U-24: a task branch refused as not-on-base read the generic policy sentence. Each closed
+  // branch word names its own cause; the policy and authority refusals keep the generic one.
+  it.each([
+    ["branch-invalid-name", "not a branch name Keiko will create"],
+    ["branch-protected-name", "protected name such as main or dev"],
+    ["branch-exists", "a branch with that name already exists"],
+    ["branch-not-on-base", "already on a task branch"],
+    ["branch-not-local-checkout", "only in a Local checkout"],
+    ["branch-executable-filters", "executable Git filters"],
+    ["branch-preflight", "repository condition that blocks the branch"],
+    ["blocked", "policy or authority checks refused"],
+  ] as const)("explains the refused task branch %s precisely", (gitOutcome, sentence) => {
+    const feed = feedWithGitOutcomes();
+    const tool = {
+      callId: "branch-1",
+      tool: "keiko_git",
+      state: "succeeded",
+      occurredAt: AT,
+      presentation: { gitOutcome, bridgeDurationMs: 9 },
+    } as const;
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-branch", messages: [], tools: [tool], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent(sentence);
+    if (gitOutcome !== "blocked") expect(container).not.toHaveTextContent("policy or authority");
+  });
+
   // Lab T37 (2026-11-07, #4271): a commit Keiko refused showed "Git commit - Succeeded". A refused
   // Git step reads as not done, with its reason, and opens like the other cards that need a reading.
   it("shows a refused Git step as not done instead of succeeded", () => {

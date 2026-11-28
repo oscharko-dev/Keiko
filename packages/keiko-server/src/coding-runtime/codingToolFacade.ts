@@ -478,6 +478,19 @@ const COMMIT_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome
   ["buffers-dirty", "unsaved-changes"],
 ]);
 
+// A refused task branch names its one cause on the card (lab U-24: a branch step refused as
+// not-on-base read the generic policy sentence). authority-denied and policy-block stay `blocked`,
+// which says exactly that; every other reason falls back to it too, never to a success word.
+const BRANCH_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityGitOutcome> = new Map([
+  ["invalid-name", "branch-invalid-name"],
+  ["protected-name", "branch-protected-name"],
+  ["branch-exists", "branch-exists"],
+  ["not-on-base", "branch-not-on-base"],
+  ["not-local-checkout", "branch-not-local-checkout"],
+  ["executable-filters", "branch-executable-filters"],
+  ["preflight-block", "branch-preflight"],
+]);
+
 const GIT_SYNC_COMPLETED_STATUSES: ReadonlySet<string> = new Set(["succeeded", "up-to-date"]);
 
 function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
@@ -492,6 +505,8 @@ function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutco
 function gitResultOutcome(git: CodingRuntimeGitResult): CodingSafeActivityGitOutcome | undefined {
   if (git.kind === "fetch" || git.kind === "pull")
     return GIT_SYNC_COMPLETED_STATUSES.has(git.status) ? "completed" : "not-done";
+  if (git.kind === "branch" && git.status === "blocked")
+    return BRANCH_OUTCOME_BY_REASON.get(git.reason) ?? "blocked";
   if (git.kind !== "stage" && git.kind !== "unstage" && git.kind !== "branch") return undefined;
   return git.status === "ready" ? undefined : gitStepOutcome(git.status);
 }
