@@ -110,6 +110,21 @@ export interface GitCommitSigningReadFailureReport {
   readonly error: unknown;
 }
 
+/**
+ * What a governed Git cleanup could not finish, body-free: which operation owned it and how many
+ * leftovers stayed (counts and flags only, never a path). `quarantines`, `temporaryIndex` and `lock`
+ * come from an index transaction; `refLocks` and `directories` from the branch ref locks of an unborn
+ * branch creation.
+ */
+export interface GitCleanupIncompleteReport {
+  readonly caller: "stage" | "unstage" | "branch-ref-lock";
+  readonly quarantines: number;
+  readonly temporaryIndex: boolean;
+  readonly lock: boolean;
+  readonly refLocks: number;
+  readonly directories: number;
+}
+
 export interface NodeGitMutationAdapterDeps {
   /**
    * The trusted branch-protection verdict for the branch a commit lands on: true only when the
@@ -120,6 +135,8 @@ export interface NodeGitMutationAdapterDeps {
   readonly signingRequiredByBranchProtection?: (() => Promise<boolean | "unavailable">) | undefined;
   /** Injected log port for a failed `commit.gpgsign` read (frames and cause chain stay with the owner). */
   readonly onSigningReadFailure?: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
+  /** Injected log port for a cleanup the index transaction or the ref locks could not finish. */
+  readonly onCleanupIncomplete?: ((report: GitCleanupIncompleteReport) => void) | undefined;
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
   readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
   readonly beforeIndexUpdate?: (() => boolean) | undefined;
@@ -248,6 +265,7 @@ interface RunContext {
   readonly readSession: GitReadSession | undefined;
   readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
   readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
+  readonly onCleanupIncomplete: ((report: GitCleanupIncompleteReport) => void) | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -493,6 +511,13 @@ function verifiedIndexEffect(
         (await configuredStageLineEndings(ctx)) === stagedLineEndings),
     // Read once per staging, not once per hashed file (PR #4568 audit: Windows spawn cost).
     filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
+    onIndexCleanupFailure: (report) =>
+      ctx.onCleanupIncomplete?.({
+        caller: stagedLineEndings === undefined ? "unstage" : "stage",
+        refLocks: 0,
+        directories: 0,
+        ...report,
+      }),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
     signal: ctx.signal,
     run: (argv, stdin, indexPath, timeoutMs, quarantine) =>
@@ -1036,6 +1061,16 @@ async function execUnbornBranch(
         return await repointUnbornHead(ctx, fromBranch, req);
       },
       workspaceFsOf(ctx.runDeps),
+      {
+        onCleanupFailure: (report) =>
+          ctx.onCleanupIncomplete?.({
+            caller: "branch-ref-lock",
+            quarantines: 0,
+            temporaryIndex: false,
+            lock: false,
+            ...report,
+          }),
+      },
     );
   } catch (error) {
     return failureFromUnbornBranchThrow(error);
@@ -1145,6 +1180,7 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     readSession: deps.readSession,
     signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
     onSigningReadFailure: deps.onSigningReadFailure,
+    onCleanupIncomplete: deps.onCleanupIncomplete,
   };
 }
 

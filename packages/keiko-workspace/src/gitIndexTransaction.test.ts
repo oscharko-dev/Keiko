@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
-  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -9,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -28,7 +28,12 @@ import {
   isGitStageLargeFile,
   readGitStageFile,
   streamGitStageFile,
+  withGitBranchRefLocks,
   withGitIndexTransaction,
+  type GitCleanupOptions,
+  type GitIndexCleanupReport,
+  type GitRefLockCleanupReport,
+  type RemovePath,
 } from "./gitIndexTransaction.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 let root: string;
@@ -530,29 +535,37 @@ describe("the object quarantine of an index transaction", () => {
     );
     expect(git(["cat-file", "-p", id])).toBe("accepted");
   });
-  it("releases the index lock and descriptor when a quarantine cannot be removed", async () => {
-    const lock = join(root, ".git", "index.lock");
-    const failures: number[] = [];
-    let blocked = "";
-    const refused = await withGitIndexTransaction(
+  // A sharing violation (EBUSY) on exactly one removal, injected through the removal seam: it behaves
+  // the same on every platform, unlike a permission trick.
+  function busyOn(
+    kinds: readonly ("file" | "directory" | "tree")[],
+    match: (path: string) => boolean = () => true,
+  ): RemovePath {
+    return (path, kind) => {
+      if (kinds.includes(kind) && match(path))
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      defaultRemove(path, kind);
+    };
+  }
+  function defaultRemove(path: string, kind: "file" | "directory" | "tree"): void {
+    if (kind === "directory") rmdirSync(path);
+    else rmSync(path, { recursive: kind === "tree", force: true });
+  }
+  async function refusedWithQuarantine(
+    options: GitCleanupOptions<GitIndexCleanupReport>,
+  ): Promise<boolean> {
+    return withGitIndexTransaction(
       root,
       (transaction) => {
-        const directory = transaction.openObjectQuarantine(40).directory;
-        mkdirSync(join(directory, "sub"));
-        writeFileSync(join(directory, "sub", "kept"), "x");
-        // A directory that cannot be emptied stands for a transient sharing violation on removal.
-        chmodSync(join(directory, "sub"), 0o500);
-        blocked = join(directory, "sub");
+        writeFileSync(join(transaction.openObjectQuarantine(40).directory, "kept"), "x");
         return Promise.resolve(false);
       },
       (accepted) => accepted,
       nodeWorkspaceFs,
-      (failed) => failures.push(failed),
+      options,
     );
-    chmodSync(blocked, 0o700);
-    expect(refused).toBe(false);
-    expect(failures).toEqual([1]);
-    expect(existsSync(lock)).toBe(false);
+  }
+  async function laterTransactionSucceeds(): Promise<void> {
     await expect(
       withGitIndexTransaction(
         root,
@@ -560,6 +573,127 @@ describe("the object quarantine of an index transaction", () => {
         (accepted) => accepted,
       ),
     ).resolves.toBe(true);
+  }
+  it("releases the index lock and descriptor when a quarantine cannot be removed, and reports it", async () => {
+    const reports: GitIndexCleanupReport[] = [];
+    const refused = await refusedWithQuarantine({
+      removePath: busyOn(["tree"]),
+      onCleanupFailure: (report) => reports.push(report),
+    });
+    expect(refused).toBe(false);
+    expect(reports).toEqual([{ quarantines: 1, temporaryIndex: false, lock: false }]);
+    expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
+    await laterTransactionSucceeds();
+  });
+  it("removes the lock even when the private index cannot be removed, and reports it", async () => {
+    const reports: GitIndexCleanupReport[] = [];
+    const accepted = await withGitIndexTransaction(
+      root,
+      () => Promise.resolve(false),
+      (value) => value,
+      nodeWorkspaceFs,
+      {
+        removePath: busyOn(["file"], (path) => path.includes(".keiko-index-")),
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(accepted).toBe(false);
+    expect(reports).toEqual([{ quarantines: 0, temporaryIndex: true, lock: false }]);
+    expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
+    await laterTransactionSucceeds();
+  });
+  it("reports a lock that cannot be removed without replacing the settled result", async () => {
+    const reports: GitIndexCleanupReport[] = [];
+    const accepted = await withGitIndexTransaction(
+      root,
+      () => Promise.resolve(false),
+      (value) => value,
+      nodeWorkspaceFs,
+      {
+        removePath: busyOn(["file"], (path) => path.endsWith("index.lock")),
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(accepted).toBe(false);
+    expect(reports).toEqual([{ quarantines: 0, temporaryIndex: false, lock: true }]);
+    expect(readdirSync(join(root, ".git")).some((n) => n.startsWith(".keiko-index-"))).toBe(false);
+    // The leftover is a real lock: it blocks the next transaction until it is removed.
+    await expect(
+      withGitIndexTransaction(
+        root,
+        () => Promise.resolve(true),
+        (value) => value,
+      ),
+    ).rejects.toThrow();
+    rmSync(join(root, ".git", "index.lock"));
+    await laterTransactionSucceeds();
+  });
+  it("never replaces the settled result with a throwing report port", async () => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error & { code?: string }): void => {
+      warnings.push(warning.code ?? "");
+    };
+    process.on("warning", onWarning);
+    try {
+      const refused = await refusedWithQuarantine({
+        removePath: busyOn(["tree"]),
+        onCleanupFailure: () => {
+          throw new Error("port failed");
+        },
+      });
+      expect(refused).toBe(false);
+      await refusedWithQuarantine({ removePath: busyOn(["tree"]) });
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off("warning", onWarning);
+    }
+    expect(warnings).toEqual(["KEIKO_GIT_CLEANUP_UNREPORTED", "KEIKO_GIT_CLEANUP_UNREPORTED"]);
+    expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
+  });
+  it("keeps what run settled when a created ref directory cannot be removed, and reports it", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    const answer = await withGitBranchRefLocks(
+      root,
+      ["feature/first", "second"],
+      () => Promise.resolve("settled"),
+      nodeWorkspaceFs,
+      {
+        removePath: busyOn(["directory"]),
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(answer).toBe("settled");
+    expect(reports).toEqual([{ refLocks: 0, directories: 1 }]);
+    expect(existsSync(join(root, ".git", "refs", "heads", "second.lock"))).toBe(false);
+    expect(existsSync(join(root, ".git", "refs", "heads", "feature", "first.lock"))).toBe(false);
+  });
+  it("releases every ref lock when one cannot be removed, and reports the one that stayed", async () => {
+    const reports: GitRefLockCleanupReport[] = [];
+    const answer = await withGitBranchRefLocks(
+      root,
+      ["alpha", "beta"],
+      () => Promise.resolve("settled"),
+      nodeWorkspaceFs,
+      {
+        removePath: busyOn(["file"], (path) => path.endsWith("beta.lock")),
+        onCleanupFailure: (report) => reports.push(report),
+      },
+    );
+    expect(answer).toBe("settled");
+    expect(reports).toEqual([{ refLocks: 1, directories: 0 }]);
+    expect(existsSync(join(root, ".git", "refs", "heads", "alpha.lock"))).toBe(false);
+    expect(existsSync(join(root, ".git", "refs", "heads", "beta.lock"))).toBe(true);
+  });
+  it("keeps the failure of run when the cleanup also fails", async () => {
+    await expect(
+      withGitBranchRefLocks(
+        root,
+        ["feature/third"],
+        () => Promise.reject(new Error("run failed")),
+        nodeWorkspaceFs,
+        { removePath: busyOn(["directory"]), onCleanupFailure: () => undefined },
+      ),
+    ).rejects.toThrow("run failed");
   });
 });
 

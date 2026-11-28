@@ -9,6 +9,7 @@ import {
   inspectGitStageFile,
   isGitStageLargeFile,
   withGitIndexTransaction,
+  type GitIndexCleanupReport,
   type GitObjectQuarantine,
   type GitStageContent,
   type GitStageFile,
@@ -50,6 +51,9 @@ export interface GitStageEffectContext {
   // Every configured `filter.<name>` driver name, or `undefined` when the configuration cannot be
   // read. The conversion hash overrides each one, so no configured driver can run while staging.
   readonly filterDriverNames: () => Promise<readonly string[] | undefined>;
+  // Injected log port: what the index transaction's cleanup could not finish (a leftover quarantine
+  // or private index, or an index lock that stayed), as counts and flags. Never changes the result.
+  readonly onIndexCleanupFailure?: ((report: GitIndexCleanupReport) => void) | undefined;
   // The line-break class of each named path's index entry as `git ls-files --eol` reports it
   // (`lf`, `crlf`, `mixed`, `none`, `-text`; absent: no entry). Git keeps the bytes of a path whose
   // staged blob already holds a CR, so the conversion depends on it.
@@ -1117,6 +1121,7 @@ export async function stageExactFiles(
       return result;
     },
     ctx.fs,
+    { onCleanupFailure: ctx.onIndexCleanupFailure },
   );
 }
 
@@ -1147,5 +1152,6 @@ export async function unstageExactFiles(
       return result;
     },
     ctx.fs,
+    { onCleanupFailure: ctx.onIndexCleanupFailure },
   );
 }

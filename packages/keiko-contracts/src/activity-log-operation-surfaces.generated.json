@@ -441,6 +441,7 @@
   "git.draft-remote.observed": "editor-delivery",
   "git.draft-target.resolved": "editor-delivery",
   "git.draft-template": "editor-delivery",
+  "git.index-transaction.cleanup-incomplete": "editor-delivery",
   "git.journey-observation": "editor-delivery",
   "git.journey-outcome.recorded": "editor-delivery",
   "git.journey-readiness.refreshed": "editor-delivery",

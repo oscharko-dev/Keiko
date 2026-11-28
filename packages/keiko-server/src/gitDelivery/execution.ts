@@ -52,6 +52,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { invalidateGitSummaryCache } from "../gitRepositoryReads.js";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { logGitIndexCleanupIncomplete } from "./indexCleanupLog.js";
 import { logWorkspaceLifecycleFailure } from "../task-workspace/activity-log.js";
 import { asRepositoryUnreachable, TaskWorkspaceError } from "../task-workspace/errors.js";
 import {
@@ -1028,6 +1029,15 @@ function adapterFor(
     },
     onSigningReadFailure: (report): void => {
       logGitDeliverySigningReadFailure(
+        seams.activityLog ?? processServerLogSink(),
+        report,
+        correlationId,
+      );
+    },
+    // A transaction whose cleanup left a quarantine, private index or lock behind: the settled
+    // result stands, and this line makes the leftover visible (counts and flags only).
+    onCleanupIncomplete: (report): void => {
+      logGitIndexCleanupIncomplete(
         seams.activityLog ?? processServerLogSink(),
         report,
         correlationId,

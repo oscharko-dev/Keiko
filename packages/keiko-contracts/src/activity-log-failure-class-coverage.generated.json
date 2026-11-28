@@ -36258,12 +36258,16 @@
         "start": [],
         "state": [],
         "end": [],
-        "failure": ["git.delivery.mutation.failed"],
+        "failure": ["git.delivery.mutation.failed", "git.index-transaction.cleanup-incomplete"],
         "loss": []
       },
       "causalEdges": [
         {
           "op": "git.delivery.mutation.failed",
+          "mode": "correlation"
+        },
+        {
+          "op": "git.index-transaction.cleanup-incomplete",
           "mode": "correlation"
         }
       ],
@@ -36328,6 +36332,60 @@
             "causeChain": true
           },
           "proofIds": ["git.delivery.mutation.failed.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "git.index-transaction.cleanup-incomplete",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "caller",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "directoryFailures",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "lockLeft",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "quarantineFailures",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "refLockFailures",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "temporaryIndexLeft",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["git.index-transaction.cleanup-incomplete.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

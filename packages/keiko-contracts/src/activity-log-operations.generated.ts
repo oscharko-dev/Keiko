@@ -31968,6 +31968,63 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "git.index-transaction.cleanup-incomplete",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "gitDelivery/indexCleanupLog.logGitIndexCleanupIncomplete",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      caller: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["stage", "unstage", "branch-ref-lock", "turn-index-restore"],
+      },
+      quarantineFailures: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      temporaryIndexLeft: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      lockLeft: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      refLockFailures: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      directoryFailures: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["git-delivery-precondition"],
+    proofIds: ["git.index-transaction.cleanup-incomplete.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "git.journey-observation",
     category: "process",
     owner: "keiko-server",

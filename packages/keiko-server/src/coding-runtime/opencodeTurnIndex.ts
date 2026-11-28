@@ -8,6 +8,7 @@ import {
 } from "./governedIndexPaths.js";
 import { observedGitRunner } from "../gitProcessActivity.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { logGitIndexCleanupIncomplete } from "../gitDelivery/indexCleanupLog.js";
 import {
   type GitIndexTransactionObserver,
   observeGitIndexTransactions,
@@ -607,6 +608,16 @@ async function moveInTransaction(
     (transaction) =>
       moveCopy(root, transaction.temporaryIndexPath, { headSha: moves.headSha, expected, target }),
     (applied) => applied === "applied",
+    undefined,
+    {
+      onCleanupFailure: (report): void => {
+        logGitIndexCleanupIncomplete(
+          processServerLogSink(),
+          { caller: "turn-index-restore", refLocks: 0, directories: 0, ...report },
+          undefined,
+        );
+      },
+    },
   );
 }
 

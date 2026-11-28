@@ -42,6 +42,26 @@ export interface GitObjectQuarantine {
   readonly liveDirectory: string;
   readonly publish: () => void;
 }
+/**
+ * Removes one path: a `file`, an empty `directory`, or a whole `tree`. A test seam: the default is
+ * `rmSync` / `rmdirSync`.
+ */
+export type RemovePath = (path: string, kind: "file" | "directory" | "tree") => void;
+/**
+ * What a transaction's cleanup could not finish, body-free: how many quarantine directories stayed,
+ * and whether the private index copy or Git's lock (with its descriptor) stayed. A leftover quarantine
+ * or private index is an invisible private file; a leftover lock blocks later index writes.
+ */
+export interface GitIndexCleanupReport {
+  readonly quarantines: number;
+  readonly temporaryIndex: boolean;
+  readonly lock: boolean;
+}
+export interface GitCleanupOptions<R> {
+  /** Receives the report only when something stayed; a port that throws never changes the result. */
+  readonly onCleanupFailure?: ((report: R) => void) | undefined;
+  readonly removePath?: RemovePath | undefined;
+}
 export interface GitIndexTransaction {
   readonly temporaryIndexPath: string;
   readonly check: () => boolean;
@@ -90,7 +110,7 @@ export async function withGitIndexTransaction<T>(
   mutate: (transaction: GitIndexTransaction) => Promise<T>,
   accept: (result: T) => boolean,
   fs: WorkspaceFs = nodeWorkspaceFs,
-  onCleanupFailure?: (failed: number) => void,
+  options: GitCleanupOptions<GitIndexCleanupReport> = {},
 ): Promise<T> {
   const base = await resolveGitdir(fs, workspaceRoot);
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
@@ -118,46 +138,106 @@ export async function withGitIndexTransaction<T>(
       openObjectQuarantine: (hashLength) =>
         openObjectQuarantine(base.path, hashLength, quarantines),
     });
-    if (accept(result)) {
-      if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
-        throw new Error("git-index-metadata-drift");
-      if (!accept(result)) throw new Error("git-index-authority-denied");
-      await notifyObserver("prepared", temporaryIndexPath);
-      for (const quarantine of quarantines) quarantine.publish();
-      promoteIndex(base.path, temporaryIndexPath, indexExisted);
-    }
+    if (accept(result))
+      await publishAccepted(
+        { workspaceRoot, fs, base: base.path, check, accept: () => accept(result) },
+        {
+          temporaryIndexPath,
+          indexExisted,
+          quarantines,
+        },
+      );
     return result;
   } finally {
-    releaseTransaction(held, quarantines, onCleanupFailure);
+    releaseTransaction(held, quarantines, options);
   }
 }
-// The lock and its descriptor are released whatever the quarantine removal does: a transient sharing
-// violation on a quarantine must never leave index.lock blocking every later write. A leftover
-// quarantine is an invisible private directory, so its failure is counted for the caller's log port
-// and never replaces the outcome the transaction already settled.
+interface AcceptedCheck {
+  readonly workspaceRoot: string;
+  readonly fs: WorkspaceFs;
+  readonly base: string;
+  readonly check: () => boolean;
+  readonly accept: () => boolean;
+}
+// Publishes the objects and replaces the live index once every check holds. The checks run again
+// after the observer, which reads asynchronously: a Stop or a drift that landed while it was pending
+// is caught immediately before publication and promotion.
+async function publishAccepted(
+  proof: AcceptedCheck,
+  candidate: {
+    readonly temporaryIndexPath: string;
+    readonly indexExisted: boolean;
+    readonly quarantines: readonly GitObjectQuarantine[];
+  },
+): Promise<void> {
+  const { workspaceRoot, fs, base, check, accept } = proof;
+  if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base)
+    throw new Error("git-index-metadata-drift");
+  if (!accept()) throw new Error("git-index-authority-denied");
+  await notifyObserver("prepared", candidate.temporaryIndexPath);
+  for (const quarantine of candidate.quarantines) quarantine.publish();
+  promoteIndex(base, candidate.temporaryIndexPath, candidate.indexExisted);
+}
+// Every cleanup step is its own guarded step, so one failure never skips another: a transient sharing
+// violation on a quarantine or the private index must never leave index.lock blocking every later
+// write. A leftover is counted into the report the caller's log port receives, and cleanup never
+// throws: it must not replace the outcome the transaction already settled.
 function releaseTransaction(
   held: HeldIndexTransaction,
   quarantines: readonly GitObjectQuarantine[],
-  onCleanupFailure: ((failed: number) => void) | undefined,
+  options: GitCleanupOptions<GitIndexCleanupReport>,
 ): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  const report = cleanupIndexTransaction(held, quarantines, remove);
+  if (report.quarantines > 0 || report.temporaryIndex || report.lock)
+    deliverCleanupReport(report, options.onCleanupFailure);
+}
+// A step that threw is a failed step: it is counted by the caller and never rethrown.
+function stepFailed(step: () => void): boolean {
   try {
-    const failed = removeQuarantines(quarantines);
-    if (failed > 0) onCleanupFailure?.(failed);
-  } finally {
-    cleanupIndexTransaction(held);
+    step();
+    return false;
+  } catch {
+    return true;
   }
+}
+// The report reaches the caller's port after every release; a port that throws cannot replace the
+// settled result, so its failure surfaces as a Node process warning (body-free, a closed code).
+function deliverCleanupReport<R>(report: R, port: ((report: R) => void) | undefined): void {
+  if (port === undefined) {
+    warnUnreported();
+    return;
+  }
+  try {
+    port(report);
+  } catch {
+    warnUnreported();
+  }
+}
+function warnUnreported(): void {
+  process.emitWarning("Git cleanup report was not recorded", {
+    code: "KEIKO_GIT_CLEANUP_UNREPORTED",
+  });
+}
+function defaultRemovePath(path: string, kind: "file" | "directory" | "tree"): void {
+  if (kind === "tree") rmSync(path, { recursive: true, force: true });
+  else if (kind === "directory") rmdirSync(path);
+  else rmSync(path, { force: true });
 }
 // Every quarantine goes on every outcome (what was published already lives in the store). One that
 // cannot be removed is counted and does not stop the others; the number of failures is returned.
-function removeQuarantines(quarantines: readonly GitObjectQuarantine[]): number {
+function removeQuarantines(
+  quarantines: readonly GitObjectQuarantine[],
+  remove: RemovePath,
+): number {
   let failed = 0;
-  for (const quarantine of quarantines) {
-    try {
-      rmSync(quarantine.directory, { recursive: true, force: true });
-    } catch {
+  for (const quarantine of quarantines)
+    if (
+      stepFailed(() => {
+        remove(quarantine.directory, "tree");
+      })
+    )
       failed += 1;
-    }
-  }
   return failed;
 }
 const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
@@ -390,6 +470,7 @@ export async function withGitBranchRefLocks<T>(
   branches: readonly string[],
   run: () => Promise<T>,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  options: GitCleanupOptions<GitRefLockCleanupReport> = {},
 ): Promise<T> {
   const base = await resolveGitdir(fs, workspaceRoot);
   if (base === undefined) throw new Error("git-index-metadata-unavailable");
@@ -405,11 +486,39 @@ export async function withGitBranchRefLocks<T>(
     }
     return await run();
   } finally {
-    held.reverse();
-    for (const lock of held) releaseRefLock(lock);
-    created.reverse();
-    for (const directory of created) removeEmptyDirectory(directory);
+    releaseBranchRefLocks(held, created, options);
   }
+}
+
+/**
+ * What the release of the branch ref locks could not finish, body-free: locks (or their descriptors)
+ * that stayed, and directories this call created that could not be removed for a reason other than
+ * another writer having filled or removed them. A leftover lock blocks every later update of its ref.
+ */
+export interface GitRefLockCleanupReport {
+  readonly refLocks: number;
+  readonly directories: number;
+}
+// Each release and each directory removal is its own guarded step, so a failure never skips the
+// others and never replaces what `run` settled; what stayed is reported through the caller's port.
+function releaseBranchRefLocks(
+  held: { path: string; descriptor: number }[],
+  created: string[],
+  options: GitCleanupOptions<GitRefLockCleanupReport>,
+): void {
+  const remove = options.removePath ?? defaultRemovePath;
+  let refLocks = 0;
+  for (const lock of held.reverse()) if (releaseRefLock(lock, remove)) refLocks += 1;
+  let directories = 0;
+  for (const directory of created.reverse())
+    if (
+      stepFailed(() => {
+        removeEmptyDirectory(directory, remove);
+      })
+    )
+      directories += 1;
+  if (refLocks > 0 || directories > 0)
+    deliverCleanupReport({ refLocks, directories }, options.onCleanupFailure);
 }
 
 // Walks from `refs/heads` down to the lock's directory: every existing component must be a plain
@@ -440,9 +549,9 @@ function makeDirectory(path: string, created: string[]): void {
 }
 
 // A directory another writer filled (or removed) meanwhile is theirs and stays as it is.
-function removeEmptyDirectory(directory: string): void {
+function removeEmptyDirectory(directory: string, remove: RemovePath): void {
   try {
-    rmdirSync(directory);
+    remove(directory, "directory");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOTEMPTY" && code !== "ENOENT" && code !== "EEXIST") throw error;
@@ -464,12 +573,21 @@ function openRefLock(path: string): number {
   }
 }
 
-function releaseRefLock(lock: { readonly path: string; readonly descriptor: number }): void {
-  try {
-    if (sameLock(lock.path, lock.descriptor)) rmSync(lock.path);
-  } finally {
+// True when the lock or its descriptor stayed. The descriptor is closed whatever the removal did.
+function releaseRefLock(
+  lock: { readonly path: string; readonly descriptor: number },
+  remove: RemovePath,
+): boolean {
+  const owned = attempt(() => sameLock(lock.path, lock.descriptor));
+  const removeFailed =
+    owned !== false &&
+    stepFailed(() => {
+      remove(lock.path, "file");
+    });
+  const closeFailed = stepFailed(() => {
     closeSync(lock.descriptor);
-  }
+  });
+  return removeFailed || closeFailed;
 }
 
 interface HeldIndexTransaction {
@@ -480,14 +598,42 @@ interface HeldIndexTransaction {
   readonly temporaryIndexPath: string;
   readonly temporary: { readonly owned: boolean };
 }
-function cleanupIndexTransaction(held: HeldIndexTransaction): void {
+function cleanupIndexTransaction(
+  held: HeldIndexTransaction,
+  quarantines: readonly GitObjectQuarantine[],
+  remove: RemovePath,
+): GitIndexCleanupReport {
   const { base, directory, lock, descriptor, temporaryIndexPath, temporary } = held;
-  try {
-    if (!sameDirectory(base, directory)) return;
-    if (temporary.owned) rmSync(temporaryIndexPath, { force: true });
-    if (sameLock(lock, descriptor)) rmSync(lock);
-  } finally {
+  const quarantineFailures = removeQuarantines(quarantines, remove);
+  // The private index and the lock are removed only while the gitdir is the directory that was
+  // locked; a directory that cannot be inspected counts as an unreleased lock.
+  const sameBase = attempt(() => sameDirectory(base, directory));
+  const temporaryIndex =
+    sameBase === true &&
+    temporary.owned &&
+    stepFailed(() => {
+      remove(temporaryIndexPath, "file");
+    });
+  const ownLock = sameBase === true ? attempt(() => sameLock(lock, descriptor)) : false;
+  const lockFailed =
+    sameBase === undefined ||
+    ownLock === undefined ||
+    (ownLock &&
+      stepFailed(() => {
+        remove(lock, "file");
+      }));
+  // The descriptor is closed whatever happened before.
+  const closeFailed = stepFailed(() => {
     closeSync(descriptor);
+  });
+  return { quarantines: quarantineFailures, temporaryIndex, lock: lockFailed || closeFailed };
+}
+// `undefined` when the check itself threw.
+function attempt(check: () => boolean): boolean | undefined {
+  try {
+    return check();
+  } catch {
+    return undefined;
   }
 }
 function sameDirectory(path: string, before: NonNullable<ReturnType<typeof lstatSync>>): boolean {

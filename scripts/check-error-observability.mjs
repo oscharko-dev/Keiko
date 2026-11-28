@@ -121,6 +121,12 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
   Object.entries({
+    "packages/keiko-workspace/src/gitIndexTransaction.ts:stepFailed":
+      "A cleanup step that threw is counted into the GitIndexCleanupReport / GitRefLockCleanupReport the caller's log port receives (git.index-transaction.cleanup-incomplete, with the mutation's correlation id); the settled transaction result is never replaced by a cleanup failure and the error class is intentionally not recorded, because every class leaves the same leftover (#4491).",
+    "packages/keiko-workspace/src/gitIndexTransaction.ts:attempt":
+      "A lock or directory check that threw is treated as an unreleased lock in the cleanup report the caller's log port receives (git.index-transaction.cleanup-incomplete); the check cannot change the settled result (#4491).",
+    "packages/keiko-workspace/src/gitIndexTransaction.ts:deliverCleanupReport":
+      "A report port that throws cannot replace the settled transaction result; the failure surfaces as the closed Node process warning KEIKO_GIT_CLEANUP_UNREPORTED, and the port's own owner records its failures (#4491).",
     "packages/keiko-server/src/editor/windowsStepSupervisor.ts:realDrivePath":
       "A folder whose real path cannot be resolved cannot be shown to be the folder a grant reads, so it is no folder: a named toolchain home is left out, a step's own toolchain folder is refused before launch, and an unresolvable profile leaves profileKnown=false on the registered Windows step supervisor line and refuses every step. A protected credential location (a file or a folder) that cannot be resolved keeps its named path in every comparison. The I/O error class is intentionally not recorded, because every class leads to the same fail-closed outcome (#4496).",
     "packages/keiko-server/src/editor/windowsStepSupervisor.ts:listEntryNames":
