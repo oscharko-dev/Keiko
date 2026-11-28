@@ -198,7 +198,7 @@
       }
     },
     "keiko-model-gateway": {
-      "files": 63,
+      "files": 64,
       "uncoveredFiles": 0,
       "uncoveredLines": 249,
       "totalLines": 6313,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1261,
+      "files": 1272,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-tools": {
-      "files": 75,
+      "files": 78,
       "uncoveredFiles": 0,
       "uncoveredLines": 382,
       "totalLines": 5339,
@@ -294,7 +294,7 @@
       }
     },
     "keiko-ui": {
-      "files": 766,
+      "files": 778,
       "uncoveredFiles": 4,
       "uncoveredLines": 2939,
       "totalLines": 58777,
