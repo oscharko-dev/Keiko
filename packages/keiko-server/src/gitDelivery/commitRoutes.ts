@@ -23,12 +23,12 @@
 import type { IncomingMessage } from "node:http";
 import {
   findConfiguredCapability,
-  parseGeneratedJson,
   selectConfiguredModel,
   type GatewayCallRequest,
   type NormalizedResponse,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
+import { parseGeneratedJson } from "@oscharko-dev/keiko-model-gateway/internal/generated-json";
 import {
   ProviderEmptyAnswerError,
   ProviderError,
