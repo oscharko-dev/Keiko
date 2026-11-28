@@ -203,14 +203,14 @@ export async function installationDenialCauseAsync(
   env: Readonly<Record<string, string | undefined>> = process.env,
   launchDirectory: string = process.cwd(),
 ): Promise<InstallationDenialCause | undefined> {
-  let nameNeeded = false;
+  const asked = { name: false };
   const lexical = (): SystemName => {
-    nameNeeded = true;
+    asked.name = true;
     return { kind: "missing" };
   };
   const first =
     programFolderDenial(path, env, launchDirectory, lexical) ?? payloadDenial(path, lexical);
-  if (first !== undefined || !nameNeeded) return first;
+  if (first !== undefined || !asked.name) return first;
   const resolved = await resolveSystemNameAsync(path);
   const name = (): SystemName => resolved;
   return programFolderDenial(path, env, launchDirectory, name) ?? payloadDenial(path, name);
