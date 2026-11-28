@@ -668,7 +668,11 @@ export default function KeikoSelect({
 
   // A change the control waits for locks it: an open menu would still commit a choice.
   useEffect(() => {
-    if (busy) closeMenu();
+    if (!busy) return;
+    const focusInMenu = menuRef.current?.contains(document.activeElement) === true;
+    closeMenu();
+    // The menu unmounts with the focus inside it: the trigger keeps it, as on every close.
+    if (focusInMenu) triggerRef.current?.focus();
   }, [busy, closeMenu]);
 
   const openMenu = (preferredIndex?: number): void => {

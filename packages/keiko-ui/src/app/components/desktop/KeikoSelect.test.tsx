@@ -525,6 +525,26 @@ describe("KeikoSelect interactions", () => {
     );
   });
 
+  it("returns focus to the trigger when the control becomes busy with focus inside the menu", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ariaLabel: "Strategy",
+      menuTitle: "Strategy",
+      onValueChange: vi.fn(),
+      searchPlaceholder: "Search",
+      sections,
+      value: "model",
+    };
+    const { rerender } = render(<KeikoSelect {...props} />);
+    await user.click(screen.getByRole("combobox", { name: "Strategy" }));
+    const search = screen.getByPlaceholderText("Search");
+    search.focus();
+    expect(search).toHaveFocus();
+    rerender(<KeikoSelect {...props} busy />);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Strategy" })).toHaveFocus();
+  });
+
   it("commits the active option with keyboard navigation and returns focus to the trigger", async () => {
     const onValueChange = vi.fn();
     render(
