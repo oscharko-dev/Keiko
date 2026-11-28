@@ -25,6 +25,29 @@ describe("Coding Workbench window frame styles", () => {
   });
 });
 
+describe("Coding Workbench body notice flow", () => {
+  // U-29: the body was a grid of two explicit rows (`auto`, `1fr`) holding up to five children (the
+  // alert, the in-place activation, the tool check, the status notice and the columns). The
+  // activation landed in the `1fr` row under overflow, so the session columns painted over the
+  // "Activate" button at a 680 px window and `elementFromPoint` returned the status container. The
+  // body is one flex column instead: every notice keeps its own height in document flow and only
+  // the last child, the session columns, takes the remaining space and shrinks.
+  it("stacks every notice in normal flow and lets only the columns shrink", () => {
+    const body = cssBlock(".body");
+
+    expect(body).toContain("display: flex;");
+    expect(body).toContain("flex-direction: column;");
+    expect(body).not.toContain("grid-template-rows");
+    expect(css).not.toContain(".body:has(> .alert)");
+    const notices = cssBlock(".body > *");
+    expect(notices).toContain("flex: 0 0 auto;");
+    const columns = cssBlock(".body > :last-child");
+    expect(columns).toContain("flex: 1 1 0;");
+    expect(columns).toContain("min-height: 0;");
+    expect(`${body}${notices}${columns}`).not.toMatch(/position:\s*absolute|z-index/u);
+  });
+});
+
 describe("Coding Workbench composer model chip styles", () => {
   // #3873 live review: a fixed 9rem chip ellipsized "gemma-4-31b-it" to "gemma-4-…". The chip grows
   // with its identifier up to a readable bound; only an identifier beyond that bound is ellipsized.

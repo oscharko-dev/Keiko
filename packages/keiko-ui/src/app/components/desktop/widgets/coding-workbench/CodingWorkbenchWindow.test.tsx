@@ -6538,6 +6538,24 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       expect(await axe(document.body)).toHaveNoViolations();
     });
 
+    // U-29: at a 680 px window the session columns painted over the button. jsdom has no layout, so
+    // pin the structure; the frame-styles test pins the flow CSS of the shared parent.
+    it("renders the alert and the activation as in-flow siblings ahead of the session columns", () => {
+      renderNotReady(NOT_ACTIVATED);
+      const alert = screen.getByRole("alert");
+      const activation = screen.getByTestId("coding-workbench-model-activation");
+      const body = alert.parentElement;
+      expect(body).not.toBeNull();
+      expect(activation.parentElement).toBe(body);
+      const children = Array.from(body?.children ?? []);
+      expect(children.indexOf(alert)).toBeLessThan(children.indexOf(activation));
+      const columns = children[children.length - 1];
+      expect(children.indexOf(activation)).toBeLessThan(children.length - 1);
+      expect(columns?.contains(activation)).toBe(false);
+      expect(columns?.contains(alert)).toBe(false);
+      expect(activation.getAttribute("style")).toBeNull();
+    });
+
     it("says a failed check is a failure and offers no activation, only the details", async () => {
       const onOpenSettings = vi.fn();
       renderNotReady(FAILED_CHECK, onOpenSettings);

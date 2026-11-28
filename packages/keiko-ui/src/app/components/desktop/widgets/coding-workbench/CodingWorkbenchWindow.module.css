@@ -385,18 +385,24 @@
   padding-block-start: var(--space-3);
 }
 
+/* U-29: one flex column, so every notice (alert, in-place activation, tool check, status) keeps
+   its own height in document flow and the session columns, the last child, take what is left. */
 .body {
-  display: grid;
+  display: flex;
   min-width: 0;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
   background: transparent;
 }
 
-.body:has(> .alert) {
-  grid-template-rows: auto minmax(0, 1fr);
+.body > * {
+  flex: 0 0 auto;
+}
+
+.body > :last-child {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .session {
