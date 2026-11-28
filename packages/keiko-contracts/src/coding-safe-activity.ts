@@ -201,9 +201,11 @@ export type CodingSafeActivityToolFailureOrigin =
   (typeof CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)[number];
 
 /**
- * What a Code Mode `execute` program does, in closed words read from the tools it calls (never from
- * its text): `command` runs a shell command, `schedule` changes a scheduled task, `tool` calls a
- * connected server's tool. A program that calls none carries no kind. Body-free (#4491 U-56).
+ * What a Code Mode `execute` program did, in closed words: `command` ran a shell command,
+ * `schedule` changed a scheduled task, `tool` called a connected server's tool. A producer may set
+ * it only from a nested call it observed running, never from the program's source text; the
+ * OpenCode `execute` part carries no such fact, so today every program row keeps the neutral label.
+ * Body-free (#4491).
  */
 export const CODING_SAFE_ACTIVITY_PROGRAM_KINDS = ["command", "schedule", "tool"] as const;
 export type CodingSafeActivityProgramKind = (typeof CODING_SAFE_ACTIVITY_PROGRAM_KINDS)[number];

@@ -475,105 +475,32 @@ describe("a subagent call's agent, description and prompt (U-52)", () => {
   });
 });
 
-describe("what a Code Mode program does (U-56)", () => {
+describe("a Code Mode program row keeps the neutral label", () => {
+  // The kind of an `execute` row would have to come from a call that ran. The tool part's state
+  // carries only the program's source and its returned value, so no kind is derived at all.
   const program = (code: string): ReturnType<typeof openCodeToolDetail> => {
     const state = { status: "completed", input: { code } };
     return openCodeToolDetail("execute", shellPart(state), state, "succeeded");
   };
 
   it.each([
-    ["schedule", 'return await tools.automation.create({ name: "x" });'],
-    ["schedule", "await tools.automation.delete({ id });"],
-    ["command", 'return await tools.shell({ command: "ls" });'],
-    ["tool", 'return await tools.fixture.echo({ text: "a" });'],
-  ] as const)("reads %s from the called tool", (kind, code) => {
-    expect(program(code).programKind).toBe(kind);
-  });
-
-  it.each([
-    "return 1 + 1;",
-    "return await tools.opencode.worktree_list({});",
-    "return await tools.automation.list();",
-    "const tools = []; return tools.map((tool) => tool);",
-  ])("names no kind for a program that calls no governed tool: %s", (code) => {
-    expect(program(code).programKind).toBeUndefined();
-  });
-
-  it.each([
+    "debugger\n/tools.shell(/g.lastIndex; return 1;",
+    "for await (const x of xs) /tools.shell(/.test(x); return 1;",
+    'if (false) tools.shell("x"); return 1;',
+    'return await tools.shell({ command: "ls" });',
+    'return await tools.bash({ command: "ls" });',
+    'return await tools.automation.create({ name: "x" });',
+    'return await tools.fixture.echo({ text: "a" });',
     'return "tools.shell(";',
-    "return 'tools.automation.create(';",
-    "return `run tools.shell( now`;",
     "return typeof tools.automation.create;",
-    "const f = tools.automation.delete; return typeof f;",
     "// tools.shell({ command: 'ls' })\nreturn 1;",
-    "/* tools.fixture.echo({}) */ return 2;",
-    "return `${1 + 1} tools.bash(`;",
-    "return obj.tools.shell({});",
-    "return /tools.shell()/u;",
-    "return /tools.automation.create(/.test(x);",
-    "const re = /[/]tools.bash(/g;",
-    "return a.replace(/x/g, '') && /tools.fixture.echo(/.test(s);",
-    "if (ok) /tools.shell(/.test(s);",
-    "return /tools.shell(",
-    "return a / /tools.shell(/.source;",
-    "return x.in / 2 + /tools.bash(/.test(s);",
-    "return (a + b) / 2 + /tools.shell(/.test(s);",
-    "return arr[0] / 2 + /tools.shell(/.test(s);",
-    "if (ok) { run(); } /tools.shell(/.test(s);",
-    "x = ++/tools.shell(/g.lastIndex, 2/3;",
-    "x = --/tools.shell(/g.lastIndex, 2/3;",
-    "x = a + ++/tools.shell(/g.lastIndex, 2/3;",
-    "return ++/tools.shell(/g.lastIndex, 2/3;",
-    "x = a\n++/tools.shell(/g.lastIndex, 2/3;",
-    "x = a\r--/tools.shell(/g.lastIndex, 2/3;",
-    "x = a /* note\n */ ++/tools.shell(/g.lastIndex, 2/3;",
-    "return\u00a0/tools.shell(/g.lastIndex, 2/3;",
-    "return\ufeff/tools.shell(/g.lastIndex, 2/3;",
-    "return\u2028/tools.shell(/g.lastIndex, 2/3;",
-    "return\u2029/tools.shell(/g.lastIndex, 2/3;",
-    "return\u3000/tools.shell(/g.lastIndex, 2/3;",
-    "return /x\u2028/.test(s); await tools.shell({});",
-    "return /x\r/.test(s); await tools.shell({});",
-  ])("names no kind where the program only mentions a tool: %s", (code) => {
-    expect(program(code).programKind).toBeUndefined();
+    "return 1 + 1;",
+  ])("names no kind for a program, whatever its source mentions: %s", (code) => {
+    expect(program(code)).not.toHaveProperty("programKind");
   });
 
-  it.each([
-    ["command", 'const note = "x"; return await tools.shell({ command: `${"a"}` });'],
-    ["schedule", "return `${await tools.automation.create({})}`;"],
-    ["tool", 'return `a${`b${await tools.fixture.echo({ text: "c" })}`}`;'],
-    ["command", 'return "it\\"s"; await tools.bash({});'],
-    ["command", 'return a++ / tools.shell("x") / 2;'],
-    ["command", "return x.in / tools.shell({}) / 2;"],
-    ["command", "return x.return / tools.bash({}) / 2;"],
-    ["command", "return (a + b) / tools.shell({}) / 2;"],
-    ["command", "return arr[0] / tools.shell({}) / 2;"],
-    ["command", "if (ok) /x/.test(s); await tools.shell({});"],
-    ["command", "// note\rawait tools.shell({});"],
-    ["command", "// note\u2028await tools.shell({});"],
-    ["command", "// note\u2029await tools.shell({});"],
-    ["command", "return a++ / tools.shell({}) / 2;"],
-    ["command", "x = ++a / tools.shell({}) / 2;"],
-    ["command", "const half = total / 2; await tools.shell({}); return half / 3;"],
-    ["command", "const re = /a\\/b[/]/g; await tools.shell({}); return re;"],
-  ] as const)("still reads %s from a call beside literals", (kind, code) => {
-    expect(program(code).programKind).toBe(kind);
-  });
-
-  it("stops reading a program nested deeper than any real one", () => {
-    const code = "`${".repeat(40) + "tools.shell({})" + "}`".repeat(40);
-    expect(program(code).programKind).toBeUndefined();
-  });
-
-  it("carries only the closed kind, never the program's text", () => {
+  it("carries nothing of the program's text", () => {
     const detail = program('return await tools.automation.create({ prompt: "SECRET_BODY" });');
     expect(JSON.stringify(detail)).not.toContain("SECRET_BODY");
-  });
-
-  it("names no kind on a tool that is not a program", () => {
-    const state = { status: "completed", input: { code: "tools.automation.create({})" } };
-    expect(openCodeToolDetail("read", shellPart(state), state, "succeeded")).not.toHaveProperty(
-      "programKind",
-    );
   });
 });
