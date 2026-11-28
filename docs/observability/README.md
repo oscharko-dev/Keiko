@@ -832,12 +832,17 @@ shows the reconnecting state at once, reopens when a slot frees and shows the wa
 meanwhile, with a hint when another Keiko window holds connections. The editor verification stream
 and the editor agent bridge never yield, because their servers keep no replay. The four slots are
 shared by every document of the origin, so what a visible tab can hold shrinks with every
-non-replayable stream another (hidden) document holds: with only its own, one document holds at most
-two of them and its replayable streams fit in the other two, but a visible tab beside one hidden tab
-that holds a bridge and a verification stream has two slots left, and its lowest-ranked replayable
-streams wait, with the waiting status, until those streams end. Two hidden tabs that each hold both
-fill all four slots, and a visible tab then waits for everything (also for a verification run that
-is starting or reconnecting). Keiko does not close another tab's non-replayable stream. "A single
+non-replayable stream another (hidden) document holds. Beside one hidden tab that holds a bridge and
+a verification stream a visible tab has two slots left, but only while it holds no non-replayable
+stream of its own: with its own bridge and verification it has none left, and its run stream waits
+too. Two hidden tabs that each hold both fill all four slots, and a visible tab then waits for
+everything (also for a verification run that is starting or reconnecting). Rank displacement works
+across documents as well: a visible tab's waiting run stream (rank 2) displaces another window's
+run-events (rank 0) or activity (rank 1) holder, even a visible one, and a waiting activity stream
+displaces another window's run-events holder; the chain is bounded by 0, 1, 2, so it ends. A
+waiter takes exactly one slot: a higher rank checks again after the whole slot stagger and keeps its
+slot if a lower rank already served the waiter. The hint that another window holds connections is
+read once, when the wait passes its threshold. Keiko does not close another tab's non-replayable stream. "A single
 visible tab never starves" therefore holds only while no other document holds non-replayable
 streams. The shared pool always keeps one
 connection. Without Web Locks the ceiling holds for the current document only.
