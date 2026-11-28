@@ -1467,6 +1467,35 @@ describe("CodingToolFacade", () => {
     expect(await run(false)).not.toHaveProperty("guidance");
   });
 
+  // A status persisted by 1.5.10 has a commit and no `head` marker. The facade reads it as a born
+  // branch before the guard, and still fails one that names no commit.
+  it("reads a persisted status without the head marker as born", async () => {
+    const persisted = {
+      kind: "status",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "main",
+      changes: [],
+      truncated: false,
+    };
+    const run = async (git: Record<string, unknown>): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+      });
+    };
+    expect(await run(persisted)).toMatchObject({
+      status: "completed",
+      git: { head: "born", headSha: "a".repeat(40) },
+    });
+    const { headSha: _sha, ...unmarked } = persisted;
+    expect(await run(unmarked)).toMatchObject({ status: "failed" });
+  });
+
   // #4068: on a stock Git for Windows host the system scope sets core.autocrlf=true, so every stage
   // was blocked as unsupported-transformation and the model guessed at file locks and hooks.
   it("names the line-ending conversion and the operator's opt-out for a blocked stage", async () => {

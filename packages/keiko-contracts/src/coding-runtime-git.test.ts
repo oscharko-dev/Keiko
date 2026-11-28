@@ -3,6 +3,7 @@ import {
   CODING_RUNTIME_GIT_MAX_PATHS,
   CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
   isCodingRuntimeGitResult,
+  normalizePersistedCodingRuntimeGitResult,
 } from "./coding-runtime-git.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 const pairs = [
@@ -130,20 +131,28 @@ describe("runtime Git status of a born and an unborn branch", () => {
     );
     expect(isCodingRuntimeGitResult({ ...body, head: "born" })).toBe(false);
     expect(isCodingRuntimeGitResult({ ...body, head: "born", headSha: "" })).toBe(false);
-    expect(isCodingRuntimeGitResult({ ...body, head: "other", headSha: "b".repeat(40) })).toBe(
-      false,
-    );
-    expect(isCodingRuntimeGitResult({ ...body, headSha: "" })).toBe(false);
+    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(false);
     expect(isCodingRuntimeGitResult(body)).toBe(false);
   });
-  // A status persisted by 1.5.10 (history, replay) has a commit and no marker: a born branch. An
-  // unborn branch is never inferred from a missing marker, so it stays strict.
-  it("reads a status without the marker as born only when it names a commit", () => {
-    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(40) })).toBe(true);
-    expect(isCodingRuntimeGitResult({ ...body, headSha: "b".repeat(64) })).toBe(true);
-    expect(isCodingRuntimeGitResult({ ...body, headSha: "not-a-sha" })).toBe(false);
-    expect(isCodingRuntimeGitResult({ ...body, head: "unborn", headSha: "b".repeat(40) })).toBe(
-      false,
-    );
+  // A status persisted by 1.5.10 has a commit and no marker. The boundary reads it as born before the
+  // guard runs; the guard itself still refuses it, and nothing else is inferred.
+  it("reads a persisted status without the marker as born, and nothing else", () => {
+    const persisted = { ...body, headSha: "b".repeat(40) };
+    expect(isCodingRuntimeGitResult(persisted)).toBe(false);
+    const normalized = normalizePersistedCodingRuntimeGitResult(persisted);
+    expect(normalized).toEqual({ ...persisted, head: "born" });
+    expect(isCodingRuntimeGitResult(normalized)).toBe(true);
+    // No commit and no marker is never read as unborn, and a stated marker is never overwritten.
+    expect(isCodingRuntimeGitResult(normalizePersistedCodingRuntimeGitResult(body))).toBe(false);
+    const unborn = { ...body, head: "unborn" };
+    expect(normalizePersistedCodingRuntimeGitResult(unborn)).toBe(unborn);
+    expect(normalizePersistedCodingRuntimeGitResult({ kind: "diff" })).toEqual({ kind: "diff" });
+    expect(normalizePersistedCodingRuntimeGitResult("x")).toBe("x");
+    // A malformed sha still fails after normalization.
+    expect(
+      isCodingRuntimeGitResult(
+        normalizePersistedCodingRuntimeGitResult({ ...body, headSha: "not-a-sha" }),
+      ),
+    ).toBe(false);
   });
 });

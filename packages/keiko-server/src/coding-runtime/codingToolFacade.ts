@@ -12,6 +12,7 @@ import { emitToolHandlerFailure } from "./codingToolFacadeFailure.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   isCodingRuntimeGitResult,
+  normalizePersistedCodingRuntimeGitResult,
   isSafeTaskBranchName,
   type CodingRuntimeGitBranch,
   type CodingRuntimeGitResult,
@@ -871,6 +872,18 @@ function projectSkillDiscovery(
     : projected("failed");
 }
 
+function projectGitResult(git: unknown): CodingToolResult {
+  return isCodingRuntimeGitResult(git)
+    ? {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+        ...stageGuidance(git),
+        ...branchGuidance(git),
+      }
+    : projected("failed");
+}
+
 function projectRuntimeGit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
@@ -884,15 +897,7 @@ function projectRuntimeGit(
         }
       : projected("failed");
   if (request.action === "git" && request.operation !== "read" && request.operation !== "write")
-    return isCodingRuntimeGitResult(value.git)
-      ? {
-          status: "completed",
-          evidence: [{ kind: "governed-delegate", code: "completed" }],
-          git: value.git,
-          ...stageGuidance(value.git),
-          ...branchGuidance(value.git),
-        }
-      : projected("failed");
+    return projectGitResult(normalizePersistedCodingRuntimeGitResult(value.git));
   return undefined;
 }
 

@@ -181,13 +181,11 @@ function changes(value: unknown): boolean {
     Array.isArray(value) && value.length <= CODING_RUNTIME_GIT_MAX_PATHS && value.every(change)
   );
 }
-// A born branch names its commit; an unborn one (a fresh repository) has none and says so. A status
-// persisted before the marker existed (a 1.5.10 history or replay row) carries a commit and no
-// `head`: that is a born branch. An unborn one always states itself.
+// A born branch names its commit; an unborn one (a fresh repository) has none and says so.
 function statusHead(value: Record<string, unknown>): boolean {
   if (value.head === "unborn") return value.headSha === undefined;
   return (
-    (value.head === "born" || value.head === undefined) &&
+    value.head === "born" &&
     typeof value.headSha === "string" &&
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value.headSha)
   );
@@ -281,6 +279,17 @@ function resultOfKind(value: Record<string, unknown>): boolean {
     parseGitEditorDiffResponse(value.diff).ok
   );
 }
+/**
+ * A status persisted by 1.5.10 (a history or replay record) names its commit and carries no `head`
+ * marker. Read at the boundary where such a record re-enters, before the guard runs, it is a born
+ * branch. The guard itself stays strict: a status still needs `head`, and an unborn branch is never
+ * inferred from a missing marker. Any other value is returned as it came.
+ */
+export function normalizePersistedCodingRuntimeGitResult(value: unknown): unknown {
+  if (!record(value) || value.kind !== "status" || value.head !== undefined) return value;
+  return typeof value.headSha === "string" ? { ...value, head: "born" } : value;
+}
+
 export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntimeGitResult {
   try {
     if (
