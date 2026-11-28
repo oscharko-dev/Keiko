@@ -20,26 +20,31 @@ import {
   type VerifiedCommitFacts,
   type VerifiedCommitRunContext,
 } from "./verifiedCommitTypes.js";
-type RawChangedFiles = Awaited<ReturnType<typeof readGitRawChangesAtHead>>["changes"];
 
-function cleanCandidate(context: VerifiedCommitRunContext, changes: RawChangedFiles): boolean {
+function cleanCandidate(context: VerifiedCommitRunContext, raw: VerifiedRawRead): boolean {
   return (
     context.buffersClean() &&
-    !changes.some((file) => file.unstaged || file.untracked) &&
+    // A nested repository is an untracked entry Git reports as one directory: it never expands into
+    // `changes`, yet it lies outside the reviewed candidate exactly as an untracked file does.
+    raw.opaqueUntrackedCount === 0 &&
+    !raw.changes.some((file) => file.unstaged || file.untracked) &&
     context.stillAuthorized()
   );
 }
 
 // The paths that keep the candidate from being clean. The two lists are cut at
 // VERIFIED_COMMIT_BLOCKING_PATHS_MAX; the counts stay exact.
-function blockingPathsOf(changes: RawChangedFiles): VerifiedCommitBlockingPaths {
-  const unstaged = changes.filter((file) => file.unstaged && !file.untracked);
-  const untracked = changes.filter((file) => file.untracked);
+function blockingPathsOf(raw: VerifiedRawRead): VerifiedCommitBlockingPaths {
+  const unstaged = raw.changes.filter((file) => file.unstaged && !file.untracked);
+  const untracked = [
+    ...raw.changes.filter((file) => file.untracked).map((file) => file.path),
+    ...raw.opaqueUntrackedPaths,
+  ];
   return {
     unstagedCount: unstaged.length,
     untrackedCount: untracked.length,
     unstaged: unstaged.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
-    untracked: untracked.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
+    untracked: untracked.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX),
   };
 }
 
@@ -115,7 +120,7 @@ export async function readVerifiedCommitRead(
   );
   if (repositoryDigest !== context.repositoryDigest)
     throw new Error("verified-commit-repository-drift");
-  const clean = cleanCandidate(context, raw.changes);
+  const clean = cleanCandidate(context, raw);
   return {
     raw,
     facts: {
@@ -124,7 +129,7 @@ export async function readVerifiedCommitRead(
       stagedTreeDigest: raw.stagedTreeDigest,
       repositoryDigest,
       clean,
-      ...(clean ? {} : { blocking: blockingPathsOf(raw.changes) }),
+      ...(clean ? {} : { blocking: blockingPathsOf(raw) }),
     },
   };
 }

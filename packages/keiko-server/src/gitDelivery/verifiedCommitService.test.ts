@@ -4052,6 +4052,26 @@ describe("deny-listed paths in the run's repository", () => {
     );
     expect(persisted).toMatchObject({ deniedPathCount: 2 });
   });
+
+  // A nested repository is one untracked directory to Git (`?? vendor/`). It never expands into the
+  // raw changes, yet it lies outside the reviewed candidate exactly as an untracked file does, so it
+  // keeps the candidate from being clean and is named, unexpanded, among the blocking paths.
+  it("does not call a candidate clean beside an untracked nested repository", async () => {
+    const execution = options.execution ?? {};
+    expect((await readVerifiedCommitFacts(context(), execution)).clean).toBe(true);
+    const nested = join(root, "vendor");
+    mkdirSync(nested);
+    execFileSync("git", ["init", "-q"], { cwd: nested });
+    writeFileSync(join(nested, "inner.txt"), "inner\n");
+
+    const facts = await readVerifiedCommitFacts(context(), execution);
+    expect(facts.clean).toBe(false);
+    expect(facts.blocking).toMatchObject({
+      unstagedCount: 0,
+      untrackedCount: 1,
+      untracked: ["vendor/"],
+    });
+  });
 });
 
 describe("a converted file staged without stat data", () => {

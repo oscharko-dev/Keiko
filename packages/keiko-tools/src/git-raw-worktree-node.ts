@@ -100,6 +100,8 @@ interface GitRawChangesBody {
    * staged -- and no longer fail the whole read (#4491).
    */
   readonly opaqueUntrackedCount: number;
+  /** The directory paths (each ending in `/`) behind `opaqueUntrackedCount`, in Git's order. */
+  readonly opaqueUntrackedPaths: readonly string[];
 }
 /** The raw read of a repository whose HEAD is born: the commit it names is `headSha`. */
 export interface GitRawChanges extends GitRawChangesBody {
@@ -268,7 +270,14 @@ export async function readGitRawChangesAtHead(
   const stagedTreeDigest = gitIndexEntriesDigest([...index.values()]);
   if (!(await stillSameSnapshot(deps, head, branch, stagedTreeDigest)))
     throw new GitRawWorktreeReadError("git-raw-snapshot-drift");
-  return { head, branch, stagedTreeDigest, opaqueUntrackedCount: opaque.length, ...scanned };
+  return {
+    head,
+    branch,
+    stagedTreeDigest,
+    opaqueUntrackedCount: opaque.length,
+    opaqueUntrackedPaths: opaque,
+    ...scanned,
+  };
 }
 // The index, the HEAD state (born commit or unborn branch) and the branch ref must be what they were
 // when the scan began; a branch that was created meanwhile turns an unborn read into drift.
