@@ -174,6 +174,68 @@ describe("node git mutation adapter — an interactive commit stays on the branc
     expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
   });
 
+  it("moves only the prepared branch when the checkout switches right before the ref update", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "base.txt"), "base\n", "utf8");
+    git(["add", "base.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const prepared = git(["branch", "--show-current"]).trim();
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+    let authorizations = 0;
+    const ad = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName: prepared },
+      // The last authorization check runs after the final checkout read and right before the ref
+      // update: the checkout switches exactly there, past every read of the checkout.
+      beforeCommitRefUpdate: (): boolean => {
+        authorizations += 1;
+        if (authorizations === 2) git(["checkout", "-q", "-b", "protected-branch"]);
+        return true;
+      },
+    });
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "bound", allowEmpty: false });
+
+    expect(authorizations).toBe(2);
+    expect(committed.outcome).toBe("succeeded");
+    expect(git(["branch", "--show-current"]).trim()).toBe("protected-branch");
+    // The commit and its signing decision belong to the prepared branch; the branch the checkout
+    // moved to is untouched.
+    expect(git(["rev-parse", `refs/heads/${prepared}~1`]).trim()).toBe(baseSha);
+    expect(git(["log", "-1", "--format=%s", `refs/heads/${prepared}`]).trim()).toBe("bound");
+    expect(git(["rev-parse", "refs/heads/protected-branch"]).trim()).toBe(baseSha);
+  });
+
+  it("commits the first commit of an unborn prepared branch", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    expect((await ad.commit({ message: "root", allowEmpty: false })).outcome).toBe("succeeded");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+    expect(git(["log", "-1", "--format=%P"]).trim()).toBe("");
+  });
+
+  it("refuses an empty commit unless it is allowed, and a commit inside a merge", async () => {
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+
+    expect((await ad.commit({ message: "nothing", allowEmpty: false })).outcome).toBe("failed");
+    expect((await ad.commit({ message: "empty ok", allowEmpty: true })).outcome).toBe("succeeded");
+
+    writeFileSync(join(root, ".git", "MERGE_HEAD"), `${git(["rev-parse", "HEAD"]).trim()}\n`);
+    expect((await ad.commit({ message: "merge", allowEmpty: true })).outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("2");
+  });
+
   it("commits on the prepared branch when the checkout did not move", async () => {
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
     const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);

@@ -554,30 +554,118 @@ async function execCommit(
     ...(read.failure === undefined ? {} : { signingReadFailure: read.failure.readFailure }),
   };
   const sign = !UNSIGNED_SIGNING_DECISIONS.has(read.decision);
-  if (request.verified !== undefined) {
-    return { ...(await execVerifiedCommit(ctx, request, sign)), ...signing };
-  }
-  // The decision above was made for the prepared branch: a checkout that moved on while it was made
-  // is refused before any commit exists. This narrows the window rather than closing it: a switch
-  // between this read and the commit's own start cannot be seen (an unverified commit has no
-  // explicit ref update to bind). A failed read is a failed commit, never a pass.
+  const outcome =
+    request.verified === undefined
+      ? await execInteractiveCommit(ctx, request, sign)
+      : await execVerifiedCommit(ctx, request, sign);
+  return { ...outcome, ...signing };
+}
+
+// The decision above was made for the prepared branch. A prepared branch is committed to through
+// one explicit ref update that names that branch and the HEAD the commit was built on, so a
+// checkout that moves on at any point can never land the commit on another branch. A checkout
+// that has no branch to bind (detached) keeps the plain commit after its checkout read.
+async function execInteractiveCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  sign: boolean,
+): Promise<GitDeliveryExecutionResult> {
+  const branch = ctx.preparedCheckout?.branchName;
+  if (branch !== undefined) return execBoundCommit(ctx, request, sign, branch);
   const prepared = await checkoutStillPrepared(ctx).catch((error: unknown) => error);
   if (prepared !== true)
-    return {
-      ...(prepared === false ? failureFromExit(0, 0) : failureFromThrow(prepared, 0, 0)),
-      ...signing,
-    };
+    return prepared === false ? failureFromExit(0, 0) : failureFromThrow(prepared, 0, 0);
   const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
-  if (result.outcome !== "succeeded") return { ...result, ...signing };
+  if (result.outcome !== "succeeded") return result;
   try {
-    return {
-      ...result,
-      ...signing,
-      externalId: await readGitRevision(commitReadDeps(ctx), "HEAD"),
-    };
+    return { ...result, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
   } catch (error) {
-    return { ...failureFromThrow(error, result.durationMs, 1), ...signing };
+    return failureFromThrow(error, result.durationMs, 1);
   }
+}
+
+// The interactive commit on a prepared branch, written with Git's own plumbing: the staged tree, one
+// commit object on the HEAD read here (signed when the decision says so), then ONE ref update whose
+// old value is that HEAD. The branch the signing decision was made for is the branch that moves, or
+// nothing does. Hooks are off for every Keiko Git process, so no hook is skipped. A commit inside a
+// merge, an empty commit without `allowEmpty` and a checkout that is not on the branch are refused
+// before any object is written; a failed read is a failed commit, never a pass.
+async function execBoundCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  sign: boolean,
+  branch: string,
+): Promise<GitDeliveryExecutionResult> {
+  let refAttempted = false;
+  try {
+    const head = await boundCommitHead(ctx, branch);
+    if (head === undefined) return failureFromExit(0, 0);
+    const tree = await checkedObjectCommand(ctx, ["write-tree"]);
+    if (!request.allowEmpty && (await commitsNothing(ctx, head, tree)))
+      return failureFromExit(0, 0);
+    const commit = await checkedObjectCommand(ctx, [
+      "commit-tree",
+      tree,
+      ...(sign ? ["-S"] : []),
+      ...(head.kind === "born" ? ["-p", head.sha] : []),
+      "-m",
+      request.message,
+    ]);
+    if (!(await checkoutOnBranch(ctx, branch))) return failureFromExit(0, 0);
+    refAttempted = true;
+    return await updateBoundCommitRef(ctx, branch, head, commit);
+  } catch (error) {
+    return failureFromVerifiedCommitError(error, refAttempted);
+  }
+}
+
+// The HEAD a bound commit builds on; undefined when it cannot be bound to the prepared branch.
+async function boundCommitHead(ctx: RunContext, branch: string): Promise<GitHeadState | undefined> {
+  if (!(await checkoutOnBranch(ctx, branch))) return undefined;
+  const deps = commitReadDeps(ctx);
+  // A merge in progress has parents this commit does not bind.
+  if (
+    await readGitRevision(deps, "MERGE_HEAD").then(
+      () => true,
+      () => false,
+    )
+  )
+    return undefined;
+  return readGitHeadState(deps);
+}
+
+async function checkoutOnBranch(ctx: RunContext, branch: string): Promise<boolean> {
+  return (
+    (await readGitCheckoutBranch(commitReadDeps(ctx))) === branch && commitEffectAuthorized(ctx)
+  );
+}
+
+async function commitsNothing(ctx: RunContext, head: GitHeadState, tree: string): Promise<boolean> {
+  const deps = commitReadDeps(ctx);
+  const current =
+    head.kind === "born"
+      ? (await readGitCommitIdentity(deps, head.sha)).treeDigest
+      : await readGitTreeDigest(
+          deps,
+          await checkedObjectCommand(ctx, ["hash-object", "-t", "tree", "--stdin"], ""),
+        );
+  return (await readGitTreeDigest(deps, tree)) === current;
+}
+
+async function updateBoundCommitRef(
+  ctx: RunContext,
+  branch: string,
+  head: GitHeadState,
+  commit: string,
+): Promise<GitDeliveryExecutionResult> {
+  const oldValue = head.kind === "born" ? head.sha : gitZeroObjectId(head.objectIdLength);
+  const result = await runOne(
+    ctx,
+    ["update-ref", "--stdin"],
+    `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
+  );
+  if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
+  return executionResult("succeeded", result.durationMs, { externalId: commit });
 }
 
 // The decisions that commit exactly as Git would, with neither `--gpg-sign` nor `--no-gpg-sign`.
@@ -754,8 +842,12 @@ async function headBranchName(deps: NodeGitWorktreeReaderDeps): Promise<string> 
   return (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
 }
 
-async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): Promise<string> {
-  const result = await runOne(ctx, argv);
+async function checkedObjectCommand(
+  ctx: RunContext,
+  argv: readonly string[],
+  stdin?: string,
+): Promise<string> {
+  const result = await runOne(ctx, argv, stdin);
   const objectId = result.stdout.trim();
   if (
     result.exitCode !== 0 ||
