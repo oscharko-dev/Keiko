@@ -430,6 +430,39 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.failedCheck("run-a")).toBeUndefined();
   });
 
+  // A revision-less failure (the supervised/sidecar producer) cannot be placed in time, so it fails
+  // closed: it is recorded even over a known state, and it keeps what the target proved before the
+  // edit, so the repair phase still knows the run itself broke a check that had passed.
+  it("records a revision-less failure and keeps the target's pass from before the edit", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.verification("run-a", true, "t", ledger.verificationRevision("run-a"));
+    ledger.edit("run-a", ["src/a.ts"]);
+    ledger.verification("run-a", false, "t", undefined, { check: "test", failedCount: 1 });
+    expect(ledger.failedCheckTarget("run-a")).toEqual({
+      target: "t",
+      failure: { check: "test", failedCount: 1 },
+      provenOwn: true,
+    });
+  });
+
+  it("never lets a stale revision-less pass or a stale stamped failure rewrite a known target", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.verification("run-a", true, "t", ledger.verificationRevision("run-a"));
+    ledger.edit("run-a", ["src/a.ts"]);
+    const stale = ledger.verificationRevision("run-a");
+    ledger.edit("run-a", ["src/b.ts"]);
+    ledger.verification("run-a", true, "t", undefined);
+    ledger.verification("run-a", false, "t", stale, { check: "lint", failedCount: 5 });
+    expect(ledger.failedCheck("run-a")).toBeUndefined();
+    ledger.verification("run-a", false, "t", ledger.verificationRevision("run-a"), {
+      check: "test",
+      failedCount: 2,
+    });
+    expect(ledger.failedCheckTarget("run-a")?.provenOwn).toBe(true);
+  });
+
   it("names no failed check for a run whose check never ran or could not start", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");

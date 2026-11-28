@@ -526,11 +526,14 @@ function recordStaleVerification(
   failure: CodingVerificationFailureEvidence | undefined,
 ): void {
   const known = run.verificationTargets.get(target);
-  if (known !== undefined && (known.passed || known.failure !== undefined)) return;
+  const placesFailure = editRevision === undefined && failure !== undefined;
+  // A stale summary that carries a revision, or a stale pass, never rewrites what is known.
+  if (known !== undefined && !placesFailure) return;
   run.verificationTargets.set(target, {
     passed: false,
     selected: true,
-    ...failedWith(false, editRevision === undefined ? failure : undefined),
+    ...keptPassedBeforeEdit(known),
+    ...failedWith(false, placesFailure ? failure : undefined),
   });
 }
 
