@@ -508,32 +508,44 @@ interface HistoryRecord {
   readonly tail: string;
 }
 
-function historyRecords(stdout: string): readonly HistoryRecord[] {
-  const records: HistoryRecord[] = [];
-  let leading: string[] = [];
-  let open: { fields: readonly string[]; count: number; tail: string } | undefined;
-  for (const token of stdout.split("\0")) {
-    if (open !== undefined) {
-      if (token.length === 0) {
-        records.push(open);
-        open = undefined;
-      } else {
-        open.count += 1;
-      }
-    } else if (leading.length < HISTORY_LEADING_FIELDS) {
-      leading.push(token);
-    } else {
-      const newline = token.indexOf("\n");
-      const subject = newline === -1 ? token : token.slice(0, newline);
-      const tail = newline === -1 ? "" : token.slice(newline + 1);
-      const fields = [...leading, subject];
-      leading = [];
-      if (tail.length === 0) records.push({ fields, count: 0, tail });
-      else open = { fields, count: 1, tail };
+interface HistoryScan {
+  readonly records: HistoryRecord[];
+  leading: string[];
+  open: { fields: readonly string[]; count: number; tail: string } | undefined;
+}
+
+// Reads the token that closes a record's leading header: the subject, and a path-listing commit's
+// first path after the subject's newline.
+function openHistoryRecord(scan: HistoryScan, token: string): void {
+  const newline = token.indexOf("\n");
+  const subject = newline === -1 ? token : token.slice(0, newline);
+  const tail = newline === -1 ? "" : token.slice(newline + 1);
+  const fields = [...scan.leading, subject];
+  scan.leading = [];
+  if (tail.length === 0) scan.records.push({ fields, count: 0, tail });
+  else scan.open = { fields, count: 1, tail };
+}
+
+function scanHistoryToken(scan: HistoryScan, token: string): void {
+  if (scan.open !== undefined) {
+    if (token.length > 0) {
+      scan.open.count += 1;
+      return;
     }
+    scan.records.push(scan.open);
+    scan.open = undefined;
+  } else if (scan.leading.length < HISTORY_LEADING_FIELDS) {
+    scan.leading.push(token);
+  } else {
+    openHistoryRecord(scan, token);
   }
-  if (open !== undefined) records.push(open);
-  return records;
+}
+
+function historyRecords(stdout: string): readonly HistoryRecord[] {
+  const scan: HistoryScan = { records: [], leading: [], open: undefined };
+  for (const token of stdout.split("\0")) scanHistoryToken(scan, token);
+  if (scan.open !== undefined) scan.records.push(scan.open);
+  return scan.records;
 }
 
 // Only the single-commit fallback below still reads a `--shortstat` line ("N files changed"; merge
