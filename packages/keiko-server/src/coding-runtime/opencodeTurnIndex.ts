@@ -40,6 +40,8 @@ const READ_MAX_BYTES = 16 * 1_024 * 1_024;
 const GIT_TIMEOUT_MS = 60_000;
 /** Paths restored by one `git restore` invocation, so the argument vector stays bounded. */
 const RESTORE_BATCH = 200;
+/** Characters of paths one Git invocation may carry (Windows caps a whole command line at 32,767). */
+const ARGV_BUDGET_CHARS = 16_000;
 /** Paths a turn may leave staged and still be restored one by one (`update-index --cacheinfo`). */
 const EXPLICIT_RESTORE_MAX = 64;
 
@@ -663,27 +665,84 @@ async function moveCopy(
   return held ? "applied" : "failed";
 }
 
-async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
-  const atHead = [...plan.target].filter(([, state]) => state === AT_HEAD).map(([path]) => path);
-  for (let offset = 0; offset < atHead.length; offset += RESTORE_BATCH) {
-    const batch = atHead.slice(offset, offset + RESTORE_BATCH);
-    const restored = await run(["restore", "--staged", `--source=${plan.headSha}`, "--", ...batch]);
-    if (!succeeded(restored)) return false;
-  }
-  for (const [path, state] of plan.target) {
-    if (state === AT_HEAD) continue;
-    if (!(await restoreExplicit(run, path, state))) return false;
-  }
-  return true;
+/** One recorded index entry (`mode oid`) for a path, ready for `update-index --cacheinfo`. */
+interface ExplicitEntry {
+  readonly path: string;
+  readonly mode: string;
+  readonly cacheInfo: string;
 }
 
-/** Puts one path back to the exact entry the person had staged (`mode oid`), or out of the index. */
-async function restoreExplicit(run: GitRun, path: string, state: string): Promise<boolean> {
+function explicitEntry(path: string, state: string): ExplicitEntry | undefined {
   const [mode, oid] = state.split(" ");
-  if (mode === undefined || oid === undefined) return false;
-  const args =
-    mode === ABSENT_MODE
-      ? ["update-index", "--force-remove", "--", path]
-      : ["update-index", "--add", "--cacheinfo", `${mode},${oid},${path}`];
-  return succeeded(await run(args));
+  if (mode === undefined || oid === undefined) return undefined;
+  return { path, mode, cacheInfo: `${mode},${oid},${path}` };
+}
+
+/**
+ * Applies the plan's target states to the private copy in a fixed order: entries leaving the index
+ * first, then the paths Git puts back from HEAD, then the entries written explicitly. A removal
+ * before an addition is what lets a file replace a directory (or the reverse) in one plan. Each
+ * step runs in bounded batches (`inBatches`), never one process per path.
+ */
+async function applyTargetState(run: GitRun, plan: MovePlan): Promise<boolean> {
+  const atHead: string[] = [];
+  const removals: string[] = [];
+  const additions: ExplicitEntry[] = [];
+  for (const [path, state] of plan.target) {
+    if (state === AT_HEAD) {
+      atHead.push(path);
+      continue;
+    }
+    const entry = explicitEntry(path, state);
+    if (entry === undefined) return false;
+    if (entry.mode === ABSENT_MODE) removals.push(path);
+    else additions.push(entry);
+  }
+  return (
+    (await runInBatches(
+      removals,
+      (path) => path.length,
+      (batch) => run(["update-index", "--force-remove", "--", ...batch]),
+    )) &&
+    (await runInBatches(
+      atHead,
+      (path) => path.length,
+      (batch) => run(["restore", "--staged", `--source=${plan.headSha}`, "--", ...batch]),
+    )) &&
+    (await runInBatches(
+      additions,
+      (entry) => entry.cacheInfo.length,
+      (batch) =>
+        run([
+          "update-index",
+          "--add",
+          ...batch.flatMap((entry) => ["--cacheinfo", entry.cacheInfo]),
+        ]),
+    ))
+  );
+}
+
+/** Runs `run` over `items` in batches bounded by count and by the characters they put on the command line. */
+async function runInBatches<T>(
+  items: readonly T[],
+  size: (item: T) => number,
+  run: (batch: readonly T[]) => Promise<GitProcessResult>,
+): Promise<boolean> {
+  let batch: T[] = [];
+  let chars = 0;
+  const flush = async (): Promise<boolean> => {
+    if (batch.length === 0) return true;
+    const ok = succeeded(await run(batch));
+    batch = [];
+    chars = 0;
+    return ok;
+  };
+  for (const item of items) {
+    const cost = size(item) + 1;
+    if (batch.length > 0 && (batch.length >= RESTORE_BATCH || chars + cost > ARGV_BUDGET_CHARS))
+      if (!(await flush())) return false;
+    batch.push(item);
+    chars += cost;
+  }
+  return await flush();
 }

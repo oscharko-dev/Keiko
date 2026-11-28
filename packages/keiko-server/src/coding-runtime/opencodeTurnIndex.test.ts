@@ -20,7 +20,7 @@ import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 
 // Counts every Git process the turn index starts, through the production runner.
-const gitProcesses = vi.hoisted(() => ({ count: 0 }));
+const gitProcesses = vi.hoisted(() => ({ count: 0, widestArgv: 0 }));
 vi.mock("../gitProcessActivity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gitProcessActivity.js")>();
   return {
@@ -29,6 +29,7 @@ vi.mock("../gitProcessActivity.js", async (importOriginal) => {
       const run = actual.observedGitRunner(...args);
       return async (gitArgs, options) => {
         gitProcesses.count += 1;
+        gitProcesses.widestArgv = Math.max(gitProcesses.widestArgv, gitArgs.join(" ").length);
         return await run(gitArgs, options);
       };
     },
@@ -77,8 +78,10 @@ import {
   captureTurnIndex,
   countRestorableTurnIndexPaths,
   readGovernedTransitions,
+  reapplyTurnIndexMoves,
   reopenTurnIndex,
   restoreTurnIndex,
+  type TurnIndexMoves,
   settleTurnIndex,
 } from "./opencodeTurnIndex.js";
 
@@ -568,6 +571,80 @@ async function keikoStages(root: string, path: string): Promise<boolean> {
     (staged) => staged,
   );
 }
+
+describe("Restore makes the recorded index moves again", () => {
+  const commit = (root: string): void => {
+    git(root, "add", "-A");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "more");
+  };
+
+  /** Undoes the turn through the production restore and hands back the moves it recorded. */
+  async function undone(
+    root: string,
+    record: TurnIndexRecord,
+  ): Promise<{ moves: TurnIndexMoves; count: number }> {
+    let recorded: TurnIndexMoves | undefined;
+    const result = await restoreTurnIndex(root, record, governedOf(record), (moves) => {
+      recorded = moves;
+    });
+    if (recorded === undefined) throw new Error(`nothing was undone: ${String(result.outcome)}`);
+    return { moves: recorded, count: result.restoredCount };
+  }
+
+  it("removes the entries a replacing file conflicts with before it writes the file", async () => {
+    const root = repository();
+    mkdirSync(join(root, "shape"));
+    writeFileSync(join(root, "shape", "child.txt"), "child\n");
+    commit(root);
+    const record = await turn(root, () => {
+      git(root, "rm", "-q", "--", "shape/child.txt");
+      writeFileSync(join(root, "shape"), "now a file\n");
+      git(root, "add", "shape");
+    }, ["shape", "shape/child.txt"]);
+    const turnEnd = git(root, "ls-files", "-s");
+    const { moves, count } = await undone(root, record);
+    expect(count).toBe(2);
+    expect(git(root, "ls-files", "-s", "shape/child.txt")).not.toBe("");
+
+    await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("restored");
+
+    expect(git(root, "ls-files", "-s")).toBe(turnEnd);
+  });
+
+  it("writes many paths in a few bounded Git runs and still refuses one a person restaged", async () => {
+    const root = repository();
+    const names = Array.from({ length: 450 }, (_unused, index) => `bulk/file-${String(index)}.txt`);
+    mkdirSync(join(root, "bulk"));
+    for (const name of names) writeFileSync(join(root, name), "one\n");
+    commit(root);
+    const record = await turn(
+      root,
+      () => {
+        for (const name of names) writeFileSync(join(root, name), "two\n");
+        git(root, "add", "bulk");
+      },
+      names,
+    );
+    const turnEnd = git(root, "ls-files", "-s");
+    const { moves, count } = await undone(root, record);
+    expect(count).toBe(names.length);
+    expect(staged(root)).toEqual([]);
+
+    const before = gitProcesses.count;
+    gitProcesses.widestArgv = 0;
+    await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("restored");
+
+    expect(gitProcesses.count - before).toBeLessThanOrEqual(12);
+    expect(gitProcesses.widestArgv).toBeLessThan(16_500);
+    expect(git(root, "ls-files", "-s")).toBe(turnEnd);
+
+    // The index is put back to the undone state, then a person restages one path: Restore refuses it.
+    git(root, "restore", "--staged", "--", "bulk");
+    writeFileSync(join(root, names[7] ?? ""), "three\n");
+    git(root, "add", names[7] ?? "");
+    await expect(reapplyTurnIndexMoves(root, moves)).resolves.toBe("changed-after-turn");
+  });
+});
 
 describe("transitions read inside the governed index transaction", () => {
   const RUN = "run-index-transitions";
