@@ -1533,16 +1533,20 @@ describe("a refused repository agent model fact (U-53)", () => {
     runtimeEvent({ eventKind: "native-agent-models-refused", refusedAgentModelCount: count });
 
   it.each([
-    ["en", 1, "1 agent model setting from the repository was not used"],
-    ["en", 2, "2 agent model settings from the repository were not used"],
-    ["de", 1, "1 Agenten-Modelleinstellung aus dem Repository wurde nicht verwendet"],
-    ["de", 2, "2 Agenten-Modelleinstellungen aus dem Repository wurden nicht verwendet"],
+    ["en", 1, "1 agent model setting in the configuration was not used"],
+    ["en", 2, "2 agent model settings in the configuration were not used"],
+    ["de", 1, "1 Agenten-Modelleinstellung in der Konfiguration wurde nicht verwendet"],
+    ["de", 2, "2 Agenten-Modelleinstellungen in der Konfiguration wurden nicht verwendet"],
   ] as const)("says in %s how many were not used (%i)", (language, count, text) => {
     const translate: CodingWorkbenchTranslate = (key, values) =>
       translateCodingWorkbench(language, key, values);
     const detail = eventDetail(fact(count), translate);
     expect(detail).toContain(text);
     expect(detail).toMatch(/[Gg]ateway/u);
+    // The count merges the global and the repository configuration, and a refused override leaves
+    // an earlier admitted model in place: the line names neither a source nor a fixed fallback.
+    expect(detail).not.toMatch(/repository|Repository/u);
+    expect(detail).not.toMatch(/run's model|Modell des Laufs/u);
     expect(eventTitle(fact(count), translate)).not.toContain("codingWorkbench.");
   });
 });
