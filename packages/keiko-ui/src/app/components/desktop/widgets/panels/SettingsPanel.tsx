@@ -457,6 +457,12 @@ function invalidateServerReadinessObservations(
   );
 }
 
+function isRecordFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && "code" in error && error.code === "RECORD_FAILED"
+  );
+}
+
 function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -2158,6 +2164,9 @@ export function SettingsPanel({
           message: readinessErrorMessage(error, t),
         }),
       );
+      // A refused record update (500 RECORD_FAILED) still deactivated the model in the process, so
+      // the picker and the rows refresh to what the server now holds.
+      if (isRecordFailure(error)) notifyGatewayModelReadinessUpdated();
       return;
     }
     setReadinessLedger((ledger) => clearReadinessRun(ledger, generation, modelId));

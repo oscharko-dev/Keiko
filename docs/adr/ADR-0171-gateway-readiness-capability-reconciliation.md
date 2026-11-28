@@ -39,8 +39,10 @@ record and the model is inactive until a person activates it again; so does Deac
 check that invalidated the observation. Saving the configuration again keeps every activation whose
 per-model binding and credential are unchanged and discards only the models whose binding changed or
 that were removed (only the basic-chat proof is carried, never a feature proof). Evidence is `gateway.activation.persistence`: a count of
-restored records and a count discarded per closed reason (`first-start`, `product-changed`,
-`configuration-changed`, `credential-changed`, `deactivated`, `invalidated`).
+restored records and a count discarded per closed reason (`first-start`, `unreadable`, `format-changed`,
+`foreign-installation`, `product-changed`, `configuration-changed`, `credential-changed`, `deactivated`,
+`invalidated`). The credential is stored as a per-installation scrypt derivation, never a plain hash, and a
+record whose removal cannot be written is withdrawn whole and reported as a failed Deactivate.
 
 ## Context
 

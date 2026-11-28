@@ -608,9 +608,9 @@ describe("handleGatewaySetup", () => {
         restore: (providers, correlationId) => real.restore(providers, correlationId),
         recorded: () => real.recorded(),
         settle: (reason, correlationId) => real.settle(reason, correlationId),
-        sync: (activated, reason, correlationId): void => {
+        sync: (activated, reason, correlationId, removalReasons): void => {
           synced.push(activated.map((entry) => entry.provider.modelId));
-          real.sync(activated, reason, correlationId);
+          real.sync(activated, reason, correlationId, removalReasons);
         },
       },
       "corr-settle-restore",

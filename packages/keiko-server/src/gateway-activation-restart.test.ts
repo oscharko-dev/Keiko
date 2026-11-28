@@ -193,6 +193,103 @@ describe("activated models across a server restart", () => {
     expect(currentConversationReady(second, MODEL)).toBe(false);
   });
 
+  describe("with several models", () => {
+    const threeModels = {
+      ...baseEnv,
+      KEIKO_MODEL_CHAT_B_API_KEY: "sk-test-activation-credential-b",
+      KEIKO_MODEL_CHAT_B_BASE_URL: "http://127.0.0.1:41998/v1",
+      KEIKO_MODEL_CHAT_C_API_KEY: "sk-test-activation-credential-c",
+      KEIKO_MODEL_CHAT_C_BASE_URL: "http://127.0.0.1:41997/v1",
+    };
+
+    function holderOf(deps: UiHandlerDeps): NonNullable<UiHandlerDeps["gatewayConfig"]> {
+      if (deps.gatewayConfig === undefined) throw new TypeError("Expected the gateway holder.");
+      return deps.gatewayConfig;
+    }
+
+    function activateModels(deps: UiHandlerDeps, ...modelIds: string[]): void {
+      const holder = holderOf(deps);
+      for (const modelId of modelIds)
+        holder.recordVerifiedCapability(
+          modelId,
+          { conversationReady: true },
+          new Date().toISOString(),
+          holder.generation(),
+        );
+    }
+
+    function deactivationOf(
+      deps: UiHandlerDeps,
+      modelId: string,
+      correlationId: string,
+    ): ReturnType<typeof handleGatewayDeactivation> {
+      return handleGatewayDeactivation(
+        {
+          correlationId,
+          req: Readable.from([Buffer.from(JSON.stringify({ modelId }))]) as IncomingMessage,
+          res: {} as RouteContext["res"],
+          params: {},
+          url: new URL("http://127.0.0.1/api/gateway/readiness/deactivation"),
+        },
+        deps,
+      );
+    }
+
+    it("keeps restored activations on disk when a deactivation of an inactive model settles first", async () => {
+      const first = start(threeModels);
+      activateModels(first, "chat-a", "chat-b");
+      const second = await restart(first, threeModels);
+      expect(currentConversationReady(second, "chat-a")).toBe(true);
+      // Deactivating a model that was never activated writes nothing that forgets the others.
+      expect(await deactivationOf(second, "chat-c", "corr-inactive")).toMatchObject({
+        status: 200,
+        body: { outcome: "not-activated" },
+      });
+      expect(await deactivationOf(second, "chat-c", "corr-inactive-again")).toMatchObject({
+        status: 200,
+        body: { outcome: "not-activated" },
+      });
+      const third = await restart(second, threeModels);
+      expect(currentConversationReady(third, "chat-a")).toBe(true);
+      expect(currentConversationReady(third, "chat-b")).toBe(true);
+    });
+
+    it("logs each removal of one settled change under its own reason", () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const deps = start(threeModels);
+      activateModels(deps, "chat-a", "chat-b");
+      const holder = holderOf(deps);
+      sink.events.length = 0;
+      holder.settleObservations?.(() => {
+        holder.clearVerifiedCapability("chat-a", undefined, { cause: "deactivated" });
+        holder.clearVerifiedCapability("chat-b", undefined, { cause: "invalidated" });
+      });
+      const lines = sink.events
+        .filter((event) => event.op === "gateway.activation.persistence")
+        .map((event) => event.extra)
+        .filter((extra) => extra?.change === "discarded");
+      expect(lines).toContainEqual(expect.objectContaining({ reason: "deactivated", count: 1 }));
+      expect(lines).toContainEqual(expect.objectContaining({ reason: "invalidated", count: 1 }));
+    });
+
+    it("does not persist the transient set of a change that threw", async () => {
+      const first = start(threeModels);
+      activateModels(first, "chat-a", "chat-b");
+      const holder = holderOf(first);
+      expect(() => {
+        holder.settleObservations?.(() => {
+          holder.clearVerifiedCapability("chat-a");
+          holder.clearVerifiedCapability("chat-b");
+          throw new Error("the change failed midway");
+        });
+      }).toThrow("failed midway");
+      const second = await restart(first, threeModels);
+      expect(currentConversationReady(second, "chat-a")).toBe(true);
+      expect(currentConversationReady(second, "chat-b")).toBe(true);
+    });
+  });
+
   it("forgets a model whose observation a failure invalidated", async () => {
     const first = start();
     activate(first);

@@ -154,7 +154,11 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     const stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     writeFileSync(file, JSON.stringify({ ...stored, schemaVersion: 1 }), { mode: 0o600 });
     expect(restoredIds(memory(), provider())).toEqual([]);
-    expect(changeLines().map((line) => line.reason)).toContain("unreadable");
+    // The reason is the exact, closed one: an older format is not an unreadable file.
+    expect(changeLines()).toContainEqual(
+      expect.objectContaining({ change: "discarded", reason: "format-changed", count: 0 }),
+    );
+    expect(changeLines().map((line) => line.reason)).not.toContain("unreadable");
   });
 
   it("derives a stable credential value that differs per installation and per key", () => {
@@ -300,6 +304,18 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(restoredIds(memory(), provider())).toEqual([]);
     });
 
+    it("writes the models that stay activated right after withdrawing the record", () => {
+      const second = provider({ modelId: "chat-b" });
+      activate(memory(), provider(), second);
+      const running = memory();
+      running.restore([provider(), second], "corr-restore");
+      writer.failures = 1;
+      running.sync([{ provider: second, activatedAt: ACTIVATED_AT }], "deactivated", "corr-deact");
+      expect(running.recorded()).toBe(true);
+      // The withdrawn record is rewritten with the remaining model at once, not at the next change.
+      expect(restoredIds(memory(), provider(), second)).toEqual(["chat-b"]);
+    });
+
     it("reports a removal that neither the write nor the withdrawal could record, then settles it", () => {
       activate(memory(), provider());
       const running = memory();
@@ -316,6 +332,28 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(running.recorded()).toBe(true);
       expect(restoredIds(memory(), provider())).toEqual([]);
     });
+  });
+
+  it("keeps the restored activations when it settles before any sync", () => {
+    const second = provider({ modelId: "chat-b" });
+    activate(memory(), provider(), second);
+    const running = memory();
+    expect(restoredIds(running, provider(), second)).toEqual(["chat-a", "chat-b"]);
+    expect(running.settle("deactivated", "corr-settle")).toBe(true);
+    expect(restoredIds(memory(), provider(), second)).toEqual(["chat-a", "chat-b"]);
+  });
+
+  it("logs each removal under its own reason when one change removed models for different ones", () => {
+    const second = provider({ modelId: "chat-b" });
+    const running = memory();
+    activate(running, provider(), second);
+    events.length = 0;
+    running.sync([], "configuration-changed", "corr-mixed", new Map([["chat-a", "deactivated"]]));
+    const lines = changeLines().filter((line) => line.change === "discarded");
+    expect(lines).toContainEqual(expect.objectContaining({ reason: "deactivated", count: 1 }));
+    expect(lines).toContainEqual(
+      expect.objectContaining({ reason: "configuration-changed", count: 1 }),
+    );
   });
 
   it("writes nothing when the activated set did not change", () => {

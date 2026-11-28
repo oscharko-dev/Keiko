@@ -1069,7 +1069,10 @@ chat model is inactive until the person activates it in Settings > Models and th
 changed or that were removed (`gateway.activation.persistence`, reason `configuration-changed`, with a count), and the person can deactivate an activated model there again (Deactivate,
 `POST /api/gateway/readiness/deactivation`): that sends nothing to the provider, the model leaves the
 Chat picker and is refused until it is activated anew, and a deactivation while that model's check
-still runs is refused (`gateway.readiness.deactivation` records the closed outcome). Only activated models are offered by the Chat picker and elected as an automatic
+still runs is refused (`gateway.readiness.deactivation` records the closed outcome: `deactivated`, `not-activated`, `check-running`,
+`unknown-model`, `bad-request`, or `record-failed`). `record-failed` means the process deactivated the model but the activation record could not be rewritten; the route answers
+500 `RECORD_FAILED`, the record is withdrawn whole so the model cannot come back at a restart, and a repeated Deactivate retries it. The discard reasons of `gateway.activation.persistence` are `first-start`, `unreadable`,
+`format-changed` (a record of an older file format, never migrated), `foreign-installation`, `product-changed`, `configuration-changed`, `credential-changed`, `deactivated` and `invalidated`. Only activated models are offered by the Chat picker and elected as an automatic
 default (Chat create and the Workbench prefer activated models over a better-ranked inactive one);
 a pick or a Send in Chat and a pick or Start in the Coding Workbench never start a basic-chat check.
 The Workbench proves tool calling and context only for an activated model. Startup still probes the

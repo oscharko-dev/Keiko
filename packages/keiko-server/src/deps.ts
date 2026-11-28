@@ -1840,7 +1840,35 @@ interface RuntimeGatewayState {
   /** Present once the installation identity is known; keeps activations across restarts. */
   activation?: ModelActivationMemory | undefined;
   /** Set while one logical change is settling: the record is written once, when it ends. */
-  settling?: { dirty: boolean; reason: ActivationRemovalReason; correlationId: string } | undefined;
+  settling?: SettlingChange | undefined;
+}
+
+/** One logical change to the observations whose durable record is written once, when it ends. */
+interface SettlingChange {
+  dirty: boolean;
+  correlationId: string;
+  /** The activated model ids after the latest step, to attribute each removal to its own step. */
+  activeIds: Set<string>;
+  /** A model still missing, with the reason of the step that took it out. */
+  readonly removals: Map<string, ActivationRemovalReason>;
+}
+
+function liveActivations(state: RuntimeGatewayState): ReturnType<typeof activatedModelsOf> {
+  return activatedModelsOf(state.observations, state.generation, state.config?.providers ?? []);
+}
+
+function deferActivationSync(
+  state: RuntimeGatewayState,
+  settling: SettlingChange,
+  reason: ActivationRemovalReason,
+  correlationId: string,
+): void {
+  const now = new Set(liveActivations(state).map((model) => model.provider.modelId));
+  for (const id of settling.activeIds) if (!now.has(id)) settling.removals.set(id, reason);
+  for (const id of now) settling.removals.delete(id);
+  settling.activeIds = now;
+  settling.dirty = true;
+  settling.correlationId = correlationId;
 }
 
 /** Keeps the durable activation record equal to the activated set after every change to it. */
@@ -1848,28 +1876,37 @@ function syncActivation(
   state: RuntimeGatewayState,
   reason: ActivationRemovalReason,
   correlationId: string = UNKNOWN_CORRELATION_ID,
+  removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
 ): void {
   if (state.settling !== undefined) {
-    state.settling = { dirty: true, reason, correlationId };
+    deferActivationSync(state, state.settling, reason, correlationId);
     return;
   }
-  state.activation?.sync(
-    activatedModelsOf(state.observations, state.generation, state.config?.providers ?? []),
-    reason,
-    correlationId,
-  );
+  state.activation?.sync(liveActivations(state), reason, correlationId, removalReasons);
 }
 
 function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
   if (state.settling !== undefined) return change();
-  state.settling = { dirty: false, reason: "invalidated", correlationId: UNKNOWN_CORRELATION_ID };
+  const settling: SettlingChange = {
+    dirty: false,
+    correlationId: UNKNOWN_CORRELATION_ID,
+    activeIds: new Set(liveActivations(state).map((model) => model.provider.modelId)),
+    removals: new Map(),
+  };
+  state.settling = settling;
+  let result: T;
   try {
-    return change();
-  } finally {
-    const { dirty, reason, correlationId } = state.settling;
+    result = change();
+  } catch (error) {
+    // A change that failed midway leaves a partial transient set: never persist it. The record
+    // keeps its last durable state and the next change settles it.
     state.settling = undefined;
-    if (dirty) syncActivation(state, reason, correlationId);
+    throw error;
   }
+  state.settling = undefined;
+  if (settling.dirty)
+    syncActivation(state, "configuration-changed", settling.correlationId, settling.removals);
+  return result;
 }
 
 function rememberRuntimeActivations(
@@ -2135,7 +2172,10 @@ function runtimeObservationFacets(
     },
     settleObservations: <T>(change: () => T): T => settleObservationChange(state, change),
     settleActivationRecord(reason, correlationId): boolean {
-      return state.activation?.settle(reason, correlationId) ?? true;
+      // From the live activations, never from what the memory last heard: a restored set that no
+      // sync has touched yet is still part of it.
+      syncActivation(state, reason, correlationId);
+      return state.activation?.recorded() ?? true;
     },
   };
 }
