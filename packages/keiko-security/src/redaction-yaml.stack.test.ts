@@ -1,13 +1,24 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { redactContent } from "./content-redaction.js";
-import { redact } from "./redaction.js";
+import { createStreamingRedactor, redact } from "./redaction.js";
 import {
   MAX_YAML_NESTING,
   YamlDepthRefusal,
   isYamlDocument,
   yamlNestingExceeds,
 } from "./redaction-yaml.js";
+
+/** The child process runs the built output, so a stale build must fail loudly, not pass. */
+function assertDistIsCurrent(): void {
+  for (const name of ["redaction", "redaction-yaml", "redaction-source-map", "redaction-code"]) {
+    const built = new URL(`../dist/${name}.js`, import.meta.url);
+    const source = new URL(`./${name}.ts`, import.meta.url);
+    if (!existsSync(built) || statSync(built).mtimeMs < statSync(source).mtimeMs)
+      throw new Error(`dist/${name}.js is missing or older than src: run npm run build:packages.`);
+  }
+}
 
 const SECRET = "hunter2hunter2-value";
 
@@ -39,6 +50,7 @@ describe("YAML projection never exhausts the call stack", () => {
   it("projects a 3,000-record listing on a small stack, masking only the secret", () => {
     // A call site on a deep stack leaves little of it: `--stack-size=150` models that. The
     // projection used to spread one argument per mapping entry onto the call stack.
+    assertDistIsCurrent();
     const moduleUrl = new URL("../dist/redaction.js", import.meta.url).href;
     const script = `import {readFileSync} from 'node:fs';
       const {redact}=await import(${JSON.stringify(moduleUrl)});
@@ -76,6 +88,25 @@ describe("YAML projection never exhausts the call stack", () => {
     expect(redact(deep)).not.toContain(SECRET);
     expect(redactContent(deep, "redact")).not.toContain(SECRET);
   });
+
+  it("keeps the credential-floor path off the YAML projection", () => {
+    const deep = `${nestedMapping(10_000)}password: ${SECRET}\n`;
+    expect(redactContent(deep, "preserve")).toBe(deep);
+  });
+
+  it.each(["? ", "&anchor "])(
+    "streams a %j line of 600 compact markers without throwing",
+    (prefix) => {
+      const text = `${prefix}${"- ".repeat(600)}x\npassword: ${SECRET}\n`;
+      const stream = createStreamingRedactor(redact);
+      let out = "";
+      expect(() => {
+        for (let i = 0; i < text.length; i += 50) out += stream.push(text.slice(i, i + 50));
+        out += stream.finish();
+      }).not.toThrow();
+      expect(out).not.toContain(SECRET);
+    },
+  );
 
   it("measures block depth over indentation and compact markers, one level per marker", () => {
     expect(yamlNestingExceeds(nestedMapping(MAX_YAML_NESTING - 1))).toBe(false);

@@ -566,7 +566,14 @@ function canonicalPlaceholder(text: string, node: Node): boolean {
 
 export function yamlPublicationNeedsContext(text: string): boolean {
   const api = yamlApi();
-  const document = parsePrivacyDocument(text);
+  let document: Document;
+  try {
+    document = parsePrivacyDocument(text);
+  } catch (error) {
+    // Too deep to parse is not provably plain: the conservative answer keeps the text as context.
+    if (error instanceof YamlDepthRefusal) return true;
+    throw error;
+  }
   return (
     document.errors.length > 0 ||
     api.isMap(document.contents) ||

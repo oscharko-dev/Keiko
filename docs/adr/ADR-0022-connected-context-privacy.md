@@ -924,8 +924,11 @@ overflowed the stack at roughly 2,200 levels (about 230 on a small stack), so te
 512 block levels is refused up front as a depth refusal (`YamlDepthRefusal`, a `RangeError`), closed
 and body-free exactly like parser stack exhaustion. The projection's walks keep explicit stacks and
 never spread a result list into call arguments (`appendAll`), so a listing with many entries does
-not exhaust a small stack and mask the remaining output. The credential-floor content path never
-invokes the YAML projection; the strict path stays fail-closed.
+not exhaust a small stack and mask the remaining output. The credential-floor
+content path (`redactContent` with `preserve`, which runs only `redactCredentialShapes`) never
+invokes the YAML projection; `redactContent` with `redact` runs the strict `redact()`, which does
+project code, and stays fail-closed. `yamlPublicationNeedsContext` answers "needs context" for text
+refused as too deep.
 Java parses run in a worker thread with a heap ceiling and a deadline that grows with the text
 (2026-11-06, #4212): the pinned java-parser's ALL(*) prediction grows superlinearly on some invalid
 expressions (400 characters took 21 s, 1,600 exhausted a 4 GB heap) and keeps its DFA caches across

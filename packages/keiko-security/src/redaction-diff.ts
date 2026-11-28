@@ -484,6 +484,7 @@ function decodeCanonicalQuotedPath(token: string): string | undefined {
   while (at < content.length) {
     const step = canonicalStep(content, at);
     if (step === undefined) return undefined;
+    // Bounded: one escape step is at most the four bytes of a single UTF-8 character.
     bytes.push(...Array.from(step.bytes));
     at += step.length;
   }

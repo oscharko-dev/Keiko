@@ -330,7 +330,9 @@ function spelledAt(text: string, start: number, secret: SecretPlan, refs: Refere
     follow(text, secret, index, reach, refs);
   const ends = reach.ends[length] ?? new Set<number>();
   if (ends.size === 0) return reach.partial ? "partial" : undefined;
-  return { end: Math.max(...ends) };
+  let end = 0;
+  for (const candidate of ends) end = Math.max(end, candidate);
+  return { end };
 }
 
 interface Scan {
