@@ -498,6 +498,21 @@ function thrownGitCode(error: unknown): { readonly code?: string } {
     : {};
 }
 
+// The body-free structured evidence of a thrown Git read or stage helper.
+function failureEvidence(cause: unknown): Omit<RuntimeGitActivityFields, "state"> {
+  const detail = describeError(cause);
+  return {
+    failureKind: gitDeliveryActivityFailureKind(errorKindOf(cause)),
+    errorClass: detail.errorClass,
+    ...thrownGitCode(cause),
+    ...(cause instanceof GitWorktreeReadError && cause.reason !== undefined
+      ? { readFailure: cause.reason }
+      : {}),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
+}
+
 function isRedemption(request: RuntimeGitRequest): request is Extract<
   RuntimeGitRequest,
   { readonly phase: "execute" }
@@ -638,24 +653,7 @@ export class RuntimeGitService {
       return REFUSED_AUTHORITY;
     }
     const cause = error instanceof StageEffectFailure ? error.cause : error;
-    const failureKind = gitDeliveryActivityFailureKind(errorKindOf(cause));
-    const detail = describeError(cause);
-    this.log(
-      context,
-      phase,
-      {
-        state: "failed",
-        failureKind,
-        errorClass: detail.errorClass,
-        ...thrownGitCode(cause),
-        ...(cause instanceof GitWorktreeReadError && cause.reason !== undefined
-          ? { readFailure: cause.reason }
-          : {}),
-        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-      },
-      "failed",
-    );
+    this.log(context, phase, { state: "failed", ...failureEvidence(cause) }, "failed");
     return error instanceof StageEffectFailure
       ? this.result(error.proposal, "failed", "execution-failed")
       : REFUSED_EXECUTION;
@@ -901,8 +899,18 @@ export class RuntimeGitService {
     const paths = selection.map((entry) => entry.path);
     pathCount = paths.length;
     const workspaceFs = runtimeWorkspaceFs(context);
-    const worktreeDigest = await this.candidateDigest(context, execution, paths, true);
-    const review = await reviewStageSelection(context, execution, selection);
+    const basis = await this.settleExpanded(
+      context,
+      "stage-propose",
+      requested,
+      paths,
+      async () => ({
+        worktreeDigest: await this.candidateDigest(context, execution, paths, true),
+        review: await reviewStageSelection(context, execution, selection),
+      }),
+    );
+    if (basis === undefined) return refuse("blocked", "unsupported-transformation");
+    const { worktreeDigest, review } = basis;
     if ((await this.candidateDigest(context, execution, paths, false)) !== worktreeDigest)
       return refuse("drift", "candidate-drift");
     const proposal = buildStageProposal(
@@ -922,6 +930,29 @@ export class RuntimeGitService {
       ? this.result(proposal, "approval-required", "approval-required")
       : this.result(proposal, "ready", "none");
   }
+  // A directory selection can reach one entry Keiko cannot read as a regular file (a submodule
+  // gitlink, an unreadable file, a directory in a file's place). That is a reasoned refusal the model
+  // can act on, with the structured failure on the log, instead of an opaque failure of the whole
+  // selection. A selection of exact paths keeps failing loudly, and a read that ended under a closed
+  // authority is still the authority refusal.
+  private async settleExpanded<T>(
+    context: VerifiedCommitRunContext,
+    phase: RuntimeGitPhase,
+    requested: readonly string[],
+    paths: readonly string[],
+    read: () => Promise<T>,
+  ): Promise<T | undefined> {
+    try {
+      return await read();
+    } catch (error) {
+      const expanded =
+        paths.length !== requested.length || paths.some((path, at) => path !== requested[at]);
+      if (!expanded || context.signal?.aborted === true || !context.stillAuthorized()) throw error;
+      const reason = "unsupported-transformation";
+      this.log(context, phase, { state: "blocked", reason, ...failureEvidence(error) }, "refused");
+      return undefined;
+    }
+  }
   // #3902 AC2: unstaging gives a staged change back to the worktree. Admission is Git's own change
   // list (only staged, unconflicted paths); the review counts the staged lines it gives back.
   private async proposeUnstage(
@@ -930,24 +961,30 @@ export class RuntimeGitService {
   ): Promise<CodingRuntimeGitUnstage> {
     this.pruneExpired();
     const proposalId = mintProposalId("unstage");
+    let pathCount = requested.length;
     const refuse = (reason: CodingRuntimeGitUnstage["reason"]): CodingRuntimeGitUnstage => ({
       kind: "unstage",
       proposalId,
       status: "blocked",
       reason,
-      pathCount: requested.length,
+      pathCount,
     });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("proposal-limit");
     const execution = this.options.execution ?? {};
     const facts = await readVerifiedCommitFacts(context, execution);
     const selection = await admitUnstageSelection(context, execution, requested);
     if (selection === undefined) return refuse("selection-unreviewed");
-    const review = await reviewStageSelection(context, execution, selection, "staged");
+    const paths = selection.map((entry) => entry.path);
+    pathCount = paths.length;
+    const review = await this.settleExpanded(context, "unstage-propose", requested, paths, () =>
+      reviewStageSelection(context, execution, selection, "staged"),
+    );
+    if (review === undefined) return refuse("unsupported-transformation");
     const proposal = buildUnstageProposal(
       context,
       facts,
       requested,
-      selection.map((entry) => entry.path),
+      paths,
       review,
       this.now(),
       proposalId,

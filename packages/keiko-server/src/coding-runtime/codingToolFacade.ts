@@ -1270,7 +1270,7 @@ function verificationPackageDetail(
 // keep their own findings and need none.
 const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path names no pending change Git lists for this worktree: a file that is unchanged, absent or in conflict, a directory with no pending change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every pending change below it (\".\" the whole workspace). Read keiko_git_status and request changed files, or a directory that holds changes.",
+    'At least one requested path names no pending change Git lists for this worktree: a file that is unchanged, absent or in conflict, a directory with no pending change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every pending change below it ("." the whole workspace). Read keiko_git_status and request changed files, or a directory that holds changes.',
   "buffers-dirty":
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
@@ -1285,9 +1285,11 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
 // An unstage proposal is refused for its own reasons (#3902 AC2).
 const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path names no staged change Git lists for this worktree: a file that is unstaged only, unchanged, absent or in conflict, a directory with no staged change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every staged change below it (\".\" the whole workspace). Read keiko_git_status and request staged files, or a directory that holds staged changes.",
+    'At least one requested path names no staged change Git lists for this worktree: a file that is unstaged only, unchanged, absent or in conflict, a directory with no staged change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every staged change below it ("." the whole workspace). Read keiko_git_status and request staged files, or a directory that holds staged changes.',
   "proposal-limit":
     "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+  "unsupported-transformation":
+    "A file below a requested directory cannot be read as a regular file (a submodule, a file without read permission, or a directory where a file was). Unstage the other files by exact path, or request directories that do not hold it, and report the blocker.",
 };
 
 // A task branch Keiko refused, with the one step that is the model's to take (#3907).

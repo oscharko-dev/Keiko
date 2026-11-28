@@ -2301,6 +2301,70 @@ describe("productive runtime status/diff/stage lane", () => {
       expect(git(["ls-files", "deep", "top.js"]).split("\n")).toEqual(["deep/a.js", "top.js"]);
     });
 
+    it('leaves denied files out of a "." selection at every depth', async () => {
+      mkdirSync(join(root, "deep"));
+      writeFileSync(join(root, "deep", "a.js"), "export const a = 1;\n");
+      writeFileSync(join(root, ".env"), "TOKEN=secret\n");
+      writeFileSync(join(root, "deep", ".env"), "TOKEN=secret\n");
+      const gitService = indexService();
+      const proposed = await index(gitService, "stage", ["."]);
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      const paths = gitService.review(proposed.proposalId)?.review.paths ?? [];
+      expect(paths).toContain("deep/a.js");
+      expect(paths.filter((path) => path.endsWith(".env"))).toEqual([]);
+      await execute(gitService, "stage", proposed.proposalId);
+      expect(
+        git(["ls-files"])
+          .split("\n")
+          .filter((path) => path.endsWith(".env")),
+      ).toEqual([]);
+    });
+
+    it("refuses a directory that matches no change, also beside one that does", async () => {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src", "value.js"), "export const value = 1;\n");
+      const gitService = indexService();
+      for (const paths of [["nowhere"], ["src", "nowhere"]])
+        expect(await index(gitService, "stage", paths)).toMatchObject({
+          kind: "stage",
+          status: "blocked",
+          reason: "selection-unreviewed",
+          pathCount: paths.length,
+        });
+      expect(git(["ls-files", "src"])).toBe("");
+    });
+
+    it("answers a gitlink under a directory with a result the model can act on", async () => {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src", "value.js"), "export const value = 1;\n");
+      git(["update-index", "--add", "--cacheinfo", `160000,${git(["rev-parse", "HEAD"])},src/sub`]);
+      const gitService = indexService();
+      const staged = await index(gitService, "stage", ["src"]);
+      expect(staged).toMatchObject({ kind: "stage", status: "ready" });
+      if (staged.kind !== "stage") throw new Error("stage proposal unavailable");
+      expect(gitService.review(staged.proposalId)?.review.paths).toEqual(["src/value.js"]);
+      // The staged gitlink cannot be read as a file: a reasoned block that names the expanded
+      // selection, with the structured failure on the log, not an opaque failure of the whole call.
+      const unstaged = await index(gitService, "unstage", ["src"]);
+      expect(unstaged).toMatchObject({
+        kind: "unstage",
+        status: "blocked",
+        reason: "unsupported-transformation",
+        pathCount: 1,
+      });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "git.runtime-action",
+          extra: expect.objectContaining({
+            phase: "unstage-propose",
+            state: "blocked",
+            reason: "unsupported-transformation",
+            failureKind: expect.any(String) as unknown,
+          }) as unknown,
+        }),
+      );
+    });
+
     it(
       "unstages the staged files below a directory and keeps their bytes",
       { timeout: 90_000 },
