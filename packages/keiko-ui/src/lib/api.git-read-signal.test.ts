@@ -8,9 +8,9 @@ afterEach(() => vi.unstubAllGlobals());
 // of the repository forwards the option, not only the status read, so the request itself ends.
 describe("repository read abort signal", () => {
   const reads: ReadonlyArray<readonly [string, (signal: AbortSignal) => Promise<unknown>]> = [
-    ["status", (signal) => fetchGitStatus("/repo", { signal })],
-    ["branches", (signal) => fetchGitBranches("/repo", { signal })],
-    ["summary", (signal) => fetchGitSummary("/repo", { signal })],
+    ["status", (signal): Promise<unknown> => fetchGitStatus("/repo", { signal })],
+    ["branches", (signal): Promise<unknown> => fetchGitBranches("/repo", { signal })],
+    ["summary", (signal): Promise<unknown> => fetchGitSummary("/repo", { signal })],
   ];
 
   it.each(reads)("ends the %s request when the caller aborts", async (_name, read) => {

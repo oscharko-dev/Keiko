@@ -229,16 +229,7 @@ function useRuntimeReadinessRetry(
   });
   useEffect(() => {
     const current = episode.current;
-    if (status === "loading" && !current.retryInFlight) {
-      // A refresh the retry did not start (a mode change, a manual read) opens a new episode: the
-      // earlier attempts were spent on an earlier failure.
-      resetReadinessRetryEpisode(current);
-    }
-    if (status === "ready" && current.attempts > 0) {
-      reportReadinessRetry("recovered", current.attempts, current.correlationId);
-    }
-    if (status === "ready") resetReadinessRetryEpisode(current);
-    if (status === "ready" || status === "error") current.retryInFlight = false;
+    settleReadinessRetryEpisode(current, status);
     if (status !== "error") return;
     const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[current.attempts];
     if (delay === undefined) {
@@ -259,6 +250,22 @@ function useRuntimeReadinessRetry(
       window.clearTimeout(timer);
     };
   }, [status, refreshRuntime]);
+}
+
+// Keeps the episode in step with the resource: a refresh the retry did not start (a mode change, a
+// manual read) opens a new episode, since the earlier attempts were spent on an earlier failure.
+function settleReadinessRetryEpisode(
+  episode: ReadinessRetryEpisode,
+  status: CodingWorkbenchResourceStatus,
+): void {
+  if (status === "loading" && !episode.retryInFlight) resetReadinessRetryEpisode(episode);
+  if (status === "ready") {
+    if (episode.attempts > 0) {
+      reportReadinessRetry("recovered", episode.attempts, episode.correlationId);
+    }
+    resetReadinessRetryEpisode(episode);
+  }
+  if (status === "ready" || status === "error") episode.retryInFlight = false;
 }
 
 interface ReadinessRetryEpisode {
