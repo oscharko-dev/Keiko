@@ -1,6 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/client";
 import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { boundedDescription, MAX_TOOL_DESCRIPTION_BYTES, ManagedMcpError } from "./definitions.js";
@@ -62,9 +63,10 @@ export function admitCatalog(
 ): AdmittedCatalog {
   if (new Set(listed.map((tool) => tool.name)).size !== listed.length)
     throw new ManagedMcpError("descriptor-drift");
-  const kept = allowed === undefined ? listed : listed.filter((tool) => allowed.has(tool.name));
+  const kept = listed.filter((tool) => allowed === undefined || allowed.has(tool.name));
   if (kept.length > MAX_ADMITTED_TOOLS) throw new ManagedMcpError("descriptor-drift");
   if (!kept.every(schemasBounded)) throw new ManagedMcpError("protocol-error");
+  kept.sort((first, second) => compareStrings(first.name, second.name));
   const { tools: bounded, truncated } = boundDescriptions(kept);
   const tools = captured(bounded, MAX_CATALOG_BYTES) as readonly AdmittedTool[];
   return {

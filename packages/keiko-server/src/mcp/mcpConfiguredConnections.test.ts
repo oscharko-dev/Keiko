@@ -149,6 +149,10 @@ describe("configured MCP connections", () => {
     const first = await manager.connect("notes", "test");
     expect(await manager.connect("notes", "test")).toBe(first);
     expect(connect).toHaveBeenCalledTimes(1);
+    const read = vi.spyOn(f.store, "read");
+    expect(manager.inspect("test")).toEqual([{ name: "notes", state: "connected", toolCount: 1 }]);
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockRestore();
     f.store.update(
       {
         expectedRevision: f.store.read("test").revision,

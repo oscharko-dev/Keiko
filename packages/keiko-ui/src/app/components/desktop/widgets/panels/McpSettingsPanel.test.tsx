@@ -54,9 +54,9 @@ async function remoteForm(): Promise<void> {
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Save and connect" })).toBeEnabled(),
   );
-  await waitFor(() => expect(screen.getByLabelText(/^Name /)).toBeEnabled());
-  fireEvent.change(screen.getByLabelText(/^Name /), { target: { value: "notes" } });
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  await waitFor(() => expect(screen.getByLabelText("Server name")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("Server name"), { target: { value: "notes" } });
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://synthetic.example.test/mcp" },
   });
 }
@@ -66,6 +66,54 @@ beforeEach(() => {
 });
 
 describe("MCP Settings", () => {
+  it.each([
+    ["Server name", "Invalid name", /start the name/i, empty],
+    ["Server name", "notes", /already uses this name/i, saved],
+    ["Server address (HTTPS)", "http://example.test/mcp", /enter a valid https/i, empty],
+  ] as const)(
+    "describes the error on %s after submitting %s",
+    async (label, value, error, data) => {
+      api.mockResolvedValueOnce(data);
+      panel();
+      await remoteForm();
+      const input = screen.getByLabelText(label);
+      const help = input.getAttribute("aria-describedby");
+      expect(help).toBeTruthy();
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(error);
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input).toHaveAccessibleDescription(error);
+      expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(help);
+      fireEvent.change(input, {
+        target: { value: label === "Server name" ? "docs" : "https://example.test/mcp" },
+      });
+      expect(input).toHaveAttribute("aria-describedby", help);
+      expect(input).toHaveAttribute("aria-invalid", "false");
+    },
+  );
+
+  it("describes local program and settings file errors on their respective inputs", async () => {
+    api.mockResolvedValueOnce(empty);
+    panel();
+    await remoteForm();
+    fireEvent.change(screen.getByLabelText("Connection type"), { target: { value: "local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+    const program = screen.getByLabelText("Start program");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/enter the full path/i);
+    expect(program).toHaveAttribute("aria-invalid", "true");
+    expect(program).toHaveAccessibleDescription(/for example \/opt\/tools\/node/i);
+
+    const settingsFile = screen.getByLabelText("Settings file (.env)");
+    const file = new File(["x".repeat(64 * 1024 + 1)], "fixture.env");
+    fireEvent.change(settingsFile, { target: { files: [file] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/smaller than 64 KB/i);
+    expect(settingsFile).toHaveAttribute("aria-invalid", "true");
+    expect(settingsFile).toHaveAccessibleDescription(/smaller than 64 KB/i);
+    expect(program).toHaveAttribute("aria-invalid", "false");
+  });
+
   it("edits OAuth definitions without dropping their issuer, scopes or tool admission", async () => {
     const previous = saved.servers[0];
     if (previous === undefined) throw new Error("Missing fixture server");
@@ -94,7 +142,7 @@ describe("MCP Settings", () => {
       "https://identity.example.test",
     );
     expect(screen.getByLabelText("Public client ID (optional)")).toHaveValue("synthetic-public");
-    fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/u }));
     await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
     const update = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
     expect(update.servers[0]?.transport).toEqual(oauth.servers[0]?.transport);
@@ -107,7 +155,7 @@ describe("MCP Settings", () => {
       .mockResolvedValueOnce(connectedSnapshot(2));
     const { container } = panel();
     await remoteForm();
-    fireEvent.change(screen.getByLabelText(/^Bearer token/), {
+    fireEvent.change(screen.getByLabelText("Access token (optional)"), {
       target: { value: "synthetic-private-ui-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
@@ -122,7 +170,7 @@ describe("MCP Settings", () => {
       { server: "notes", value: "synthetic-private-ui-token" },
     ]);
     expect(JSON.stringify(mutation.servers)).not.toContain("synthetic-private-ui-token");
-    expect(screen.queryByLabelText(/^Bearer token/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Access token (optional)")).not.toBeInTheDocument();
     expect(container.textContent).not.toContain("synthetic-private-ui-token");
     expect(await axe(container)).toHaveNoViolations();
   });
@@ -134,7 +182,7 @@ describe("MCP Settings", () => {
     panel();
     await remoteForm();
     fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
-    await screen.findByRole("alert");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Server saved. Connection failed.");
     expect(screen.getByText("notes")).toBeInTheDocument();
     expect(screen.getByText("Status unavailable")).toBeInTheDocument();
     expect(api).toHaveBeenCalledTimes(3);
@@ -147,7 +195,7 @@ describe("MCP Settings", () => {
       .mockResolvedValueOnce(connectedSnapshot(1));
     panel();
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    expect(screen.getByLabelText(/^Name /)).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Server name")).toHaveAttribute("readonly");
     fireEvent.click(screen.getByRole("button", { name: "Save and connect" }));
     await screen.findByText("Connected · Tools: 1");
     const mutation = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
@@ -208,10 +256,10 @@ it("keeps a disabled server disabled when editing and does not start its transpo
   api.mockResolvedValueOnce(disabled).mockResolvedValueOnce(disabled);
   panel();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://changed.example.test/mcp" },
   });
-  fireEvent.change(screen.getByLabelText(/^Bearer token/), {
+  fireEvent.change(screen.getByLabelText("Access token (optional)"), {
     target: { value: "synthetic-replacement" },
   });
   fireEvent.click(screen.getByRole("button", { name: /^(Save|Save and connect)$/ }));
@@ -228,12 +276,12 @@ it("keeps connection fields editable during a load failure and preserves the dra
   api.mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce(empty);
   panel();
   await screen.findByRole("alert");
-  expect(screen.queryByLabelText(/^Name /)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Server name")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add MCP server" }));
-  const name = screen.getByLabelText(/^Name /);
+  const name = screen.getByLabelText("Server name");
   expect(name).toBeEnabled();
   fireEvent.change(name, { target: { value: "draft-server" } });
-  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+  fireEvent.change(screen.getByLabelText("Server address (HTTPS)"), {
     target: { value: "https://synthetic.example.test/mcp" },
   });
   expect(screen.getByRole("button", { name: "Save and connect" })).toBeDisabled();
@@ -257,11 +305,11 @@ it("shows saved servers first and only opens the form on demand", async () => {
   api.mockResolvedValueOnce(saved);
   const { container } = panel();
   expect(await screen.findByRole("list", { name: "Your servers" })).toHaveTextContent("notes");
-  expect(screen.queryByLabelText(/^Name /)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Server name")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  expect(screen.getByLabelText(/^Name /)).toHaveValue("notes");
+  expect(screen.getByLabelText("Server name")).toHaveValue("notes");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  expect(screen.queryByLabelText(/^Name /)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Server name")).not.toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
 });
 

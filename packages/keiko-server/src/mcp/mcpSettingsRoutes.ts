@@ -1,8 +1,21 @@
-import { emitServerDiagnostic, contentFreeErrorClass } from "../diagnostics-log.js";
-import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import type { McpSettingsStore } from "./mcpSettingsStore.js";
 import {
+  contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+} from "../diagnostics-log.js";
+import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import {
+  McpSettingsInputError,
+  mcpSettingsFitStorage,
+  recordMcpSettingsImport,
+  type McpSettingsStore,
+} from "./mcpSettingsStore.js";
+import { prepareMcpSettingsImport } from "./mcpSettingsImport.js";
+import {
+  MCP_SETTINGS_IMPORT_MAX_BYTES,
   parseMcpSettingsUpdate,
+  type McpSettingsImportResponse,
+  type McpSettingsUpdate,
   type McpServerDefinition,
   type McpSettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
@@ -15,7 +28,12 @@ import type { RouteContext, RouteResult } from "../routes.js";
 
 type SettingsDeps = Pick<
   UiHandlerDeps,
-  "mcpSettings" | "mcpConnections" | "mcpAuthorization" | "codingAppSessionChannel" | "diagnostics"
+  | "mcpSettings"
+  | "mcpConnections"
+  | "mcpAuthorization"
+  | "codingAppSessionChannel"
+  | "diagnostics"
+  | "activityLog"
 >;
 const denied = (): RouteResult => ({
   status: 403,
@@ -65,17 +83,124 @@ export async function handlePutMcpSettings(
   const update = parseMcpSettingsUpdate(body.value);
   if (update === undefined)
     return { status: 400, body: errorBody("BAD_REQUEST", "MCP settings are invalid.") };
-  const result = store.update(update, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
-  if (!result.ok)
-    return {
-      status: 409,
-      body: errorBody("MCP_SETTINGS_CONFLICT", "MCP settings changed. Reload before saving."),
-    };
+  return applySettingsUpdate(deps, store, update, correlationIdOrUnknown(ctx.correlationId));
+}
+
+function settingsConflict(): RouteResult {
   return {
-    status: 200,
-    headers: { "cache-control": "no-store" },
-    body: withConnections(deps, result.snapshot, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+    status: 409,
+    body: errorBody("MCP_SETTINGS_CONFLICT", "MCP settings changed. Reload before saving."),
   };
+}
+
+function applySettingsUpdate(
+  deps: SettingsDeps,
+  store: McpSettingsStore,
+  update: McpSettingsUpdate,
+  correlationId: string,
+  imported = false,
+): RouteResult {
+  try {
+    const result = store.update(update, correlationId);
+    if (!result.ok) return settingsConflict();
+    const snapshot = withConnections(deps, result.snapshot, correlationId);
+    return settingsResponse(imported ? { kind: "saved", snapshot } : snapshot);
+  } catch (error) {
+    if (!(error instanceof McpSettingsInputError)) throw error;
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "mcp.settings",
+      source: "mcp.settings.update",
+      errorClass: contentFreeErrorClass(error),
+      diagnosticOutcome: "routine",
+      code: "mcp-settings-update-invalid",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    });
+    return { status: 400, body: errorBody("BAD_REQUEST", "MCP settings are invalid.") };
+  }
+}
+
+function settingsResponse(body: McpSettingsSnapshot | McpSettingsImportResponse): RouteResult {
+  return { status: 200, headers: { "cache-control": "no-store" }, body };
+}
+
+function importRequest(value: unknown): { text: string; revision?: string } | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("text" in value) ||
+    typeof value.text !== "string"
+  )
+    return undefined;
+  if (!("revision" in value)) return { text: value.text };
+  return typeof value.revision === "string" && /^[a-f0-9]{64}$/u.test(value.revision)
+    ? { text: value.text, revision: value.revision }
+    : undefined;
+}
+
+export async function handleImportMcpSettings(
+  ctx: RouteContext,
+  deps: SettingsDeps,
+): Promise<RouteResult> {
+  const authority = resolveAppSessionReadAuthority(deps, ctx.req);
+  if (authority === undefined) return denied();
+  const store = deps.mcpSettings;
+  if (store === undefined) return unavailable();
+  const correlationId = correlationIdOrUnknown(ctx.correlationId);
+  // The surrounding JSON request can escape up to six bytes for each byte of text.
+  const body = await readJsonRequestBodyOutcome(
+    ctx.req,
+    6 * MCP_SETTINGS_IMPORT_MAX_BYTES + 256,
+    correlationId,
+  );
+  if (!sameSession(ctx, deps, authority)) return denied();
+  if (body.kind === "rejected") return body.response;
+  const request = importRequest(body.value);
+  if (request === undefined)
+    return { status: 400, body: errorBody("BAD_REQUEST", "An MCP import document is required.") };
+  return importSettings(deps, store, request, correlationId);
+}
+
+function importSettings(
+  deps: SettingsDeps,
+  store: McpSettingsStore,
+  request: { text: string; revision?: string },
+  correlationId: string,
+): RouteResult {
+  const intent = request.revision === undefined ? "preview" : "save";
+  const current = store.read(correlationId);
+  if (request.revision !== undefined && request.revision !== current.revision) {
+    recordMcpSettingsImport(deps.activityLog, correlationId, current, intent, "conflict");
+    return settingsConflict();
+  }
+  const prepared =
+    Buffer.byteLength(request.text, "utf8") > MCP_SETTINGS_IMPORT_MAX_BYTES
+      ? ({ kind: "invalid", issue: "size" } as const)
+      : prepareMcpSettingsImport(request.text, current);
+  if (prepared.kind === "invalid") {
+    recordMcpSettingsImport(deps.activityLog, correlationId, current, intent, "import-invalid");
+    return settingsResponse(prepared);
+  }
+  const { update } = prepared;
+  if (!mcpSettingsFitStorage(update.servers)) {
+    recordMcpSettingsImport(deps.activityLog, correlationId, current, intent, "import-invalid");
+    return settingsResponse({ kind: "invalid", issue: "size" });
+  }
+  const servers = update.servers
+    .slice(current.servers.length)
+    .map(({ name, transport }) => ({ name, kind: transport.kind }));
+  recordMcpSettingsImport(
+    deps.activityLog,
+    correlationId,
+    current,
+    intent,
+    "import-ready",
+    servers.length,
+  );
+  if (intent === "preview")
+    return settingsResponse({ kind: "preview", revision: current.revision, servers });
+  return applySettingsUpdate(deps, store, update, correlationId, true);
 }
 
 function withConnections(

@@ -227,6 +227,11 @@ function remoteUrl(value: unknown): string | undefined {
   return url.href;
 }
 
+/** New connections cannot use fragments, which are refused at the request boundary. */
+export function isMcpRemoteAddress(value: unknown): value is string {
+  return typeof value === "string" && !value.includes("#") && remoteUrl(value) !== undefined;
+}
+
 function remoteTransportBase(value: Json): McpRemoteTransport | undefined {
   if (value.protocol !== undefined && value.protocol !== "sse") return undefined;
   if (value.network !== undefined && value.network !== "private") return undefined;
@@ -787,3 +792,28 @@ export function mcpServerSecretReferences(server: McpServerDefinition): readonly
   const entries = transport.kind === "local" ? transport.secretEnvironment : transport.headers;
   return [...new Set(Object.values(entries ?? {}).map((entry) => entry.secretEnv))];
 }
+
+/** Central Settings import accepts a bounded user-supplied document, independent of run config. */
+export const MCP_SETTINGS_IMPORT_MAX_BYTES = 64 * 1024;
+export type McpSettingsImportIssue =
+  | "syntax"
+  | "duplicate-key"
+  | "shape"
+  | "empty"
+  | "capacity"
+  | "name"
+  | "duplicate"
+  | "type"
+  | "options"
+  | "local"
+  | "remote"
+  | "credentials"
+  | "size";
+export type McpSettingsImportResponse =
+  | { readonly kind: "invalid"; readonly issue: McpSettingsImportIssue; readonly entry?: number }
+  | {
+      readonly kind: "preview";
+      readonly revision: string;
+      readonly servers: readonly { readonly name: string; readonly kind: "local" | "remote" }[];
+    }
+  | { readonly kind: "saved"; readonly snapshot: McpSettingsSnapshot };

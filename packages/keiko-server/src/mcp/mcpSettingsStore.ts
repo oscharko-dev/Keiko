@@ -16,12 +16,16 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { savePrivateJson } from "../private-json.js";
+import { savePrivateJson, serializePrivateJson } from "../private-json.js";
 import {
   createMcpServerSecretStore,
   type McpOAuthCredentialStoreInput,
 } from "./mcpOAuthCredentialStore.js";
-import { loadMcpServerRegistry, MCP_SERVER_REGISTRY_FILE } from "./mcpServerRegistry.js";
+import {
+  loadMcpServerRegistry,
+  MAX_REGISTRY_BYTES,
+  MCP_SERVER_REGISTRY_FILE,
+} from "./mcpServerRegistry.js";
 
 const UPDATED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -35,10 +39,17 @@ const UPDATED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["applied", "conflict", "reconciled"],
+      values: ["applied", "conflict", "reconciled", "import-ready", "import-invalid"],
     },
     serverCount: { type: "integer", dataClass: "count", required: true },
     secretCount: { type: "integer", dataClass: "count", required: true },
+    importIntent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["preview", "save"],
+    },
+    importCount: { type: "integer", dataClass: "count", required: false },
     registrySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     credentialContext: {
       type: "string",
@@ -86,10 +97,11 @@ function snapshot(
 function recordMcpSettingsUpdate(
   log: ServerLogSink | undefined,
   correlationId: string,
-  outcome: "applied" | "conflict" | "reconciled",
+  outcome: "applied" | "conflict" | "reconciled" | "import-ready" | "import-invalid",
   state: McpSettingsSnapshot,
   secretCount: number,
   credentialContext?: "persistent" | "process-scoped",
+  imported?: { readonly importIntent: "preview" | "save"; readonly importCount: number },
 ): void {
   log?.write(
     activityLogEvent(
@@ -102,9 +114,24 @@ function recordMcpSettingsUpdate(
         registrySha256: state.revision,
         credentialCleanup: state.credentialCleanup ?? "complete",
         ...(credentialContext === undefined ? {} : { credentialContext }),
+        ...imported,
       },
     ),
   );
+}
+
+export function recordMcpSettingsImport(
+  log: ServerLogSink | undefined,
+  correlationId: string,
+  state: McpSettingsSnapshot,
+  importIntent: "preview" | "save",
+  outcome: "import-ready" | "import-invalid" | "conflict",
+  importCount = 0,
+): void {
+  recordMcpSettingsUpdate(log, correlationId, outcome, state, 0, undefined, {
+    importIntent,
+    importCount,
+  });
 }
 
 function readSettings(
@@ -123,13 +150,14 @@ function readSettings(
 
 function importEnvironmentFiles(update: McpSettingsUpdate): McpSettingsUpdate {
   const secrets = { ...update.secrets };
+  const files = new Map(Object.entries(update.environmentFiles ?? {}));
   const servers = update.servers.map((server) => {
-    const file = update.environmentFiles?.[server.name];
+    const file = files.get(server.name);
     if (file === undefined || server.transport.kind !== "local") return server;
     const environment = { ...server.transport.environment };
     const secretEnvironment = { ...server.transport.secretEnvironment };
     for (const [name, value] of Object.entries(parseEnv(file))) {
-      if (value === undefined) throw new TypeError("MCP environment value is invalid");
+      if (value === undefined) throw new McpSettingsInputError("MCP environment value is invalid");
       if (value === "") {
         environment[name] = "";
         Reflect.deleteProperty(secretEnvironment, name);
@@ -145,16 +173,34 @@ function importEnvironmentFiles(update: McpSettingsUpdate): McpSettingsUpdate {
   return { expectedRevision: update.expectedRevision, servers, secrets };
 }
 
+/** A known configuration refusal, distinct from storage and credential-custody faults. */
+export class McpSettingsInputError extends TypeError {}
+
+function registryDocument(
+  servers: readonly McpServerDefinition[],
+  generation: string,
+): Record<string, unknown> {
+  return { schemaVersion: 1, generation, servers };
+}
+
+export function mcpSettingsFitStorage(servers: readonly McpServerDefinition[]): boolean {
+  const document = registryDocument(servers, "00000000-0000-0000-0000-000000000000");
+  return Buffer.byteLength(serializePrivateJson(document), "utf8") <= MAX_REGISTRY_BYTES;
+}
+
+function validateMcpSettingsStorageSize(servers: readonly McpServerDefinition[]): void {
+  if (!mcpSettingsFitStorage(servers))
+    throw new McpSettingsInputError("MCP settings exceed the registry size limit");
+}
+
 function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
   const input = parseMcpSettingsUpdate(update);
   const parsed =
     input === undefined ? undefined : parseMcpSettingsUpdate(importEnvironmentFiles(input));
   const validated =
     parsed === undefined ? undefined : parseMcpSettingsUpdate(sealBearerUrls(parsed));
-  if (validated === undefined) throw new TypeError("MCP settings are invalid");
-  const document = { schemaVersion: 1, servers: validated.servers };
-  if (Buffer.byteLength(JSON.stringify(document), "utf8") + 64 > 64 * 1024)
-    throw new TypeError("MCP settings exceed the registry size limit");
+  if (validated === undefined) throw new McpSettingsInputError("MCP settings are invalid");
+  validateMcpSettingsStorageSize(validated.servers);
   return validated;
 }
 
@@ -175,7 +221,7 @@ function sealBearerUrls(update: McpSettingsUpdate): McpSettingsUpdate {
         (name) => name.toLowerCase() === "authorization",
       )
     )
-      throw new TypeError("MCP URI credentials are ambiguous");
+      throw new McpSettingsInputError("MCP URI credentials are ambiguous");
     url.searchParams.delete("access_token");
     if (server.transport.oauth !== undefined)
       return { ...server, transport: { ...server.transport, url: url.href } };
@@ -255,11 +301,10 @@ class SettingsStore implements McpSettingsStore {
     const validated = validUpdate(update);
     const entries = secretEntries(validated);
     this.#secrets.put(entries);
-    savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), {
-      schemaVersion: 1,
-      generation: randomUUID(),
-      servers: validated.servers,
-    });
+    savePrivateJson(
+      join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE),
+      registryDocument(validated.servers, randomUUID()),
+    );
     const migrated = readSettings(this.input, correlationId);
     recordMcpSettingsUpdate(
       this.input.activityLog,
@@ -423,17 +468,16 @@ class SettingsStore implements McpSettingsStore {
         (this.#secrets.usesEnvironment([entry.reference]) ||
           this.#secrets.get(entry.reference, entry.server) !== entry.value)
       )
-        throw new TypeError("An active MCP credential requires a new reference");
+        throw new McpSettingsInputError("An active MCP credential requires a new reference");
     }
     this.#secrets.put(entries);
     if (JSON.stringify(current.servers) !== JSON.stringify(validated.servers)) {
       // The epoch and definitions commit together: restoring old definitions never restores consent.
       const generation = randomUUID();
-      savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), {
-        schemaVersion: 1,
-        generation,
-        servers: validated.servers,
-      });
+      savePrivateJson(
+        join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE),
+        registryDocument(validated.servers, generation),
+      );
     }
     // Resolve the public revision from the committed definitions and current credential custody.
     const committed = this.scopeCredentialContext(

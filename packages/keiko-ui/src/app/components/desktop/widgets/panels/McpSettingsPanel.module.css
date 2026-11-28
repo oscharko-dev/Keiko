@@ -13,12 +13,6 @@
 .cmpPanel :is(h2, h3, p) {
   margin: 0;
 }
-.cmpHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-}
 .cmpHeader h2 {
   font-size: 20px;
   font-weight: 650;
@@ -28,9 +22,6 @@
   color: var(--text-secondary);
   margin-top: 6px;
   max-width: 480px;
-}
-.cmpHeader > button {
-  flex: 0 0 auto;
 }
 .cmpAvailability {
   display: flex;
@@ -331,13 +322,6 @@
   font-size: 12px;
 }
 @container (max-width: 520px) {
-  .cmpHeader {
-    flex-direction: column;
-    gap: 12px;
-  }
-  .cmpHeader > button {
-    align-self: flex-start;
-  }
   .cmpCardHeader {
     gap: 10px;
   }
@@ -352,4 +336,136 @@
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+.cmpInputStack {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  min-width: 0;
+}
+
+.cmpFieldHelp {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.cmpFieldHelp svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 2px;
+}
+
+.cmpDisclosure {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.cmpDisclosure[open] > * + * {
+  margin-top: 10px;
+}
+
+.cmpDisclosure summary {
+  cursor: pointer;
+  font-weight: 550;
+}
+
+.cmpPanel summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.cmpImportInputs {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.cmpForm .cmpJson {
+  font-family: var(--font-mono);
+  tab-size: 2;
+}
+
+.cmpImportPreview {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface-inset);
+}
+
+.cmpImportPreview h4 {
+  margin: 0 0 6px;
+}
+
+.cmpImportPreview ul {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 10px 0 0;
+  list-style: none;
+}
+
+.cmpImportPreview li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.cmpPanel .cmpFormProblem,
+.cmpForm [role="alert"] {
+  color: var(--danger);
+}
+
+.cmpPanel .cmpImportSuccess {
+  display: block;
+  border: 1px solid var(--border-default);
+  background: var(--surface-elevated);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.cmpSetupActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 245px), 1fr));
+  gap: 10px;
+}
+
+.cmpSetupActions[hidden] {
+  display: none;
+}
+
+.cmpPanel .cmpSetupActions > button {
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px;
+  text-align: start;
+  min-width: 0;
+}
+
+.cmpSetupActions > button > svg {
+  margin-top: 2px;
+}
+
+.cmpSetupActions > button > span {
+  display: grid;
+  gap: 3px;
+}
+
+.cmpSetupActions strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.cmpSetupActions strong + span {
+  color: var(--text-secondary);
+  font-weight: 400;
 }

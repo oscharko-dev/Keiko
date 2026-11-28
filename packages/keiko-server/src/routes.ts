@@ -101,6 +101,7 @@ import {
 } from "./chat-draft-routes.js";
 import {
   handleGetMcpSettings,
+  handleImportMcpSettings,
   handlePutMcpSettings,
   handleConnectMcpServer,
 } from "./mcp/mcpSettingsRoutes.js";
@@ -588,6 +589,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
   { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
+  { method: "POST", pattern: "/api/mcp/servers/import", handler: handleImportMcpSettings },
   {
     method: "POST",
     pattern: "/api/mcp/servers/:serverName/connect",

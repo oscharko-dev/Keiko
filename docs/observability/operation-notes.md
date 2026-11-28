@@ -1308,3 +1308,12 @@ Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and s
 Coding Workbench composer reuses that store per Workbench window (`surface: "coding-workbench"`).
 Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
 browser persistence; stale revisions fail closed (ADR-0114 D1).
+
+## Central MCP settings
+
+`mcp.settings.updated` records preview or save admission with `importIntent`, a closed outcome
+and the number of admitted servers in `importCount`. A successful save emits a second line with
+`outcome: "applied"` under the same correlation after the registry commits. Import text, names,
+paths, URLs and credential values are excluded. A known configuration refusal on the ordinary
+Settings write is recorded through the routine diagnostic channel with code
+`mcp-settings-update-invalid`.

@@ -478,9 +478,11 @@ class ExternalClient implements ExternalMcpConnection {
   private async verifyDeclarations(signal: AbortSignal): Promise<void> {
     const previous = this.#metadataTail;
     let release: () => void = (): void => undefined;
-    this.#metadataTail = new Promise<void>((resolve) => {
+    const slot = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // A cancelled waiter releases its slot, but its successor still waits for every predecessor.
+    this.#metadataTail = previous.then(() => slot);
     try {
       await abortable(previous, signal);
       await this.readDeclarations(signal);
@@ -495,13 +497,14 @@ class ExternalClient implements ExternalMcpConnection {
       timeout: LIST_TIMEOUT_MS,
       maxTotalTimeout: LIST_TIMEOUT_MS,
     });
-    if (listingFingerprint(listed.tools) === this.#fingerprint) return;
+    const fingerprint = listingFingerprint(listed.tools);
+    if (fingerprint === this.#fingerprint) return;
     // A reordered but equal catalog must not retire the connection: compare the admitted digest.
     if (admitCatalog(listed.tools, this.#allowed).digest !== this.#digest) {
       this.#retire();
       throw noEffectError("descriptor-drift");
     }
-    this.#fingerprint = listingFingerprint(listed.tools);
+    this.#fingerprint = fingerprint;
   }
   async close(): Promise<void> {
     this.#closing ??= this.#shutdown();

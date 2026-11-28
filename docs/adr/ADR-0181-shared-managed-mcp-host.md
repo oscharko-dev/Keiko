@@ -640,6 +640,15 @@ at the transport boundary. Native OpenCode reaches these connections through its
 run-bound MCP relay; its configuration contains a revocable relay capability, never provider
 credentials. Disabling or changing a server invalidates that generation and its relay capabilities.
 
+Central Settings accepts a bounded JSON or JSONC document for one or more external servers.
+The authenticated preview returns server names and transport kinds at the current registry revision.
+Confirmation revalidates the document and revision and commits the complete batch through the
+existing Settings store. Existing names refuse the batch. Imported entries begin disabled and
+automatic discovery treats unknown tools as writes. Literal header and environment values supplied
+in the import enter the same encrypted custody. Import does not start a process, make a request
+to the provider, connect a browser account or grant a tool permission. The registry size check uses
+the private writer's exact serialization and the registry reader's bound before staging secrets.
+
 A native managed MCP write requires the owning run's recovery callback before dispatch. A lost,
 malformed or error result after invoking the write, including observed cancellation, synchronously
 revokes all MCP relay capabilities for that run and asks the existing authority lifecycle to revoke

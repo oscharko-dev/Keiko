@@ -1,6 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +24,8 @@ import {
 import { createMcpServerSecretStore } from "./mcpOAuthCredentialStore.js";
 import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import * as privateJson from "../private-json.js";
-import { createMcpSettingsStore } from "./mcpSettingsStore.js";
+import { createMcpSettingsStore, McpSettingsInputError } from "./mcpSettingsStore.js";
+import { MAX_REGISTRY_BYTES, MCP_SERVER_REGISTRY_FILE } from "./mcpServerRegistry.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -700,4 +709,52 @@ describe("legacy environment credential authority across restarts", () => {
     expect(() => f.store.secret(reference, f.server)).toThrow();
     expect(JSON.stringify(f.events)).not.toContain("invalid synthetic vault metadata");
   });
+});
+
+it("preserves the registry and vault when the formatted registry exceeds the reader's limit", () => {
+  const { input, store, server } = fixture();
+  const initial = store.read("initial");
+  const local: McpServerDefinition = {
+    ...server,
+    name: "local",
+    transport: { kind: "local", command: ["/opt/fixture"], environment: {} },
+  };
+  const saved = store.update(
+    { expectedRevision: initial.revision, servers: [local], secrets: {} },
+    "seed",
+  );
+  expect(saved.ok).toBe(true);
+  const path = join(input.stateDir, MCP_SERVER_REGISTRY_FILE);
+  const before = readFileSync(path, "utf8");
+  const filesBefore = readdirSync(input.stateDir);
+  const servers = [
+    server,
+    ...Array.from({ length: 15 }, (_, index): McpServerDefinition => ({
+      ...local,
+      name: `local-${String(index)}`,
+      description: "x".repeat(965),
+      tools: Object.fromEntries(
+        Array.from({ length: 64 }, (_, i) => [
+          `tool_${String(i).padStart(2, "0")}_common-fixture-suffix`,
+          "write",
+        ]),
+      ),
+    })),
+  ];
+  expect(Buffer.byteLength(JSON.stringify({ schemaVersion: 1, servers })) + 64).toBeLessThan(
+    MAX_REGISTRY_BYTES,
+  );
+  expect(() =>
+    store.update(
+      {
+        expectedRevision: saved.snapshot.revision,
+        servers,
+        secrets: { [reference]: { server: server.name, value: token } },
+      },
+      "oversize",
+    ),
+  ).toThrow(McpSettingsInputError);
+  expect(readFileSync(path, "utf8")).toBe(before);
+  expect(store.read("after")).toEqual(saved.snapshot);
+  expect(readdirSync(input.stateDir)).toEqual(filesBefore);
 });

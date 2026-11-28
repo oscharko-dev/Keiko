@@ -359,17 +359,10 @@ function unsupportedLocalServer(options: Options, server: McpServerDefinition): 
     !supportsOwnedMcpStdio(process.platform, options.nativeOwner)
   );
 }
-function currentEntry(
-  entry: ConnectionEntry | undefined,
-  generation: AbortSignal,
-): entry is ConnectionEntry {
-  return !generation.aborted && entry !== undefined && !entry.signal.aborted;
-}
 function connectionView(
   options: Options,
   connections: ReadonlyMap<string, ConnectionEntry>,
   server: McpServerDefinition,
-  correlationId: string,
 ): McpServerConnectionView {
   const idle = {
     name: server.name,
@@ -379,9 +372,9 @@ function connectionView(
   if (!server.enabled) return idle;
   if (unsupportedLocalServer(options, server))
     return { name: server.name, state: "unsupported", toolCount: null };
-  const generation = currentGeneration(options, server, correlationId);
+  // The caller's Settings read already reconciled and aborted superseded generations.
   const entry = connections.get(server.name);
-  if (!currentEntry(entry, generation)) return idle;
+  if (entry === undefined || entry.signal.aborted) return idle;
   if (entry.failed || entry.client?.signal.aborted === true)
     return { name: server.name, state: "failed", toolCount: null };
   return entry.client === undefined
@@ -396,7 +389,7 @@ function connectedToolsOf(
 ): readonly ExternalMcpTool[] | undefined {
   const server = options.settings.read(correlationId).servers.find((entry) => entry.name === name);
   if (server === undefined) return undefined;
-  const view = connectionView(options, connections, server, correlationId);
+  const view = connectionView(options, connections, server);
   return view.state === "connected" ? connections.get(name)?.client?.tools : undefined;
 }
 async function openConnection(
@@ -562,7 +555,7 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
     inspect: (correlationId) =>
       options.settings
         .read(correlationId)
-        .servers.map((server) => connectionView(options, connections, server, correlationId)),
+        .servers.map((server) => connectionView(options, connections, server)),
     connectedTools: (name, correlationId) =>
       connectedToolsOf(options, connections, name, correlationId),
     generation: (server, correlationId) => currentGeneration(options, server, correlationId),
