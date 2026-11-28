@@ -242,11 +242,16 @@ export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
 // ─── Governed git delivery work ──────────────────────────────────────────────────────
 // The settlement budget of a redeemed delivery proposal (`keiko.git.execute`: stage, unstage, commit,
 // push, pull request). Such a call runs many git subprocesses, each already bounded by its own
-// command timeout and cancelled by Stop or authority revocation, so its catalog budget is only a
-// runaway backstop. The 30 s sandbox default ended healthy work on a loaded host and on Windows with
-// slow git or antivirus scanning in a large repository (work-ending limits, owner decision
-// 2026-11-24: a fixed bound that ends healthy work is a defect). It is not the global default.
-export const GOVERNED_GIT_EXECUTE_MAX_DURATION_MS = 10 * 60 * 1_000;
+// command timeout (a staging hash of a large file by one in proportion to its size) and cancelled by
+// Stop or authority revocation, so its catalog budget is only a runaway backstop. A fixed 30 s, and
+// later ten-minute, budget ended healthy work: a supported 6 GiB file at 10 MiB/s needs 614 s for one
+// hash pass alone, inside the 674 s the hash itself is allowed (work-ending limits, owner decision
+// 2026-11-24: a fixed bound that ends healthy work is a defect). The backstop is therefore the
+// longest run the product can authorize, eight hours (`MAX_RUNTIME_MAX_DURATION_MINUTES`, pinned
+// against it in the server tests): the call can never outlive its Authority Envelope, whose expiry
+// (`context.deadlineAt`) still ends it earlier, and a staging deadline that scales with file size is
+// never cut by a shorter outer one. It is not the global default.
+export const GOVERNED_GIT_EXECUTE_MAX_DURATION_MS = 8 * 60 * 60 * 1_000;
 
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //

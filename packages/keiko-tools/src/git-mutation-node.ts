@@ -91,6 +91,9 @@ import {
   type GitStageEffectContext,
   type GitStageLineEndings,
 } from "./git-stage-node.js";
+// The size-proportional deadline of one large-file hash, so the outer catalog budget of a staging
+// call is proven against the step it must not cut short.
+export { largeHashTimeoutMs } from "./git-stage-node.js";
 import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
