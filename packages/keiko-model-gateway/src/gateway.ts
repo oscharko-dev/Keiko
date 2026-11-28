@@ -35,12 +35,7 @@ import type {
   GatewayEmptyAnswerEvidence,
   GatewayOutputRepairOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
-import {
-  calibrationLayout,
-  calibrationPromptTokens,
-  GatewayPromptAdmission,
-  ProviderPromptCounter,
-} from "./gateway-prompt-admission.js";
+import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { PromptCalibrationLedger } from "./prompt-calibration.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
@@ -1725,10 +1720,7 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.settleCompletedCall(attempt.state, request, route.provider, result);
-    attempt.promptAdmission.recordUsage(
-      calibrationPromptTokens(result.usage),
-      calibrationLayout(result.usage),
-    );
+    attempt.promptAdmission.recordUsageOf(result.usage);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -2514,10 +2506,7 @@ export class Gateway {
       for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
-          state.promptAdmission.recordUsage(
-            calibrationPromptTokens(usage),
-            calibrationLayout(usage),
-          );
+          state.promptAdmission.recordUsageOf(usage);
           received = true;
           terminal = chunk;
           break;

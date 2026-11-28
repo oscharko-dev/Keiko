@@ -291,6 +291,11 @@ export class GatewayPromptAdmission {
     throw error;
   }
 
+  /** Records a completed call's usage, with the cache layout decided from the usage shape. */
+  recordUsageOf(usage: UsageMetadata): void {
+    this.recordUsage(calibrationPromptTokens(usage), calibrationLayout(usage));
+  }
+
   /** Records the provider's real prompt usage of the last admitted prompt for later calibration. */
   recordUsage(providerPromptTokens: number, layout: "known" | "ambiguous" = "known"): void {
     const mark = this.pending;
