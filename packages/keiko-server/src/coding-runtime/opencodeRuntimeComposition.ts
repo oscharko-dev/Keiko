@@ -2961,12 +2961,16 @@ async function handshake(
     });
     const result = await adapter.start();
     if (!result.ok) {
-      await adapter.close();
+      await closeOnce(adapter, () => {
+        adapter = undefined;
+      });
       return { ok: false, reason: result.phase };
     }
     input.safeActivity?.arm(result.sessionId, input.toolProfile);
     if (runs.get(request.runId) !== run) {
-      await adapter.close();
+      await closeOnce(adapter, () => {
+        adapter = undefined;
+      });
       return { ok: false, reason: "preparation-missing" };
     }
     // #3903 AC3: a kept MCP credential reaches the attested runtime before its first turn.
@@ -2983,6 +2987,18 @@ async function handshake(
     await closeFailedHandshakeAdapter(input.diagnostics, request.runId, adapter);
     return { ok: false, reason: "readiness-failed" };
   }
+}
+
+/**
+ * Closes the handshake's adapter after dropping the catch's reference to it, so a close that throws
+ * is recorded once by the handshake's catch and never closed or reported a second time.
+ */
+async function closeOnce(
+  adapter: { readonly close: () => Promise<void> },
+  release: () => void,
+): Promise<void> {
+  release();
+  await adapter.close();
 }
 
 async function closeFailedHandshakeAdapter(

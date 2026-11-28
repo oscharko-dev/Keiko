@@ -3367,6 +3367,45 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  it("closes a failed handshake's adapter once and records one diagnostic when its close throws", async () => {
+    const module = await import("./opencodeRuntimeAdapter.js");
+    const createAdapter = module.createOpenCodeRuntimeAdapter;
+    const closing = vi.fn();
+    const spy = vi.spyOn(module, "createOpenCodeRuntimeAdapter").mockImplementation((input) => ({
+      ...createAdapter(input),
+      start: (): ReturnType<ReturnType<typeof createAdapter>["start"]> =>
+        Promise.resolve({ ok: false, phase: "readiness" } as never),
+      close: (): Promise<void> => {
+        closing();
+        return Promise.reject(new Error("SENTINEL_CLOSE_BODY"));
+      },
+    }));
+    const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        expectedStart: expect.objectContaining({ ok: false }) as Readonly<Record<string, unknown>>,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      },
+    );
+    try {
+      expect(closing).toHaveBeenCalledOnce();
+      const handshake = records.filter((record) =>
+        record.source?.startsWith("opencode-runtime-composition.handshake"),
+      );
+      expect(handshake).toHaveLength(1);
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_CLOSE_BODY");
+    } finally {
+      spy.mockRestore();
+      await fixture.stop();
+    }
+  });
+
   it("exposes only fixed-session questions through bounded answer and reject run controls", async () => {
     const questionRequests: {
       readonly method: string;

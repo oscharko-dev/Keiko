@@ -8,6 +8,11 @@
  * bounded number of paths (`truncated` says the cap cut some). A forgotten, cut or restarted record
  * cannot be told from a person's own staging, so the undo reports any changed path it does not name
  * as a closed outcome instead of claiming it restored everything.
+ *
+ * Accepted loss: the record is process-global memory, so it holds at most 256 runs and is gone
+ * after a server restart. An undo that follows a restart therefore reports `partial` for the
+ * turn's staged paths and restores none of them; that fails closed (the person's staging is never
+ * guessed away) and costs only a manual unstage, so the record is deliberately not persisted.
  */
 export const GOVERNED_INDEX_PATHS_MAX_RUNS = 256;
 export const GOVERNED_INDEX_PATHS_MAX_PER_RUN = 20_000;
