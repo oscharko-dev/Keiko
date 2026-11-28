@@ -175,6 +175,37 @@ function decision(
  * repository decides (commitlint present means Keiko's Conventional check, otherwise the repository's
  * own hooks stay authoritative). A failed read fails closed to the Conventional check.
  */
+function emitFallbackDiagnostic(
+  deps: Pick<UiHandlerDeps, "diagnostics">,
+  correlationId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      source: "git-delivery.commit-policy",
+      operation: "git.commit.message-policy.resolve",
+      error,
+      summary: "server-operation-failed",
+      redact: (): string => "server-operation-failed",
+    }),
+  );
+}
+
+async function decisionFromSettings(
+  deps: Pick<UiHandlerDeps, "editorSettingsControl">,
+  workspaceRoot: string,
+): Promise<GovernedCommitMessagePolicyDecision> {
+  const snapshot = await deps.editorSettingsControl?.read(workspaceRoot);
+  const setting = snapshot?.settings.find((entry) => entry.id === "gitCommitMessagePolicy");
+  if (setting?.source !== "builtInDefault") {
+    return decision(resolveGitCommitMessagePolicyMode(setting?.value), "setting");
+  }
+  const declared = await repositoryDeclaresConventionalCommits(workspaceRoot);
+  return decision(declared ? "keiko-conventional" : "repository-native", "repository");
+}
+
 export async function resolveGovernedCommitMessagePolicyDecision(
   deps: Pick<UiHandlerDeps, "editorSettingsControl" | "diagnostics">,
   workspaceRoot: string,
@@ -191,27 +222,9 @@ export async function resolveGovernedCommitMessagePolicyDecision(
     };
   }
   try {
-    const snapshot = await deps.editorSettingsControl?.read(workspaceRoot);
-    const setting = snapshot?.settings.find((entry) => entry.id === "gitCommitMessagePolicy");
-    if (setting?.source === "builtInDefault") {
-      const mode = (await repositoryDeclaresConventionalCommits(workspaceRoot))
-        ? "keiko-conventional"
-        : "repository-native";
-      return decision(mode, "repository");
-    }
-    return decision(resolveGitCommitMessagePolicyMode(setting?.value), "setting");
+    return await decisionFromSettings(deps, workspaceRoot);
   } catch (error) {
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        source: "git-delivery.commit-policy",
-        operation: "git.commit.message-policy.resolve",
-        error,
-        summary: "server-operation-failed",
-        redact: (): string => "server-operation-failed",
-      }),
-    );
+    emitFallbackDiagnostic(deps, correlationId, error);
     return decision("keiko-conventional", "fallback");
   }
 }

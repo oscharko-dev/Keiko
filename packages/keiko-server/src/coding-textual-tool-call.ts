@@ -553,8 +553,14 @@ function classifyTagStart(afterAngle: string, names: readonly string[]): AnswerS
   const next = rest.charAt(match?.[0].length ?? 0);
   const plausible = names.some((name) => name.startsWith(candidate));
   if (next === "") return plausible ? "pending" : "text";
-  if (candidate === "function" && next === "=") return "markup";
-  return plausible && candidate !== "" && /[\s>/]/u.test(next) ? "markup" : "text";
+  return endsTagName(candidate, next, plausible) ? "markup" : "text";
+}
+
+// A tag name that is complete: `function=`, or the name of (a prefix of) a tool or wrapper tag
+// followed by whitespace, `>` or `/`.
+function endsTagName(candidate: string, next: string, plausible: boolean): boolean {
+  if (candidate === "function" && next === "=") return true;
+  return plausible && candidate !== "" && /[\s>/]/u.test(next);
 }
 
 // What the first non-whitespace text of an answer says: a code fence, `{` or `[` or a tool-named

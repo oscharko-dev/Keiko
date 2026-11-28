@@ -153,7 +153,7 @@ describe("the commit message policy follows the repository (G-4)", () => {
       {
         editorSettingsControl: control,
         diagnostics: { record: (r: { correlationId?: string }) => records.push(r) },
-      } as unknown as Pick<UiHandlerDeps, "editorSettingsControl" | "diagnostics">,
+      },
       root,
       undefined,
       "corr-run-1",
