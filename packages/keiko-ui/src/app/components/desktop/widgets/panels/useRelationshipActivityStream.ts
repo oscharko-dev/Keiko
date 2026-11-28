@@ -492,9 +492,13 @@ export function useRelationshipActivityStream(
       }
     }
 
-    function closeStream(): void {
+    function closeEventSource(): void {
       es?.close();
       es = null;
+    }
+
+    function closeStream(): void {
+      closeEventSource();
       streamAdmission?.release();
       streamAdmission = null;
     }
@@ -516,14 +520,16 @@ export function useRelationshipActivityStream(
     function startSSE(): void {
       if (closed || !visibleRef.current || streamAdmission?.active === true) return;
       // The stream opens only once an origin-wide connection slot admits it.
-      streamAdmission = admitDirectBrowserStream(connectSSE, () => {
-        streamAdmission = null;
-        scheduleReconnect();
+      // A background stream: it yields its slot to an essential one and asks for it again.
+      streamAdmission = admitDirectBrowserStream(connectSSE, {
+        priority: "background",
+        onYield: closeEventSource,
       });
     }
 
     function connectSSE(): void {
-      if (closed || !visibleRef.current || es !== null) return;
+      if (closed || !visibleRef.current) return;
+      closeEventSource();
 
       const url =
         workspaceId !== undefined

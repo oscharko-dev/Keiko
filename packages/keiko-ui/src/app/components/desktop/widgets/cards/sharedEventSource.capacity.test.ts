@@ -78,12 +78,7 @@ describe("shared EventSource with actual origin leases", () => {
 
   // U-37: the shared pool shrinks by one connection per unshared stream, and grows back.
   it("holds fewer shared connections while unshared streams are open", async () => {
-    const releaseHeld = [1, 2].map(() =>
-      admitDirectBrowserStream(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    const releaseHeld = [1, 2].map(() => admitDirectBrowserStream(() => undefined));
     const releases = Array.from({ length: 3 }, (_, index) => subscribeRoot(index));
     await vi.advanceTimersByTimeAsync(0);
     expect(CapacityEventSource.instances.filter((source) => !source.closed)).toHaveLength(2);

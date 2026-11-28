@@ -829,10 +829,7 @@ describe("RelationshipEdgeBadge a11y (25 mixed states)", () => {
   // Review #4573 finding 11: the activity stream is a long-lived direct connection.
   it("counts its open stream against the persistent connection budget until it unmounts", () => {
     resetBrowserStreamCapacityForTests();
-    admitDirectBrowserStream(
-      () => undefined,
-      () => undefined,
-    );
+    admitDirectBrowserStream(() => undefined);
     const before = sharedStreamConnectionBudget();
     const view = render(<HookHarness onState={() => undefined} />);
     expect(FakeEventSource.instances).toHaveLength(1);

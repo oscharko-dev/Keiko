@@ -690,28 +690,28 @@ function handleEditorAgentFrame(event: Event): void {
 }
 
 let editorAgentAdmission: DirectStreamAdmission | null = null;
-const EDITOR_AGENT_ADMISSION_RETRY_MS = 5_000;
 
-function closeEditorAgentEventSource(): void {
-  if (editorAgentEventSource === null) {
-    // A stream still waiting for an origin-wide slot is cancelled with its admission.
-    editorAgentAdmission?.release();
-    editorAgentAdmission = null;
-    editorAgentConnectedSessionKey = null;
-    return;
-  }
+// Closes the connection only: the admission stays, so a yielded stream asks for its slot again.
+function detachEditorAgentEventSource(): void {
+  const source = editorAgentEventSource;
+  if (source === null) return;
   if (editorAgentActionListener !== null) {
-    editorAgentEventSource.removeEventListener("editor-agent:action", editorAgentActionListener);
+    source.removeEventListener("editor-agent:action", editorAgentActionListener);
   }
   if (editorAgentResultListener !== null) {
-    editorAgentEventSource.removeEventListener("editor-agent:result", editorAgentResultListener);
+    source.removeEventListener("editor-agent:result", editorAgentResultListener);
   }
-  editorAgentEventSource.close();
-  editorAgentAdmission?.release();
-  editorAgentAdmission = null;
+  source.close();
   editorAgentEventSource = null;
   editorAgentActionListener = null;
   editorAgentResultListener = null;
+}
+
+function closeEditorAgentEventSource(): void {
+  // A stream still waiting for an origin-wide slot is cancelled with its admission.
+  detachEditorAgentEventSource();
+  editorAgentAdmission?.release();
+  editorAgentAdmission = null;
   editorAgentConnectedSessionKey = null;
 }
 
@@ -738,18 +738,16 @@ function reconcileEditorAgentEventSource(): void {
   const url = editorAgentEventUrl(readySessions);
   if (url === null) return;
   editorAgentConnectedSessionKey = nextKey;
-  // The stream opens only once an origin-wide connection slot admits it.
-  editorAgentAdmission = admitDirectBrowserStream(
-    () => openEditorAgentEventSource(url),
-    () => {
-      editorAgentAdmission = null;
-      editorAgentConnectedSessionKey = null;
-      setTimeout(scheduleEditorAgentReconcile, EDITOR_AGENT_ADMISSION_RETRY_MS);
-    },
-  );
+  // The stream opens only once an origin-wide connection slot admits it. It is a background
+  // stream: it yields its slot to an essential one and asks for it again until it is granted.
+  editorAgentAdmission = admitDirectBrowserStream(() => openEditorAgentEventSource(url), {
+    priority: "background",
+    onYield: detachEditorAgentEventSource,
+  });
 }
 
 function openEditorAgentEventSource(url: string): void {
+  detachEditorAgentEventSource();
   const source = createSameOriginApiEventSource(url);
   if (source === null) {
     queueMicrotask(() => {

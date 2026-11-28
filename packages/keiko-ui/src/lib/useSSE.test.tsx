@@ -200,10 +200,7 @@ describe("useSSE", () => {
   // Review #4573 finding 11: the run stream is a long-lived connection outside the shared pool.
   it("counts its open run stream against the persistent connection budget until it closes", () => {
     resetBrowserStreamCapacityForTests();
-    admitDirectBrowserStream(
-      () => undefined,
-      () => undefined,
-    );
+    admitDirectBrowserStream(() => undefined);
     vi.stubGlobal("EventSource", FakeEventSource);
     const before = sharedStreamConnectionBudget();
     const view = renderHook(() => useSSE("run 1"));
@@ -222,12 +219,7 @@ describe("useSSE", () => {
       value: createOriginLocksFixture(),
     });
     vi.stubGlobal("EventSource", FakeEventSource);
-    const held = Array.from({ length: 4 }, () =>
-      admitDirectBrowserStream(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
     await act(async () => {
       await Promise.resolve();
     });

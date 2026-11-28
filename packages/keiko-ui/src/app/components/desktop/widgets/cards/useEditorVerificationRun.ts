@@ -455,11 +455,7 @@ function handleSharedSourceLoss(source: EventSource): void {
 function createSharedSource(): void {
   if (sharedSource !== null || sharedSourceAdmission?.active === true || !hasActiveRun()) return;
   // The stream opens only once an origin-wide connection slot admits it (see the capacity module).
-  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource, () => {
-    sharedSourceAdmission = null;
-    setDependentSourceHealth("reconnecting");
-    scheduleSharedSourceReconnect();
-  });
+  sharedSourceAdmission = admitDirectBrowserStream(connectSharedSource);
   void waitForSharedSource();
 }
 

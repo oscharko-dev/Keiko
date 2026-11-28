@@ -48,31 +48,80 @@ const SHARED_STREAM_CONNECTIONS = 3;
 let directStreams = 0;
 let admittedDirectStreams = 0;
 
-function requestDirectSlot(
-  admit: () => void,
-  deny: () => void,
-  correlationId: string | undefined,
-): () => void {
+/**
+ * `essential` streams (the Workbench run streams, the viewed run's events, editor verification)
+ * never yield their slot. `background` streams (relationship activity, the editor agent, Browser)
+ * give theirs up when an essential stream waits, so an essential stream always opens eventually.
+ */
+export type DirectStreamPriority = "essential" | "background";
+
+export interface DirectStreamOptions {
+  readonly priority?: DirectStreamPriority;
+  /** A background stream lost its slot to an essential one: close the connection. */
+  readonly onYield?: () => void;
+  readonly correlationId?: string;
+}
+
+const DIRECT_RETRY_INITIAL_MS = 1_000;
+const DIRECT_RETRY_MAX_MS = 30_000;
+
+function directRetryDelay(attempt: number): number {
+  return Math.min(DIRECT_RETRY_MAX_MS, DIRECT_RETRY_INITIAL_MS * 2 ** attempt);
+}
+
+interface DirectSlotRequest {
+  readonly admit: () => void;
+  readonly lose: () => void;
+  readonly background: boolean;
+  readonly correlationId: string | undefined;
+}
+
+function requestDirectSlot(request: DirectSlotRequest): () => void {
   if (typeof navigator === "undefined" || navigator.locks === undefined) {
     if (admittedDirectStreams >= PERSISTENT_STREAM_CONNECTION_CEILING) {
-      deny();
+      request.lose();
     } else {
       reportUnsupportedCapacity();
-      admit();
+      request.admit();
     }
     return () => undefined;
   }
   return acquirePersistentBrowserStreamCapacity(
-    admit,
+    request.admit,
     (reason) => {
-      if (reason === "unavailable") deny();
+      if (reason !== "cancelled") request.lose();
     },
     {
-      yieldable: false,
+      yieldable: request.background,
+      waitOnEverySlot: !request.background,
       slots: PERSISTENT_STREAM_CONNECTION_CEILING,
-      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
     },
   );
+}
+
+interface DirectStreamState {
+  settled: boolean;
+  admitted: boolean;
+  attempt: number;
+  retryTimer: number | undefined;
+  releaseLease: () => void;
+}
+
+function setDirectAdmitted(state: DirectStreamState, value: boolean): void {
+  if (state.admitted === value) return;
+  state.admitted = value;
+  admittedDirectStreams = Math.max(0, admittedDirectStreams + (value ? 1 : -1));
+}
+
+function releaseDirectStream(state: DirectStreamState): void {
+  if (state.settled) return;
+  state.settled = true;
+  window.clearTimeout(state.retryTimer);
+  setDirectAdmitted(state, false);
+  directStreams = Math.max(0, directStreams - 1);
+  notifyCapacityChange();
+  state.releaseLease();
 }
 
 /** A direct stream's slot: `active` while it awaits or holds a slot; `release` gives it up. */
@@ -86,56 +135,64 @@ export interface DirectStreamAdmission {
  * event stream, the Workbench streams, the Browser and editor streams). The stream may open only
  * after `onAdmitted` runs: it holds one of the origin's persistent connection slots until the
  * returned admission is released, so no mix of documents and widgets can take more than
- * {@link PERSISTENT_STREAM_CONNECTION_CEILING} connections. `onDenied` runs when no slot became
- * free in time; the caller treats it as a failed connection and retries on its own schedule. The
- * shared pool gives up its slots at once while a direct stream is pending or admitted. Without Web
- * Locks the ceiling is enforced for this document only, and a callback may run before this
- * function returns, so callers test `active` rather than a stored handle. `release` is idempotent
- * and also cancels a pending admission.
+ * {@link PERSISTENT_STREAM_CONNECTION_CEILING} connections. Admission never gives up: while no slot
+ * is free the request is repeated on a bounded backoff until it is granted or released, and a
+ * background stream that yielded its slot (`onYield`) asks for one again, so `onAdmitted` may run
+ * several times. The shared pool gives up its slots at once while a direct stream is pending or
+ * admitted. Without Web Locks the ceiling is enforced for this document only, and a callback may
+ * run before this function returns, so callers test `active` rather than a stored handle.
+ * `release` is idempotent and also cancels a pending admission.
  */
 export function admitDirectBrowserStream(
   onAdmitted: () => void,
-  onDenied: () => void,
-  correlationId?: string,
+  options: DirectStreamOptions = {},
 ): DirectStreamAdmission {
   directStreams += 1;
   notifyCapacityChange();
-  let settled = false;
-  let admitted = false;
-  const finish = (): void => {
-    if (settled) return;
-    settled = true;
-    directStreams = Math.max(0, directStreams - 1);
-    if (admitted) admittedDirectStreams = Math.max(0, admittedDirectStreams - 1);
-    notifyCapacityChange();
+  const state: DirectStreamState = {
+    settled: false,
+    admitted: false,
+    attempt: 0,
+    retryTimer: undefined,
+    releaseLease: () => undefined,
   };
-  const admit = (): void => {
-    if (settled) return;
-    admitted = true;
-    admittedDirectStreams += 1;
-    onAdmitted();
+  const request = (): void => {
+    if (state.settled) return;
+    state.releaseLease = requestDirectSlot({
+      admit: () => {
+        if (state.settled) return;
+        state.attempt = 0;
+        setDirectAdmitted(state, true);
+        onAdmitted();
+      },
+      lose: () => {
+        if (state.settled) return;
+        if (state.admitted) {
+          setDirectAdmitted(state, false);
+          options.onYield?.();
+        }
+        state.retryTimer = window.setTimeout(request, directRetryDelay(state.attempt));
+        state.attempt += 1;
+      },
+      background: options.priority === "background",
+      correlationId: options.correlationId,
+    });
   };
-  const deny = (): void => {
-    if (settled) return;
-    finish();
-    onDenied();
-  };
-  const releaseLease = requestDirectSlot(admit, deny, correlationId);
+  request();
   return {
     get active(): boolean {
-      return !settled;
+      return !state.settled;
     },
     release: (): void => {
-      finish();
-      releaseLease();
+      releaseDirectStream(state);
     },
   };
 }
 
 /**
- * Promise form of {@link admitDirectBrowserStream} for a stream a caller awaits: it resolves with
- * the release callback once a slot admits the stream, or with `null` when none became free in time
- * or the signal aborted first.
+ * Promise form of {@link admitDirectBrowserStream} for an essential stream a caller awaits: it
+ * resolves with the release callback once a slot admits the stream, or with `null` when the signal
+ * aborted first.
  */
 export function admitDirectBrowserStreamAsync(
   signal: AbortSignal,
@@ -156,11 +213,7 @@ export function admitDirectBrowserStreamAsync(
         signal.removeEventListener("abort", cancel);
         resolve(() => admission?.release());
       },
-      () => {
-        signal.removeEventListener("abort", cancel);
-        resolve(null);
-      },
-      correlationId,
+      correlationId === undefined ? {} : { correlationId },
     );
     signal.addEventListener("abort", cancel, { once: true });
   });
@@ -203,6 +256,7 @@ interface PersistentCapacityOptions {
   readonly yieldable?: boolean;
   readonly correlationId?: string;
   readonly slots?: number;
+  readonly waitOnEverySlot?: boolean;
 }
 
 type PersistentReleaseReason = "expired" | "cancelled" | "unavailable";
@@ -217,6 +271,7 @@ interface PersistentLease {
   waiterQueryFailed: boolean;
   acquisitionTimer: number;
   leaseTimer: number | undefined;
+  staggerTimer: number | undefined;
   finish: (() => void) | undefined;
 }
 
@@ -225,7 +280,8 @@ function releaseLease(lease: PersistentLease, reason: PersistentReleaseReason): 
   lease.ended = true;
   lease.abort.abort();
   window.clearTimeout(lease.acquisitionTimer);
-  window.clearTimeout(lease.leaseTimer);
+  window.clearInterval(lease.leaseTimer);
+  window.clearTimeout(lease.staggerTimer);
   if (reason === "unavailable") {
     reportClientDiagnostic("[keiko] persistent stream origin capacity acquisition unavailable", {
       correlationId: lease.options.correlationId,
@@ -236,6 +292,17 @@ function releaseLease(lease: PersistentLease, reason: PersistentReleaseReason): 
   lease.finish?.();
 }
 
+const LEASE_CHECK_STAGGER_MS = 100;
+
+// Each slot checks for waiters at its own offset, so holders of different slots never decide on
+// the same snapshot.
+function staggerLeaseCheck(name: string, lease: PersistentLease): Promise<void> {
+  const index = Number(name.slice(name.lastIndexOf(":") + 1));
+  return new Promise((resolve) => {
+    lease.staggerTimer = window.setTimeout(resolve, (index + 1) * LEASE_CHECK_STAGGER_MS);
+  });
+}
+
 async function checkLeaseWaiters(
   locks: LockManager,
   name: string,
@@ -243,6 +310,10 @@ async function checkLeaseWaiters(
 ): Promise<void> {
   if (lease.ended || lease.options.yieldable === false) return;
   try {
+    // Direct streams are checked at staggered moments: one waiter pending on every slot would
+    // otherwise make every background holder yield in the same tick, though one slot serves it.
+    if (lease.options.slots !== undefined) await staggerLeaseCheck(name, lease);
+    if (lease.ended) return;
     const snapshot = await locks.query();
     lease.waiterQueryFailed = false;
     if (snapshot.pending?.some((pending) => pending.name === name)) releaseLease(lease, "expired");
@@ -324,8 +395,13 @@ async function requestLease(locks: LockManager, lease: PersistentLease): Promise
   // waits for the slot only direct streams use, because that slot may be the one that frees first;
   // the first slot granted wins and the other request is withdrawn.
   const yieldable = await leastContendedSlot(locks, names.filter(yieldableSlotName));
+  // An essential direct stream waits on every slot: whichever holder frees or yields first serves it.
   const candidates =
-    lease.options.slots === undefined ? [yieldable] : [yieldable, ...names.slice(0, 1)];
+    lease.options.waitOnEverySlot === true
+      ? names
+      : lease.options.slots === undefined
+        ? [yieldable]
+        : [yieldable, ...names.slice(0, 1)];
   const waiting = new AbortController();
   lease.abort.signal.addEventListener("abort", () => waiting.abort(), { once: true });
   await Promise.allSettled(
@@ -361,6 +437,7 @@ export function acquirePersistentBrowserStreamCapacity(
     waiterQueryFailed: false,
     acquisitionTimer: 0,
     leaseTimer: undefined,
+    staggerTimer: undefined,
     finish: undefined,
   };
   lease.acquisitionTimer = window.setTimeout(

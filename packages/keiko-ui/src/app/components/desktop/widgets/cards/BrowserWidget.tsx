@@ -230,27 +230,28 @@ function useBrowserEventStream(
       return;
     }
     let source: EventSource | null = null;
+    const closeSource = (): void => {
+      source?.close();
+      source = null;
+      eventSourceRef.current = null;
+    };
     // A direct stream outside the shared pool: it opens only once an origin-wide slot admits it, so
-    // finite requests keep a connection however many tabs and widgets stream.
+    // finite requests keep a connection however many tabs and widgets stream. It is a background
+    // stream: it yields its slot to an essential one and asks for it again until it is granted.
     const admission = admitDirectBrowserStream(
       () => {
+        closeSource();
         source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
         if (source === null) return;
         attachBrowserEventListeners(source, pushEvent);
         attachBrowserStreamErrorHandler(source, setError, t);
         eventSourceRef.current = source;
       },
-      () => {
-        setError({
-          code: "EVENT_STREAM_CLOSED",
-          message: t("browserWidget.error.streamDisconnected"),
-        });
-      },
+      { priority: "background", onYield: closeSource },
     );
     return (): void => {
-      source?.close();
+      closeSource();
       admission.release();
-      eventSourceRef.current = null;
     };
   }, [session, pushEvent, setError, eventSourceRef, t]);
 }

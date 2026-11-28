@@ -628,6 +628,8 @@ describe("useEditorAgentBridge — observed activity state (Issue #2120)", () =>
       inFlightActionIds: [],
       inFlightActionCount: 0,
     });
+    // The stream's slot lease is released when the bridge reconciles, one microtask later.
+    await flushBridgeMicrotasks();
     expect(vi.getTimerCount()).toBe(0);
     hook.unmount();
   });

@@ -305,6 +305,7 @@ export function useCodingWorkbenchRuntimeEventStream(
     let session: CodingWorkbenchRuntimeStreamSession | undefined;
     let admission: DirectStreamAdmission | undefined;
     const openSession = (): void => {
+      if (session !== undefined) return;
       try {
         session = createCodingWorkbenchRuntimeStreamSession(
           runId,
@@ -324,9 +325,7 @@ export function useCodingWorkbenchRuntimeEventStream(
       }
     };
     // The stream opens only once an origin-wide connection slot admits it.
-    admission = admitDirectBrowserStream(openSession, () => {
-      handlersRef.current.onError(new Error("Workbench event stream capacity unavailable"));
-    });
+    admission = admitDirectBrowserStream(openSession);
     return (): void => {
       session?.close();
       admission?.release();

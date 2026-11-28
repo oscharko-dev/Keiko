@@ -260,15 +260,17 @@ function openSharedEventSource(): void {
   ) {
     return;
   }
-  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource, () => {
-    sharedEventSourceAdmission = null;
-    notifyAll("error", "Stream disconnected. Attempting to reconnect…");
-    scheduleReconnect();
-  });
+  sharedEventSourceAdmission = admitDirectBrowserStream(connectSharedEventSource);
 }
 
 function connectSharedEventSource(): void {
-  if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
+  if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) {
+    // Nobody needs the stream any more: hand the slot back instead of holding it unused.
+    queueMicrotask(() => {
+      if (subscriberCount() === 0 || documentHidden()) closeSharedEventSource();
+    });
+    return;
+  }
   sharedEventSource = createSameOriginApiEventSource(runEventsUrl());
   if (sharedEventSource === null) {
     // The slot is stored only after a synchronous admission returns, so release it afterwards.

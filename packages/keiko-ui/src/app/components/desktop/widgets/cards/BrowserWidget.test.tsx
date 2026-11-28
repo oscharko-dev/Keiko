@@ -2,7 +2,7 @@
 // drives the UI through the same paths a real BFF would. Covers: render, navigate POSTs,
 // SSE event display, accessible error surface for ORIGIN_NOT_ALLOWED, and screenshot apply.
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../../../lib/api";
@@ -127,10 +127,7 @@ describe("BrowserWidget", () => {
   // Review #4573 finding 11: the session's event stream is a long-lived direct connection.
   it("counts its event stream against the persistent connection budget until it unmounts", async () => {
     resetBrowserStreamCapacityForTests();
-    admitDirectBrowserStream(
-      () => undefined,
-      () => undefined,
-    );
+    admitDirectBrowserStream(() => undefined);
     vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
     const before = sharedStreamConnectionBudget();
     const view = render(<BrowserWidget />);
@@ -139,6 +136,28 @@ describe("BrowserWidget", () => {
     expect(sharedStreamConnectionBudget()).toBe(before - 1);
     view.unmount();
     expect(sharedStreamConnectionBudget()).toBe(before);
+    resetBrowserStreamCapacityForTests();
+  });
+
+  // #4573: a stream refused for lack of a slot must not stay dead until the session changes.
+  it("opens its event stream once a slot frees up after a wait beyond the acquisition deadline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    resetBrowserStreamCapacityForTests();
+    const held = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    render(<BrowserWidget />);
+    fireEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(FakeEventSource.last).toBeNull();
+    held[0]?.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000);
+    });
+    expect(FakeEventSource.last).not.toBeNull();
+    held.forEach((admission) => admission.release());
+    vi.useRealTimers();
     resetBrowserStreamCapacityForTests();
   });
 

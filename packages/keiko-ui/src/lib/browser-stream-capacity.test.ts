@@ -8,6 +8,7 @@ import {
   admitDirectBrowserStream,
   admitDirectBrowserStreamAsync,
   type DirectStreamAdmission,
+  type DirectStreamOptions,
   PERSISTENT_STREAM_CONNECTION_CEILING,
   sharedStreamConnectionBudget,
   reserveInteractiveBrowserStreamCapacity,
@@ -183,13 +184,10 @@ describe("persistent stream connection ceiling", () => {
   function admitAll(
     count: number,
     admitted: Set<number>,
-    denied?: Set<number>,
+    options: DirectStreamOptions = {},
   ): DirectStreamAdmission[] {
     return Array.from({ length: count }, (_, index) =>
-      admitDirectBrowserStream(
-        () => admitted.add(index),
-        () => denied?.add(index),
-      ),
+      admitDirectBrowserStream(() => admitted.add(index), options),
     );
   }
 
@@ -222,9 +220,9 @@ describe("persistent stream connection ceiling", () => {
     const pool = Array.from({ length: 3 }, () =>
       acquirePersistentBrowserStreamCapacity(open, () => (live -= 1)),
     );
-    const documentA = Array.from({ length: 2 }, () => admitDirectBrowserStream(open, vi.fn()));
+    const documentA = Array.from({ length: 2 }, () => admitDirectBrowserStream(open));
     resetBrowserStreamCapacityForTests(); // Another tab starts its own counters, not its locks.
-    const documentB = Array.from({ length: 3 }, () => admitDirectBrowserStream(open, vi.fn()));
+    const documentB = Array.from({ length: 3 }, () => admitDirectBrowserStream(open));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(peak).toBeLessThanOrEqual(PERSISTENT_STREAM_CONNECTION_CEILING);
     expect(live).toBeLessThanOrEqual(PERSISTENT_STREAM_CONNECTION_CEILING);
@@ -233,15 +231,62 @@ describe("persistent stream connection ceiling", () => {
     );
   });
 
-  it("denies a stream that waits past the acquisition deadline", async () => {
+  // The Workbench run streams must open eventually, however long other streams hold the slots.
+  it("keeps asking for a slot past the acquisition deadline until one frees", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
-    const denied = new Set<number>();
-    const admissions = admitAll(5, new Set<number>(), denied);
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect([...denied]).toEqual([4]);
-    expect(admissions[4]?.active).toBe(false);
+    const admitted = new Set<number>();
+    const admissions = admitAll(5, admitted);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect([...admitted]).toEqual([0, 1, 2, 3]);
+    expect(admissions[4]?.active).toBe(true);
+    admissions[0]?.release();
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(admitted.has(4)).toBe(true);
     admissions.forEach((admission) => admission.release());
+  });
+
+  it("makes a background stream yield its slot to an essential one and take it back later", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const yielded = vi.fn();
+    const background = admitAll(4, new Set<number>(), { priority: "background", onYield: yielded });
+    await vi.advanceTimersByTimeAsync(0);
+    const essential = new Set<number>();
+    const waiting = admitAll(1, essential);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(essential.size).toBe(1);
+    expect(yielded).toHaveBeenCalledTimes(1);
+    waiting.forEach((admission) => admission.release());
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(background.filter((admission) => admission.active)).toHaveLength(4);
+    background.forEach((admission) => admission.release());
+  });
+
+  it("never yields an essential stream to another essential one", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const held = admitAll(4, new Set<number>());
+    await vi.advanceTimersByTimeAsync(0);
+    const waiting = new Set<number>();
+    admitAll(1, waiting);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(waiting.size).toBe(0);
+    held.forEach((admission) => admission.release());
+  });
+
+  it("stops asking once released while it waits", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+    const held = admitAll(4, new Set<number>());
+    const late = new Set<number>();
+    const [waiting] = admitAll(1, late);
+    await vi.advanceTimersByTimeAsync(20_000);
+    waiting?.release();
+    held[0]?.release();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(late.size).toBe(0);
+    held.forEach((admission) => admission.release());
   });
 
   it("admits a stream asynchronously and not at all once its signal aborted", async () => {
@@ -257,13 +302,17 @@ describe("persistent stream connection ceiling", () => {
     await expect(admitDirectBrowserStreamAsync(controller.signal)).resolves.toBeNull();
   });
 
-  it("falls back to this document's ceiling when Web Locks are unavailable", () => {
+  it("falls back to this document's ceiling when Web Locks are unavailable", async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("navigator", {});
     const admitted = new Set<number>();
-    const denied = new Set<number>();
-    const admissions = admitAll(5, admitted, denied);
+    const admissions = admitAll(5, admitted);
     expect(admitted.size).toBe(PERSISTENT_STREAM_CONNECTION_CEILING);
-    expect([...denied]).toEqual([4]);
+    // The refused stream stays pending (not settled), so a caller's stored handle stays valid.
+    expect(admissions[4]?.active).toBe(true);
+    admissions[0]?.release();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(admitted.has(4)).toBe(true);
     admissions.forEach((admission) => admission.release());
   });
 });
