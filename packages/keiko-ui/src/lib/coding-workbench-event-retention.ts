@@ -138,7 +138,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     this.source = source;
     source.onopen = (): void => {
       if (this.source !== source) return;
-      this.silentReconnects = 0;
+      // A transport open is not activity: only a runtime frame or a heartbeat ends a silent streak.
       this.armWatchdog();
       this.handlers.onOpen();
     };

@@ -280,6 +280,40 @@ describe("Coding Workbench event retention", () => {
     });
   });
 
+  it("does not count a transport open without a frame as stream activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const onError = vi.fn();
+      const sources: FakeEventSource[] = [];
+      const session = createCodingWorkbenchRuntimeStreamSession(
+        "run-1",
+        {
+          onOpen: vi.fn(),
+          onEvents: vi.fn(),
+          onError,
+          onReset: vi.fn(() => Promise.resolve()),
+        },
+        {
+          staleAfterMs: 100,
+          createEventSource: () => {
+            const source = new FakeEventSource();
+            sources.push(source);
+            source.onopen?.(new Event("open"));
+            return source as unknown as EventSource;
+          },
+        },
+      );
+      for (let reconnect = 0; reconnect < 3; reconnect += 1) {
+        sources.at(-1)?.onopen?.(new Event("open"));
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(onError).toHaveBeenCalledOnce();
+      session.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("delivers observations before a later state event without bypassing the batch", () => {
     vi.useFakeTimers();
     try {
