@@ -28,7 +28,6 @@ import {
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
-  buildUnbornBranchArgv,
   buildUnstageArgv,
   GIT_MUTATION_COMMAND_RULES,
   type GitBranchCreateExecRequest,
@@ -98,7 +97,9 @@ import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
   GIT_REF_LOCK_HELD,
+  GIT_HEAD_CHANGED,
   gitSequencerOperationInProgress,
+  repointSymbolicHead,
   GIT_REF_LOCK_UNAVAILABLE,
   withGitBranchRefLocks,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -1032,13 +1033,34 @@ async function execUnbornBranch(
         const snapshot = await readGitWorktreeSnapshot(deps);
         if (snapshot.existingLocalBranchNames.includes(req.branchName))
           return failureFromExit(0, 0);
-        return await execPlan(ctx, () => buildUnbornBranchArgv(req));
+        return await repointUnbornHead(ctx, fromBranch, req);
       },
       workspaceFsOf(ctx.runDeps),
     );
   } catch (error) {
     return failureFromUnbornBranchThrow(error);
   }
+}
+
+// HEAD is re-pointed under Git's own HEAD.lock with the expected old symbolic value checked while
+// the lock is held, so an ordinary checkout of another branch between the proof and this write is
+// refused instead of overwritten (the branch ref locks do not cover HEAD itself). The live authority
+// is re-proved immediately before the write; a name Git would not accept writes nothing.
+async function repointUnbornHead(
+  ctx: RunContext,
+  fromBranch: string,
+  req: GitBranchCreateExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  if (!isSafeGitRefName(req.branchName) || !commitEffectAuthorized(ctx))
+    return failureFromExit(0, 0);
+  const startedAtMs = ctx.runDeps.now();
+  await repointSymbolicHead(
+    ctx.runDeps.workspace.root,
+    fromBranch,
+    req.branchName,
+    workspaceFsOf(ctx.runDeps),
+  );
+  return executionResult("succeeded", ctx.runDeps.now() - startedAtMs);
 }
 
 // Nothing was written when the lock or a state read throws. A branch ref lock another process holds
@@ -1048,7 +1070,10 @@ async function execUnbornBranch(
 export function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
   if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
     return failureFromThrow(error, 0, 0);
-  if (error instanceof Error && error.message === GIT_REF_LOCK_HELD)
+  if (
+    error instanceof Error &&
+    (error.message === GIT_REF_LOCK_HELD || error.message === GIT_HEAD_CHANGED)
+  )
     return failureFromExit(0, 0, "conflict");
   const unproven =
     error instanceof GitWorktreeReadFailure ||

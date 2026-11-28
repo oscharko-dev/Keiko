@@ -7,11 +7,13 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   renameSync,
   rmdirSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -322,6 +324,47 @@ export async function gitSequencerOperationInProgress(
     );
   } catch (error) {
     throw new Error(GIT_SEQUENCER_STATE_UNAVAILABLE, { cause: error });
+  }
+}
+
+/** The message of the failure thrown when HEAD no longer names the branch it was proved to name. */
+export const GIT_HEAD_CHANGED = "git-head-changed";
+
+const SAFE_HEAD_BRANCH = /^[A-Za-z0-9._/-]+$/u;
+
+/**
+ * Re-points the symbolic HEAD from `expectedBranch` to `targetBranch` under Git's own `HEAD.lock`,
+ * the lock every checkout, switch and commit takes to change HEAD. The expected old value is read
+ * while the lock is held and the new one is written into the lock file and renamed over HEAD, so an
+ * ordinary switch to an unrelated branch between the caller's proof and this write is refused
+ * (`GIT_HEAD_CHANGED`) instead of overwritten. A lock another process holds is `GIT_REF_LOCK_HELD`.
+ * Nothing but the lock file is written unless the expectation holds.
+ */
+export async function repointSymbolicHead(
+  workspaceRoot: string,
+  expectedBranch: string,
+  targetBranch: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): Promise<void> {
+  if (!SAFE_HEAD_BRANCH.test(expectedBranch) || !SAFE_HEAD_BRANCH.test(targetBranch))
+    throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  const base = await resolveGitdir(fs, workspaceRoot);
+  if (base === undefined) throw new Error("git-index-metadata-unavailable");
+  const head = join(base.path, "HEAD");
+  const lock = `${head}.lock`;
+  const descriptor = openRefLock(lock);
+  let published = false;
+  try {
+    if (readFileSync(head, "utf8") !== `ref: refs/heads/${expectedBranch}\n`)
+      throw new Error(GIT_HEAD_CHANGED);
+    writeSync(descriptor, `ref: refs/heads/${targetBranch}\n`);
+    closeSync(descriptor);
+    published = true;
+    renameSync(lock, head);
+  } catch (error) {
+    if (!published) closeSync(descriptor);
+    rmSync(lock, { force: true });
+    throw error;
   }
 }
 

@@ -533,8 +533,9 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     const racing = createNodeGitMutationAdapter({
       workspace,
       processEnv: { PATH: process.env.PATH, HOME: root },
-      spawn: (command, args, options) => {
-        if (args.includes("symbolic-ref") && attempt === undefined) {
+      // The last point before the write: the authority re-proof right before HEAD is re-pointed.
+      beforeCommitRefUpdate: (): boolean => {
+        if (attempt === undefined) {
           let threw = false;
           try {
             git(["commit", "-qm", "external first commit"]);
@@ -543,7 +544,7 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
           }
           attempt = { threw };
         }
-        return nodeSpawnFn(command, args, options);
+        return true;
       },
     });
     const result = await racing.createBranch({
@@ -567,8 +568,8 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     const racing = createNodeGitMutationAdapter({
       workspace,
       processEnv: { PATH: process.env.PATH, HOME: root },
-      spawn: (command, args, options) => {
-        if (args.includes("symbolic-ref") && attempt === undefined) {
+      beforeCommitRefUpdate: (): boolean => {
+        if (attempt === undefined) {
           let threw = false;
           try {
             git(["update-ref", "refs/heads/task/work", other]);
@@ -577,7 +578,7 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
           }
           attempt = { threw };
         }
-        return nodeSpawnFn(command, args, options);
+        return true;
       },
     });
     const result = await racing.createBranch({
@@ -590,6 +591,38 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/task/work");
     expect(existsSync(join(root, ".git", "refs", "heads", "task", "work"))).toBe(false);
     expect(existsSync(join(root, ".git", "refs", "heads", "task", "work.lock"))).toBe(false);
+  });
+  // An ordinary checkout changes the symbolic HEAD without writing either branch ref, so the branch
+  // locks cannot see it: the write is bound to the expected old HEAD under Git's own HEAD.lock.
+  it("refuses the re-point when HEAD was switched to an unrelated branch after the proof", async () => {
+    const racing = createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      beforeCommitRefUpdate: (): boolean => {
+        git(["symbolic-ref", "HEAD", "refs/heads/unrelated"]);
+        return true;
+      },
+    });
+    const result = await racing.createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result).toMatchObject({ outcome: "failed", errorCode: "conflict" });
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/unrelated");
+    expect(existsSync(join(root, ".git", "HEAD.lock"))).toBe(false);
+  });
+  it("writes nothing when another process holds HEAD.lock", async () => {
+    const lock = join(root, ".git", "HEAD.lock");
+    writeFileSync(lock, "");
+    const result = await adapter().createBranch({
+      branchName: "feature/first",
+      startPointRefHash: gitZeroObjectId(40),
+      fromUnbornBranch: "fresh",
+    });
+    expect(result).toMatchObject({ outcome: "failed", errorCode: "conflict" });
+    expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+    expect(existsSync(lock)).toBe(true);
   });
   it("writes nothing when another writer already holds a lock on the old branch", async () => {
     const lock = join(root, ".git", "refs", "heads", "fresh.lock");
