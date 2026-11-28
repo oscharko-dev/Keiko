@@ -297,8 +297,8 @@ async function revertTurn(
   try {
     const outcome =
       action === "undo"
-        ? await undoLastTurn(ports, run)
-        : await restoreUndo(ports, run, correlationId);
+        ? await undoLastTurn(ports, run, correlationId ?? runId)
+        : await restoreUndo(ports, run, correlationId ?? runId);
     if (!outcome.ok)
       return recordRevertRefusal(ports, runId, action, outcome.reason, correlationId);
     recordRevertApplied(ports.activityLog, runId, action, outcome, correlationId);
@@ -326,6 +326,7 @@ type RevertOutcome = AppliedRevert | { readonly ok: false; readonly reason: Open
 async function undoLastTurn(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
+  correlationId: string,
 ): Promise<RevertOutcome> {
   if (run.revert !== undefined) return { ok: false, reason: "already-staged" };
   // Every check precedes the interrupt: a request that cannot succeed never ends a working turn.
@@ -347,23 +348,32 @@ async function undoLastTurn(
     if (!(await turnUnchanged(run, await changedFiles(run, range), true)))
       return { ok: false, reason: "workspace-changed" };
   }
-  return stageTurnRevert(ports, run, boundary, range, busy);
+  return stageTurnRevert(ports, run, { boundary, range, busy, correlationId });
 }
 
 async function stageTurnRevert(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
-  boundary: string,
-  range: TurnRange | undefined,
-  busy: boolean,
+  turn: {
+    readonly boundary: string;
+    readonly range: TurnRange | undefined;
+    readonly busy: boolean;
+    readonly correlationId: string;
+  },
 ): Promise<RevertOutcome> {
+  const { boundary, range, busy, correlationId } = turn;
   const staged = await run.client.stageRevert(run.sessionId, boundary);
   const files = staged.files.map((diff) => diff.file);
   // The worktree is back at the turn start; the paths the turn staged leave the index with it.
   let indexMoves: TurnIndexMoves | undefined;
-  const index = await restoreIndexOrReport(ports, run, (moves) => {
-    indexMoves = moves;
-  });
+  const index = await restoreIndexOrReport(
+    ports,
+    run,
+    (moves) => {
+      indexMoves = moves;
+    },
+    correlationId,
+  );
   const record: OpenCodeStagedRevert = {
     ...diffCounts(staged.files),
     files,
@@ -393,6 +403,7 @@ async function restoreIndexOrReport(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   onRestored: (moves: TurnIndexMoves) => void,
+  correlationId: string,
 ): Promise<Awaited<ReturnType<typeof restoreTurnIndex>>> {
   try {
     const restored = await restoreTurnIndex(
@@ -400,6 +411,7 @@ async function restoreIndexOrReport(
       run.turnIndex,
       governedIndexRecord(run.runId),
       onRestored,
+      correlationId,
     );
     const failure: unknown = run.turnIndex?.failure;
     if (failure !== undefined) reportIndexFailure(ports, run, failure);
@@ -447,7 +459,7 @@ function stagedIndexPaths(staged: OpenCodeStagedRevert): { indexPathCount?: numb
 async function restoreUndo(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
-  correlationId: string | undefined,
+  correlationId: string,
 ): Promise<RevertOutcome> {
   const staged = run.revert;
   if (staged === undefined) return { ok: false, reason: "nothing-staged" };
@@ -456,7 +468,7 @@ async function restoreUndo(
   if (!(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))) {
     return { ok: false, reason: "workspace-changed" };
   }
-  const moved = await reapplyIndexMoves(run, staged);
+  const moved = await reapplyIndexMoves(run, staged, correlationId);
   if (moved === "changed") return { ok: false, reason: "index-changed" };
   if (moved === "failed") return { ok: false, reason: "revert-failed" };
   try {
@@ -487,10 +499,11 @@ async function restoreUndo(
 async function reapplyIndexMoves(
   run: OpenCodeRevertRun,
   staged: OpenCodeStagedRevert,
+  correlationId: string,
 ): Promise<"restored" | "none" | "changed" | "failed"> {
   const moves = staged.indexMoves;
   if (moves === undefined || moves.entries.length === 0) return "none";
-  const result = await reapplyTurnIndexMoves(run.workspaceRoot, moves);
+  const result = await reapplyTurnIndexMoves(run.workspaceRoot, moves, correlationId);
   if (result === "restored") return "restored";
   return result === "changed-after-turn" ? "changed" : "failed";
 }
@@ -499,13 +512,17 @@ async function undoIndexMoves(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   moves: TurnIndexMoves,
-  correlationId: string | undefined,
+  correlationId: string,
 ): Promise<void> {
   try {
-    const result = await reapplyTurnIndexMoves(run.workspaceRoot, {
-      headSha: moves.headSha,
-      entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
-    });
+    const result = await reapplyTurnIndexMoves(
+      run.workspaceRoot,
+      {
+        headSha: moves.headSha,
+        entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
+      },
+      correlationId,
+    );
     // A person's restaging in this window is correctly left alone, but never silently.
     if (result !== "restored")
       recordRevertRefused(ports.activityLog, {

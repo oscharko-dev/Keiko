@@ -1,9 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { processServerLogSink } from "../process-log-sink.js";
 
 import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
 
@@ -22,6 +32,33 @@ vi.mock("../gitProcessActivity.js", async (importOriginal) => {
         return await run(gitArgs, options);
       };
     },
+  };
+});
+
+// A sharing violation on the private index copy's removal, injected through the removal seam of the
+// production transaction while a test asks for it: the cleanup line is the only thing it changes.
+const cleanupFault = vi.hoisted(() => ({ on: false }));
+vi.mock("@oscharko-dev/keiko-workspace/internal/git-index", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-workspace/internal/git-index")>();
+  const removePath: Parameters<typeof actual.withGitIndexTransaction>[4] = {
+    removePath: (path, kind) => {
+      if (kind === "file" && path.includes(".keiko-index-"))
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      if (kind === "directory") rmdirSync(path);
+      else rmSync(path, { recursive: kind === "tree", force: true });
+    },
+  };
+  return {
+    ...actual,
+    withGitIndexTransaction: ((root, work, accepted, fs, options) =>
+      actual.withGitIndexTransaction(
+        root,
+        work,
+        accepted,
+        fs,
+        cleanupFault.on ? { ...options, ...removePath } : options,
+      )) as typeof actual.withGitIndexTransaction,
   };
 });
 
@@ -468,6 +505,32 @@ describe("turn index restore", () => {
     });
 
     expect(staged(root)).toEqual([]);
+  });
+
+  it("writes the cleanup line of an Undo's index transaction on the run's correlation", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+    });
+    const write = vi.spyOn(processServerLogSink(), "write");
+    cleanupFault.on = true;
+    try {
+      await expect(
+        restoreTurnIndex(root, record, governedOf(record), undefined, "run-correlation-1"),
+      ).resolves.toEqual({ outcome: "restored", restoredCount: 1 });
+      const lines = write.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.op === "git.index-transaction.cleanup-incomplete");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        correlationId: "run-correlation-1",
+        extra: { caller: "turn-index-restore", temporaryIndexLeft: true },
+      });
+    } finally {
+      cleanupFault.on = false;
+      write.mockRestore();
+    }
   });
 
   it("changes nothing and throws when Git's index lock is held", async () => {

@@ -43,7 +43,7 @@ describe("git index transaction cleanup line", () => {
     expect(persisted).toMatchObject({ caller: "stage", lockLeft: true });
   });
 
-  it("falls back to the unknown correlation for the turn-index undo, which has none", () => {
+  it("falls back to the unknown correlation only when a caller has none", () => {
     const activity = captureActivityLog();
     logGitIndexCleanupIncomplete(
       activity.sink,

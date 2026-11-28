@@ -402,6 +402,7 @@ export async function restoreTurnIndex(
   record: TurnIndexRecord | undefined,
   governed: GovernedIndexRecord,
   onRestored?: (moves: TurnIndexMoves) => void,
+  correlationId?: string,
 ): Promise<TurnIndexRestoreResult> {
   const start = await record?.start;
   if (record === undefined || start === undefined) return NO_RESTORE;
@@ -413,7 +414,7 @@ export async function restoreTurnIndex(
   if (images === undefined) return UNAVAILABLE;
   if (images.live.headSha !== images.start.headSha || images.left.headSha !== images.start.headSha)
     return { outcome: "head-moved", restoredCount: 0 };
-  return await restoreTouched(root, images, governed, onRestored);
+  return await restoreTouched(root, images, governed, onRestored, correlationId);
 }
 
 /**
@@ -534,6 +535,7 @@ async function restoreTouched(
   images: ProvenImages,
   governed: GovernedIndexRecord,
   onRestored: ((moves: TurnIndexMoves) => void) | undefined,
+  correlationId: string | undefined,
 ): Promise<TurnIndexRestoreResult> {
   const verdict = restoreVerdict(images, governed);
   if (verdict.kind === "nothing") return { outcome: verdict.unrecorded, restoredCount: 0 };
@@ -546,7 +548,7 @@ async function restoreTouched(
   }));
   const moves: TurnIndexMoves = { headSha: images.start.headSha, entries };
   // An index that cannot be locked or copied throws: the caller logs it and reports `unavailable`.
-  const applied = await moveInTransaction(root, moves, "undo");
+  const applied = await moveInTransaction(root, moves, "undo", correlationId);
   if (applied !== "applied") {
     return {
       outcome: applied === "changed" ? "changed-after-turn" : "unavailable",
@@ -596,6 +598,7 @@ async function moveInTransaction(
   root: string,
   moves: TurnIndexMoves,
   direction: "undo" | "restore",
+  correlationId: string | undefined,
 ): Promise<TransactionResult> {
   const expected = new Map<string, string>();
   const target = new Map<string, string>();
@@ -614,7 +617,7 @@ async function moveInTransaction(
         logGitIndexCleanupIncomplete(
           processServerLogSink(),
           { caller: "turn-index-restore", refLocks: 0, directories: 0, ...report },
-          undefined,
+          correlationId,
         );
       },
     },
@@ -625,8 +628,9 @@ async function moveInTransaction(
 export async function reapplyTurnIndexMoves(
   root: string,
   moves: TurnIndexMoves,
+  correlationId?: string,
 ): Promise<"restored" | "changed-after-turn" | "unavailable"> {
-  const result = await moveInTransaction(root, moves, "restore");
+  const result = await moveInTransaction(root, moves, "restore", correlationId);
   if (result === "applied") return "restored";
   return result === "changed" ? "changed-after-turn" : "unavailable";
 }
