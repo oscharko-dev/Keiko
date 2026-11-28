@@ -174,18 +174,7 @@ export interface GitStagedConversionEvidence {
  */
 export interface GitReadSession {
   spawnCount: number;
-  promisorVerdict?: Promise<GitPromisorVerdict> | undefined;
-}
-
-/**
- * What one promisor probe established. `reusable` is false when the verdict may only authorize the
- * effect that asked: a negative verdict is reusable across an operation only while the installed
- * git itself enforces GIT_NO_LAZY_FETCH, because on an older git the repository configuration is
- * the sole guard and can change between two effects of one operation.
- */
-export interface GitPromisorVerdict {
-  readonly atRisk: boolean;
-  readonly reusable: boolean;
+  promisorAtRisk?: Promise<boolean> | undefined;
 }
 
 export function createGitReadSession(): GitReadSession {
@@ -416,28 +405,25 @@ function countProcess(ctx: ReadContext): void {
 async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
   const session = ctx.session;
   if (session === undefined) return probePromisorRemote(ctx);
+  const held = session.promisorAtRisk;
+  if (held !== undefined) {
+    const atRisk = await held;
+    // A repository at risk stays at risk for the operation, and the version gate judges it at every
+    // effect. A negative verdict is only as durable as Git's own enforcement of the guard: on a Git
+    // that ignores GIT_NO_LAZY_FETCH the repository configuration is the sole guard, and it can
+    // change between two effects of one operation, so the next effect probes it again.
+    if (atRisk || (await cachedVersionGuardSupport(ctx)).supported) return atRisk;
+  }
   // One verdict per logical operation while it stays trustworthy. A failed probe (a cancelled
   // caller) is evicted so the next read of the session probes again instead of replaying the
-  // rejection; a verdict that is not reusable is evicted so the next effect probes again.
-  const pending = (session.promisorVerdict ??= probePromisorVerdict(ctx));
-  try {
-    const verdict = await pending;
-    if (!verdict.reusable && session.promisorVerdict === pending)
-      session.promisorVerdict = undefined;
-    return verdict.atRisk;
-  } catch (error: unknown) {
-    if (session.promisorVerdict === pending) session.promisorVerdict = undefined;
+  // rejection.
+  const fresh = probePromisorRemote(ctx);
+  const stored = fresh.catch((error: unknown) => {
+    if (session.promisorAtRisk === stored) session.promisorAtRisk = undefined;
     throw error;
-  }
-}
-
-async function probePromisorVerdict(ctx: ReadContext): Promise<GitPromisorVerdict> {
-  const atRisk = await probePromisorRemote(ctx);
-  // A repository at risk is judged by the version gate on every effect anyway. A negative verdict
-  // is only as durable as git's own enforcement of the guard, which the version decides.
-  if (atRisk) return { atRisk, reusable: true };
-  const support = await cachedVersionGuardSupport(ctx);
-  return { atRisk, reusable: support.supported };
+  });
+  session.promisorAtRisk = stored;
+  return stored;
 }
 
 async function probePromisorRemote(ctx: ReadContext): Promise<boolean> {

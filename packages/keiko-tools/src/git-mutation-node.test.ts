@@ -239,10 +239,17 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   rec.child.emit("close", 0, null);
   // The commit's success triggers a follow-up readGitRevision("HEAD"). It runs in the commit's own
   // read session, so the probe the commit already took covers it (the verdict is held for ONE
-  // operation and never across operations — see git-worktree-snapshot-node.ts): the fourth spawn is
-  // the rev-parse itself.
-  await expect.poll(() => rec.calls()).toHaveLength(4);
-  expect(rec.calls()[3]?.args).toContain("rev-parse");
+  // operation and never across operations — see git-worktree-snapshot-node.ts), PROVIDED the
+  // installed git itself enforces GIT_NO_LAZY_FETCH: reusing a verdict is the one place the version
+  // matters, so it is read here, once per spawn function. The rev-parse follows it.
+  const probesBefore = rec.calls().length;
+  await expect.poll(() => rec.calls()).toHaveLength(probesBefore + 1);
+  expect(rec.calls()[3]?.args).toEqual(["version"]);
+  rec.child.stdout.emit("data", Buffer.from("git version 2.50.0\n"));
+  rec.child.emit("close", 0, null);
+  await expect.poll(() => rec.calls()).toHaveLength(5);
+  expect(rec.calls()[4]?.args).toContain("rev-parse");
+  expect(rec.calls().filter((call) => call.args.includes("--get-regexp"))).toHaveLength(1);
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
   await pending;
