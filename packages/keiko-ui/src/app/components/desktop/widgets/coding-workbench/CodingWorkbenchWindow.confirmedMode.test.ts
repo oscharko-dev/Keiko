@@ -33,6 +33,18 @@ describe("confirmedMode", () => {
     expect(confirmedMode(state)).toBeNull();
   });
 
+  // The anchored answer may exceed the selected mode (it states a live run's wider posture). With no
+  // live run in this window's state it must never surface as the authority the next run will hold.
+  it("never shows an anchored readiness mode as wider authority when no live run is known", () => {
+    for (const run of [null, { state: "failed", effectiveMode: "autonomous-delivery" }]) {
+      const state = stateWith(run, {
+        effectiveMode: "autonomous-delivery",
+        liveRunAnchored: true,
+      });
+      expect(confirmedMode(state)).toBeNull();
+    }
+  });
+
   it("states an unanchored readiness mode when no run is active", () => {
     expect(confirmedMode(stateWith(null, { effectiveMode: "governed-assist" }))).toBe(
       "governed-assist",
