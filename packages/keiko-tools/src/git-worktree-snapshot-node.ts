@@ -60,6 +60,7 @@ export const GIT_WORKTREE_READ_COMMAND_RULES: readonly CommandRule[] = Object.fr
       "ls-tree",
       "cat-file",
       "show-ref",
+      "for-each-ref",
     ]),
     valueFlags: Object.freeze([
       "-C",
@@ -1154,6 +1155,40 @@ export async function readGitLocalBranchTip(
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
     throw new GitWorktreeReadError("git branch did not resolve uniquely");
   return value;
+}
+
+/**
+ * What one `for-each-ref` of `refs/heads/<branch>` says about it: whether it exists (a dangling
+ * symref and an absent branch both read as absent), whether HEAD resolves to it, whether it is a
+ * symbolic ref, and its tip. One process answers what a tip read, a checkout read and a symbolic-ref
+ * read would each answer.
+ */
+export interface GitBranchRefFacts {
+  readonly present: boolean;
+  readonly head: boolean;
+  readonly symbolic: boolean;
+  readonly tip: string | undefined;
+}
+
+export async function readGitBranchRefFacts(
+  deps: NodeGitWorktreeReaderDeps,
+  branch: string,
+): Promise<GitBranchRefFacts> {
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git branch name is unsafe");
+  const ref = `refs/heads/${branch}`;
+  const output = await runRead(machineReadContext(deps), [
+    "for-each-ref",
+    "--format=%(refname)%09%(HEAD)%09%(symref)%09%(objectname)",
+    ref,
+  ]);
+  for (const line of output.split("\n")) {
+    const [name, head, symref, tip] = line.split("\t");
+    if (name !== ref) continue;
+    if (tip === undefined || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(tip))
+      throw new GitWorktreeReadError("git branch did not resolve uniquely");
+    return { present: true, head: head === "*", symbolic: symref !== "", tip };
+  }
+  return { present: false, head: false, symbolic: false, tip: undefined };
 }
 
 /**

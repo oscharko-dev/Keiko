@@ -905,10 +905,11 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       const otherBefore = gitIn(repo, ["rev-parse", "refs/heads/other"]).trim();
       let authorizations = 0;
       const { result, causes } = await refused(repo, "mine", true, {
-        // The last authorization runs right before the ref update: the branch becomes a symref there.
+        // The first authorization runs after the checkout was proved and long before the final read of
+        // the branch: the branch becomes a symref there, and that final read must see it.
         beforeCommitRefUpdate: (): boolean => {
           authorizations += 1;
-          if (authorizations === 2)
+          if (authorizations === 1)
             gitIn(repo, ["symbolic-ref", "refs/heads/main", "refs/heads/other"]);
           return true;
         },

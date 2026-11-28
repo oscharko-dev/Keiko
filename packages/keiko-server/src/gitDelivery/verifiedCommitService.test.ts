@@ -1550,10 +1550,8 @@ describe("verified Code-task commit service", () => {
       stageExecute: 43,
       unstagePropose: 17,
       commitPrepare: 25,
-      // 52 and 55 plus the one `symbolic-ref` read that proves the branch is a direct ref right
-      // before the final update (AlJV, #4491): the update never follows a symref.
-      commitExecute: 53,
-      commitExecuteSigningUnset: 56,
+      commitExecute: 52,
+      commitExecuteSigningUnset: 55,
       branch: 25,
       branchExists: 13,
       // What thirty paths may start beyond what two paths start (batches, never one per path).

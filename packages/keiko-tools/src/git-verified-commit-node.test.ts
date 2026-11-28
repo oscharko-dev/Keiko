@@ -407,7 +407,8 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(git(["rev-parse", "HEAD^"])).toBe(bornSha(request.verified.head));
     expectLastCommitSigned();
   });
-  it("refuses a destination that turns symbolic at the last authority check", async () => {
+  // The branch becomes a symref at the start of the final fact check: its read sees it.
+  it("refuses a destination that turns symbolic before the final fact check", async () => {
     const request = await candidate();
     const sha = bornSha(request.verified.head);
     git(["branch", "elsewhere", sha]);
@@ -416,10 +417,9 @@ describe("verified commit at the sole mutation adapter", () => {
     const result = await createNodeGitMutationAdapter({
       workspace,
       processEnv: { PATH: process.env.PATH, HOME: root },
-      // The branch becomes a symref right before the ref update: it must not move its target.
       beforeCommitRefUpdate: (): boolean => {
         checks += 1;
-        if (checks === 3) git(["symbolic-ref", "refs/heads/codex/task", "refs/heads/elsewhere"]);
+        if (checks === 2) git(["symbolic-ref", "refs/heads/codex/task", "refs/heads/elsewhere"]);
         return true;
       },
       onCommitRefused: (report) => {
@@ -431,6 +431,19 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(causes).toEqual(["ref-symbolic"]);
     expect(git(["rev-parse", "refs/heads/elsewhere"])).toBe(sha);
     expect(git(["symbolic-ref", "refs/heads/codex/task"])).toBe("refs/heads/elsewhere");
+  });
+  // After the last read nothing but the update remains, and `--no-deref` keeps it off the target.
+  it("never moves the target of a branch that turns symbolic after the final read", async () => {
+    const request = await candidate();
+    const sha = bornSha(request.verified.head);
+    git(["branch", "elsewhere", sha]);
+    let checks = 0;
+    await adapter(() => {
+      checks += 1;
+      if (checks === 3) git(["symbolic-ref", "refs/heads/codex/task", "refs/heads/elsewhere"]);
+      return true;
+    }).commit(request);
+    expect(git(["rev-parse", "refs/heads/elsewhere"])).toBe(sha);
   });
   it("atomically refuses movement of a branch that is its own base", async () => {
     const request = await candidate();

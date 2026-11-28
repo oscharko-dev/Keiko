@@ -64,7 +64,7 @@ import {
   readGitTreeDigest,
   readGitHeadState,
   readGitCheckoutBranch,
-  readGitLocalBranchTip,
+  readGitBranchRefFacts,
   readGitBaseState,
   readGitWorktreeSnapshot,
   createGitReadSession,
@@ -728,7 +728,7 @@ async function execBoundCommit(
       ],
       Buffer.from(message, "utf8"),
     );
-    const moved = await boundCheckoutRefusal(ctx, branch);
+    const moved = await boundCheckoutRefusal(ctx, branch, head);
     if (moved !== undefined) return reportCommitRefusal(ctx, moved);
     refAttempted = true;
     return await updateBoundCommitRef(ctx, branch, head, commit, message);
@@ -973,12 +973,20 @@ async function boundCommitHead(
   return { head: await readGitHeadState(commitReadDeps(ctx)) };
 }
 
+// The checkout must be on the prepared branch and the run still authorized. The read right before
+// the ref update of a born branch is one `for-each-ref` that also tells whether the destination is a
+// symbolic ref; an unborn branch has no ref to read, and Git refuses a dangling symref by itself.
 async function boundCheckoutRefusal(
   ctx: RunContext,
   branch: string,
+  final?: GitHeadState,
 ): Promise<GitCommitRefusalCause | undefined> {
-  if ((await readGitCheckoutBranch(commitReadDeps(ctx))) !== branch)
-    return "not-on-prepared-branch";
+  const deps = commitReadDeps(ctx);
+  if (final?.kind === "born") {
+    const facts = await readGitBranchRefFacts(deps, branch);
+    if (facts.symbolic) return "ref-symbolic";
+    if (!facts.head) return "not-on-prepared-branch";
+  } else if ((await readGitCheckoutBranch(deps)) !== branch) return "not-on-prepared-branch";
   return commitEffectAuthorized(ctx) ? undefined : "authority-lapsed";
 }
 
@@ -1014,9 +1022,6 @@ async function updateBoundCommitRef(
   message: string,
 ): Promise<GitDeliveryExecutionResult> {
   const oldValue = head.kind === "born" ? head.sha : gitZeroObjectId(head.objectIdLength);
-  // The ref moved is the direct ref the signing decision was made for, never the target of a symref.
-  if (await refIsSymbolic(ctx, `refs/heads/${branch}`))
-    return reportCommitRefusal(ctx, "ref-symbolic");
   const result = await runOne(
     ctx,
     ["update-ref", "--no-deref", "-m", commitReflogMessage(head, message), "--stdin"],
@@ -1036,18 +1041,10 @@ async function updateBoundCommitRef(
   });
 }
 
-// Whether `ref` is a symbolic ref (`git symbolic-ref --quiet`: exit 0 yes, 1 no or absent). Any other
-// answer is a failed read, never "no". `update-ref` follows a symref by default, and with an expected
-// old value it only verifies the resolved value, so a symbolic destination is refused up front and
-// every final update runs with `--no-deref`.
-async function refIsSymbolic(ctx: RunContext, ref: string): Promise<boolean> {
-  const argv = ["symbolic-ref", "--quiet", ref];
-  const result = await runOne(ctx, argv);
-  if (result.exitCode === 0) return true;
-  if (result.exitCode === 1 && !result.truncated) return false;
-  throw new GitObjectCommandFailure(result, argv);
-}
-
+// `update-ref` follows a symref by default, and with an expected old value it only verifies the
+// resolved value, so every final update runs with `--no-deref` (it can never move a symref's target),
+// and a symbolic destination is refused from the reads the lane already makes right before the update
+// (the branch read of a born commit) and after a failed update (the re-read of the tip).
 // A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit
 // was built on; a held ref lock or any other Git failure leaves it there and is a plain failure of
 // the command (its exit class only, never its text), as the plain lane reports it.
@@ -1062,9 +1059,9 @@ async function classifyRefUpdateFailure(
   head: GitHeadState,
   commit: string,
 ): Promise<GitDeliveryExecutionResult | undefined> {
-  if (await refIsSymbolic(ctx, `refs/heads/${branch}`))
-    return reportCommitRefusal(ctx, "ref-symbolic");
-  const tip = await readGitLocalBranchTip(commitReadDeps(ctx), branch);
+  const facts = await readGitBranchRefFacts(commitReadDeps(ctx), branch);
+  if (facts.symbolic) return reportCommitRefusal(ctx, "ref-symbolic");
+  const tip = facts.tip;
   if (tip === commit) {
     reportCommitRefusal(ctx, "landed-after-failure");
     return undefined;
@@ -1250,6 +1247,7 @@ class GitObjectCommandFailure extends Error {
 async function verifiedFactsMatch(
   ctx: RunContext,
   request: Pick<GitCommitExecRequest, "verified">,
+  onSymbolic?: () => void,
 ): Promise<boolean> {
   const expected = request.verified;
   if (expected === undefined || ctx.signal.aborted || ctx.beforeCommitRefUpdate?.() === false)
@@ -1258,7 +1256,10 @@ async function verifiedFactsMatch(
   // A head that was unborn and is born now (or the reverse) is drift like any moved head: the
   // comparison is on the whole state, branch included.
   const head = await readGitHeadState(deps);
-  const branch = head.kind === "unborn" ? head.branch : await headBranchName(deps);
+  const branch =
+    head.kind === "unborn"
+      ? head.branch
+      : await bornBranchName(deps, expected.branchName, onSymbolic);
   const indexDigest = await readGitIndexTreeDigest(deps);
   // The review-time fact is the record: a base that was never born then may still be absent now.
   const base = await readGitBaseState(
@@ -1275,8 +1276,17 @@ async function verifiedFactsMatch(
   );
 }
 
-async function headBranchName(deps: NodeGitWorktreeReaderDeps): Promise<string> {
-  return (await readGitFullRef(deps, "HEAD")).replace(/^refs\/heads\//u, "");
+// The branch a born HEAD is on, as the comparison with the reviewed branch needs it. One
+// `for-each-ref` of the reviewed branch answers whether HEAD resolves to it (then it is that branch)
+// and whether it is a symbolic ref, which a commit never moves (`onSymbolic` reports it).
+async function bornBranchName(
+  deps: NodeGitWorktreeReaderDeps,
+  reviewed: string,
+  onSymbolic: (() => void) | undefined,
+): Promise<string | undefined> {
+  const facts = await readGitBranchRefFacts(deps, reviewed);
+  if (facts.symbolic) onSymbolic?.();
+  return facts.present && facts.head && !facts.symbolic ? reviewed : undefined;
 }
 
 async function checkedObjectCommand(
@@ -1306,7 +1316,7 @@ async function prepareVerifiedCommit(
   request: VerifiedCommitExecRequest,
   sign: boolean,
 ): Promise<PreparedVerifiedCommit | undefined> {
-  if (!(await verifiedFactsMatch(ctx, request))) return undefined;
+  if (!(await verifiedFactsMatch(ctx, request, symbolicRefusal(ctx)))) return undefined;
   const tree = await checkedObjectCommand(ctx, ["write-tree"]);
   const deps = commitReadDeps(ctx);
   // An unborn base has no ref to resolve yet; its full name is the branch's own.
@@ -1360,8 +1370,6 @@ async function updateVerifiedCommitRef(
 ): Promise<GitDeliveryExecutionResult> {
   const transaction = verifiedCommitRefTransaction(request.verified, prepared);
   if (transaction === undefined) return failureFromExit(0, 0);
-  if (await refIsSymbolic(ctx, `refs/heads/${request.verified.branchName}`))
-    return reportCommitRefusal(ctx, "ref-symbolic");
   const result = await runOne(ctx, ["update-ref", "--no-deref", "--stdin"], transaction);
   if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
   return executionResult("succeeded", result.durationMs, { externalId: prepared.head });
@@ -1399,11 +1407,19 @@ async function execVerifiedCommit(
   }
 }
 
+function symbolicRefusal(ctx: RunContext): () => void {
+  return () => {
+    reportCommitRefusal(ctx, "ref-symbolic");
+  };
+}
+
 async function verifiedEffectReady(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<boolean> {
-  return (await verifiedFactsMatch(ctx, request)) && commitEffectAuthorized(ctx);
+  return (
+    (await verifiedFactsMatch(ctx, request, symbolicRefusal(ctx))) && commitEffectAuthorized(ctx)
+  );
 }
 
 function commitEffectAuthorized(ctx: RunContext): boolean {
