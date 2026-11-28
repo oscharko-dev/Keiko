@@ -931,28 +931,52 @@ function windowParts(
 }
 
 const MIN_SECRET_LINE_CHARS = 8;
+// The shortest secret line still matched (the short last line of a PEM body, `Zg==`), and the
+// shortest overlap of a cut line's end with the start of a secret line that counts as a fragment.
+const MIN_NEEDLE_CHARS = 2;
+const MIN_FRAGMENT_OVERLAP_CHARS = 4;
 
-// Every line of a multi-line secret long enough to identify it, trimmed: a retained line that
-// contains one is part of the secret however the stream was cut (it may end inside the secret, or
-// print it indented or behind a prefix), so it never leaves the retained window.
+// Every non-trivial line of a multi-line secret, trimmed: a retained line that carries one is part
+// of the secret however the stream was cut (it may end inside the secret, or print it indented or
+// behind a prefix), so it never leaves the retained window.
 function secretLineNeedles(secrets: readonly (readonly string[])[]): readonly string[] {
   return secrets.flatMap((lines) =>
-    lines.map((line) => line.trim()).filter((line) => line.length >= MIN_SECRET_LINE_CHARS),
+    lines.map((line) => line.trim()).filter((line) => line.length >= MIN_NEEDLE_CHARS),
   );
 }
 
+// A long needle is carried by any line that contains it. A short one would match innocent text
+// anywhere, so it must be the whole line or the end of a line after a non-alphanumeric prefix.
+function lineCarriesNeedle(text: string, needle: string): boolean {
+  if (needle.length >= MIN_SECRET_LINE_CHARS) return text.includes(needle);
+  if (text === needle) return true;
+  if (!text.endsWith(needle)) return false;
+  return !/[\p{L}\p{N}]/u.test(text.charAt(text.length - needle.length - 1));
+}
+
+// The line was cut mid-print: its end may be the start of a secret line, behind any decoration.
+function endsWithNeedleStart(text: string, needle: string): boolean {
+  for (
+    let size = Math.min(needle.length, text.length);
+    size >= MIN_FRAGMENT_OVERLAP_CHARS;
+    size -= 1
+  ) {
+    if (text.endsWith(needle.slice(0, size))) return true;
+  }
+  return text.length >= MIN_SECRET_LINE_CHARS && needle.includes(text);
+}
+
 // `endsMidLine`: the window ends without a newline (a stream killed mid-print), so its last line may
-// be only the start of a secret line; a fragment of at least the needle length floor that is part of
-// one is dropped as well.
+// be only the start of a secret line; it is dropped when its end is the start of any secret line.
 function dropSecretLines(window: Buffer, needles: readonly string[], endsMidLine: boolean): Buffer {
   if (needles.length === 0 || window.length === 0) return window;
   const lines = window.toString("utf8").split("\n");
   const lastIndex = lines.length - 1;
   const kept = lines.filter((line, index) => {
     const text = line.trim();
-    if (needles.some((needle) => text.includes(needle))) return false;
-    const fragment = endsMidLine && index === lastIndex && text.length >= MIN_SECRET_LINE_CHARS;
-    return !(fragment && needles.some((needle) => needle.includes(text)));
+    if (needles.some((needle) => lineCarriesNeedle(text, needle))) return false;
+    const fragment = endsMidLine && index === lastIndex;
+    return !(fragment && needles.some((needle) => endsWithNeedleStart(text, needle)));
   });
   return kept.length === lines.length ? window : Buffer.from(kept.join("\n"), "utf8");
 }

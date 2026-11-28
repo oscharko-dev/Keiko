@@ -1756,6 +1756,52 @@ describe("runCommand — retain-head-tail output (output volume never ends healt
       return (await promise).stdout;
     }
 
+    describe("a PEM-shaped secret with a short last body line", () => {
+      const pem =
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nZg==\n-----END PRIVATE KEY-----";
+
+      async function runPem(chunks: readonly string[]): Promise<string> {
+        const spawn = recordingSpawn();
+        const base = retainDeps(spawn);
+        const deps = {
+          ...base,
+          policy: { ...base.policy, maxOutputBytes: 400 },
+          processEnv: { PATH: process.env.PATH ?? "", KEIKO_FIXTURE_PEM: pem },
+        };
+        const promise = runCommand({ ...input, signal: controller().signal }, deps);
+        for (const chunk of chunks) spawn.child.stdout.emit("data", Buffer.from(chunk));
+        spawn.child.emit("close", 0, null);
+        return (await promise).stdout;
+      }
+
+      it.each([
+        ["a decorated END header cut mid-word", "log: -----END PRIVATE K"],
+        ["a diff-prefixed body fragment", "+ MIIEvQIBADANBgkq"],
+        ["a fragment shorter than eight characters", "-----EN"],
+        ["a bare body fragment", "MIIEvQIB"],
+      ])("drops an unterminated last line that is %s", async (_n, last) => {
+        const stdout = await runPem([filler, `start\n${last}`]);
+        expect(stdout).not.toContain(last);
+        expect(stdout).toContain("start");
+      });
+
+      it.each([
+        ["bare", "Zg=="],
+        ["prefixed", "> Zg=="],
+        ["indented", "    Zg==  "],
+      ])("drops the short %s last body line in the head and in the tail", async (_n, line) => {
+        const stdout = await runPem([`${line}\n${filler}`, filler, `end\n${line}\n${filler}`]);
+        expect(stdout).not.toContain("Zg==");
+        const mid = await runPem([filler, `end\n${line}`]);
+        expect(mid).not.toContain("Zg==");
+      });
+
+      it("keeps ordinary text that merely resembles a short secret line", async () => {
+        const stdout = await runPem([`ok Zg==x\n${filler}`, filler, "done\n"]);
+        expect(stdout).toContain("ok Zg==x");
+      });
+    });
+
     it("keeps no middle line when the stream ends inside the secret", async () => {
       const stdout = await runWith([filler, "start\nbeta-secret-line-two\n"]);
       expect(stdout).not.toContain("secret-line");
