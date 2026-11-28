@@ -30,7 +30,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { readGitIndexLineBreaks } from "./git-worktree-snapshot-node.js";
 import { readGitRawChanges } from "./git-raw-worktree-node.js";
-import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
+import { createGitStagedObjectIdPort, scaledRunTimeoutMs } from "./git-mutation-node.js";
 import {
   gitStageFilesSupported,
   largeHashTimeoutMs,
@@ -425,7 +425,7 @@ describe("a large file is verified against what Git read (audit of 71573ba88)", 
     const hashRuns = timeouts.filter((value) => value !== undefined);
     expect(hashRuns.length).toBeGreaterThan(0);
     expect(Math.min(...hashRuns.map(Number))).toBe(largeHashTimeoutMs(5 * MIB));
-    expect(largeHashTimeoutMs(4096 * MIB)).toBeGreaterThan(largeHashTimeoutMs(5 * MIB));
+    expect(largeHashTimeoutMs(16_384 * MIB)).toBeGreaterThan(largeHashTimeoutMs(5 * MIB));
   });
 
   it("stops streaming at the next chunk when the run is cancelled", async () => {
@@ -636,5 +636,20 @@ describe("a large file is staged as the same file would be if it were small", ()
     });
     expect(raw.changes.some((change) => change.path === "big.dat")).toBe(true);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe("the deadline of a run that reads a large file by path", () => {
+  it("never falls below the lane's deadline, which is the policy default when the lane sets none", () => {
+    const policyDefault = 600_000;
+    // A small file's proportional deadline (about 60 s) must not undercut a longer policy default.
+    expect(scaledRunTimeoutMs(largeHashTimeoutMs(5 * MIB), undefined, policyDefault)).toBe(
+      policyDefault,
+    );
+    expect(scaledRunTimeoutMs(largeHashTimeoutMs(5 * MIB), 300_000, policyDefault)).toBe(300_000);
+    // A multi-gigabyte file's proportional deadline wins over both.
+    expect(scaledRunTimeoutMs(largeHashTimeoutMs(16_384 * MIB), undefined, policyDefault)).toBe(
+      largeHashTimeoutMs(16_384 * MIB),
+    );
   });
 });

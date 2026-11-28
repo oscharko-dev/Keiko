@@ -256,6 +256,17 @@ const GIT_CONFIG_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   },
 ]);
 
+/**
+ * The deadline of a run that reads a large file by path: the size-proportional one, but never below
+ * the lane's own deadline, which is the lane's `timeoutMs` or else the run policy's default.
+ */
+export function scaledRunTimeoutMs(
+  scaledMs: number,
+  laneMs: number | undefined,
+  policyDefaultMs: number,
+): number {
+  return Math.max(scaledMs, laneMs ?? policyDefaultMs);
+}
 // Every mutating spawn goes through here, so the version-gated lazy-fetch/replace-objects guard
 // (git-worktree-snapshot-node.ts, reviewer 3941836280) protects the write lane exactly the way it
 // protects the read lane — cached after the first call, so this costs nothing beyond it. This
@@ -281,7 +292,7 @@ async function runOne(
       timeoutMs:
         scaledTimeoutMs === undefined
           ? ctx.timeoutMs
-          : Math.max(scaledTimeoutMs, ctx.timeoutMs ?? 0),
+          : scaledRunTimeoutMs(scaledTimeoutMs, ctx.timeoutMs, ctx.runDeps.policy.defaultTimeoutMs),
       signal: ctx.signal,
       stdin,
     },
