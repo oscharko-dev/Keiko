@@ -9,7 +9,11 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
-import { logDeniedPathExclusion, withStagedConversion } from "./runtimeGitRead.js";
+import {
+  logDeniedPathExclusion,
+  logLargeFilesStreamed,
+  withStagedConversion,
+} from "./runtimeGitRead.js";
 import {
   VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
   type VerifiedCommitBlockingPaths,
@@ -94,6 +98,7 @@ export async function readVerifiedCommitRead(
   const raw = await readGitRawChangesAtHead(deps);
   if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
   logDeniedPathExclusion(seams, context.correlationId, raw.deniedPathCount);
+  logLargeFilesStreamed(seams, context.correlationId, "status", raw);
   const base = await readGitBaseState(deps, context.baseRef, raw.head);
   if (raw.branch !== context.headRef) throw new Error("verified-commit-repository-drift");
   const { digest: repositoryDigest } = await readVerifiedRepositoryIdentity(

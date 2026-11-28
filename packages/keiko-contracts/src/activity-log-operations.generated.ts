@@ -32132,6 +32132,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "git.large-files-streamed",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "gitDelivery/runtimeGitRead.logLargeFilesStreamed",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      phase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["status", "stage-propose"],
+      },
+      largeFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      streamedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["git-large-file-streaming"],
+    proofIds: ["git.large-files-streamed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "git.pr-description",
     category: "process",
     owner: "keiko-server",

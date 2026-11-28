@@ -443,6 +443,7 @@
   "git.journey-observation": "editor-delivery",
   "git.journey-outcome.recorded": "editor-delivery",
   "git.journey-readiness.refreshed": "editor-delivery",
+  "git.large-files-streamed": "editor-delivery",
   "git.pr-description": "editor-delivery",
   "git.pr-description.receipt": "editor-delivery",
   "git.process.failed": "editor-delivery",

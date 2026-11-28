@@ -267,6 +267,9 @@ async function runOne(
   ctx: RunContext,
   argv: readonly string[],
   stdin?: string | Uint8Array,
+  // A run that reads a large file by path gets time in proportion to the file; never less than the
+  // lane's own deadline.
+  scaledTimeoutMs?: number,
 ): Promise<CommandResult> {
   await ensureGitLazyFetchGuardSupported(commitReadDeps(ctx));
   if (ctx.readSession !== undefined) ctx.readSession.spawnCount += 1;
@@ -275,7 +278,10 @@ async function runOne(
       command: "git",
       args: [...GOVERNED_GIT_MUTATION_CONFIG_ARGS, ...argv],
       cwd: undefined,
-      timeoutMs: ctx.timeoutMs,
+      timeoutMs:
+        scaledTimeoutMs === undefined
+          ? ctx.timeoutMs
+          : Math.max(scaledTimeoutMs, ctx.timeoutMs ?? 0),
       signal: ctx.signal,
       stdin,
     },
@@ -451,8 +457,9 @@ function verifiedIndexEffect(
     // Read once per staging, not once per hashed file (PR #4568 audit: Windows spawn cost).
     filterDriverNames: () => (filterDrivers ??= readStageConfig(ctx).then((c) => c?.filterDrivers)),
     authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
-    run: (argv, stdin, indexPath) =>
-      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+    signal: ctx.signal,
+    run: (argv, stdin, indexPath, timeoutMs) =>
+      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin, timeoutMs),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
 }
@@ -896,7 +903,8 @@ export async function readGitStageSupport(
     authorized: () => !ctx.signal.aborted,
     check: () => Promise.resolve(!ctx.signal.aborted),
     filterDriverNames: () => Promise.resolve(filterDrivers),
-    run: (argv, stdin) => runOne(ctx, argv, stdin),
+    signal: ctx.signal,
+    run: (argv, stdin, _indexPath, timeoutMs) => runOne(ctx, argv, stdin, timeoutMs),
     indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
   };
   return (
@@ -924,9 +932,10 @@ export function createGitStagedObjectIdPort(
       authorized: () => !ctx.signal.aborted,
       check: () => Promise.resolve(!ctx.signal.aborted),
       filterDriverNames: () => Promise.resolve(config.filterDrivers),
-      run: (argv, stdin) => {
+      signal: ctx.signal,
+      run: (argv, stdin, _indexPath, timeoutMs) => {
         if (!gitStagedObjectPortArgvAllowed(argv)) throw new Error("git-staged-object-port-denied");
-        return runOne(ctx, argv, stdin);
+        return runOne(ctx, argv, stdin, timeoutMs);
       },
       indexLineBreaks: (paths) => readGitIndexLineBreaks(commitReadDeps(ctx), paths),
     };

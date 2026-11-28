@@ -9,6 +9,7 @@ import {
   readFileSync,
   symlinkSync,
   chmodSync,
+  linkSync,
   unlinkSync,
   existsSync,
 } from "node:fs";
@@ -191,6 +192,19 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(result.outcome).toBe("succeeded");
     for (const path of ["mid.bin", "huge.bin"])
       expect(git(["rev-parse", `:${path}`])).toBe(git(["hash-object", "--no-filters", path]));
+    expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
+  });
+  it("refuses a large hard-linked file at the adapter, with no digest to bind it, and changes nothing", async () => {
+    const approved = await candidate();
+    writeFileSync(join(root, "linked.bin"), Buffer.alloc(200 * 1024, 0x6c));
+    linkSync(join(root, "linked.bin"), join(root, "second-name.bin"));
+    const index = git(["write-tree"]);
+    const result = await adapter().stage({
+      pathspecs: ["linked.bin"],
+      verified: approved.verified,
+    });
+    expect(result.outcome).toBe("failed");
+    expect(git(["write-tree"])).toBe(index);
     expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
   });
   // Windows has no executable bit (and this host class cannot create the symlink), so the full

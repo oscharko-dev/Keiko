@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -101,6 +102,35 @@ describe("existing workspace Git metadata index owner", () => {
     expect(() => {
       assertGitStageFileUnchanged(root, fresh);
     }).toThrow("git-stage-file-changed");
+  });
+
+  // A permanent refusal must not read as the transient `git-stage-file-changed` (which the model
+  // retries): a directory or a hard-linked file above the inline bound can never be staged.
+  it("names a non-regular or hard-linked entry above the inline bound with its own permanent code", async () => {
+    mkdirSync(join(root, "folder"));
+    await expect(inspectGitStageFile(root, "folder", { inlineMaxBytes: 0 })).rejects.toThrow(
+      "git-stage-file-not-regular",
+    );
+    writeFileSync(join(root, "one.bin"), Buffer.alloc(100 * 1024, 0x61));
+    linkSync(join(root, "one.bin"), join(root, "two.bin"));
+    await expect(inspectGitStageFile(root, "one.bin")).rejects.toThrow(
+      "git-stage-file-hard-linked",
+    );
+  });
+
+  it("stops a streamed read at the next chunk once the signal is aborted", async () => {
+    writeFileSync(join(root, "huge.bin"), Buffer.alloc(4 * 1024 * 1024, 0x61));
+    const large = await inspectGitStageFile(root, "huge.bin");
+    if (!isGitStageLargeFile(large)) throw new Error("expected a large handle");
+    const controller = new AbortController();
+    let chunks = 0;
+    await expect(
+      streamGitStageFile(root, large, { signal: controller.signal }, () => {
+        chunks += 1;
+        controller.abort();
+      }),
+    ).rejects.toThrow("git-stage-read-cancelled");
+    expect(chunks).toBe(1);
   });
 
   // The staging write path keeps refusing a link that leaves the workspace; only the status read

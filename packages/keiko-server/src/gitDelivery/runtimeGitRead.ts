@@ -74,6 +74,35 @@ const DENIED_PATHS_EXCLUDED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// A file's size never ends a status read or a staging (owner decision 2026-11-24): a file above the
+// inline bound is streamed, never held. The line names how many such files a read met and how many
+// bytes were streamed for them, so a slow or cancelled read of a large repository is explainable
+// from the log alone (counts only, no path or content).
+const LARGE_FILES_STREAMED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.large-files-streamed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitRead.logLargeFilesStreamed",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["status", "stage-propose"],
+    },
+    largeFileCount: { type: "integer", dataClass: "count", required: true },
+    streamedBytes: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-large-file-streaming"],
+  proofIds: ["git.large-files-streamed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const STAGED_CONVERSION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -208,6 +237,22 @@ export function logDeniedPathExclusion(
       DENIED_PATHS_EXCLUDED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       { deniedPathCount },
+    ),
+  );
+}
+/** One line per read that met a file above the inline bound (nothing when it met none). */
+export function logLargeFilesStreamed(
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+  phase: "status" | "stage-propose",
+  counts: { readonly largeFileCount: number; readonly streamedBytes: number },
+): void {
+  if (counts.largeFileCount === 0) return;
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      LARGE_FILES_STREAMED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { phase, largeFileCount: counts.largeFileCount, streamedBytes: counts.streamedBytes },
     ),
   );
 }

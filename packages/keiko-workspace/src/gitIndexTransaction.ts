@@ -172,6 +172,11 @@ export function isGitStageLargeFile(content: GitStageContent): content is GitSta
 /** Closed failure codes a stage-file read throws (the `Error` message is the code). */
 export const GIT_STAGE_FILE_TOO_LARGE = "git-stage-file-too-large";
 export const GIT_STAGE_FILE_CHANGED = "git-stage-file-changed";
+// Permanent: the entry is not a regular file (a directory, a device, a FIFO) or has several hard
+// links, which the stage lane never reads. Retrying cannot cure either, unlike a change mid-read.
+export const GIT_STAGE_FILE_NOT_REGULAR = "git-stage-file-not-regular";
+export const GIT_STAGE_FILE_HARD_LINKED = "git-stage-file-hard-linked";
+export const GIT_STAGE_READ_CANCELLED = "git-stage-read-cancelled";
 export interface GitStageReadOptions {
   readonly maxBytes?: number | undefined;
   // The port containment resolves through; the owned-root port admits a managed worktree below the
@@ -185,6 +190,9 @@ export interface GitStageReadOptions {
    * the unchanged entry it is instead of failing the whole status read.
    */
   readonly symlinks?: "contained" | "read-only" | undefined;
+  // Checked between the chunks of a streamed read: a cancelled run stops reading a multi-gigabyte
+  // file at the next chunk instead of finishing the pass.
+  readonly signal?: AbortSignal | undefined;
 }
 export interface GitStageInspectOptions extends GitStageReadOptions {
   /**
@@ -310,9 +318,10 @@ export async function inspectGitStageFile(
   if (before === undefined) throw new Error(GIT_STAGE_FILE_CHANGED);
   if (before.size > inlineMax) {
     assertContainedRealPath(fs, canonical, absolute, "git-stage-file");
+    if (!before.isFile()) throw new Error(GIT_STAGE_FILE_NOT_REGULAR);
+    if (before.nlink > 1) throw new Error(GIT_STAGE_FILE_HARD_LINKED);
     const identity = stageIdentity(absolute);
-    if (!before.isFile() || identity.size !== BigInt(before.size))
-      throw new Error(GIT_STAGE_FILE_CHANGED);
+    if (identity.size !== BigInt(before.size)) throw new Error(GIT_STAGE_FILE_CHANGED);
     return { path, mode: stageFileMode(before), size: before.size, identity };
   }
   const bytes = await readRegularBytes(target, inlineMax);
@@ -341,6 +350,7 @@ export async function streamGitStageFile(
   try {
     let offset = 0;
     while (offset < file.size) {
+      if (options.signal?.aborted === true) throw new Error(GIT_STAGE_READ_CANCELLED);
       const length = Math.min(STREAM_CHUNK_BYTES, file.size - offset);
       const chunk = await rangeOrChanged(reader, offset, length); // NOSONAR typescript:S9382 -- chunks are read in order, one in memory at a time
       if (chunk.byteLength === 0) break;

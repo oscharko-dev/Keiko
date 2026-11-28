@@ -51,6 +51,7 @@ import {
 import {
   admitStageSelection,
   admitUnstageSelection,
+  logLargeFilesStreamed,
   reviewStageSelection,
   runtimeGitDiff,
   runtimeGitStatusOfRaw,
@@ -896,11 +897,9 @@ export class RuntimeGitService {
     const selection = await admitStageSelection(context, execution, paths);
     if (selection === undefined) return refuse("blocked", "selection-unreviewed");
     const workspaceFs = runtimeWorkspaceFs(context);
-    const worktreeDigest = await readGitStageCandidate(context.workspace.root, paths, workspaceFs);
+    const worktreeDigest = await this.candidateDigest(context, execution, paths, true);
     const review = await reviewStageSelection(context, execution, selection);
-    if (
-      (await readGitStageCandidate(context.workspace.root, paths, workspaceFs)) !== worktreeDigest
-    )
+    if ((await this.candidateDigest(context, execution, paths, false)) !== worktreeDigest)
       return refuse("drift", "candidate-drift");
     const proposal = buildStageProposal(
       context,
@@ -1013,6 +1012,25 @@ export class RuntimeGitService {
       current.stagedTreeDigest === proposal.binding.stagedTreeDigest
     );
   }
+  // The digest of the selected files' current content; the files above the inline bound are streamed
+  // (cancellable between chunks) and, on the proposal's first read, counted on the log.
+  private async candidateDigest(
+    context: VerifiedCommitRunContext,
+    execution: NonNullable<RuntimeGitOptions["execution"]>,
+    paths: readonly string[],
+    logStreamed: boolean,
+  ): Promise<string> {
+    const streamed = { signal: context.signal, largeFileCount: 0, streamedBytes: 0 };
+    const digest = await readGitStageCandidate(
+      context.workspace.root,
+      paths,
+      runtimeWorkspaceFs(context),
+      streamed,
+    );
+    if (logStreamed)
+      logLargeFilesStreamed(execution, context.correlationId, "stage-propose", streamed);
+    return digest;
+  }
   private async stageCurrent(
     context: VerifiedCommitRunContext,
     proposal: RuntimeGitProposal & { readonly command: GitStageCommand },
@@ -1022,6 +1040,7 @@ export class RuntimeGitService {
       context.workspace.root,
       proposal.command.pathspecs,
       runtimeWorkspaceFs(context),
+      { signal: context.signal, largeFileCount: 0, streamedBytes: 0 },
     );
     return (
       context.buffersClean() &&

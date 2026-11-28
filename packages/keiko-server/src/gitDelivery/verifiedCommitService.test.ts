@@ -2346,10 +2346,32 @@ describe("productive runtime status/diff/stage lane", () => {
       },
       { check: () => true },
     );
-    expect(result).not.toEqual({ kind: "refused", reason: "execution-failed" });
+    expect(result).toMatchObject({ kind: "stage", status: "ready", pathCount: 1 });
     expect(
       events.some((event) => event.op === "git.runtime-action" && event.extra?.state === "failed"),
     ).toBe(false);
+    // The streamed file is counted on the log (counts only: no path, no content), for the status
+    // read that listed it and for the stage proposal that digested it.
+    const streamed = events.filter((event) => event.op === "git.large-files-streamed");
+    expect([...new Set(streamed.map((event) => event.extra?.phase))].sort()).toEqual([
+      "stage-propose",
+      "status",
+    ]);
+    for (const line of streamed)
+      expect(line).toMatchObject({
+        correlationId: "verified-commit-test",
+        extra: { largeFileCount: 1 },
+      });
+    // Only the stage proposal streams the file's bytes; the status lists an untracked one unread.
+    expect(streamed.find((event) => event.extra?.phase === "status")?.extra?.streamedBytes).toBe(0);
+    expect(
+      streamed.find((event) => event.extra?.phase === "stage-propose")?.extra?.streamedBytes,
+    ).toBe(GIT_STAGE_FILE_MAX_BYTES + 1);
+    const persisted = expectActivityLogProof(
+      "git.large-files-streamed.emitted-line",
+      formatActivityLogProofLine(streamed[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ largeFileCount: 1 });
   });
 
   // Authority that closes UNDER a dispatch makes the facts or review read throw

@@ -6946,6 +6946,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "git-large-file-streaming",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["git.large-files-streamed"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["git.large-files-streamed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["git.large-files-streamed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["git.large-files-streamed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "git-raw-conversion-settlement",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

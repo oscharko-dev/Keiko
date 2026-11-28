@@ -20,7 +20,10 @@ const RULES: readonly (readonly [RegExp, CommitProofUnavailableCause])[] = [
   [/^git-raw-unborn-head$/u, "unborn-head"],
   [/^git-raw-snapshot-incomplete$/u, "snapshot-incomplete"],
   [/^(?:git-raw-snapshot-drift|git-stage-file-changed)$/u, "snapshot-drift"],
-  [/^(?:git-raw-read-cancelled|TOOL_COMMAND_CANCELLED)$/u, "read-cancelled"],
+  [
+    /^(?:git-raw-read-cancelled|git-stage-read-cancelled|TOOL_COMMAND_CANCELLED)$/u,
+    "read-cancelled",
+  ],
   [/^TOOL_COMMAND_TIMEOUT$/u, "read-timeout"],
   [/^git-stage-link-denied$/u, "link-denied"],
   [/^(?:git-stage-path-denied|WORKSPACE_PATH_ESCAPE|WORKSPACE_PATH_DENIED)$/u, "path-denied"],

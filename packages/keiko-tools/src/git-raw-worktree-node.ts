@@ -16,6 +16,8 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 import {
   assertGitStageFileUnchanged,
   inspectGitStageFile,
+  GIT_STAGE_FILE_CHANGED,
+  GIT_STAGE_READ_CANCELLED,
   isGitStageLargeFile,
   readGitStageFile,
   type GitStageContent,
@@ -85,6 +87,12 @@ interface GitRawChangesBody {
    * (`.idea/.gitignore`, run 6 of the Workbench engagement) could never be verified or committed.
    */
   readonly deniedPathCount: number;
+  /**
+   * Regular files above the inline bound that were never read whole, and the bytes of those that
+   * were streamed to be compared (body-free evidence for the Activity Log; no size fails a read).
+   */
+  readonly largeFileCount: number;
+  readonly streamedBytes: number;
   /**
    * Untracked nested repositories (`vendor/` holding its own `.git`): Git lists the directory, not
    * its files. They are opaque -- counted, never read into, never listed in `changes` and so never
@@ -173,24 +181,47 @@ async function inspectWorkingFile(
 }
 // A file too large to read whole: untracked and mode-changed files need no content at all, and a
 // tracked one is compared by the blob id of its streamed raw bytes. Git's line-ending conversion is
-// settled for it by the staged-object port, which hashes by path, exactly as for a small file.
+// settled for it by the staged-object port, which hashes by path, exactly as for a small file. A file
+// that changes while it is streamed is modified, as a small one that changes between reads is: the
+// status answers for the state it can observe instead of failing the whole read.
 async function inspectLargeWorkingFile(
   scan: ScanInputs,
   file: GitStageLargeFile,
   index: IndexEntry | undefined,
 ): Promise<WorkingInspection> {
+  scan.large.count += 1;
   if (index === undefined) return { status: " ", bytes: 0, untracked: true };
   if (!sameMode(file.mode, index.mode, await scan.fileMode()))
     return { status: "M", bytes: 0, untracked: false };
-  const { objectId } = await blobIdOfLargeFile(
-    scan.deps.workspace.root,
-    file,
-    index.objectId.length,
-    { fs: workspaceFsOf(scan.deps) },
-  );
-  if (objectId === index.objectId) return { status: " ", bytes: 0, untracked: false };
+  const compared = await streamedObjectId(scan, file, index.objectId.length);
+  if (compared === undefined) return { status: "M", bytes: 0, untracked: false };
+  scan.large.bytes += file.size;
+  if (compared === index.objectId) return { status: " ", bytes: 0, untracked: false };
   const regular = index.mode !== "120000";
   return { status: "M", bytes: 0, untracked: false, ...(regular ? { convertible: file } : {}) };
+}
+// The raw blob id of a large file, `undefined` when it changed while it was streamed; a cancellation
+// ends the read.
+async function streamedObjectId(
+  scan: ScanInputs,
+  file: GitStageLargeFile,
+  hashLength: number,
+): Promise<string | undefined> {
+  try {
+    const { objectId } = await blobIdOfLargeFile(scan.deps.workspace.root, file, hashLength, {
+      fs: workspaceFsOf(scan.deps),
+      signal: scan.deps.signal,
+    });
+    return objectId;
+  } catch (error) {
+    if (scan.deps.signal?.aborted === true || messageOf(error) === GIT_STAGE_READ_CANCELLED)
+      throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+    if (messageOf(error) === GIT_STAGE_FILE_CHANGED) return undefined;
+    throw error;
+  }
+}
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : "";
 }
 /** Reads the changes of a born HEAD; an unborn HEAD fails closed with `git-raw-unborn-head`. */
 export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promise<GitRawChanges> {
@@ -229,6 +260,7 @@ export async function readGitRawChangesAtHead(
       fileMode: lazyFileMode(deps),
       startedAt,
       scanStartedAt: Date.now(),
+      large: { count: 0, bytes: 0 },
     },
     paths,
   );
@@ -267,11 +299,18 @@ interface ScanInputs {
   // Wall-clock marks for the settlement evidence: the read began, and its path scan began.
   readonly startedAt: number;
   readonly scanStartedAt: number;
+  // Large files met and the bytes streamed for them, counted for the evidence line.
+  readonly large: { count: number; bytes: number };
 }
 async function scanPaths(
   scan: ScanInputs,
   paths: readonly string[],
-): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
+): Promise<
+  Pick<
+    GitRawChanges,
+    "changes" | "truncated" | "deniedPathCount" | "largeFileCount" | "streamedBytes"
+  >
+> {
   const changes: GitChangedFile[] = [];
   const pending = new Map<string, GitStageContent>();
   let total = 0;
@@ -303,6 +342,8 @@ async function scanPaths(
     changes: await settleConvertedFiles(scan, changes, pending),
     truncated,
     deniedPathCount,
+    largeFileCount: scan.large.count,
+    streamedBytes: scan.large.bytes,
   };
 }
 // A Windows checkout never matches the index stat data, so every tracked text file can land here.
@@ -348,10 +389,7 @@ async function askStagedObjectPort(
 type Recheck = { readonly unchanged: boolean } | { readonly error: unknown };
 async function unchangedSinceRead(scan: ScanInputs, file: GitStageContent): Promise<Recheck> {
   try {
-    if (isGitStageLargeFile(file)) {
-      assertGitStageFileUnchanged(scan.deps.workspace.root, file, { fs: workspaceFsOf(scan.deps) });
-      return { unchanged: true };
-    }
+    if (isGitStageLargeFile(file)) return recheckLargeFile(scan, file);
     const again = await readGitStageFile(scan.deps.workspace.root, file.path, {
       maxBytes: MAX_CONTENT_BYTES,
       fs: workspaceFsOf(scan.deps),
@@ -362,6 +400,17 @@ async function unchangedSinceRead(scan: ScanInputs, file: GitStageContent): Prom
     if (scan.deps.signal?.aborted === true || error instanceof CommandCancelledError)
       throw new GitRawWorktreeReadError("git-raw-read-cancelled");
     return { error };
+  }
+}
+// A large file that is no longer the one that was read is not unchanged (it stays modified); any
+// other failure is the observer's, as for a small file.
+function recheckLargeFile(scan: ScanInputs, file: GitStageLargeFile): Recheck {
+  try {
+    assertGitStageFileUnchanged(scan.deps.workspace.root, file, { fs: workspaceFsOf(scan.deps) });
+    return { unchanged: true };
+  } catch (error) {
+    if (messageOf(error) === GIT_STAGE_FILE_CHANGED) return { unchanged: false };
+    throw error;
   }
 }
 function throwIfCancelled(scan: ScanInputs): void {

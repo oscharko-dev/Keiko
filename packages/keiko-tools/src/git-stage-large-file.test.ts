@@ -7,11 +7,17 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   copyFileSync,
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +33,7 @@ import { readGitRawChanges } from "./git-raw-worktree-node.js";
 import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
 import {
   gitStageFilesSupported,
+  largeHashTimeoutMs,
   readGitStageCandidate,
   stageExactFiles,
   type GitStageEffectContext,
@@ -104,24 +111,36 @@ function recordingFs(reads: string[]): WorkspaceFs {
   };
 }
 
+interface RunObserver {
+  // Runs before / after the Git process of one governed run.
+  readonly after?: (argv: readonly string[]) => void;
+  // The deadline each run was given (`undefined`: the lane's own).
+  readonly timeouts?: (number | undefined)[];
+  readonly signal?: AbortSignal;
+}
 function context(
   repo: string,
   fs?: WorkspaceFs,
   before?: (argv: readonly string[]) => void,
+  observer: RunObserver = {},
 ): GitStageEffectContext {
   return {
     workspaceRoot: repo,
     ...(fs === undefined ? {} : { fs }),
+    ...(observer.signal === undefined ? {} : { signal: observer.signal }),
     check: () => Promise.resolve(true),
     authorized: () => true,
-    run: (argv, stdin, indexPath): Promise<CommandResult> => {
+    run: (argv, stdin, indexPath, timeoutMs): Promise<CommandResult> => {
       before?.(argv);
+      observer.timeouts?.push(timeoutMs);
+      const stdout = git(repo, argv, indexPath, stdin);
+      observer.after?.(argv);
       return Promise.resolve({
         command: "git",
         args: [...argv],
         exitCode: 0,
         signal: null,
-        stdout: git(repo, argv, indexPath, stdin),
+        stdout,
         stderr: "",
         durationMs: 1,
         timedOut: false,
@@ -358,5 +377,264 @@ describe("a large file stages", () => {
     await expect(stageExactFiles(swapped, request(repo, ["large.json"]), "exact")).rejects.toThrow(
       "git-stage-file-changed",
     );
+  });
+});
+
+describe("a large file is verified against what Git read (audit of 71573ba88)", () => {
+  it("fails closed when a parent directory is swapped for the duration of Git's read", async () => {
+    const repo = repository();
+    mkdirSync(join(repo, "sub"));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-outside-")));
+    dirs.push(outside);
+    writeFileSync(join(repo, "sub", "large.json"), textOfSize(3 * MIB));
+    // Same size, other bytes: only the parent directory differs while Git reads the path.
+    writeFileSync(join(outside, "large.json"), binaryOfSize(3 * MIB));
+    const real = join(repo, "sub");
+    const parked = join(repo, "sub-parked");
+    const swapIn = (argv: readonly string[]): void => {
+      if (!argv.includes("-w")) return;
+      renameSync(real, parked);
+      symlinkSync(outside, real);
+    };
+    const swapBack = (argv: readonly string[]): void => {
+      if (!argv.includes("-w")) return;
+      unlinkSync(real);
+      renameSync(parked, real);
+    };
+    const indexBefore = git(repo, ["ls-files", "-s"]);
+    await expect(
+      stageExactFiles(
+        context(repo, undefined, swapIn, { after: swapBack }),
+        request(repo, ["sub/large.json"]),
+        "exact",
+      ),
+    ).rejects.toThrow("git-stage-file-changed");
+    expect(git(repo, ["ls-files", "-s"])).toBe(indexBefore);
+  });
+
+  it("gives a run reading a large file a deadline in proportion to its size", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "big.bin"), binaryOfSize(5 * MIB));
+    const timeouts: (number | undefined)[] = [];
+    await expect(
+      stageExactFiles(
+        context(repo, undefined, undefined, { timeouts }),
+        request(repo, ["big.bin"]),
+      ),
+    ).resolves.toBe(true);
+    const hashRuns = timeouts.filter((value) => value !== undefined);
+    expect(hashRuns.length).toBeGreaterThan(0);
+    expect(Math.min(...hashRuns.map(Number))).toBe(largeHashTimeoutMs(5 * MIB));
+    expect(largeHashTimeoutMs(4096 * MIB)).toBeGreaterThan(largeHashTimeoutMs(5 * MIB));
+  });
+
+  it("stops streaming at the next chunk when the run is cancelled", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "big.bin"), binaryOfSize(5 * MIB));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      readGitStageCandidate(repo, ["big.bin"], undefined, {
+        signal: controller.signal,
+        largeFileCount: 0,
+        streamedBytes: 0,
+      }),
+    ).rejects.toThrow("git-stage-read-cancelled");
+  });
+
+  it("marks a large tracked file that changes while it is streamed modified, never failing the status", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "large.json"), textOfSize(2 * MIB));
+    git(repo, ["add", "large.json"]);
+    git(repo, ["-c", "commit.gpgsign=false", "commit", "-qm", "large"]);
+    const id = git(repo, ["rev-parse", ":large.json"]).trim();
+    execFileSync("git", ["update-index", "--index-info"], {
+      cwd: repo,
+      input: `100644 ${id}\tlarge.json\n`,
+    });
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(repo, "large.json"), later, later);
+    const open = nodeWorkspaceFs.openFileReader;
+    if (open === undefined) throw new Error("the node port opens readers");
+    let changed = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      openFileReader: async (path, policy, expected) => {
+        const reader = await open(path, policy, expected);
+        return {
+          ...reader,
+          readRange: (start, length): Promise<Uint8Array> => {
+            if (!changed) {
+              changed = true;
+              appendFileSync(join(repo, "large.json"), "edited while streaming\n");
+            }
+            return reader.readRange(start, length);
+          },
+        };
+      },
+    };
+    const raw = await readGitRawChanges({
+      workspace: workspaceInfo(repo),
+      processEnv: readerEnv(),
+      fs,
+    });
+    expect(raw.changes.map((change) => [change.path, change.worktreeStatus])).toEqual([
+      ["large.json", "M"],
+    ]);
+    expect(raw.largeFileCount).toBe(1);
+  });
+
+  it("cancels the status read between the chunks of a large file", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "large.json"), textOfSize(2 * MIB));
+    git(repo, ["add", "large.json"]);
+    git(repo, ["-c", "commit.gpgsign=false", "commit", "-qm", "large"]);
+    const id = git(repo, ["rev-parse", ":large.json"]).trim();
+    execFileSync("git", ["update-index", "--index-info"], {
+      cwd: repo,
+      input: `100644 ${id}\tlarge.json\n`,
+    });
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(repo, "large.json"), later, later);
+    const controller = new AbortController();
+    const open = nodeWorkspaceFs.openFileReader;
+    if (open === undefined) throw new Error("the node port opens readers");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      openFileReader: async (path, policy, expected) => {
+        const reader = await open(path, policy, expected);
+        return {
+          ...reader,
+          readRange: (start, length): Promise<Uint8Array> => {
+            controller.abort();
+            return reader.readRange(start, length);
+          },
+        };
+      },
+    };
+    await expect(
+      readGitRawChanges({
+        workspace: workspaceInfo(repo),
+        processEnv: readerEnv(),
+        fs,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ code: "git-raw-read-cancelled" });
+  });
+});
+
+describe("a large file is staged as the same file would be if it were small", () => {
+  const crlfText = (bytes: number): Buffer =>
+    Buffer.from("line of text\r\n".repeat(Math.ceil(bytes / 14))).subarray(0, bytes - (bytes % 14));
+
+  function configured(attributes: string, autocrlf: string, content: Buffer): string {
+    const repo = repository();
+    if (autocrlf !== "") git(repo, ["config", "core.autocrlf", autocrlf]);
+    if (attributes !== "")
+      writeFileSync(join(repo, ".git", "info", "attributes"), `${attributes}\n`);
+    writeFileSync(join(repo, "doc.txt"), content);
+    return repo;
+  }
+  const lineEndings = (autocrlf: string): "exact" | "autocrlf-true" | "autocrlf-input" => {
+    if (autocrlf === "true") return "autocrlf-true";
+    return autocrlf === "input" ? "autocrlf-input" : "exact";
+  };
+  function oracle(repo: string, autocrlf: string): string {
+    const oracleIndex = join(repo, ".git", "oracle-doc");
+    copyFileSync(join(repo, ".git", "index"), oracleIndex);
+    git(
+      repo,
+      [
+        "-c",
+        `core.autocrlf=${autocrlf === "" ? "false" : autocrlf}`,
+        "-c",
+        "core.safecrlf=false",
+        "add",
+        "doc.txt",
+      ],
+      oracleIndex,
+    );
+    return git(repo, ["rev-parse", ":doc.txt"], oracleIndex).trim();
+  }
+
+  it.each([
+    ["* text=auto", ""],
+    ["* text", ""],
+    ["* -text", ""],
+    ["* eol=lf", ""],
+    ["* text eol=crlf", ""],
+    ["* text=auto eol=crlf", ""],
+    ["", "input"],
+    ["", "true"],
+    ["* text=auto", "true"],
+  ] as const)("under attributes %j and autocrlf %j", async (attributes, autocrlf) => {
+    const small = configured(attributes, autocrlf, crlfText(2_000));
+    const large = configured(attributes, autocrlf, crlfText(2 * MIB));
+    const mode = lineEndings(autocrlf);
+    const smallOutcome = await stageExactFiles(context(small), request(small, ["doc.txt"]), mode);
+    const largeOutcome = await stageExactFiles(context(large), request(large, ["doc.txt"]), mode);
+    expect(largeOutcome).toBe(smallOutcome);
+    if (largeOutcome)
+      expect(git(large, ["rev-parse", ":doc.txt"]).trim()).toBe(oracle(large, autocrlf));
+    else expect(git(large, ["ls-files", "-s"]).includes("doc.txt")).toBe(false);
+  });
+
+  it("keeps the executable mode of a large file and the object `git hash-object` names", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "run.sh"), textOfSize(2 * MIB));
+    chmodSync(join(repo, "run.sh"), 0o755);
+    await expect(stageExactFiles(context(repo), request(repo, ["run.sh"]), "exact")).resolves.toBe(
+      true,
+    );
+    const entry = git(repo, ["ls-files", "-s", "run.sh"]);
+    expect(entry).toMatch(/^100755 /u);
+    expect(git(repo, ["rev-parse", ":run.sh"]).trim()).toBe(
+      git(repo, ["hash-object", "--no-filters", "run.sh"]).trim(),
+    );
+  });
+
+  it("reads a file of exactly 64 KiB in memory and one byte more as a streamed file", async () => {
+    const repo = repository();
+    writeFileSync(join(repo, "edge.bin"), binaryOfSize(65_536));
+    writeFileSync(join(repo, "over.bin"), binaryOfSize(65_537));
+    const reads: string[] = [];
+    const fs = recordingFs(reads);
+    await expect(
+      stageExactFiles(context(repo, fs), request(repo, ["edge.bin", "over.bin"]), "exact"),
+    ).resolves.toBe(true);
+    for (const path of ["edge.bin", "over.bin"])
+      expect(git(repo, ["rev-parse", `:${path}`]).trim()).toBe(
+        git(repo, ["hash-object", "--no-filters", path]).trim(),
+      );
+    expect(reads.some((path) => path.endsWith("edge.bin"))).toBe(true);
+    expect(reads.some((path) => path.endsWith("over.bin"))).toBe(false);
+  });
+
+  it("refuses a large file under a configured clean filter and executes nothing", async () => {
+    const repo = repository();
+    const marker = join(repo, "..", `${repo.split("/").pop() ?? "repo"}-driver-ran`);
+    dirs.push(marker);
+    writeFileSync(join(repo, ".gitattributes"), "*.dat filter=probe\n");
+    git(repo, ["config", "filter.probe.clean", `touch '${marker}'; cat`]);
+    writeFileSync(join(repo, "big.dat"), textOfSize(2 * MIB));
+    const filtered = {
+      ...context(repo),
+      filterDriverNames: (): Promise<readonly string[]> => Promise.resolve(["probe"]),
+    };
+    await expect(stageExactFiles(filtered, request(repo, ["big.dat"]), "exact")).resolves.toBe(
+      false,
+    );
+    expect(existsSync(marker)).toBe(false);
+    // The status port hashes by path too, with every configured driver neutralised.
+    const raw = await readGitRawChanges({
+      workspace: workspaceInfo(repo),
+      processEnv: readerEnv(),
+      stagedObjectIds: createGitStagedObjectIdPort({
+        workspace: workspaceInfo(repo),
+        processEnv: readerEnv(),
+      }),
+    });
+    expect(raw.changes.some((change) => change.path === "big.dat")).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 });
