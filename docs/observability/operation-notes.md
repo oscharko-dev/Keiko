@@ -940,8 +940,9 @@ tool call costs the processes it needs and nothing else (Windows pays 70 to 130 
 carries both: the processes the action's scope started (its snapshot read, its preflight and every
 governed step) and its wall time. A proposal reads the repository once and its redemption reads it
 again before anything is written; a task branch asks Git for `refs/heads/<name>` with one
-`rev-parse --verify`; the commit signing decision reads the branch the preflight verified and one
-`git remote`. The session ends with the call, so a promisor verdict never authorizes a later one.
+`rev-parse --verify`; the commit signing decision reads the branch the same mutation's preflight snapshot reported
+(the adapter binds the commit to the verified head and branch, so no other branch can receive it) and
+one fresh `git remote`. The session ends with the call, so a promisor verdict never authorizes a later one.
 
 ## Coding Workbench request deadlines, Editor and window binding
 

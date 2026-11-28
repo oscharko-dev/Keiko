@@ -1070,3 +1070,74 @@ describe("node git mutation adapter — signing scopes and branch protection", (
     expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("N");
   });
 });
+
+// A blob a UTF-8 decoder cannot carry through (a binary file) cannot be told from its batch answer,
+// so the batch is halved around it. That isolation is paid from a budget: a selection of nothing but
+// binaries must cost no more than the one-by-one read always did.
+describe("blob texts of binary selections", () => {
+  function counting(): {
+    readonly deps: Parameters<typeof readGitBlobTextsWithin>[0];
+    readonly argvs: string[][];
+  } {
+    const argvs: string[][] = [];
+    const spawn: SpawnFn = (command, args, options) => {
+      argvs.push([...args]);
+      return nodeSpawnFn(command, args, options);
+    };
+    return {
+      deps: {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+        spawn,
+        readSession: createGitReadSession(),
+      },
+      argvs,
+    };
+  }
+
+  function binary(seed: number): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: Uint8Array.from([0x89, 0x50, 0xff, 0xfe, seed % 256, Math.floor(seed / 256)]),
+      encoding: "utf8",
+    }).trim();
+  }
+
+  function text(seed: number): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: `text ${String(seed)}\n`,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  it.each([1, 2, 3, 20])(
+    "never costs more for %i binary blobs than reading them one by one",
+    async (count) => {
+      const ids = Array.from({ length: count }, (_, at) => binary(at));
+      const old = counting();
+      for (const id of ids) await readGitBlobTextWithin(old.deps, id, 4096);
+      const oldProcesses = old.argvs.length;
+      const batched = counting();
+      const texts = await readGitBlobTextsWithin(batched.deps, ids, 4096);
+      expect(batched.argvs.length).toBeLessThanOrEqual(oldProcesses);
+      for (const id of ids)
+        expect(texts.get(id), id).toBe(await readGitBlobTextWithin(old.deps, id, 4096));
+    },
+  );
+
+  it("isolates a few binary blobs among many texts without a process per blob", async () => {
+    const ids = Array.from({ length: 60 }, (_, at) => (at % 20 === 7 ? binary(at) : text(at)));
+    const { deps, argvs } = counting();
+    const texts = await readGitBlobTextsWithin(deps, ids, 4096);
+    expect(texts.size).toBe(60);
+    expect(argvs.length).toBeLessThan(60);
+  });
+
+  it("asks for the sizes of many blobs in runs the stdin bound carries", async () => {
+    const ids = Array.from({ length: 450 }, (_, at) => text(at));
+    const { deps, argvs } = counting();
+    await readGitBlobTextsWithin(deps, ids, 4096);
+    expect(argvs.filter((argv) => argv.includes("--batch-check"))).toHaveLength(2);
+  });
+});

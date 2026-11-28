@@ -940,6 +940,15 @@ async function signatureRequirementAt(
 }
 
 /**
+ * Signing-decision source (#4491, PERF-GIT-1): the branch is the one the preflight snapshot of THIS
+ * governed mutation reported (`snapshot.currentBranchName`, read in the operation's own scope just
+ * before the kernel ran), not a fresh read at signing time. The commit itself is bound to the
+ * verified head and branch by the adapter (`validVerifiedOperands`, `beforeCommitRefUpdate`), so a
+ * branch that moved in between cannot receive the commit; a decision made for the preflight branch
+ * therefore is the decision for the branch the commit lands on. The remote list is read fresh.
+ * An unreadable remote list throws, as the snapshot read did, and a missing branch is `unavailable`,
+ * which is never "required".
+ *
  * The same verdict for a commit that is already past its preflight: the branch is the one the
  * preflight snapshot verified, and the remote list is the only thing read here (one `git remote`),
  * where a full worktree snapshot (about fifteen processes) was read to learn the same two facts.

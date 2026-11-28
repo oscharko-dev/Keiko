@@ -889,6 +889,15 @@ export async function readGitBlobTextWithin(
   if (!Number.isSafeInteger(size) || size < 0)
     throw new GitWorktreeReadError("git blob size is unreadable");
   if (size > maxBytes) return undefined;
+  return readBlobOfKnownSize(deps, sha, size);
+}
+
+// One blob whose size is already known: one process, with the output bound set from that size.
+function readBlobOfKnownSize(
+  deps: NodeGitWorktreeReaderDeps,
+  sha: string,
+  size: number,
+): Promise<string> {
   return runRead(
     buildReadContext({
       ...deps,
@@ -968,21 +977,30 @@ async function readBlobBatch(
   return parseBlobBatch(result.stdout, batch);
 }
 
-// The size of every blob, from one `cat-file --batch-check`; a missing or non-blob object is unreadable.
+// The most object ids one `cat-file --batch-check` carries on stdin: 400 ids of at most 64 hex digits
+// are about 26 KiB, below the 64 KiB a byte input may be, so the bound holds for every caller.
+const BLOB_SIZE_CHECK_MAX_OBJECTS = 400;
+
+// The size of every blob, from `cat-file --batch-check` runs of at most BLOB_SIZE_CHECK_MAX_OBJECTS
+// ids; a missing or non-blob object is unreadable.
 async function readBlobSizes(
   deps: NodeGitWorktreeReaderDeps,
   shas: readonly string[],
 ): Promise<readonly BlobSize[]> {
-  const checked = await runRead(
-    machineReadContext(deps),
-    ["cat-file", "--batch-check"],
-    new TextEncoder().encode(`${shas.join("\n")}\n`),
-  );
   const sizes = new Map<string, number>();
-  for (const line of parseLines(checked)) {
-    const [sha, type, size] = line.split(" ");
-    if (sha !== undefined && type === "blob" && /^\d+$/u.test(size ?? ""))
-      sizes.set(sha, Number(size));
+  for (let from = 0; from < shas.length; from += BLOB_SIZE_CHECK_MAX_OBJECTS) {
+    const checked = await runRead(
+      machineReadContext(deps),
+      ["cat-file", "--batch-check"],
+      new TextEncoder().encode(
+        `${shas.slice(from, from + BLOB_SIZE_CHECK_MAX_OBJECTS).join("\n")}\n`,
+      ),
+    ); // NOSONAR typescript:S9382 -- the checks run one after the other
+    for (const line of parseLines(checked)) {
+      const [sha, type, size] = line.split(" ");
+      if (sha !== undefined && type === "blob" && /^\d+$/u.test(size ?? ""))
+        sizes.set(sha, Number(size));
+    }
   }
   return shas.map((sha) => {
     const size = sizes.get(sha);
@@ -1013,23 +1031,35 @@ function blobRuns(blobs: readonly BlobSize[]): readonly (readonly BlobSize[])[] 
   return runs;
 }
 
+// How many failed batch runs one call may spend isolating the blobs a decoder cannot carry through.
+interface BatchFailureBudget {
+  remaining: number;
+}
+
 // One run's texts. A run whose answer does not read back is halved until the blob that cannot be
-// carried through the decoder (a binary file) stands alone and is read by itself, so a few binary
-// files among hundreds cost a few more processes and not one per blob.
+// carried through the decoder (a binary file) stands alone, so a few binary files among hundreds cost
+// a few more processes and not one per blob. The halving is paid from a budget of half the call's
+// blobs: when binary files are the rule, not the exception, the rest is read blob by blob at ONE
+// process each (the sizes are known), so a selection of nothing but binaries never costs more than
+// the two processes per blob the one-by-one read always took.
 async function readRunTexts(
   deps: NodeGitWorktreeReaderDeps,
   run: readonly BlobSize[],
-  maxBytes: number,
+  budget: BatchFailureBudget,
 ): Promise<ReadonlyMap<string, string | undefined>> {
+  if (run.length === 1 || budget.remaining <= 0) {
+    const texts = new Map<string, string | undefined>();
+    for (const blob of run)
+      texts.set(blob.sha, await readBlobOfKnownSize(deps, blob.sha, blob.size)); // NOSONAR typescript:S9382 -- one blob at a time
+    return texts;
+  }
   const answered = await readBlobBatch(deps, run);
   if (answered !== undefined) return answered;
-  const [only] = run;
-  if (only !== undefined && run.length === 1)
-    return new Map([[only.sha, await readGitBlobTextWithin(deps, only.sha, maxBytes)]]);
+  budget.remaining -= 1;
   const middle = Math.ceil(run.length / 2);
   return new Map([
-    ...(await readRunTexts(deps, run.slice(0, middle), maxBytes)),
-    ...(await readRunTexts(deps, run.slice(middle), maxBytes)), // NOSONAR typescript:S9382 -- the halves are read one after the other
+    ...(await readRunTexts(deps, run.slice(0, middle), budget)),
+    ...(await readRunTexts(deps, run.slice(middle), budget)), // NOSONAR typescript:S9382 -- the halves are read one after the other
   ]);
 }
 
@@ -1051,8 +1081,10 @@ export async function readGitBlobTextsWithin(
   if (unique.length === 0) return texts;
   const sizes = await readBlobSizes(deps, unique);
   for (const blob of sizes) if (blob.size > maxBytes) texts.set(blob.sha, undefined);
-  for (const run of blobRuns(sizes.filter((blob) => blob.size <= maxBytes)))
-    for (const [sha, text] of await readRunTexts(deps, run, maxBytes)) texts.set(sha, text); // NOSONAR typescript:S9382 -- runs are bounded, one after the other
+  const readable = sizes.filter((blob) => blob.size <= maxBytes);
+  const budget = { remaining: Math.ceil(readable.length / 2) };
+  for (const run of blobRuns(readable))
+    for (const [sha, text] of await readRunTexts(deps, run, budget)) texts.set(sha, text); // NOSONAR typescript:S9382 -- runs are bounded, one after the other
   return texts;
 }
 

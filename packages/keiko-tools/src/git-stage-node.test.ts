@@ -1365,3 +1365,137 @@ describe("a stage or unstage selection far above the request bound", () => {
     await expect(unstageExactFiles(context(repo), [])).resolves.toBe(false);
   });
 });
+
+// PERF-GIT-1: the files Git stores unchanged are written with one `hash-object -w --stdin-paths` run.
+// Git reads them by path, so the verified bytes stay the authority: an object is accepted only when
+// it is the id of those bytes, and every other answer falls back to one write per file.
+describe("the batched object write of exact-file staging", () => {
+  type Run = GitStageEffectContext["run"];
+  const BATCH = "--stdin-paths";
+
+  function repositoryOf(names: readonly string[]): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-batch-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    git(base, ["config", "core.autocrlf", "false"]);
+    writeFileSync(join(base, "seed.txt"), "seed\n");
+    git(base, ["add", "seed.txt"]);
+    git(base, ["-c", "commit.gpgsign=false", "commit", "-qm", "base"]);
+    for (const name of names) writeFileSync(join(base, name), `verified ${name}\n`);
+    return base;
+  }
+
+  async function stagedWith(
+    repo: string,
+    names: readonly string[],
+    around: (inner: Run, calls: string[][]) => Run,
+  ): Promise<{ readonly staged: boolean; readonly calls: string[][] }> {
+    const calls: string[][] = [];
+    const base = context(repo);
+    const staged = await stageExactFiles(
+      { ...base, run: around(base.run, calls) },
+      { ...request(repo), pathspecs: [...names] },
+    );
+    return { staged, calls };
+  }
+
+  function expectIndexHoldsVerified(repo: string, names: readonly string[]): void {
+    for (const name of names) {
+      const verified = git(repo, ["hash-object", "--stdin"], `verified ${name}\n`).trim();
+      expect(git(repo, ["rev-parse", `:${name}`]).trim(), name).toBe(verified);
+    }
+  }
+
+  const perFileWrites = (calls: string[][]): number =>
+    calls.filter((argv) => argv.includes("--stdin") && argv.includes("-w")).length;
+
+  it("writes every unchanged file with one run and no per-file hash", async () => {
+    const names = ["a.txt", "b.txt", "c.txt"];
+    const repo = repositoryOf(names);
+    const { staged, calls } = await stagedWith(
+      repo,
+      names,
+      (inner, seen) =>
+        (argv, ...rest): ReturnType<Run> => {
+          seen.push([...argv]);
+          return inner(argv, ...rest);
+        },
+    );
+    expect(staged).toBe(true);
+    expect(calls.filter((argv) => argv.includes(BATCH) && argv.includes("-w"))).toHaveLength(1);
+    expect(perFileWrites(calls)).toBe(0);
+    expectIndexHoldsVerified(repo, names);
+  });
+
+  it("writes one by one from the verified bytes when a file changed after it was verified", async () => {
+    const names = ["a.txt", "b.txt"];
+    const repo = repositoryOf(names);
+    let changed = false;
+    const { staged, calls } = await stagedWith(
+      repo,
+      names,
+      (inner, seen) =>
+        (argv, ...rest): ReturnType<Run> => {
+          seen.push([...argv]);
+          if (argv.includes(BATCH) && !changed) {
+            changed = true;
+            writeFileSync(join(repo, "b.txt"), "changed after verification\n");
+          }
+          return inner(argv, ...rest);
+        },
+    );
+    expect(changed).toBe(true);
+    expect(staged).toBe(true);
+    expect(perFileWrites(calls)).toBe(2);
+    // The index holds the verified bytes only, never what the batch read from the changed file.
+    expectIndexHoldsVerified(repo, names);
+    expect(git(repo, ["show", ":b.txt"])).toBe("verified b.txt\n");
+  });
+
+  it("writes one by one when the batch exits non-zero after printing part of its answer", async () => {
+    const names = ["a.txt", "b.txt"];
+    const repo = repositoryOf(names);
+    const { staged, calls } = await stagedWith(
+      repo,
+      names,
+      (inner, seen) =>
+        async (argv, ...rest): Promise<CommandResult> => {
+          seen.push([...argv]);
+          const result = await inner(argv, ...rest);
+          if (!argv.includes(BATCH)) return result;
+          const [first = ""] = result.stdout.split("\n");
+          return { ...result, exitCode: 128, stdout: `${first}\n` };
+        },
+    );
+    expect(staged).toBe(true);
+    expect(perFileWrites(calls)).toBe(2);
+    expectIndexHoldsVerified(repo, names);
+  });
+
+  it.each([
+    ["a newline", "line\nbreak.txt"],
+    ["a carriage return", "carriage\rreturn.txt"],
+    ["a leading quote", '"quoted.txt'],
+  ])("never offers a path with %s to the batch and still stages it", async (_label, odd) => {
+    const names = ["a.txt", odd];
+    const repo = repositoryOf(names);
+    const { staged, calls } = await stagedWith(
+      repo,
+      names,
+      (inner, seen) =>
+        (argv, stdin, ...rest): ReturnType<Run> => {
+          seen.push([...argv]);
+          if (argv.includes(BATCH))
+            expect(new TextDecoder().decode(stdin as Uint8Array)).not.toContain(odd);
+          return inner(argv, stdin, ...rest);
+        },
+    );
+    expect(staged).toBe(true);
+    expect(calls.filter((argv) => argv.includes(BATCH))).toHaveLength(1);
+    expect(perFileWrites(calls)).toBe(1);
+    expect(git(repo, ["show", `:${odd}`])).toBe(`verified ${odd}\n`);
+    expectIndexHoldsVerified(repo, ["a.txt"]);
+  });
+});
