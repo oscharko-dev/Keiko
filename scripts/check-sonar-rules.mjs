@@ -161,9 +161,13 @@ export function createEngine() {
   });
 }
 
-/** The analysis group of a changed file: its workspace package, else its top-level folder. */
+/**
+ * The analysis group of a changed file: its workspace package, else its top-level folder; the files
+ * at the repository root share one group.
+ */
 export function lintGroupOf(path) {
   const parts = path.split("/");
+  if (parts.length === 1) return ".";
   return parts[0] === "packages" && parts.length > 2 ? `packages/${parts[1]}` : parts[0];
 }
 
@@ -219,7 +223,12 @@ export function lintGroupInChild(
       child.status === null ? `signal ${String(child.signal)}` : `status ${String(child.status)}`;
     throw new Error(`the analysis of ${String(files.length)} file(s) ended by ${ended}`);
   }
-  return JSON.parse(String(child.output[RESULT_FD]));
+  const results = JSON.parse(String(child.output[RESULT_FD]));
+  const analysed = new Set(results.map((result) => result.filePath));
+  const missing = files.filter((file) => !analysed.has(resolve(repoRoot, file)));
+  if (missing.length > 0)
+    throw new Error(`the analysis returned no result for ${String(missing.length)} file(s)`);
+  return results;
 }
 
 export async function lintChangedFiles(files, lintGroup = lintGroupInChild) {

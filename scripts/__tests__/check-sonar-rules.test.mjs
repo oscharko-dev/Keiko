@@ -421,7 +421,8 @@ describe("analysis groups", () => {
     expect(lintGroupOf("packages/keiko-server/src/a.ts")).toBe("packages/keiko-server");
     expect(lintGroupOf("packages/keiko-ui/src/lib/b.tsx")).toBe("packages/keiko-ui");
     expect(lintGroupOf("scripts/lib/c.mjs")).toBe("scripts");
-    expect(lintGroupOf("eslint.config.mjs")).toBe("eslint.config.mjs");
+    expect(lintGroupOf("eslint.config.mjs")).toBe(".");
+    expect(lintGroupOf("vitest.config.ts")).toBe(".");
     expect(lintGroupOf("packages/x.mjs")).toBe("packages");
   });
 
@@ -483,10 +484,14 @@ describe("lintGroupInChild", () => {
   const spawnReturning = (child) => vi.fn(() => child);
 
   it("starts the script as a marked group process with the raised heap and the files on stdin", () => {
-    const spawn = spawnReturning({ status: 0, output: [null, null, null, "[]"] });
+    const analysed = [{ filePath: resolve(repoRoot, "scripts/a.mjs"), messages: [] }];
+    const spawn = spawnReturning({
+      status: 0,
+      output: [null, null, null, JSON.stringify(analysed)],
+    });
     expect(
       lintGroupInChild(["scripts/a.mjs"], { spawn, script: "/x/s.mjs", env: { PATH: "p" } }),
-    ).toEqual([]);
+    ).toEqual(analysed);
     const [executable, args, options] = spawn.mock.calls[0];
     expect(executable).toBe(process.execPath);
     expect(args).toEqual([`--max-old-space-size=${String(SONAR_RULES_HEAP_MB)}`, "/x/s.mjs"]);
@@ -497,6 +502,17 @@ describe("lintGroupInChild", () => {
     });
     expect(options.input).toBe(JSON.stringify(["scripts/a.mjs"]));
     expect(options.stdio[3]).toBe("pipe");
+  });
+
+  it("fails instead of passing when a requested file has no result", () => {
+    const analysed = [{ filePath: resolve(repoRoot, "scripts/a.mjs"), messages: [] }];
+    const spawn = spawnReturning({
+      status: 0,
+      output: [null, null, null, JSON.stringify(analysed)],
+    });
+    expect(() => lintGroupInChild(["scripts/a.mjs", "scripts/b.mjs"], { spawn })).toThrow(
+      "no result for 1 file(s)",
+    );
   });
 
   it("fails instead of passing when a group process ends with a status", () => {
