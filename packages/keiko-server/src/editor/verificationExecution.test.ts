@@ -41,6 +41,7 @@ import {
   type NetworkIsolationProbe,
   planIsolationProbe,
   windowsStepRunDeps,
+  type ExecuteVerificationArgs,
 } from "./verificationExecution.js";
 
 function note(message: string): void {
@@ -694,5 +695,98 @@ describe("executeVerificationEnforced — the Windows step Node.js of a run (#44
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("executeVerificationEnforced — an offered step Node.js is pinned or the run is refused (#4491)", () => {
+  const PIN = { sha256: "ab", sizeBytes: 1, sourceSha256: "", patchSha256s: [] };
+
+  function supervisorWith(offered: boolean): WindowsStepSupervisor {
+    return {
+      acquire: () => ({ path: "supervisor.exe", drives: [], release: () => 0, refused: () => 0 }),
+      readRoots: [],
+      profile: String.raw`C:\Users\dev`,
+      admitReadRoot: (directory) => directory,
+      ...(offered
+        ? {
+            stepNode: {
+              directory: "/install/step-node",
+              executable: "/install/step-node/node.exe",
+              record: () => undefined,
+            },
+          }
+        : {}),
+    };
+  }
+
+  async function runWith(
+    offered: boolean,
+    copy: Partial<NonNullable<ExecuteVerificationArgs["stepNodeCopy"]>>,
+    records: ServerDiagnosticRecord[] = [],
+  ): ReturnType<typeof executeVerificationEnforced> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-step-node-pin-")));
+    try {
+      return await executeVerificationEnforced({
+        plan: { workspaceRoot: root, steps: [] },
+        workspace: detectWorkspaceAt(root),
+        signal: new AbortController().signal,
+        diagnostics: { record: (record): void => void records.push(record) },
+        isolation: {
+          probe: { available: true, backend: "windows-appcontainer" },
+          durationMs: 0,
+          windowsStep: { supervisor: supervisorWith(offered) },
+        },
+        stepNodeCopy: {
+          pin: () => PIN,
+          makeDirectory: () => Promise.resolve(join(root, "unused")),
+          copyFile: () => Promise.resolve(),
+          sizeOf: () => Promise.resolve(1),
+          sha256: () => Promise.resolve("ab"),
+          removeDirectory: () => Promise.resolve(),
+          ...copy,
+        },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ["a size mismatch", { sizeOf: (): Promise<number> => Promise.resolve(2) }, "size"],
+    ["a hash mismatch", { sha256: (): Promise<string> => Promise.resolve("cd") }, "hash"],
+    [
+      "a failed copy",
+      { copyFile: (): Promise<void> => Promise.reject(new Error("denied")) },
+      "copy-failed",
+    ],
+    ["no pin", { pin: (): undefined => undefined }, "no-pin"],
+  ] as const)(
+    "refuses the run on %s, with a closed reason and a body-free diagnostic",
+    async (_n, copy, outcome) => {
+      const records: ServerDiagnosticRecord[] = [];
+      await expect(runWith(true, copy, records)).rejects.toMatchObject({
+        reason: "step-node-pin-mismatch",
+        outcome,
+        code: "VERIFICATION_RUNNER_UNAVAILABLE",
+      });
+      expect(records).toHaveLength(1);
+      expect(JSON.stringify(records)).not.toContain("/install/step-node");
+    },
+  );
+
+  it("keeps the fallback only when no step Node.js was ever offered", async () => {
+    const { report } = await runWith(false, { sha256: () => Promise.resolve("cd") });
+    expect(report.results).toEqual([]);
+  });
+
+  it("never lets a failed removal of the copy replace the run's result, and reports it", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const { report } = await runWith(
+      true,
+      { removeDirectory: () => Promise.reject(new Error("busy")) },
+      records,
+    );
+    expect(report.results).toEqual([]);
+    expect(records).toHaveLength(1);
   });
 });

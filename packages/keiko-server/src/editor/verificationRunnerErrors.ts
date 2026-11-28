@@ -103,3 +103,21 @@ export class VerificationPlanChangedError extends VerificationRunnerError {
     super("BAD_REQUEST", "The verification plan changed after it was approved.");
   }
 }
+
+// A step Node.js was offered and attested, but the private copy this run would execute is not the
+// pinned build (or could not be made). The run is refused instead of continuing on an unpinned
+// Node.js. The reason is closed and body-free.
+export const STEP_NODE_PIN_MISMATCH_REASON = "step-node-pin-mismatch";
+
+export class StepNodePinMismatchError extends VerificationRunnerError {
+  public readonly reason = STEP_NODE_PIN_MISMATCH_REASON;
+  public readonly outcome: "no-pin" | "size" | "hash" | "copy-failed";
+
+  public constructor(outcome: "no-pin" | "size" | "hash" | "copy-failed") {
+    super(
+      "VERIFICATION_RUNNER_UNAVAILABLE",
+      "The Windows step Node.js is not the pinned build; the verification was not run.",
+    );
+    this.outcome = outcome;
+  }
+}

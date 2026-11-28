@@ -49,6 +49,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
 
 import { resolveVerificationRuntimeTarget } from "./verificationRuntimeTarget.js";
+import { StepNodePinMismatchError } from "./verificationRunnerErrors.js";
 import {
   nodeStepNodeCopyPorts,
   privateStepNode,
@@ -573,7 +574,28 @@ async function executeExclusiveVerification(
   try {
     return await executeWithStepNode({ args, timed, resolvedStep, stepNode, activityLog });
   } finally {
-    await stepNode.node?.dispose();
+    await disposeStepNode(args, stepNode.node);
+  }
+}
+
+// A copy that cannot be removed is reported and never replaces the run's own result or error.
+async function disposeStepNode(
+  args: ExecuteVerificationArgs,
+  node: PrivateStepNode | undefined,
+): Promise<void> {
+  try {
+    await node?.dispose();
+  } catch (error) {
+    emitServerDiagnostic(
+      args.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.step-node-copy",
+        source: "verification.step-node-copy.dispose",
+        error,
+        redact: () => "The private Windows step Node.js copy could not be removed.",
+      }),
+    );
   }
 }
 
@@ -613,8 +635,10 @@ interface PrivateSupervisor {
 }
 
 // The supervisor the run's steps use: the resolved one with its step Node.js replaced by a private
-// copy proven against the pin after the queue. A copy that is not the pinned build leaves the
-// steps without a step Node.js, as an install that missed the pin always did, and says so.
+// copy proven against the pin after the queue. When a step Node.js was offered and attested but
+// the copy is not the pinned build, the run is refused with a closed reason and a body-free
+// diagnostic: it never continues on an unpinned Node.js. Without an offered step Node.js nothing
+// changes.
 async function privateStepNodeFor(
   args: ExecuteVerificationArgs,
   supervisor: WindowsStepSupervisor | undefined,
@@ -622,12 +646,11 @@ async function privateStepNodeFor(
   const installed = supervisor?.stepNode;
   if (supervisor === undefined || installed === undefined) return { supervisor, node: undefined };
   const node = await privateStepNode(installed, args.stepNodeCopy ?? nodeStepNodeCopyPorts);
-  if (node.outcome !== "copied") reportStepNodeCopy(args, node);
-  const { stepNode: _installed, ...rest } = supervisor;
-  return {
-    supervisor: node.stepNode === undefined ? rest : { ...rest, stepNode: node.stepNode },
-    node,
-  };
+  if (node.stepNode === undefined) {
+    reportStepNodeCopy(args, node);
+    throw new StepNodePinMismatchError(node.outcome === "copied" ? "copy-failed" : node.outcome);
+  }
+  return { supervisor: { ...supervisor, stepNode: node.stepNode }, node };
 }
 
 function reportStepNodeCopy(args: ExecuteVerificationArgs, node: PrivateStepNode): void {
