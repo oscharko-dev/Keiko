@@ -7,7 +7,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { CancelledError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayCallRequest } from "./gateway.js";
-import type { ModelCapability, ModelProviderConfig } from "./types.js";
+import type { ModelCapability, ModelProviderConfig, UsageMetadata } from "./types.js";
 import {
   withCorrelationId,
   activityLogErrorKind,
@@ -55,6 +55,34 @@ const COUNTER_COOLDOWN = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-context-admission"],
   proofIds: ["gateway.prompt.counter-cooldown.lifecycle"],
+  releaseImpact: "patch",
+});
+
+const USAGE_REJECTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.prompt.usage-rejected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway-prompt-admission.GatewayPromptAdmission.recordUsage",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["implausibly-low"],
+    },
+    reportedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    localPromptTokens: { type: "integer", dataClass: "count", required: true },
+    modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-context-admission"],
+  proofIds: ["gateway.prompt.usage-rejected.implausibly-low"],
   releaseImpact: "patch",
 });
 
@@ -156,6 +184,11 @@ interface AdmissionOptions {
   readonly fetchImpl?: typeof fetch | undefined;
 }
 
+/** The prompt size to calibrate from: the reported count including cache tokens it leaves out. */
+export function calibrationPromptTokens(usage: UsageMetadata): number {
+  return usage.totalPromptTokens ?? usage.promptTokens;
+}
+
 /** One logical call, including corrective retries. Retains the measured floor if counting degrades. */
 export class GatewayPromptAdmission {
   private previous: { estimated: number; measured: number } | undefined;
@@ -253,7 +286,24 @@ export class GatewayPromptAdmission {
   recordUsage(providerPromptTokens: number): void {
     const mark = this.pending;
     this.pending = undefined;
-    if (mark !== undefined) this.options.calibration?.record(mark, providerPromptTokens);
+    if (mark === undefined) return;
+    const outcome = this.options.calibration?.record(mark, providerPromptTokens);
+    if (outcome !== "implausible") return;
+    // Counts and a digest only: the provider's figure is too small to calibrate from (#4491).
+    this.log.write(
+      activityLogEvent(
+        USAGE_REJECTED,
+        { correlationId: this.options.correlationId },
+        {
+          reason: "implausibly-low",
+          reportedPromptTokens: providerPromptTokens,
+          localPromptTokens: mark.localTokens,
+          modelIdDigest: sha256Hex(this.options.provider.modelId).slice(0, 16),
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
   }
 
   private remotePayloadEstimate(request: GatewayCallRequest & GatewayPromptTokenInput): number {

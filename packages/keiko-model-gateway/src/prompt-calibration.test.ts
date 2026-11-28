@@ -1,10 +1,19 @@
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { describe, expect, it } from "vitest";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { Gateway } from "./gateway.js";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import type { GatewayCallRequest } from "./gateway.js";
-import { PromptCalibrationLedger } from "./prompt-calibration.js";
+import {
+  MIN_PLAUSIBLE_USAGE_RATIO,
+  PromptCalibrationLedger,
+  type PromptCalibrationMark,
+} from "./prompt-calibration.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayStreamChunk, ModelProviderConfig, NormalizedResponse } from "./types.js";
@@ -155,6 +164,59 @@ describe("usage-calibrated prompt admission", () => {
     expect(lastAdmission(events).calibratedPromptTokens).toBeGreaterThan(inputBudget);
   });
 
+  it.each([1, 200])(
+    "does not trust a report of %i tokens for a prefix that fills most of the window (cache-excluded usage)",
+    async (reported) => {
+      const ledger = new PromptCalibrationLedger();
+      const first = conversation(inputBudget - 12_000);
+      expect(reported).toBeLessThan(localTokens(first) * MIN_PLAUSIBLE_USAGE_RATIO);
+      const reportEvents: ModelGatewayLogEvent[] = [];
+      await turn(ledger, first, reported, reportEvents);
+      const rejected = reportEvents.find((event) => event.op === "gateway.prompt.usage-rejected");
+      if (rejected === undefined) throw new Error("Expected the rejected-usage line");
+      expect(
+        expectActivityLogProof(
+          "gateway.prompt.usage-rejected.implausibly-low",
+          formatActivityLogProofLine(rejected),
+        ),
+      ).toMatchObject({ modelIdDigest: sha256Hex(provider.modelId).slice(0, 16) });
+      expect(
+        reportEvents.filter((event) => event.op === "gateway.prompt.usage-rejected"),
+      ).toHaveLength(1);
+      expect(rejected.extra).toMatchObject({
+        reason: "implausibly-low",
+        reportedPromptTokens: reported,
+        localPromptTokens: localTokens(first),
+      });
+      // The follow-up really is over the budget: it must keep the conservative local bound and be
+      // refused, not admitted as `reported` plus its growth.
+      const followUp = extended(first, 16_000);
+      expect(localTokens(followUp)).toBeGreaterThan(inputBudget);
+      const events: ModelGatewayLogEvent[] = [];
+      await expect(turn(ledger, followUp, undefined, events)).rejects.toMatchObject({
+        code: "GATEWAY_CONTEXT_OVERFLOW",
+      });
+      expect(lastAdmission(events)).toMatchObject({
+        state: "overflow",
+        counterSource: "fallback-estimated",
+        promptTokens: localTokens(followUp),
+      });
+      expect(lastAdmission(events)).not.toHaveProperty("calibratedPromptTokens");
+    },
+  );
+
+  it("keeps an earlier plausible record when a later report is implausible", async () => {
+    const ledger = new PromptCalibrationLedger();
+    const first = conversation(20_000);
+    const reported = Math.round(localTokens(first) * 0.6);
+    await turn(ledger, first, reported);
+    const second = extended(first, 2_000);
+    await turn(ledger, second, 1);
+    const events: ModelGatewayLogEvent[] = [];
+    await turn(ledger, extended(second, 500), undefined, events);
+    expect(lastAdmission(events).calibratedPromptTokens).toBeGreaterThan(reported);
+  });
+
   it("never estimates below the provider's reported usage of the prefix", async () => {
     const ledger = new PromptCalibrationLedger();
     const first = conversation(20_000);
@@ -166,7 +228,10 @@ describe("usage-calibrated prompt admission", () => {
   });
 });
 
-function reportingGateway(events: ModelGatewayLogEvent[]): Gateway {
+function reportingGateway(
+  events: ModelGatewayLogEvent[],
+  usage: Partial<NormalizedResponse["usage"]> = {},
+): Gateway {
   const adapterCall = (): Promise<NormalizedResponse> =>
     Promise.resolve({
       modelId: provider.modelId,
@@ -180,6 +245,7 @@ function reportingGateway(events: ModelGatewayLogEvent[]): Gateway {
         completionTokens: 1,
         latencyMs: 1,
         costClass: "low",
+        ...usage,
       },
     });
   return new Gateway(
@@ -204,6 +270,68 @@ function reportingGateway(events: ModelGatewayLogEvent[]): Gateway {
   );
 }
 
+// Live macOS lab, Gemma 4 31B via LiteLLM/Ollama, first turn of a large-repository run: the local
+// estimate was 58,954 and the provider reported 35,798 with no caching involved (ratio 0.61).
+const GEMMA_LOCAL = 58_954;
+const GEMMA_REPORTED = 35_798;
+
+describe("plausibility floor that learns the model's own ratio", () => {
+  const mark = (localTokens: number, digest: string): PromptCalibrationMark => ({
+    modelId: "gemma",
+    messageCount: 3,
+    digest,
+    localTokens,
+  });
+
+  it("keeps the denser tokenizer's legitimate 0.61 report calibrated", () => {
+    expect(GEMMA_REPORTED / GEMMA_LOCAL).toBeCloseTo(0.607, 3);
+    const ledger = new PromptCalibrationLedger();
+    expect(ledger.record(mark(GEMMA_LOCAL, "a"), GEMMA_REPORTED)).toBe("recorded");
+    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "b"), 40_000)).toBe("recorded");
+  });
+
+  it("refuses a cache-excluded report once the ratio is learned, even above the absolute floor", () => {
+    const ledger = new PromptCalibrationLedger();
+    ledger.record(mark(GEMMA_LOCAL, "a"), GEMMA_REPORTED);
+    // 0.28 of the local estimate clears the unlearned quarter floor, but is under half of 0.61.
+    const partlyCached = Math.round((GEMMA_LOCAL + 4_000) * 0.28);
+    expect(partlyCached).toBeGreaterThan((GEMMA_LOCAL + 4_000) * MIN_PLAUSIBLE_USAGE_RATIO);
+    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "b"), partlyCached)).toBe("implausible");
+    expect(ledger.record(mark(GEMMA_LOCAL + 4_000, "c"), 1)).toBe("implausible");
+    expect(new PromptCalibrationLedger().record(mark(GEMMA_LOCAL + 4_000, "b"), partlyCached)).toBe(
+      "recorded",
+    );
+  });
+
+  it("falls back to the absolute floor for a model with no learned ratio", () => {
+    const ledger = new PromptCalibrationLedger();
+    expect(ledger.record(mark(GEMMA_LOCAL, "a"), 200)).toBe("implausible");
+    expect(ledger.record(mark(GEMMA_LOCAL, "a"), GEMMA_REPORTED)).toBe("recorded");
+  });
+
+  it("lets a model whose honest ratio is low keep reporting it", () => {
+    const ledger = new PromptCalibrationLedger();
+    expect(ledger.record(mark(10_000, "a"), 3_000)).toBe("recorded");
+    expect(ledger.record(mark(12_000, "b"), 3_600)).toBe("recorded");
+    expect(ledger.record(mark(12_000, "c"), 1_000)).toBe("implausible");
+  });
+
+  it("keeps calibrating a conversation from the Gemma report end to end", async () => {
+    const ledger = new PromptCalibrationLedger();
+    const first = conversation(inputBudget - 12_000);
+    const reported = Math.round(localTokens(first) * (GEMMA_REPORTED / GEMMA_LOCAL));
+    const events: ModelGatewayLogEvent[] = [];
+    await turn(ledger, first, reported, events);
+    expect(events.some((event) => event.op === "gateway.prompt.usage-rejected")).toBe(false);
+    const second: ModelGatewayLogEvent[] = [];
+    await turn(ledger, extended(first, 16_000), undefined, second);
+    expect(lastAdmission(second)).toMatchObject({
+      state: "admitted",
+      counterSource: "usage-calibrated",
+    });
+  });
+});
+
 describe("calibration key", () => {
   it.each([
     ["a different deployment behind the alias", { deploymentIdentitySha256: "d".repeat(64) }],
@@ -222,6 +350,19 @@ describe("calibration key", () => {
 });
 
 describe("gateway wiring of provider usage", () => {
+  it("calibrates from the total including cache tokens a provider reports beside prompt_tokens", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const first = conversation(6_000);
+    const total = Math.round(localTokens(first) * 0.8);
+    const gateway = reportingGateway(events, { promptTokens: 200, totalPromptTokens: total });
+    await gateway.chat({ modelId: provider.modelId, messages: first });
+    await gateway.chat({ modelId: provider.modelId, messages: extended(first, 1_000) });
+    const admissions = events.filter((event) => event.op === "gateway.prompt.admission");
+    expect(admissions[1]?.extra).toMatchObject({ counterSource: "usage-calibrated" });
+    expect(admissions[1]?.extra?.calibratedPromptTokens).toBeGreaterThan(total);
+    expect(events.some((event) => event.op === "gateway.prompt.usage-rejected")).toBe(false);
+  });
+
   it.each([false, true])(
     "calibrates the next call of a conversation from the reported usage, streaming=%s",
     async (streaming) => {

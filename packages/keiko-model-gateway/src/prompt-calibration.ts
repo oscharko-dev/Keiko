@@ -8,7 +8,28 @@ import type { ModelProviderConfig } from "./types.js";
  * already-measured prefix is replaced by what the provider really reported.
  */
 export const PROMPT_CALIBRATION_DELTA_FACTOR = 1.1;
+/**
+ * How far below the local estimate a provider's reported usage may be and still be the count of the
+ * same prompt. Tokenizers differ legitimately: a live Gemma 4 31B behind LiteLLM reported 35,798
+ * tokens where the local estimate was 58,954 (ratio 0.61, no caching involved), and other
+ * tokenizers are denser still on code. A fixed floor near that would flip on a legitimate model, so
+ * the floor has two parts:
+ * - with no ratio learned for the model, a report under `MIN_PLAUSIBLE_USAGE_RATIO` (a quarter) of
+ *   the local estimate is refused: that is below any tokenizer difference seen, and is what a
+ *   cache-excluded or broken counter looks like (Ollama behind LiteLLM reports a few hundred tokens
+ *   for a 30k prompt);
+ * - once a model's ratio is learned (the highest plausible report so far, at most 1), a report under
+ *   `LEARNED_RATIO_FLOOR_SHARE` (half) of it times the local estimate is refused, so a model whose
+ *   honest ratio is 0.61 trips at 0.30 and one whose honest ratio is 0.30 only at 0.15.
+ * A refused report is never recorded: later prompts keep the conservative local estimate, which is
+ * the behaviour without calibration.
+ */
+export const MIN_PLAUSIBLE_USAGE_RATIO = 0.25;
+export const LEARNED_RATIO_FLOOR_SHARE = 0.5;
 const MAX_RECORDS_PER_MODEL = 8;
+
+/** What became of a provider's reported usage offered to the ledger. */
+export type PromptUsageRecording = "recorded" | "implausible" | "unusable";
 
 interface PromptCalibrationRecord {
   readonly messageCount: number;
@@ -70,6 +91,7 @@ export function promptCalibrationMark(
  */
 export class PromptCalibrationLedger {
   private readonly byModel = new Map<string, PromptCalibrationRecord[]>();
+  private readonly learnedRatio = new Map<string, number>();
 
   /** The calibrated token estimate of `request`, or undefined when no recorded prefix matches. */
   calibrate(
@@ -85,9 +107,21 @@ export class PromptCalibrationLedger {
     return record.providerTokens + Math.ceil(growth * factor);
   }
 
-  /** Records the provider's real prompt usage for a prompt that was admitted with `mark`. */
-  record(mark: PromptCalibrationMark, providerTokens: number): void {
-    if (!Number.isSafeInteger(providerTokens) || providerTokens <= 0) return;
+  /**
+   * Records the provider's real prompt usage for a prompt that was admitted with `mark`. A report
+   * below the plausibility floor (see `MIN_PLAUSIBLE_USAGE_RATIO`) is refused ("implausible") and
+   * leaves the ledger as it was.
+   */
+  record(mark: PromptCalibrationMark, providerTokens: number): PromptUsageRecording {
+    if (!Number.isSafeInteger(providerTokens) || providerTokens <= 0) return "unusable";
+    const learned = this.learnedRatio.get(mark.modelId);
+    const floor =
+      learned === undefined ? MIN_PLAUSIBLE_USAGE_RATIO : LEARNED_RATIO_FLOOR_SHARE * learned;
+    if (providerTokens < mark.localTokens * floor) return "implausible";
+    if (mark.localTokens > 0) {
+      const ratio = Math.min(1, providerTokens / mark.localTokens);
+      this.learnedRatio.set(mark.modelId, Math.max(learned ?? 0, ratio));
+    }
     const records = this.byModel.get(mark.modelId) ?? [];
     const kept = records.filter(
       (entry) => entry.messageCount !== mark.messageCount || entry.digest !== mark.digest,
@@ -99,11 +133,13 @@ export class PromptCalibrationLedger {
       providerTokens,
     });
     this.byModel.set(mark.modelId, kept.slice(-MAX_RECORDS_PER_MODEL));
+    return "recorded";
   }
 
   /** Forgets every record; for test isolation of a process-wide instance. */
   reset(): void {
     this.byModel.clear();
+    this.learnedRatio.clear();
   }
 
   private matching(

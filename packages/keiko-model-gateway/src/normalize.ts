@@ -56,12 +56,30 @@ function reportedReasoningTokens(usage: Record<string, unknown>): number | undef
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
+// Prompt-cache tokens the provider reports: OpenAI-style `prompt_tokens_details.cached_tokens`
+// (included in `prompt_tokens` by OpenAI, but not by every OpenAI-compatible backend) and
+// Anthropic-style `cache_read_input_tokens` / `cache_creation_input_tokens` (excluded from the
+// input count of the native API). A figure is cache-exclusive when it exceeds `prompt_tokens`, so
+// the prompt's size is then the two added; a `prompt_tokens` that already covers the cached tokens
+// is left alone, so a provider that includes them is never counted twice.
+function reportedTotalPromptTokens(usage: Record<string, unknown>): number | undefined {
+  const promptTokens = asCount(usage.prompt_tokens);
+  const details = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};
+  const cached = Math.max(
+    asCount(details.cached_tokens),
+    asCount(usage.cache_read_input_tokens) + asCount(usage.cache_creation_input_tokens),
+  );
+  return cached > promptTokens ? promptTokens + cached : undefined;
+}
+
 function buildUsage(payload: Record<string, unknown>, seed: UsageSeed): UsageMetadata {
   const usage = isRecord(payload.usage) ? payload.usage : {};
   const reasoningTokens = reportedReasoningTokens(usage);
+  const totalPromptTokens = reportedTotalPromptTokens(usage);
   return {
     requestId: seed.requestId,
     promptTokens: asCount(usage.prompt_tokens),
+    ...(totalPromptTokens === undefined ? {} : { totalPromptTokens }),
     completionTokens: asCount(usage.completion_tokens),
     latencyMs: seed.latencyMs,
     costClass: seed.costClass,

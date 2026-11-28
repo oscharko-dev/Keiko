@@ -30178,7 +30178,11 @@
       "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
+        "state": [
+          "gateway.prompt.admission",
+          "gateway.prompt.counter-cooldown",
+          "gateway.prompt.usage-rejected"
+        ],
         "end": [],
         "failure": ["gateway.prompt.admission-failed", "gateway.prompt.counter-failed"],
         "loss": []
@@ -30199,10 +30203,18 @@
         {
           "op": "gateway.prompt.counter-failed",
           "mode": "correlation"
+        },
+        {
+          "op": "gateway.prompt.usage-rejected",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
+      "resourceSignals": [
+        "gateway.prompt.admission",
+        "gateway.prompt.counter-cooldown",
+        "gateway.prompt.usage-rejected"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -30492,6 +30504,48 @@
             "causeChain": true
           },
           "proofIds": ["gateway.prompt.counter-failed.fallback"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.prompt.usage-rejected",
+          "owner": "keiko-model-gateway",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "localPromptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reportedPromptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.prompt.usage-rejected.implausibly-low"],
           "replayReferences": [],
           "missingObligations": []
         }

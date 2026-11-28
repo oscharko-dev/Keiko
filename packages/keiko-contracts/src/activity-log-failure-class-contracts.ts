@@ -616,7 +616,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
+      state: [
+        "gateway.prompt.admission",
+        "gateway.prompt.counter-cooldown",
+        "gateway.prompt.usage-rejected",
+      ],
       end: [],
       failure: ["gateway.prompt.admission-failed", "gateway.prompt.counter-failed"],
       loss: [],
@@ -626,6 +630,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "gateway.prompt.admission-failed",
       "gateway.prompt.counter-cooldown",
       "gateway.prompt.counter-failed",
+      "gateway.prompt.usage-rejected",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -633,9 +638,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "gateway.prompt.admission-failed",
       "gateway.prompt.counter-cooldown",
       "gateway.prompt.counter-failed",
+      "gateway.prompt.usage-rejected",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["gateway.prompt.admission", "gateway.prompt.counter-cooldown"],
+    requiredResourceOperations: [
+      "gateway.prompt.admission",
+      "gateway.prompt.counter-cooldown",
+      "gateway.prompt.usage-rejected",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

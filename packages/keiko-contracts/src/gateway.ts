@@ -922,6 +922,13 @@ export interface UsageMetadata {
    * reasoning itself, so its share of the completion stays measurable (#3878).
    */
   readonly reasoningBytes?: number | undefined;
+  /**
+   * The prompt's size including prompt-cache tokens the provider reports beside, not inside,
+   * `prompt_tokens` (`cache_read_input_tokens`, `prompt_tokens_details.cached_tokens`). Present only
+   * when it exceeds `promptTokens`; the gateway calibrates its admission from it, never from the
+   * smaller figure that leaves the cached prefix out.
+   */
+  readonly totalPromptTokens?: number | undefined;
 }
 
 // ─── Normalised response ──────────────────────────────────────────────────────

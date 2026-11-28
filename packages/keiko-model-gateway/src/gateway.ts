@@ -32,7 +32,11 @@ import {
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
-import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
+import {
+  calibrationPromptTokens,
+  GatewayPromptAdmission,
+  ProviderPromptCounter,
+} from "./gateway-prompt-admission.js";
 import { PromptCalibrationLedger } from "./prompt-calibration.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import { carriedReasoning, SYNTHESIZED_TOOL_CALL_ID_PREFIX } from "./normalize.js";
@@ -1687,7 +1691,7 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.settleCompletedCall(attempt.state, request, route.provider, result);
-    attempt.promptAdmission.recordUsage(result.usage.promptTokens);
+    attempt.promptAdmission.recordUsage(calibrationPromptTokens(result.usage));
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return withDiscardedUsage(
       recoveredResponse(
@@ -2472,7 +2476,7 @@ export class Gateway {
       for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
-          state.promptAdmission.recordUsage(usage.promptTokens);
+          state.promptAdmission.recordUsage(calibrationPromptTokens(usage));
           received = true;
           terminal = chunk;
           break;

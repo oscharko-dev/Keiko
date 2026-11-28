@@ -402,13 +402,6 @@ function runtime(
   resetServerLogger();
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "Feature.ts"), "export function Feature() { return true; }\n");
-  // The provider fixtures here report synthetic prompt usage (one token, or a whole window for a
-  // prompt of a few thousand tokens) to pin the server's own window and grant arithmetic. The
-  // gateway admits an extended prompt from the usage the provider reported for its prefix (#4491),
-  // so a synthetic report would stand in for the real prompt size and refuse or shrink the very
-  // prompts these cases measure. The usage-calibrated admission has its own pins in the gateway's
-  // prompt-calibration suite; here the gateway estimates every prompt locally.
-  vi.spyOn(PromptCalibrationLedger.prototype, "calibrate").mockReturnValue(undefined);
   const deps = buildUiHandlerDeps({
     configPath: join(state, "gateway.json"),
     evidenceDir: join(state, "evidence"),
@@ -967,6 +960,47 @@ interface ProviderOptions {
   readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
   readonly onRequest?: (body: string, index: number) => void;
 }
+/**
+ * What a provider that counts its prompt as the gateway does reports for the request it received:
+ * the production estimator over the wire messages and tools. The gateway admits an extended prompt
+ * from the usage the provider reported for its prefix (#4491), so a fixture that reports one token
+ * for a prompt of thousands would make every later prompt look free; this keeps calibration live
+ * and realistic.
+ */
+function estimatedPromptTokens(body: string): number {
+  const wire = JSON.parse(body) as {
+    readonly messages?: Parameters<typeof countGatewayPromptTokens>[0]["messages"];
+    readonly tools?: readonly {
+      readonly function: {
+        readonly name: string;
+        readonly description?: string;
+        readonly parameters: Record<string, unknown>;
+      };
+    }[];
+  };
+  const tools = wire.tools?.map(({ function: tool }) => ({
+    name: tool.name,
+    description: tool.description ?? "",
+    parameters: tool.parameters,
+  }));
+  return countGatewayPromptTokens({ messages: wire.messages ?? [], tools });
+}
+/**
+ * For the cases that deliberately probe the server's window and grant arithmetic with a reported
+ * prompt usage that is NOT the size of the prompt (a whole window, or a figure straddling it, for a
+ * prompt of a few thousand tokens). The usage-calibrated admission would take such a figure for the
+ * prefix's real size, so these cases leave the gateway to estimate locally; the calibrated admission
+ * is pinned in the gateway's prompt-calibration suite and by the live-calibration case below.
+ */
+function probeWindowArithmeticIndependentOfPriorUsage(): void {
+  vi.spyOn(PromptCalibrationLedger.prototype, "calibrate").mockReturnValue(undefined);
+}
+function productiveUsage(
+  body: string,
+  options: ProviderOptions,
+): { readonly prompt_tokens: number; readonly completion_tokens: number } {
+  return options.usage ?? { prompt_tokens: estimatedPromptTokens(body), completion_tokens: 1 };
+}
 function reportedProviderUsage(
   usage = { prompt_tokens: 1, completion_tokens: 1 },
 ): Readonly<Record<string, number>> {
@@ -1028,6 +1062,7 @@ function provider(
   options: ProviderOptions = {},
 ): string[] {
   const requests: string[] = [];
+  if (options.usage !== undefined) probeWindowArithmeticIndependentOfPriorUsage();
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_url, init) => {
@@ -1068,7 +1103,7 @@ function provider(
               finish_reason: tools ? "tool_calls" : "stop",
             },
           ],
-          usage: reportedProviderUsage(productive ? options.usage : undefined),
+          usage: reportedProviderUsage(productive ? productiveUsage(body, options) : undefined),
         }),
       );
     }),
@@ -1219,6 +1254,20 @@ it.each(["input", "output"] as const)(
     ]);
   },
 );
+
+it("admits the answer after a tool round from the provider's realistic usage with calibration live", async () => {
+  const f = runtime();
+  const calibrate = vi.spyOn(PromptCalibrationLedger.prototype, "calibrate");
+  const requests = provider(["tool", "answer"]);
+  const result = await askFeatureAndProjects(f);
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  const reported = estimatedPromptTokens(requests[0] ?? "{}");
+  const calibrated = calibrate.mock.results.map((entry) => entry.value as number | undefined);
+  // The tool round's reported usage became the answer prompt's floor; nothing was refused.
+  expect(calibrated.some((tokens) => tokens !== undefined && tokens >= reported)).toBe(true);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
 
 it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
   const f = runtime();
@@ -2061,6 +2110,10 @@ function observeToolRoundAndTwoSynthesisAttempts(
   completionTokens: readonly number[] = [1, 0, 1],
   reportedPromptTokens = 0,
 ): (costs: readonly number[]) => void {
+  // Its pin equates the server's charge for each attempt with the gateway's admitted cost, which is
+  // the local estimate the server also charges. A calibrated admission is that estimate plus a
+  // margin on the growth, so the equality is only defined while the gateway estimates locally.
+  probeWindowArithmeticIndependentOfPriorUsage();
   const budgets: groundedSynthesis.GroundedSynthesisCallBudget[] = [];
   const create = groundedSynthesis.createGroundedSynthesisCallBudget;
   vi.spyOn(groundedSynthesis, "createGroundedSynthesisCallBudget").mockImplementation(() => {
