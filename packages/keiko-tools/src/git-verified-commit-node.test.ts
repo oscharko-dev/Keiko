@@ -1,3 +1,4 @@
+import { CommandDeniedError } from "./errors.js";
 import { nodeSpawnFn } from "./exec.js";
 import { readGitRawChanges } from "./git-raw-worktree-node.js";
 import { execFileSync } from "node:child_process";
@@ -20,6 +21,7 @@ import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   createNodeGitMutationAdapter,
+  failureFromUnbornBranchThrow,
   readGitWorktreeSnapshot,
   readGitTreeDigest,
   readGitHeadState,
@@ -583,6 +585,26 @@ describe("the first commit of an unborn branch at the sole mutation adapter", ()
     });
     expect(result).toMatchObject({ outcome: "failed", errorCode: "precondition-failed" });
     expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+  });
+  it("reports a lock that cannot be created for lack of permission as a failed precondition, not a conflict", async () => {
+    const heads = join(root, ".git", "refs", "heads");
+    chmodSync(heads, 0o555);
+    try {
+      const result = await adapter().createBranch({
+        branchName: "feature/first",
+        startPointRefHash: gitZeroObjectId(40),
+        fromUnbornBranch: "fresh",
+      });
+      expect(result).toMatchObject({ outcome: "failed", errorCode: "precondition-failed" });
+      expect(git(["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh");
+    } finally {
+      chmodSync(heads, 0o755);
+    }
+  });
+  it("keeps a denied command an internal error, never a statement about the repository", () => {
+    expect(
+      failureFromUnbornBranchThrow(new CommandDeniedError("executable denied", "git")),
+    ).toMatchObject({ outcome: "failed", errorCode: "internal-error" });
   });
   it("reads the orphan branch as an explicit unborn state", async () => {
     const head: GitHeadState = await readGitHeadState({ workspace });

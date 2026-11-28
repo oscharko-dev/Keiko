@@ -68,6 +68,7 @@ import {
   readGitBaseState,
   readGitWorktreeSnapshot,
   createGitReadSession,
+  GitWorktreeReadError as GitWorktreeReadFailure,
   type NodeGitWorktreeReaderDeps,
   type GitReadSession,
   type GitStagedObjectIdPort,
@@ -93,6 +94,7 @@ import {
 import type { GitObjectQuarantine } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 import {
+  GIT_REF_LOCK_HELD,
   GIT_REF_LOCK_UNAVAILABLE,
   withGitBranchRefLocks,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -917,15 +919,19 @@ async function execUnbornBranch(
   }
 }
 
-// Nothing was written when the lock or a state read throws. A branch ref lock that cannot be taken
-// (another process holds it) is a `conflict`; any other failure to read or prove the unborn state is
-// `precondition-failed`; a timeout or cancellation keeps its own closed result.
-function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
+// Nothing was written when the lock or a state read throws. A branch ref lock another process holds
+// is a `conflict`; a lock that cannot be created or a state that cannot be read or proved is
+// `precondition-failed`; a timeout or cancellation keeps its own closed result; any other throw
+// (a denied command, an argv fault) is an internal error, never a statement about the repository.
+export function failureFromUnbornBranchThrow(error: unknown): GitDeliveryExecutionResult {
   if (error instanceof CommandTimeoutError || error instanceof CommandCancelledError)
     return failureFromThrow(error, 0, 0);
-  if (error instanceof Error && error.message === GIT_REF_LOCK_UNAVAILABLE)
+  if (error instanceof Error && error.message === GIT_REF_LOCK_HELD)
     return failureFromExit(0, 0, "conflict");
-  return failureFromExit(0, 0, "precondition-failed");
+  const unproven =
+    error instanceof GitWorktreeReadFailure ||
+    (error instanceof Error && error.message === GIT_REF_LOCK_UNAVAILABLE);
+  return unproven ? failureFromExit(0, 0, "precondition-failed") : failureFromThrow(error, 0, 0);
 }
 
 function execBranchCreate(

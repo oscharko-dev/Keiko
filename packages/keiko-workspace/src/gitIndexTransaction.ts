@@ -139,7 +139,10 @@ function promoteIndex(gitdir: string, temporaryIndexPath: string, indexExisted: 
   renameSync(temporaryIndexPath, index);
 }
 
-/** The message of the failure thrown when a branch ref lock cannot be taken. */
+/** The message of the failure thrown when another process holds the branch ref lock (EEXIST). */
+export const GIT_REF_LOCK_HELD = "git-ref-lock-held";
+
+/** The message of the failure thrown when a branch ref lock cannot be created for another reason. */
 export const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
 
 // The directory that holds `refs/heads`: the repository's own gitdir, or the common directory a
@@ -199,8 +202,11 @@ function openRefLock(path: string): number {
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
       0o600,
     );
-  } catch {
-    throw new Error(GIT_REF_LOCK_UNAVAILABLE);
+  } catch (error) {
+    // Only an existing lock file is a lock another process holds; a permission, space or
+    // read-only failure says nothing about a competing writer.
+    const held = (error as NodeJS.ErrnoException).code === "EEXIST";
+    throw new Error(held ? GIT_REF_LOCK_HELD : GIT_REF_LOCK_UNAVAILABLE, { cause: error });
   }
 }
 
