@@ -2722,6 +2722,7 @@ function approvalReviewBound(
   if (request.actionKind === "verification-command") return true;
   const review = approvalReview.status === "ready" ? approvalReview.review : null;
   if (review?.requestId !== request.requestId) return false;
+  if (request.actionKind === "git-branch" && review.gitBranch === undefined) return false;
   // A native ask that names no command, path or address gives the human nothing to decide on.
   return !isNativeActionPermission(request) || nativeActionNamesResource(review.nativeAction);
 }

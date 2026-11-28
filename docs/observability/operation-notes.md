@@ -800,7 +800,8 @@ request's correlation id, with the closed `errorKind` `unavailable` (404), `conf
 messages, so completing a task records `updated` alone. A run that moved onto a task branch of its
 own (`keiko_git_branch`) moves its task with it, recorded as `updated` with `branchChanged` under the
 run's correlation id and never the branch name; a failure there records `failed` and leaves the
-branch move standing (#4491). Removing a project that still holds Coding
+branch move standing (#4491). The branch name reaches only the authenticated in-memory approval
+review channel (hash-bound to the approval digest), never the Activity Log. Removing a project that still holds Coding
 tasks is refused with `PROJECT_HAS_CODING_TASKS` and deletes nothing, because a removed project
 would take its Coding tasks with it. A scheduled wake continues only a task that is still active;
 for a completed task it keeps waiting (#4491).

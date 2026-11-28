@@ -20,6 +20,7 @@ import type {
   OpenCodeCompactionActivity,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isRuntimeGitBranchName } from "./codingRuntimeGitIpc.js";
 import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
 import {
@@ -561,7 +562,7 @@ function validAskBranchName(metadata: Record<string, unknown>): boolean {
   const name = metadata.branchName;
   return (
     isRuntimeGitBranchName(name) &&
-    !/\p{Cc}/u.test(name) &&
+    stripUnsafeFormatChars(name) === name &&
     createHash("sha256").update(name, "utf8").digest("hex") === metadata.targetPathHash
   );
 }

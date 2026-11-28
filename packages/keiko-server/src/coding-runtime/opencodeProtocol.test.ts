@@ -1539,6 +1539,16 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     expect(branchAsk({ branchName: "feature/y" })).toBeUndefined();
     expect(branchAsk({ branchName: "" })).toBeUndefined();
     expect(branchAsk({ branchName: "feature/x\n" })).toBeUndefined();
+    // The review contract refuses bidi, zero-width and line-separator characters, so the ask must
+    // too: otherwise the card would wait on a review that can never validate.
+    for (const name of ["a\u202eb", "a\u200bb", "a\u2028b", "a\ufeffb"]) {
+      expect(
+        branchAsk({
+          branchName: name,
+          targetPathHash: createHash("sha256").update(name, "utf8").digest("hex"),
+        }),
+      ).toBeUndefined();
+    }
     expect(syncAsk("fetch", { branchName: "feature/x" })).toBeUndefined();
     expect(syncAsk("pull", { commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
     expect(syncAsk("pull", { risk: "low" })).toBeUndefined();

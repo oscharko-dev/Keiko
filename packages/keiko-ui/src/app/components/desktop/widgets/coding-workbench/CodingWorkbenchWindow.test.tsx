@@ -3479,6 +3479,27 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
   });
 
+  it("U-27: Approve stays disabled when the ready review names no branch", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-branch-1",
+        // A valid review of another shape bound to this request: it names no branch.
+        verificationPreview: { status: "commands", commands: ["mvn -B test"], truncated: false },
+        paths: [],
+        pathsTruncated: false,
+        fileCount: 0,
+        addedLines: 0,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    } as UseCodingWorkbenchApprovalReviewResult);
+    renderWorkbench(branchAskState());
+
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
   it("#3897: a native web ask names the internet and Full access, never the task workspace", () => {
     approvalReviewHookMock.mockReturnValue(nativeReview("webfetch", ["https://example.test/doc"]));
     renderWorkbench(nativeAskState("webfetch"));
