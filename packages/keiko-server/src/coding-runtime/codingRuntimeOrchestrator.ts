@@ -4288,7 +4288,7 @@ export class CodingRuntimeOrchestrator {
     target: TaskOutcomeTarget,
   ):
     | {
-        readonly state: "cancelled" | "failed" | "succeeded";
+        readonly state: TaskOutcomeState;
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
@@ -4340,7 +4340,7 @@ export class CodingRuntimeOrchestrator {
     target: TaskOutcomeTarget,
   ):
     | {
-        readonly state: "cancelled" | "failed" | "succeeded";
+        readonly state: TaskOutcomeState;
         readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
       }
     | undefined {
@@ -5983,9 +5983,7 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
   ): void {
     if (!TERMINAL_STATES.has(state)) return;
-    const reason =
-      state === "taken-over" ? "takeover" : state === "cancelled" ? "stop" : "run-ended";
-    this.deps.safeActivityProjection?.interrupt(runId, reason);
+    this.deps.safeActivityProjection?.interrupt(runId, interruptReasonOf(state));
   }
 
   private publishSettlement(
@@ -6092,8 +6090,17 @@ function taskOutcomeState(
   return { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
 }
 
+function interruptReasonOf(
+  state: CodingWorkbenchRuntimeStateName,
+): "takeover" | "stop" | "run-ended" {
+  if (state === "taken-over") return "takeover";
+  return state === "cancelled" ? "stop" : "run-ended";
+}
+
+type TaskOutcomeState = "cancelled" | "failed" | "succeeded";
+
 interface TaskOutcomeTarget {
-  readonly state: "cancelled" | "failed" | "succeeded";
+  readonly state: TaskOutcomeState;
   readonly failureCode?: TaskSettlementFailureCode | undefined;
 }
 
