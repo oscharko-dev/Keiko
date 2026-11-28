@@ -551,6 +551,44 @@ describe("CodingWorkbenchRepositorySelector reconnect of a changed folder (U-16)
     ]);
   });
 
+  it("remembers whether the failed attempt came from the picker or from the button", async () => {
+    reconnectRepository.mockRejectedValue(new Error("refused"));
+    const { result } = renderHook(() =>
+      useRepositoryReconnect([project("/work/app"), drifted], vi.fn(), vi.fn()),
+    );
+    await act(async () => result.current.choose("/work/cloned"));
+    expect(result.current.failedFrom).toBe("picker");
+    await act(async () => result.current.reconnectSelected("/work/cloned"));
+    expect(result.current.failedFrom).toBe("button");
+    act(() => result.current.choose("/work/app"));
+    expect(result.current.failedFrom).toBeNull();
+    expect(result.current.failed).toBe(false);
+  });
+
+  it("reports a throwing follow-up on its own and still reports the reconnect", async () => {
+    reconnectRepository.mockResolvedValue({ project: project("/work/cloned") });
+    const onSelect = vi.fn(() => {
+      throw new Error("select handler failed");
+    });
+    const { result } = renderHook(() =>
+      useRepositoryReconnect([project("/work/app"), drifted], vi.fn(), onSelect),
+    );
+    await act(async () => result.current.choose("/work/cloned"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(result.current.failed).toBe(false);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench repository reconnect follow-up failed",
+      expect.objectContaining({ kind: "other", correlationId: expect.any(String) }),
+    );
+    expect(reportClientDiagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench repository reconnect failed",
+      expect.anything(),
+    );
+    expect(interactions()).toEqual([
+      { interaction: "repository-reconnected", outcome: "selected" },
+    ]);
+  });
+
   it("ends a hung reconnect as a timeout failure and unlocks", async () => {
     vi.useFakeTimers();
     try {

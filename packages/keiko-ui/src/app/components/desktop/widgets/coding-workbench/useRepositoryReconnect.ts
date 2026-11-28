@@ -17,9 +17,13 @@ export interface RepositoryReconnect {
   /** Reconnects the folder that is already selected; on success it tells the caller, never selects. */
   readonly reconnectSelected: (path: string) => void;
   readonly failed: boolean;
+  /** Where the failed attempt started: the Reconnect button or a choice in the picker. */
+  readonly failedFrom: ReconnectOrigin | null;
   /** A reconnect is running: the picker stays locked so no choice can be dropped or replaced. */
   readonly reconnecting: boolean;
 }
+
+export type ReconnectOrigin = "button" | "picker";
 
 // A reconnect that failed: a rejected request carries its error, a request that answered but left
 // the workspace unavailable carries none.
@@ -83,45 +87,65 @@ function useMounted(): { readonly current: boolean } {
   return mounted;
 }
 
+// The caller's own handler (select, window rebind) must not turn a reconnect that worked into an
+// unhandled rejection: its throw is reported on its own, body-free, and never as a reconnect failure.
+function applyReconnected(apply: (path: string) => void, path: string): void {
+  try {
+    apply(path);
+  } catch (error) {
+    reportClientDiagnostic("[keiko] coding workbench repository reconnect follow-up failed", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+      correlationId: correlationIdOf(error) ?? newClientCorrelationId(),
+    });
+  }
+}
+
 function useReconnectStatus(): {
-  readonly failed: boolean;
-  readonly setFailed: (failed: boolean) => void;
+  readonly failedFrom: ReconnectOrigin | null;
+  readonly setFailedFrom: (origin: ReconnectOrigin | null) => void;
   readonly reconnecting: boolean;
   readonly setReconnecting: (reconnecting: boolean) => void;
 } {
-  const [failed, setFailed] = useState(false);
+  const [failedFrom, setFailedFrom] = useState<ReconnectOrigin | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  return { failed, setFailed, reconnecting, setReconnecting };
+  return { failedFrom, setFailedFrom, reconnecting, setReconnecting };
 }
 
 // One request per folder; where it settles follows the person's latest choice (see `settle`).
 function useReconnectRequest(
   reload: () => void,
   latest: { readonly current: string | null },
-  { setFailed, setReconnecting }: ReturnType<typeof useReconnectStatus>,
-): (path: string, apply: (path: string) => void) => void {
+  { setFailedFrom, setReconnecting }: ReturnType<typeof useReconnectStatus>,
+): (path: string, apply: (path: string) => void, origin: ReconnectOrigin) => void {
   const mounted = useMounted();
   const inFlight = useRef(new Set<string>());
   const settle = useCallback(
-    (path: string, failure: ReconnectFailure, apply: (path: string) => void): void => {
+    (
+      path: string,
+      failure: ReconnectFailure,
+      apply: (path: string) => void,
+      origin: ReconnectOrigin,
+    ): void => {
       inFlight.current.delete(path);
       if (mounted.current) setReconnecting(inFlight.current.size > 0);
       const outcome = reconnectOutcome(mounted.current, latest.current === path);
       if (failure !== null) {
         if (outcome !== "selector-gone") reportReconnectFailure(failure);
-        if (outcome === "selected") setFailed(true);
+        if (outcome === "selected") setFailedFrom(origin);
         return;
       }
       // The catalog is read again for every successful reconnect, even a superseded one, so the
       // folder stops reading as changed.
       if (outcome !== "selector-gone") reload();
-      if (outcome === "selected") apply(path);
+      if (outcome === "selected") applyReconnected(apply, path);
       reportReconnected(outcome);
     },
-    [mounted, latest, reload, setFailed, setReconnecting],
+    [mounted, latest, reload, setFailedFrom, setReconnecting],
   );
   return useCallback(
-    (path: string, apply: (path: string) => void): void => {
+    (path: string, apply: (path: string) => void, origin: ReconnectOrigin): void => {
       if (inFlight.current.has(path)) return;
       inFlight.current.add(path);
       setReconnecting(true);
@@ -131,8 +155,9 @@ function useReconnectRequest(
             path,
             response.project.workspaceAvailable === true ? null : { error: undefined },
             apply,
+            origin,
           ),
-        (error: unknown): void => settle(path, { error }, apply),
+        (error: unknown): void => settle(path, { error }, apply, origin),
       );
     },
     [settle, setReconnecting],
@@ -152,26 +177,26 @@ export function useRepositoryReconnect(
   onReconnected?: (() => void) | undefined,
 ): RepositoryReconnect {
   const status = useReconnectStatus();
-  const { failed, setFailed, reconnecting } = status;
+  const { failedFrom, setFailedFrom, reconnecting } = status;
   const latest = useRef<string | null>(null);
   const reconnect = useReconnectRequest(reload, latest, status);
   const choose = useCallback(
     (path: string): void => {
       latest.current = path;
-      setFailed(false);
+      setFailedFrom(null);
       const project = repositories.find((entry) => entry.path === path);
-      if (project !== undefined && needsReconnect(project)) reconnect(path, onSelect);
+      if (project !== undefined && needsReconnect(project)) reconnect(path, onSelect, "picker");
       else onSelect(path);
     },
-    [onSelect, reconnect, repositories, setFailed],
+    [onSelect, reconnect, repositories, setFailedFrom],
   );
   const reconnectSelected = useCallback(
     (path: string): void => {
       latest.current = path;
-      setFailed(false);
-      reconnect(path, () => onReconnected?.());
+      setFailedFrom(null);
+      reconnect(path, () => onReconnected?.(), "button");
     },
-    [onReconnected, reconnect, setFailed],
+    [onReconnected, reconnect, setFailedFrom],
   );
-  return { choose, reconnectSelected, failed, reconnecting };
+  return { choose, reconnectSelected, failed: failedFrom !== null, failedFrom, reconnecting };
 }

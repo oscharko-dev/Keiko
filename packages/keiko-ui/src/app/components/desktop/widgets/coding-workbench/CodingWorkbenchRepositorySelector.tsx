@@ -21,7 +21,7 @@ import {
 } from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
 import { locallyAvailable, needsReconnect } from "./codingWorkbenchRepositoryAvailability";
-import { useRepositoryReconnect } from "./useRepositoryReconnect";
+import { useRepositoryReconnect, type ReconnectOrigin } from "./useRepositoryReconnect";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -580,6 +580,7 @@ interface RepositorySelectorState {
   // U-16: choosing a changed folder reconnects it first; the failure stays visible.
   readonly choose: (root: string) => void;
   readonly reconnectFailed: boolean;
+  readonly reconnectFailedFrom: ReconnectOrigin | null;
   // The Reconnect button: reconnects the selected folder and tells the window, never re-selects it.
   readonly reconnectSelected: (root: string) => void;
   // U-44: a reconnect is running; the repository field stays locked until it lands.
@@ -626,6 +627,7 @@ function useRepositorySelectorState(
     choose: reconnect.choose,
     reconnectSelected: reconnect.reconnectSelected,
     reconnectFailed: reconnect.failed,
+    reconnectFailedFrom: reconnect.failedFrom,
     reconnecting: reconnect.reconnecting,
   };
 }
@@ -764,7 +766,7 @@ function SelectorRecoveryForState({
       <ReconnectNotice
         failed={state.reconnectFailed}
         reconnecting={state.reconnecting}
-        reconnectable={state.reconnectable}
+        failedFrom={state.reconnectFailedFrom}
         t={t}
       />
     </>
@@ -834,13 +836,13 @@ function RepositorySelectorField({
 function ReconnectNotice({
   failed,
   reconnecting,
-  reconnectable,
+  failedFrom,
   t,
 }: {
   readonly failed: boolean;
   readonly reconnecting: boolean;
-  // The selected folder offers the Reconnect button: its failure names the Git route.
-  readonly reconnectable: boolean;
+  // The failure names the Git route only when the Reconnect button started the attempt.
+  readonly failedFrom: ReconnectOrigin | null;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   // The status region stays mounted and empty, so a screen reader announces the text swapped in.
@@ -852,7 +854,7 @@ function ReconnectNotice({
       {failed ? (
         <p className={styles.cmpRepositorySelectorNotice} role="alert">
           {t(
-            reconnectable
+            failedFrom === "button"
               ? "codingWorkbench.repository.reconnectFailed"
               : "codingWorkbench.repository.reconnectChoiceFailed",
           )}
