@@ -146,14 +146,12 @@ function joinSharedRead(
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
-    void shared.expired.then(async () => {
+    void shared.expired.then(() => {
       if (settled) return;
       settled = true;
-      try {
-        resolve(await replacementRead(key, path, init));
-      } catch (error: unknown) {
+      replacementRead(key, path, init).then(resolve, (error: unknown) => {
         reject(error instanceof Error ? error : new Error(String(error)));
-      }
+      });
     });
   });
 }
