@@ -390,9 +390,9 @@ class FileModelActivationMemory implements ModelActivationMemory {
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
     additions: "allowed" | "withheld" = "allowed",
   ): void {
-    const { next, saved, overflow, bindings } = this.plan(activated, additions);
+    const { next, saved, overflow, bindings, kept } = this.plan(activated, additions);
     this.plannedBindings = bindings;
-    this.desired = this.keptModels(activated, next);
+    this.desired = kept;
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
     const stale = this.rewritePending;
@@ -438,22 +438,33 @@ class FileModelActivationMemory implements ModelActivationMemory {
     readonly saved: number;
     readonly overflow: number;
     readonly bindings: Map<string, Binding>;
+    /** The activated models a later settle replays: a model past the capacity stays, unsaved. */
+    readonly kept: ActivatedModel[];
   } {
     const next = new Map<string, StoredActivation>();
     const bindings = new Map<string, Binding>();
+    const kept: ActivatedModel[] = [];
+    const before = new Set(
+      this.desired.map((model) => modelDigest(this.options.installationId, model.provider.modelId)),
+    );
     let saved = 0;
     let overflow = 0;
     for (const model of activated) {
       const key = modelDigest(this.options.installationId, model.provider.modelId);
-      if (next.size >= MAX_ENTRIES) overflow += 1;
-      else {
-        const planned = this.planModel(key, model, additions);
-        if (planned.entry !== undefined) next.set(key, planned.entry);
-        if (planned.binding !== undefined) bindings.set(key, planned.binding);
-        if (planned.saved) saved += 1;
+      if (next.size >= MAX_ENTRIES) {
+        overflow += 1;
+        kept.push(model);
+        continue;
       }
+      const planned = this.planModel(key, model, additions);
+      if (planned.entry !== undefined) next.set(key, planned.entry);
+      if (planned.binding !== undefined) bindings.set(key, planned.binding);
+      if (planned.saved) saved += 1;
+      // A withheld sync drops an addition it never saw before, but keeps what was already wanted.
+      if (additions === "allowed" || planned.entry !== undefined || before.has(key))
+        kept.push(model);
     }
-    return { next, saved, overflow, bindings };
+    return { next, saved, overflow, bindings, kept };
   }
 
   /** The entry one model needs: its stored one when still bound the same way, else a new one. */
@@ -476,16 +487,6 @@ class FileModelActivationMemory implements ModelActivationMemory {
     // Withheld, a changed binding keeps the stored entry: the model is live, and nothing is added.
     if (known !== undefined && additions === "withheld") return { entry: known, saved: false };
     return { entry, binding, saved: true };
-  }
-
-  /** The activated models the record holds or now wants: all of them, less withheld additions. */
-  private keptModels(
-    activated: readonly ActivatedModel[],
-    next: ReadonlyMap<string, StoredActivation>,
-  ): readonly ActivatedModel[] {
-    return activated.filter((model) =>
-      next.has(modelDigest(this.options.installationId, model.provider.modelId)),
-    );
   }
 
   /** Trusts the planned bindings only for what the file now holds, and forgets the rest. */

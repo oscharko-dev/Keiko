@@ -373,6 +373,35 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       );
       expect(changeLines().filter((line) => line.change === "discarded")).toEqual([]);
       expect(running.recorded()).toBe(true);
+      // The stored entry survives unchanged, so the original binding still restores...
+      expect(restoredIds(memory(), provider())).toEqual(["chat-a"]);
+      // ...and a restart with the changed binding discards it.
+      events.length = 0;
+      expect(restoredIds(memory(), rotated)).toEqual([]);
+      expect(changeLines()).toContainEqual(
+        expect.objectContaining({ change: "discarded", reason: "credential-changed", count: 1 }),
+      );
+    });
+
+    it("adds a model that was past the capacity back once removals free it", () => {
+      const all = Array.from({ length: 513 }, (_, index) =>
+        provider({ modelId: `chat-${String(index)}` }),
+      );
+      const running = memory();
+      activate(running, ...all);
+      // chat-0 leaves in a change that failed midway; the settle must also store chat-512.
+      running.sync(
+        all.slice(1).map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT })),
+        "invalidated",
+        "corr-failed-change",
+        undefined,
+        "withheld",
+      );
+      expect(running.settle("invalidated", "corr-settle")).toBe(true);
+      const restored = restoredIds(memory(), ...all);
+      expect(restored).toHaveLength(512);
+      expect(restored).toContain("chat-512");
+      expect(restored).not.toContain("chat-0");
     });
 
     it("keeps the bindings of restored models when the startup rewrite had to withdraw", () => {

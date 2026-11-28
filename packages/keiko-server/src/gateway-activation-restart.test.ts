@@ -288,29 +288,78 @@ describe("activated models across a server restart", () => {
       expect(currentConversationReady(second, "chat-b")).toBe(true);
     });
 
-    it("surfaces the original error when persisting the removals of a failed change also fails", () => {
-      const first = start(threeModels);
-      const holder = holderOf(first);
-      let failing = false;
-      holder.rememberActivations?.(
-        {
-          restore: () => [],
-          sync: (): void => {
-            if (failing) throw new Error("the log sink is down");
+    describe("when persisting the removals of a failed change also fails", () => {
+      const syncFailure = new Error("the log sink is down");
+
+      function failingChange(thrown: unknown): unknown {
+        const first = start(threeModels);
+        const holder = holderOf(first);
+        let failing = false;
+        holder.rememberActivations?.(
+          {
+            restore: () => [],
+            sync: (): void => {
+              if (failing) throw syncFailure;
+            },
+            recorded: () => true,
+            settle: () => true,
           },
-          recorded: () => true,
-          settle: () => true,
-        },
-        "corr-fake-memory",
-      );
-      activateModels(first, "chat-a");
-      failing = true;
-      expect(() => {
-        holder.settleObservations?.(() => {
-          holder.clearVerifiedCapability("chat-a");
-          throw new Error("the change failed midway");
-        });
-      }).toThrow("the change failed midway");
+          "corr-fake-memory",
+        );
+        activateModels(first, "chat-a");
+        failing = true;
+        try {
+          holder.settleObservations?.(() => {
+            holder.clearVerifiedCapability("chat-a");
+            throw thrown;
+          });
+        } catch (error) {
+          return error;
+        }
+        throw new TypeError("The change was expected to throw.");
+      }
+
+      function diagnosticOperations(spy: { mock: { calls: unknown[][] } }): string[] {
+        return spy.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.includes("keiko-server:diagnostic"))
+          .map((line) => line);
+      }
+
+      it("keeps the original error, links the second failure and records a diagnostic", () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const original = new Error("the change failed midway");
+          expect(failingChange(original)).toBe(original);
+          expect(original.cause).toBe(syncFailure);
+          expect(
+            diagnosticOperations(consoleError).some((line) =>
+              line.includes("gateway.activation.persist"),
+            ),
+          ).toBe(true);
+        } finally {
+          consoleError.mockRestore();
+        }
+      });
+
+      it("never throws from a frozen, cause-bearing or non-Error original, and still records it", () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const frozen = Object.freeze(new Error("frozen failure"));
+          const caused = new Error("caused failure", { cause: "earlier" });
+          expect(failingChange(frozen)).toBe(frozen);
+          expect(failingChange(caused)).toBe(caused);
+          expect(caused.cause).toBe("earlier");
+          expect(failingChange("a thrown string")).toBe("a thrown string");
+          expect(
+            diagnosticOperations(consoleError).filter((line) =>
+              line.includes("gateway.activation.persist"),
+            ),
+          ).toHaveLength(3);
+        } finally {
+          consoleError.mockRestore();
+        }
+      });
     });
 
     it("never persists an activation that a change which threw had only half applied", async () => {

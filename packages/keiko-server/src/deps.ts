@@ -1895,8 +1895,26 @@ function persistRemovalsAfterFailure(
   try {
     syncActivation(state, "invalidated", settling.correlationId, settling.removals, "withheld");
   } catch (syncError) {
-    if (original instanceof Error && original.cause === undefined) original.cause = syncError;
+    // Never silent: a body-free diagnostic always records it; the original error stays the one thrown.
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: settling.correlationId,
+        operation: "gateway.activation.persist",
+        source: "server.deps.persistRemovalsAfterFailure",
+        error: syncError,
+        redact: () => "Keiko could not record the removals of a capability change that failed.",
+      }),
+    );
+    attachCause(original, syncError);
   }
+}
+
+/** Links the second failure to the first when the first can carry it; never throws. */
+function attachCause(original: unknown, cause: unknown): void {
+  if (!(original instanceof Error) || !Object.isExtensible(original)) return;
+  if (Object.getOwnPropertyDescriptor(original, "cause") !== undefined) return;
+  Object.defineProperty(original, "cause", { value: cause, configurable: true, writable: true });
 }
 
 function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
