@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { GovernedIndexRecord } from "./governedIndexPaths.js";
 import {
   beginTurnIndex,
   captureTurnIndex,
@@ -15,7 +16,11 @@ import {
 
 const roots: string[] = [];
 /** What the turn's governed staging named; the run's record is the production source of it. */
-const GOVERNED = ["a.txt", "b.txt", "p.txt", "new.txt"];
+const GOVERNED = governedOf(["a.txt", "b.txt", "p.txt", "new.txt"]);
+
+function governedOf(paths: readonly string[], truncated = false): GovernedIndexRecord {
+  return { paths, truncated };
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -226,15 +231,33 @@ describe("turn index restore", () => {
       git(root, "add", "p.txt");
     });
 
-    await expect(restoreTurnIndex(root, record, ["a.txt"])).resolves.toEqual({
-      outcome: "restored",
+    // The unrecorded path stays, and the outcome says staged changes may remain.
+    await expect(restoreTurnIndex(root, record, governedOf(["a.txt"]))).resolves.toEqual({
+      outcome: "partial",
       restoredCount: 1,
     });
 
     expect(staged(root)).toEqual(["p.txt"]);
-    await expect(restoreTurnIndex(root, record, [])).resolves.toMatchObject({
-      outcome: undefined,
+  });
+
+  it("never claims a restore for a record that names nothing the turn changed", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
     });
+
+    await expect(restoreTurnIndex(root, record, governedOf([]))).resolves.toEqual({
+      outcome: "partial",
+      restoredCount: 0,
+    });
+    // A record the per-run cap cut is known to be incomplete: the index is reported unavailable.
+    await expect(restoreTurnIndex(root, record, governedOf([], true))).resolves.toEqual({
+      outcome: "unavailable",
+      restoredCount: 0,
+    });
+
+    expect(staged(root)).toEqual(["a.txt"]);
   });
 
   it("uses the live index for a step that began after the turn last settled", async () => {
@@ -300,7 +323,7 @@ describe("turn index restore", () => {
       git(root, "add", ...names);
     });
 
-    const result = await restoreTurnIndex(root, record, names);
+    const result = await restoreTurnIndex(root, record, governedOf(names));
 
     expect(result).toEqual({ outcome: "partial", restoredCount: 64 });
     expect(staged(root)).toHaveLength(70);

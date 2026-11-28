@@ -25,7 +25,7 @@ import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
-import { governedIndexPaths, resetGovernedIndexPaths } from "./governedIndexPaths.js";
+import { governedIndexRecord, resetGovernedIndexPaths } from "./governedIndexPaths.js";
 import {
   beginTurnIndex,
   restoreTurnIndex,
@@ -373,7 +373,7 @@ async function restoreIndexOrReport(
     const restored = await restoreTurnIndex(
       run.workspaceRoot,
       run.turnIndex,
-      governedIndexPaths(run.runId),
+      governedIndexRecord(run.runId),
     );
     const failure: unknown = run.turnIndex?.failure;
     if (failure !== undefined) reportIndexFailure(ports, run, failure);

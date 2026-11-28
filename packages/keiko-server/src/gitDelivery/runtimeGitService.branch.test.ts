@@ -12,6 +12,10 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
+import {
+  governedIndexRecord,
+  resetGovernedIndexPaths,
+} from "../coding-runtime/governedIndexPaths.js";
 import { runMigrations } from "../store/schema.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import {
@@ -194,6 +198,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetGovernedIndexPaths("run-branch");
   db.close();
   rmSync(base, { recursive: true, force: true });
 });
@@ -773,6 +778,88 @@ describe("redeeming a known stage proposal after the worktree drifted", () => {
       { check: (): boolean => true },
     );
     expect(redeemed).toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
+  });
+});
+
+// U-34b: the undo restores only what governed staging changed, so the one place that records it is
+// the successful index mutation, through the real service, repository and mutation adapter.
+describe("the paths governed staging records for the turn's undo", () => {
+  const request = (
+    operation: "stage" | "unstage",
+    phase: "propose" | "execute",
+    extra: Record<string, unknown>,
+  ): Parameters<RuntimeGitService["execute"]>[0] =>
+    ({
+      action: "git",
+      actionId: `${operation}-${phase}-1`,
+      idempotencyKey: `${operation}-${phase}-1`,
+      operation,
+      phase,
+      ...extra,
+    }) as Parameters<RuntimeGitService["execute"]>[0];
+
+  async function proposeAndRedeem(
+    gitService: RuntimeGitService,
+    operation: "stage" | "unstage",
+    between: () => void = (): void => undefined,
+  ): Promise<Awaited<ReturnType<RuntimeGitService["execute"]>>> {
+    const proposed = await gitService.execute(
+      request(operation, "propose", { paths: ["code.js"] }),
+      {
+        check: (): boolean => true,
+      },
+    );
+    if (proposed.kind !== operation || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    between();
+    return gitService.execute(request(operation, "execute", { proposalId: proposed.proposalId }), {
+      check: (): boolean => true,
+    });
+  }
+
+  it("records the staged paths of a successful stage and of a successful unstage", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      kind: "stage",
+      status: "succeeded",
+    });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("code.js");
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+
+    resetGovernedIndexPaths("run-branch");
+    await expect(proposeAndRedeem(gitService, "unstage")).resolves.toMatchObject({
+      kind: "unstage",
+      status: "succeeded",
+    });
+    expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+  });
+
+  it("records nothing for a stage that drifted, was refused or never ran", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    const gitService = service("none");
+
+    await expect(
+      proposeAndRedeem(gitService, "stage", () => {
+        writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+      }),
+    ).resolves.toMatchObject({ status: "drift" });
+    expect(governedIndexRecord("run-branch").paths).toEqual([]);
+
+    // A run whose authority ended after the proposal is refused before any index change.
+    const proposed = await gitService.execute(request("stage", "propose", { paths: ["code.js"] }), {
+      check: (): boolean => true,
+    });
+    if (proposed.kind !== "stage" || !("proposalId" in proposed))
+      throw new Error(`unexpected proposal ${JSON.stringify(proposed)}`);
+    live = false;
+    await gitService.execute(request("stage", "execute", { proposalId: proposed.proposalId }), {
+      check: (): boolean => true,
+    });
+    expect(governedIndexRecord("run-branch").paths).toEqual([]);
     expect(git(root, ["diff", "--cached", "--name-only"])).toBe("");
   });
 });

@@ -1849,7 +1849,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.index.restored":
     "Was dieser Durchgang vorgemerkt hat, ist wieder nicht vorgemerkt, wie vor dem Durchgang.",
   "codingWorkbench.revert.index.partial":
-    "Einiges, was dieser Durchgang vorgemerkt hat, ließ sich nicht zurücknehmen. Prüfe das Git-Fenster, bevor du committest.",
+    "Einige vorgemerkte Änderungen blieben bestehen: Sie können von dir oder von diesem Durchgang stammen, Keiko konnte das nicht unterscheiden. Prüfe das Git-Fenster, bevor du committest.",
   "codingWorkbench.revert.index.changed-after-turn":
     "Die vorgemerkten Änderungen blieben unverändert, weil sich der Git-Index nach dem Durchgang geändert hat. Prüfe das Git-Fenster, bevor du committest: Dateien können noch vorgemerkt sein.",
   "codingWorkbench.revert.index.head-moved":

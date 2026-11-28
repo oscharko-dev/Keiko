@@ -1782,7 +1782,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.revert.index.restored":
     "Changes this turn staged are unstaged again, as they were before the turn.",
   "codingWorkbench.revert.index.partial":
-    "Some changes this turn staged could not be unstaged. Check the Git window before you commit.",
+    "Some staged changes were left in place: they may be yours or this turn's, and Keiko could not tell which. Check the Git window before you commit.",
   "codingWorkbench.revert.index.changed-after-turn":
     "The staged changes were left as they are because the Git index changed after the turn. Check the Git window before you commit: files may still be staged.",
   "codingWorkbench.revert.index.head-moved":

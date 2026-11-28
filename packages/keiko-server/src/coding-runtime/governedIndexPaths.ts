@@ -5,20 +5,33 @@
  * person staged themselves in the Git window while the turn ran is never taken back.
  *
  * The record is bounded: the run least recently written is forgotten first, and a run keeps a
- * bounded number of paths. A forgotten run restores nothing in the index, which fails closed.
+ * bounded number of paths (`truncated` says the cap cut some). A forgotten, cut or restarted record
+ * cannot be told from a person's own staging, so the undo reports any changed path it does not name
+ * as a closed outcome instead of claiming it restored everything.
  */
 export const GOVERNED_INDEX_PATHS_MAX_RUNS = 256;
 export const GOVERNED_INDEX_PATHS_MAX_PER_RUN = 20_000;
 
-const records = new Map<string, Set<string>>();
+export interface GovernedIndexRecord {
+  readonly paths: readonly string[];
+  /** The per-run cap cut paths: the record is known to be incomplete. */
+  readonly truncated: boolean;
+}
+
+interface Held {
+  readonly paths: Set<string>;
+  truncated: boolean;
+}
+
+const records = new Map<string, Held>();
 
 /** Records the pathspecs one successful governed stage or unstage changed. */
 export function noteGovernedIndexPaths(runId: string, pathspecs: readonly string[]): void {
-  const held = records.get(runId) ?? new Set<string>();
+  const held = records.get(runId) ?? { paths: new Set<string>(), truncated: false };
   records.delete(runId);
   for (const pathspec of pathspecs) {
-    if (held.size >= GOVERNED_INDEX_PATHS_MAX_PER_RUN) break;
-    held.add(pathspec.replace(/\/+$/u, ""));
+    if (held.paths.size >= GOVERNED_INDEX_PATHS_MAX_PER_RUN) held.truncated = true;
+    else held.paths.add(pathspec.replace(/\/+$/u, ""));
   }
   records.set(runId, held);
   if (records.size <= GOVERNED_INDEX_PATHS_MAX_RUNS) return;
@@ -27,8 +40,9 @@ export function noteGovernedIndexPaths(runId: string, pathspecs: readonly string
 }
 
 /** What governed staging changed for the run since its newest human turn began. */
-export function governedIndexPaths(runId: string): readonly string[] {
-  return [...(records.get(runId) ?? [])];
+export function governedIndexRecord(runId: string): GovernedIndexRecord {
+  const held = records.get(runId);
+  return { paths: [...(held?.paths ?? [])], truncated: held?.truncated ?? false };
 }
 
 /** A new human turn begins: nothing staged before it counts as the turn's. */

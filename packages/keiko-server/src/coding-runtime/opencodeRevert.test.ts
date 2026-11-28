@@ -1209,7 +1209,7 @@ describe("undo and the Git index (U-34b)", () => {
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "restored" });
   });
 
-  it("restores nothing in the index that governed staging did not stage", async () => {
+  it("restores nothing in the index that governed staging did not stage, and says staged changes may remain", async () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
@@ -1221,6 +1221,7 @@ describe("undo and the Git index (U-34b)", () => {
     await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
 
     expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
-    await expect(port.revertState(RUN_ID)).resolves.not.toHaveProperty("index");
+    // A record that names nothing cannot be told from the person's own staging: never "restored".
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "partial" });
   });
 });

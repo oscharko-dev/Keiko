@@ -1,6 +1,6 @@
 import { createGitProcessRunner, gitEnv } from "@oscharko-dev/keiko-git";
 import type { GitProcessResult } from "@oscharko-dev/keiko-git";
-import { isGovernedIndexPath } from "./governedIndexPaths.js";
+import { isGovernedIndexPath, type GovernedIndexRecord } from "./governedIndexPaths.js";
 import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
@@ -212,7 +212,7 @@ function touchedPaths(start: TurnIndexImage, left: TurnIndexImage): readonly str
 export async function restoreTurnIndex(
   root: string,
   record: TurnIndexRecord | undefined,
-  governed: readonly string[],
+  governed: GovernedIndexRecord,
 ): Promise<TurnIndexRestoreResult> {
   const start = await record?.start;
   if (record === undefined || start === undefined) return NO_RESTORE;
@@ -247,14 +247,29 @@ function provenImages(
 async function restoreTouched(
   root: string,
   images: ProvenImages,
-  governed: readonly string[],
+  governed: GovernedIndexRecord,
 ): Promise<TurnIndexRestoreResult> {
   const { start, live, left } = images;
-  const touched = touchedPaths(start, left).filter((path) => isGovernedIndexPath(path, governed));
-  if (touched.length === 0) return NO_RESTORE;
+  const changed = touchedPaths(start, left);
+  const touched = changed.filter((path) => isGovernedIndexPath(path, governed.paths));
+  // A changed path the record does not name is the person's own staging, or the turn's when the
+  // record was forgotten, cut or lost with a restart. It stays, and the outcome says so.
+  const unrecorded = unrecordedOutcome(changed.length > touched.length, governed);
   // An undo asked again after a restore finds the index already at the turn start: nothing to do.
-  if (touched.every((path) => stateOf(live, path) === stateOf(start, path))) return NO_RESTORE;
-  return await restoreInTransaction(root, { start, left, touched });
+  if (touched.length === 0 || touched.every((path) => stateOf(live, path) === stateOf(start, path)))
+    return { outcome: unrecorded, restoredCount: 0 };
+  const result = await restoreInTransaction(root, { start, left, touched });
+  return result.outcome === "restored" && unrecorded !== undefined
+    ? { outcome: unrecorded, restoredCount: result.restoredCount }
+    : result;
+}
+
+function unrecordedOutcome(
+  any: boolean,
+  governed: GovernedIndexRecord,
+): TurnIndexRestoreResult["outcome"] {
+  if (!any) return undefined;
+  return governed.truncated ? "unavailable" : "partial";
 }
 
 interface RestorePlan {
