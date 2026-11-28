@@ -845,9 +845,10 @@ export class RuntimeGitService {
    * proceeds and the step judges after the approval, so this can only ever withhold a card.
    */
   public branchAskRefusal(branchName: string): CodingRuntimeGitBranch["reason"] | undefined {
-    const context = this.options.context();
-    if (context?.stillAuthorized() !== true) return undefined;
+    let context: VerifiedCommitRunContext | undefined;
     try {
+      context = this.options.context();
+      if (context?.stillAuthorized() !== true) return undefined;
       const reason = taskBranchAskRefusal({ context, port: this.options.taskBranch, branchName });
       if (reason !== undefined)
         this.log(

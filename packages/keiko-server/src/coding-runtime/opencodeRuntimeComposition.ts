@@ -5205,6 +5205,21 @@ function branchAskName(value: Readonly<Record<string, unknown>>): string | undef
     : undefined;
 }
 
+function recordBranchAskPrecheckFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.branch-ask-precheck",
+    errorClass: contentFreeErrorClass(error),
+    message: "tool-facade-failed",
+  });
+}
+
 // A task branch Keiko would refuse anyway is answered as that refusal, never asked of a person and
 // never mistaken for a human denial: an unsafe name (U-27), and any refusal the run's own state
 // already settles, such as a run that is not on its base branch (U-32). The step after an approval
@@ -5216,9 +5231,17 @@ function branchAskRefusal(
 ): OpenCodeToolBridgeResponse | undefined {
   const name = branchAskName(value);
   if (run === undefined || name === undefined) return undefined;
-  const refusal = isSafeTaskBranchName(name)
-    ? deps.facade.branchAsk?.refusal(name)
-    : invalidBranchNameToolResult();
+  let refusal: CodingToolResult | undefined;
+  try {
+    refusal = isSafeTaskBranchName(name)
+      ? deps.facade.branchAsk?.refusal(name)
+      : invalidBranchNameToolResult();
+  } catch (error) {
+    // Fail closed toward the person: a precheck that cannot answer leaves the ask to be asked, and
+    // the step after an approval judges it.
+    recordBranchAskPrecheckFailure(deps.diagnostics, run.runId, error);
+    return undefined;
+  }
   return refusal === undefined
     ? undefined
     : { status: 409, body: JSON.stringify(refusal), rejection: "branch-name-refused" };

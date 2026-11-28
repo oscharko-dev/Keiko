@@ -12610,7 +12610,7 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
 
   async function askBranch(
     mode: "governed-assist" | "supervised-coding",
-    refusal: CodingToolResult | undefined,
+    refusal: CodingToolResult | Error | undefined,
   ): Promise<{
     readonly status: number;
     readonly body: string;
@@ -12625,6 +12625,7 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
         branchAsk: {
           refusal: (name) => {
             consulted.push(name);
+            if (refusal instanceof Error) throw refusal;
             return refusal;
           },
         },
@@ -12662,6 +12663,17 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
       });
       expect(answered.asked).toBe(false);
       expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "falls back to asking, without a 409 or a rejection, when the precheck throws in %s",
+    async (mode) => {
+      const throwing = new TypeError("precheck unreadable");
+      const answered = await askBranch(mode, throwing);
+      expect(answered.consulted).toEqual(["feat/u27-branch-check"]);
+      expect(answered.status).not.toBe(409);
+      expect(answered.body).not.toContain('"kind":"branch"');
     },
   );
 

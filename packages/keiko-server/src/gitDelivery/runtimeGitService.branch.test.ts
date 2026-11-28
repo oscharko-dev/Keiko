@@ -32,6 +32,7 @@ const DIGEST = "a".repeat(64);
 let base: string;
 let root: string;
 let live: boolean;
+let contextFault: Error | undefined;
 let db: DatabaseSync;
 let events: ServerLogEvent[];
 let evidence: Map<string, string>;
@@ -62,6 +63,7 @@ function git(cwd: string, args: readonly string[]): string {
 }
 
 function context(): VerifiedCommitRunContext {
+  if (contextFault !== undefined) throw contextFault;
   return {
     runId: "run-branch",
     envelopeDigest: "b".repeat(64),
@@ -177,6 +179,7 @@ beforeEach(() => {
   git(root, ["add", "code.js"]);
   git(root, ["commit", "-qm", "base"]);
   live = true;
+  contextFault = undefined;
   runHead = "main";
   runBase = "main";
   admission = "admitted";
@@ -596,7 +599,6 @@ describe("a governed task branch through the Git kernel (#3907)", () => {
   });
 });
 
-// Every way the kernel can stop a branch step, in the tool's closed words (#3907).
 // U-32: a task branch Keiko is certain to refuse is refused while it is still an ask, with the
 // reason the step itself gives after a decision; the step stays the authoritative backstop.
 describe("a task-branch ask Keiko is certain to refuse (U-32)", () => {
@@ -659,6 +661,16 @@ describe("a task-branch ask Keiko is certain to refuse (U-32)", () => {
     expect(JSON.stringify(line)).not.toContain("unreadable");
   });
 
+  it("never refuses, and says why, when the run context itself cannot be read", () => {
+    contextFault = new TypeError("context unreadable");
+    expect(service().branchAskRefusal("feature/x")).toBeUndefined();
+    const [line] = branchLines();
+    expect(line).toMatchObject({
+      level: "warn",
+      extra: { phase: "branch", state: "failed", errorClass: "TypeError", refusedBeforeAsk: false },
+    });
+  });
+
   it("asks nothing of a run that is not live, leaving the decision to the step", () => {
     live = false;
     expect(service().branchAskRefusal("feature/x")).toBeUndefined();
@@ -666,6 +678,7 @@ describe("a task-branch ask Keiko is certain to refuse (U-32)", () => {
   });
 });
 
+// Every way the kernel can stop a branch step, in the tool's closed words (#3907).
 describe("the closed result of a stopped kernel outcome", () => {
   const executionResult = { schemaVersion: "1", outcome: "failed", durationMs: 0 } as never;
   it.each([
