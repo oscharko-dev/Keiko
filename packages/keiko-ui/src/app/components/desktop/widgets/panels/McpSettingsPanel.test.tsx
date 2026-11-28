@@ -94,7 +94,7 @@ describe("MCP Settings", () => {
       "https://identity.example.test",
     );
     expect(screen.getByLabelText("Public client ID (optional)")).toHaveValue("synthetic-public");
-    fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/u }));
     await waitFor(() => expect(api).toHaveBeenCalledTimes(2));
     const update = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
     expect(update.servers[0]?.transport).toEqual(oauth.servers[0]?.transport);
