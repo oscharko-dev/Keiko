@@ -326,7 +326,7 @@ describe("LiveTextHold", () => {
 
   it("holds a preface followed by a fence or an object, and waits for a tag name to finish", () => {
     const fence = new LiveTextHold(true, TOOLS);
-    expect(fence.push("Sure:\n```json\n{}\n```")).toBe("");
+    expect(fence.push('Sure:\n```json\n{"name":"shell"}\n```')).toBe("");
     expect(fence.isHolding).toBe(true);
     const split = new LiveTextHold(true, TOOLS);
     expect(split.push("Ok.\n<s")).toBe("");
@@ -342,6 +342,34 @@ describe("LiveTextHold", () => {
     const later = new LiveTextHold(true, TOOLS);
     expect(later.push("Ok.\n   \n\n")).toBe("");
     expect(later.push("then <div>")).toBe("Ok.\n   \n\nthen <div>");
+  });
+
+  it("streams an ordinary code block once its first content line is visible", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Here is the code:\n```js\n")).toBe("");
+    expect(hold.push("const x = 1;")).toBe("Here is the code:\n```js\nconst x = 1;");
+    expect(hold.isHolding).toBe(false);
+    expect(hold.push("\n```")).toBe("\n```");
+  });
+
+  it("keeps holding a preface followed by a fenced or bare tool-call object", () => {
+    const fenced = new LiveTextHold(true, TOOLS);
+    expect(fenced.push('Ok.\n```json\n{"name":"shell",')).toBe("");
+    expect(fenced.isHolding).toBe(true);
+    const bare = new LiveTextHold(true, TOOLS);
+    expect(bare.push('Ok.\n{\n  "tool": "shell"')).toBe("");
+    expect(bare.isHolding).toBe(true);
+    const tag = new LiveTextHold(true, TOOLS);
+    expect(tag.push("Ok.\n```xml\n<shell command=")).toBe("");
+    expect(tag.isHolding).toBe(true);
+  });
+
+  it("releases a fenced JSON block without a tool-call key once the lookahead is spent", () => {
+    const hold = new LiveTextHold(true, TOOLS);
+    expect(hold.push("Data:\n```json\n{")).toBe("");
+    const rows = '"a":1,'.repeat(40);
+    expect(hold.push(rows)).toBe(`Data:\n\`\`\`json\n{${rows}`);
+    expect(hold.isHolding).toBe(false);
   });
 
   it("releases a window that waits too long for the next line", () => {

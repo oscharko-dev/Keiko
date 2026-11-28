@@ -13028,6 +13028,15 @@ describe("coding sidecar gateway textual tool-call recovery (M-1)", () => {
     });
   });
 
+  it("delivers a preface and a fenced call once when the detector does not read it as a call", async () => {
+    // The detector reads a fence among prose as an example, so the held answer is released whole.
+    const markup = `Ok.\n\`\`\`\n{"name":"shell","arguments":{"command":"${"npm test ".repeat(30)}"}}\n\`\`\``;
+    const { body, seq } = await live([textual(markup), nativeCall()]);
+
+    expect(seq.requests).toHaveLength(1);
+    expect(liveText(body)).toBe(markup);
+  });
+
   it("recovers a live tool call that follows a short preface, discarding both unseen", async () => {
     const markup = `Ok.\n<shell command="${"npm test ".repeat(30)}" />`;
     const { body, seq, sink } = await live([textual(markup), nativeCall()]);

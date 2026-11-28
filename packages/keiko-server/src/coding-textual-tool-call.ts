@@ -365,7 +365,9 @@ export function detectTextualToolCall(
 // Lower-cases ASCII letters only, so the result has the length of the input and every index into it
 // is an index into the original (`toLowerCase` can change the length of some Unicode text).
 function asciiLower(text: string): string {
-  return text.replace(/[A-Z]/gu, (letter) => String.fromCodePoint((letter.codePointAt(0) ?? 0) + 32));
+  return text.replace(/[A-Z]/gu, (letter) =>
+    String.fromCodePoint((letter.codePointAt(0) ?? 0) + 32),
+  );
 }
 
 const MAX_COMPANION_TAGS = 32;
@@ -473,6 +475,9 @@ const PREFACE_LINE_MAX_CHARS = 160;
 // What the window may buffer while it waits for the next line to begin (blank lines, indentation, an
 // unfinished tag name) before it is released as prose.
 const PREFACE_WINDOW_MAX_CHARS = PREFACE_LINE_MAX_CHARS + 64;
+// How much of a code fence's or a JSON block's content is read for a tool call's keys.
+const CONTENT_LOOKAHEAD_MAX_CHARS = 160;
+const TOOL_CALL_KEY = /"(?:name|tool|tool_name|function|function_name|arguments|parameters)"\s*:/u;
 
 /**
  * Holds back a live answer that may turn out to be a tool call written as text. A detected call must
@@ -538,14 +543,16 @@ export class LiveTextHold {
         : this.wait(text);
     }
     const next = text.slice(newline + 1).search(/\S/u);
-    if (next === -1) return this.waitWithinWindow(text);
-    const verdict = classifyAnswerStart(text.slice(newline + 1 + next), this.names);
+    if (next === -1) return this.waitWithinWindow(text, PREFACE_WINDOW_MAX_CHARS);
+    const verdict = lineStartVerdict(text.slice(newline + 1 + next), this.names);
     if (verdict === "markup") {
       this.preface = "";
       this.holding = true;
       return this.hold(text);
     }
-    return verdict === "pending" ? this.waitWithinWindow(text) : this.settleAsProse(text);
+    return verdict === "pending"
+      ? this.waitWithinWindow(text, PREFACE_WINDOW_MAX_CHARS + CONTENT_LOOKAHEAD_MAX_CHARS + 64)
+      : this.settleAsProse(text);
   }
 
   private wait(text: string): string {
@@ -553,8 +560,8 @@ export class LiveTextHold {
     return "";
   }
 
-  private waitWithinWindow(text: string): string {
-    return text.length > PREFACE_WINDOW_MAX_CHARS ? this.settleAsProse(text) : this.wait(text);
+  private waitWithinWindow(text: string, cap: number): string {
+    return text.length > cap ? this.settleAsProse(text) : this.wait(text);
   }
 
   private settleAsProse(text: string): string {
@@ -597,6 +604,35 @@ export class LiveTextHold {
 }
 
 type AnswerStart = "markup" | "text" | "pending";
+
+// What follows a code fence's opening line, or undefined while that line is not finished.
+function afterFenceLine(text: string): string | undefined {
+  const lineEnd = text.indexOf("\n");
+  return lineEnd === -1 ? undefined : text.slice(lineEnd + 1);
+}
+
+// What a markup start at a line start after a preface says once its first content is visible. A tag
+// decides at once. A code fence, `{` or `[` is a tool call only when its first content is a tag that
+// names a tool or a JSON object carrying a tool-call key within the lookahead bound; an ordinary
+// code block ("Here is the code:" then a fence) is prose and streams.
+function lineStartVerdict(text: string, names: readonly string[]): AnswerStart {
+  const start = classifyAnswerStart(text, names);
+  if (start !== "markup" || text.startsWith("<")) return start;
+  const content = text.startsWith("```") ? afterFenceLine(text) : text;
+  if (content === undefined) return "pending";
+  const at = content.search(/\S/u);
+  if (at === -1) return "pending";
+  const visible = content.slice(at);
+  return visible.startsWith("<") ? classifyAnswerStart(visible, names) : jsonBlockVerdict(visible);
+}
+
+// A JSON block is a tool call when a tool-call key shows within the lookahead; any other first
+// content is prose; a block that is still short may yet show the key.
+function jsonBlockVerdict(visible: string): AnswerStart {
+  if (!visible.startsWith("{") && !visible.startsWith("[")) return "text";
+  if (TOOL_CALL_KEY.test(visible.slice(0, CONTENT_LOOKAHEAD_MAX_CHARS))) return "markup";
+  return visible.length >= CONTENT_LOOKAHEAD_MAX_CHARS ? "text" : "pending";
+}
 
 const TAG_NAME_AT_START = /^\/?([a-z0-9_.:-]*)/u;
 const MAX_TAG_LOOKAHEAD_CHARS = 96;
