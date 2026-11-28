@@ -311,7 +311,10 @@ function createCodingWorkbenchRuntimeActions({
       dispatch({ kind: "select-model", modelId });
     },
     setReasoningEffort: (effort) => dispatch({ kind: "select-reasoning-effort", effort }),
-    dismissRefusal: () => dispatch({ kind: "refusal-dismissed" }),
+    dismissRefusal: () => {
+      dispatch({ kind: "refusal-dismissed" });
+      dispatch({ kind: "pending-start-left" });
+    },
     prepareCodexSetup,
     refreshProfile,
     refreshSource,

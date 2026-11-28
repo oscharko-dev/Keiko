@@ -545,11 +545,16 @@ async function failMutation(
   { refreshRun, dispatch }: RuntimeMutationQueueInput,
   error: unknown,
   signal: AbortSignal,
+  requestId: string | undefined,
 ): Promise<void> {
   // A request Stop took the place of is neither a failure nor a timeout: no alert, no report.
   if (wasPreempted(signal)) return;
   const failure = codingWorkbenchRuntimeApiError(error);
-  dispatch({ kind: "mutation-failed", error: failure });
+  dispatch({
+    kind: "mutation-failed",
+    error: failure,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
   if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
   // A request that hit its deadline has an unknown outcome, and a start whose run already exists
   // keeps going on the server: only a re-read shows it (#4271).
@@ -579,8 +584,11 @@ async function runMutation(
 ): Promise<void> {
   // Stop took this mutation's place while it still waited for its turn: it is never sent.
   if (wasPreempted(signal)) return;
+  // The attempt a late failure is bound to, so it never lands on whatever the window shows later.
+  let requestId: string | undefined;
   try {
     const command = prepare(context.stateRef.current);
+    requestId = command.requestId;
     context.dispatch({ kind: "mutation-start", mutation: kind, requestId: command.requestId });
     const snapshot = await command.run(signal);
     if (wasPreempted(signal)) return;
@@ -589,7 +597,7 @@ async function runMutation(
     context.dispatch({ kind: "mutation-complete" });
   } catch (error) {
     reportMutationFailure(error, signal);
-    await failMutation(context, error, signal);
+    await failMutation(context, error, signal, requestId);
   }
 }
 

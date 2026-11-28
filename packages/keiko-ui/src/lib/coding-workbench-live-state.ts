@@ -140,6 +140,12 @@ export interface CodingWorkbenchMutationState {
    */
   readonly cancelled?: true;
   /**
+   * The person left the task while this Start was still in flight. Its late failure belongs to
+   * the task that was left, so it must not alert on the task shown now; the server-side re-read
+   * that follows a conflict still runs.
+   */
+  readonly leftTask?: true;
+  /**
    * A newer snapshot superseded this failed action: the mutation is idle again without having
    * succeeded. Like `cancelled`, it must never read as "pending → idle" success, and it keeps the
    * refused kind and code, so a window that never rendered the failure (the re-read came back
@@ -188,6 +194,11 @@ export interface CodingWorkbenchRuntimeState {
   readonly run: CodingWorkbenchResourceState<CodingWorkbenchRuntimeSnapshot>;
   readonly stream: CodingWorkbenchResourceState<CodingWorkbenchStreamProjection>;
   readonly mutation: CodingWorkbenchMutationState;
+  /**
+   * Whether the last completed source read admitted the model. A read that is merely in flight or
+   * failed leaves it as it was, so a refused start is only ended by a confirmed change (U-46).
+   */
+  readonly confirmedSourceAdmitted: boolean;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly pairing: CodingWorkbenchPairingState;
   readonly canStart: boolean;
@@ -233,8 +244,14 @@ export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "mutation-complete" }
   | { readonly kind: "session-renewed" }
   | { readonly kind: "refusal-dismissed" }
+  | { readonly kind: "pending-start-left" }
   | { readonly kind: "mutation-cancelled" }
-  | { readonly kind: "mutation-failed"; readonly error: CodingWorkbenchClientError }
+  | {
+      readonly kind: "mutation-failed";
+      readonly error: CodingWorkbenchClientError;
+      /** The attempt that failed; a failure of an attempt no longer shown is dropped. */
+      readonly requestId?: string;
+    }
   | { readonly kind: "events-received"; readonly events: readonly CodingWorkbenchRuntimeSseEvent[] }
   | { readonly kind: "events-reset" }
   | { readonly kind: "pairing-set"; readonly pairing: CodingWorkbenchPairingState };
@@ -285,6 +302,7 @@ export function createInitialCodingWorkbenchRuntimeState(
     run: emptyResource(),
     stream: emptyResource(),
     mutation: IDLE_MUTATION,
+    confirmedSourceAdmitted: false,
     events: [],
     pairing: "unknown",
     canStart: false,
@@ -442,11 +460,29 @@ function sourceAdmitsModel(source: CodingWorkbenchRuntimeState["source"]): boole
 // repeats an admitted source proves nothing about the refusal and keeps it.
 function withoutResolvedModelRefusal(
   state: CodingWorkbenchRuntimeState,
-  before: CodingWorkbenchRuntimeState["source"],
+  admittedBefore: boolean,
 ): CodingWorkbenchRuntimeState {
-  return sourceAdmitsModel(state.source) && !sourceAdmitsModel(before)
-    ? withoutModelRefusal(state)
-    : state;
+  const admitted = sourceAdmitsModel(state.source);
+  const settled = admitted && !admittedBefore ? withoutModelRefusal(state) : state;
+  return { ...settled, confirmedSourceAdmitted: admitted };
+}
+
+function failedMutation(
+  state: CodingWorkbenchRuntimeState,
+  error: CodingWorkbenchClientError,
+): CodingWorkbenchRuntimeState {
+  return projectReadiness({
+    ...state,
+    mutation: {
+      ...state.mutation,
+      status: "error",
+      error,
+      failedAgainst: {
+        runId: state.run.value?.runId ?? null,
+        revision: state.run.value?.revision ?? 0,
+      },
+    },
+  });
 }
 
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
@@ -618,6 +654,7 @@ function selectPreference(
       profile: emptyResource(),
       codexSetup: emptyResource(),
       source: emptyResource(),
+      confirmedSourceAdmitted: false,
     }),
   );
 }
@@ -740,6 +777,7 @@ const runtimeActionHandlers = {
         ...state,
         selectedModelId: action.modelId,
         reasoningEffort: null,
+        confirmedSourceAdmitted: false,
       }),
     ),
   "select-reasoning-effort": (state, action): CodingWorkbenchRuntimeState => ({
@@ -765,7 +803,10 @@ const runtimeActionHandlers = {
     action.source.runtimePreference !== state.runtimePreference
       ? state
       : projectReadiness(
-          withoutResolvedModelRefusal({ ...state, source: ready(action.source) }, state.source),
+          withoutResolvedModelRefusal(
+            { ...state, source: ready(action.source) },
+            state.confirmedSourceAdmitted,
+          ),
         ),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness(
@@ -806,21 +847,23 @@ const runtimeActionHandlers = {
   // live (a failed stop, approval or recovery acknowledgement): that failure still applies (U-42).
   "refusal-dismissed": (state): CodingWorkbenchRuntimeState =>
     failedAgainstLiveRun(state) ? state : withoutMutationError(state),
+  // The person left the task whose Start is still in flight: the Start stays pending (a second one
+  // is not allowed), but its late failure no longer alerts on the task shown now.
+  "pending-start-left": (state): CodingWorkbenchRuntimeState =>
+    state.mutation.status === "pending" && state.mutation.kind === "start"
+      ? { ...state, mutation: { ...state.mutation, leftTask: true } }
+      : state,
   "mutation-cancelled": (state): CodingWorkbenchRuntimeState =>
     projectReadiness({ ...state, mutation: CANCELLED_MUTATION }),
-  "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({
-      ...state,
-      mutation: {
-        ...state.mutation,
-        status: "error",
-        error: action.error,
-        failedAgainst: {
-          runId: state.run.value?.runId ?? null,
-          revision: state.run.value?.revision ?? 0,
-        },
-      },
-    }),
+  "mutation-failed": (state, action): CodingWorkbenchRuntimeState => {
+    if (action.requestId !== undefined && state.mutation.requestId !== action.requestId) {
+      return state;
+    }
+    if (state.mutation.leftTask === true) {
+      return projectReadiness({ ...state, mutation: CANCELLED_MUTATION });
+    }
+    return failedMutation(state, action.error);
+  },
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),
   "events-reset": (state): CodingWorkbenchRuntimeState => ({

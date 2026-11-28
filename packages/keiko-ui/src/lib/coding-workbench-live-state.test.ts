@@ -1102,6 +1102,74 @@ describe("a refused action belongs to the attempt that produced it (U-42, U-46)"
     expect(failedProbe.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
   });
 
+  it("keeps the refusal through a bare re-read that reports the same admitted model (U-46)", () => {
+    const verified = { ...UNVERIFIED, verification: "verified" } as const;
+    const admitted = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "source-set",
+      source: verified,
+    });
+    const refusedState = codingWorkbenchRuntimeReducer(admitted, {
+      kind: "mutation-failed",
+      error: {
+        code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+        message: "redacted",
+        retryable: true,
+        correlationId: "corr-refused",
+      },
+    });
+    const loading = codingWorkbenchRuntimeReducer(refusedState, {
+      kind: "resource-loading",
+      resource: "source",
+    });
+    const reread = codingWorkbenchRuntimeReducer(loading, { kind: "source-set", source: verified });
+    expect(reread.mutation.error?.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+  });
+
+  it("still ends the refusal through the production loading step when the model became admitted", () => {
+    const loading = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_MODEL_UNAVAILABLE"), {
+      kind: "resource-loading",
+      resource: "source",
+    });
+    const admitted = codingWorkbenchRuntimeReducer(loading, {
+      kind: "source-set",
+      source: { ...UNVERIFIED, verification: "verified" },
+    });
+    expect(admitted.mutation).toMatchObject({ status: "idle", error: null });
+  });
+
+  it("drops the late failure of a Start the person already left, but keeps it pending until then", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "old-start",
+    });
+    const left = codingWorkbenchRuntimeReducer(
+      codingWorkbenchRuntimeReducer(pending, { kind: "refusal-dismissed" }),
+      { kind: "pending-start-left" },
+    );
+    expect(left.mutation.status).toBe("pending");
+    const late = codingWorkbenchRuntimeReducer(left, {
+      kind: "mutation-failed",
+      requestId: "old-start",
+      error: { code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT", message: "redacted", retryable: true },
+    });
+    expect(late.mutation).toMatchObject({ status: "idle", error: null, cancelled: true });
+  });
+
+  it("ignores a failure of an attempt that is no longer the one shown", () => {
+    const pending = codingWorkbenchRuntimeReducer(readyState(), {
+      kind: "mutation-start",
+      mutation: "start",
+      requestId: "new-start",
+    });
+    const late = codingWorkbenchRuntimeReducer(pending, {
+      kind: "mutation-failed",
+      requestId: "old-start",
+      error: { code: "CODING_RUNTIME_ACTIVE_RUN_CONFLICT", message: "redacted", retryable: true },
+    });
+    expect(late).toBe(pending);
+  });
+
   it("keeps every other refusal when a source read reports an admitted model", () => {
     const state = codingWorkbenchRuntimeReducer(refused("CODING_RUNTIME_INVALID_INTENT"), {
       kind: "source-set",
