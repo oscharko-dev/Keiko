@@ -3631,7 +3631,7 @@ describe("CodingRuntimeOrchestrator", () => {
         expect.objectContaining({
           correlationId: "3f2b8a52-0d6e-4c1a-9a57-2f7f0c1e9b13",
           operation: "coding-runtime.start",
-          code: "stage=start-scope:reason=root-lookup-failed",
+          code: "stage=start-scope:reason=root-lookup-failed:errno=EACCES",
         }),
       );
     },

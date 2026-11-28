@@ -1442,6 +1442,7 @@ function rootsAreSameFolderOrReport(
   try {
     return repositoryRootsAreSameFolder(expectedRoot, activeRoot);
   } catch (error) {
+    const described = describeError(error);
     emitServerDiagnostic(diagnostics, {
       correlationId:
         correlationId !== undefined && isValidCorrelationId(correlationId)
@@ -1450,9 +1451,12 @@ function rootsAreSameFolderOrReport(
       timestamp: new Date().toISOString(),
       operation: "coding-runtime.start",
       source: "coding-runtime-orchestrator.start",
-      ...describeError(error),
+      ...described,
       message: "runtime-start-failed",
-      code: "stage=start-scope:reason=root-lookup-failed",
+      // The closed reason, with the machine errno (EACCES, ENOENT) the lookup failed with.
+      code: `stage=start-scope:reason=root-lookup-failed${
+        described.code === undefined ? "" : `:errno=${described.code}`
+      }`,
     });
     return false;
   }
