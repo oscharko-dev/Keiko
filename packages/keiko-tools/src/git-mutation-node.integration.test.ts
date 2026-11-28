@@ -25,7 +25,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { createNodeGitMutationAdapter, readGitStageSupport } from "./git-mutation-node.js";
+import {
+  createGitReadSession,
+  createNodeGitMutationAdapter,
+  readGitStageSupport,
+} from "./git-mutation-node.js";
+import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import type {
   GitLocalMutationAdapter,
   GitVerifiedCommitPrecondition,
@@ -390,6 +395,88 @@ describe("node git mutation adapter — multi-step recovery through the real bou
     });
     expect(partial.outcome).toBe("partial");
     expect(partial.partialDetail).toEqual({ attemptedUnitCount: 2, succeededUnitCount: 1 });
+  });
+});
+
+// Windows lab (1.5.10): every Git process costs 70 to 130 ms there, and each governed step used to
+// probe the repository's promisor remotes again before its own process. The probe is the guard's
+// `git config --get-regexp ^remote\..*\.(promisor|partialclonefilter)$`.
+describe("node git mutation adapter — one promisor verdict per operation", () => {
+  const PROMISOR_PROBE = String.raw`^remote\..*\.(promisor|partialclonefilter)$`;
+
+  function countingAdapter(options: { readonly readSession?: boolean } = {}): {
+    readonly adapter: GitLocalMutationAdapter;
+    readonly probes: () => number;
+    readonly processes: () => number;
+  } {
+    let probes = 0;
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, spawnOptions) => {
+      processes += 1;
+      if (args.includes(PROMISOR_PROBE)) probes += 1;
+      return nodeSpawnFn(command, args, spawnOptions);
+    };
+    return {
+      adapter: createNodeGitMutationAdapter({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+        now: () => Date.now(),
+        spawn,
+        ...(options.readSession === true ? { readSession: createGitReadSession() } : {}),
+      }),
+      probes: () => probes,
+      processes: () => processes,
+    };
+  }
+
+  function dirtyRepositoryTwoCommitsDeep(): string {
+    const { base } = seedBaseCommit();
+    writeFileSync(join(root, "f.txt"), "v2\n", "utf8");
+    git(["commit", "-am", "v2"]);
+    writeFileSync(join(root, "f.txt"), "dirty\n", "utf8");
+    return base;
+  }
+
+  it("probes once for a two-step operation, where it probed before each step", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: counted, probes, processes } = countingAdapter();
+    const recovered = await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(recovered.outcome).toBe("succeeded");
+    expect(processes()).toBe(3);
+    expect(probes()).toBe(1);
+  });
+
+  it("probes again for the next operation of the same adapter", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: counted, probes } = countingAdapter();
+    await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(probes()).toBe(1);
+    // A promisor remote configured between two operations is seen by the second one.
+    git(["config", "remote.origin.url", "https://example.invalid/repo.git"]);
+    git(["config", "remote.origin.promisor", "true"]);
+    await counted.switchBranch({ branchName: "main" });
+    await counted.switchBranch({ branchName: "main" });
+    expect(probes()).toBe(3);
+  });
+
+  it("shares the verdict of a scope the caller owns across the operations inside it", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const { adapter: scoped, probes } = countingAdapter({ readSession: true });
+    await scoped.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    await scoped.switchBranch({ branchName: "main" });
+    expect(probes()).toBe(1);
   });
 });
 

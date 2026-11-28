@@ -1514,6 +1514,284 @@ describe("verified Code-task commit service", () => {
     });
     expect(git(["log", "-1", "--format=%G?"])).toBe("N");
   });
+  // Windows lab (1.5.10): every Git process costs 70 to 130 ms there, so a tool step is as slow as
+  // the processes it starts. The shim is a real `git` on PATH that records each start, so these pins
+  // count the processes of the production entry points (RuntimeGitService, the commit service)
+  // instead of restating how many reads the code is supposed to make.
+  describe.skipIf(process.platform === "win32")("Git processes of one governed action", () => {
+    // The most processes each action may start, measured on the code that makes one read of the
+    // repository per proposal, one scope (and one promisor probe) per operation, one `git remote`
+    // for the signing decision and one `rev-parse` for the branch lookup. Before that code the same
+    // actions started 12, 43, 58, 42, 26, 70, 83 and 34.
+    const spawnBudget = {
+      status: 12,
+      stagePropose: 18,
+      stageExecute: 41,
+      unstagePropose: 19,
+      commitPrepare: 25,
+      commitExecute: 52,
+      commitExecuteSigningUnset: 55,
+      branch: 25,
+      branchExists: 13,
+    };
+    let shimDir: string;
+    let spawnLog: string;
+    let previousPath: string | undefined;
+
+    beforeEach(() => {
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      shimDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-shim-")));
+      spawnLog = join(shimDir, "spawns.log");
+      writeFileSync(spawnLog, "");
+      writeFileSync(
+        join(shimDir, "git"),
+        `#!/bin/sh\n{ printf '%s' "$*" | tr '\\n' ' ' | cut -c1-110; echo; } >> '${spawnLog}'\nexec '${realGit}' "$@"\n`,
+        { mode: 0o755 },
+      );
+      previousPath = process.env.PATH;
+      process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+      const execution = {
+        ...options.execution,
+        processEnv: { PATH: process.env.PATH, HOME: root },
+      };
+      fixtureGitEnvironment.value = execution.processEnv;
+      options = { ...options, execution };
+      service = createVerifiedCommitService(options);
+    });
+    afterEach(() => {
+      process.env.PATH = previousPath;
+      rmSync(shimDir, { recursive: true, force: true });
+    });
+
+    // The arguments of every process the action started, so a failing budget names what ran.
+    async function counted<T>(
+      run: () => Promise<T>,
+    ): Promise<{ value: T; spawned: number; started: string }> {
+      writeFileSync(spawnLog, "");
+      const value = await run();
+      const lines = readFileSync(spawnLog, "utf8").split("\n").filter(Boolean);
+      return { value, spawned: lines.length, started: lines.join("\n") };
+    }
+    function runtimeService(mode: "supervised-coding" | "autonomous-delivery"): RuntimeGitService {
+      return new RuntimeGitService({
+        ...options,
+        mode: () => mode,
+        invalidateVerification: (): void => {
+          service.invalidate();
+        },
+      });
+    }
+    const guard = { check: (): boolean => true };
+    function request(
+      operation: "stage" | "unstage",
+      phase: "propose" | "execute",
+      rest: { readonly paths: readonly string[] } | { readonly proposalId: string },
+    ): Parameters<RuntimeGitService["execute"]>[0] {
+      return {
+        action: "git",
+        actionId: `${operation}-${phase}`,
+        idempotencyKey: `${operation}-${phase}`,
+        operation,
+        phase,
+        ...rest,
+      } as Parameters<RuntimeGitService["execute"]>[0];
+    }
+
+    it("starts as few processes for a status as its one raw read needs", async () => {
+      const { value, spawned, started } = await counted(() =>
+        runtimeService("supervised-coding").execute(
+          { action: "git", actionId: "s", idempotencyKey: "s", operation: "status" },
+          guard,
+        ),
+      );
+      expect(value).toMatchObject({ kind: "status", branch: "codex/task" });
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.status);
+    });
+
+    it("reads the repository once for a stage proposal and re-reads it for the redemption", async () => {
+      writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+      const runtime = runtimeService("supervised-coding");
+      const proposed = await counted(() =>
+        runtime.execute(request("stage", "propose", { paths: ["other.js"] }), guard),
+      );
+      expect(proposed.value).toMatchObject({ kind: "stage", status: "ready" });
+      expect(proposed.spawned, proposed.started).toBeLessThanOrEqual(spawnBudget.stagePropose);
+      if (proposed.value.kind !== "stage") throw new Error("stage proposal unavailable");
+      const { proposalId } = proposed.value;
+      const redeemed = await counted(() =>
+        runtime.execute(request("stage", "execute", { proposalId }), guard),
+      );
+      expect(redeemed.value).toMatchObject({ kind: "stage", status: "succeeded" });
+      expect(git(["show", ":other.js"])).toBe("export const other = 3;");
+      expect(redeemed.spawned, redeemed.started).toBeLessThanOrEqual(spawnBudget.stageExecute);
+    });
+
+    it("reads the repository once for an unstage proposal", async () => {
+      const { value, spawned, started } = await counted(() =>
+        runtimeService("supervised-coding").execute(
+          request("unstage", "propose", { paths: ["code.js"] }),
+          guard,
+        ),
+      );
+      expect(value).toMatchObject({ kind: "unstage", status: "ready" });
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.unstagePropose);
+    });
+
+    it("still refuses a redemption whose staged tree moved after the proposal", async () => {
+      writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+      const runtime = runtimeService("supervised-coding");
+      const proposed = await runtime.execute(
+        request("stage", "propose", { paths: ["other.js"] }),
+        guard,
+      );
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+      git(["add", "code.js"]);
+      await expect(
+        runtime.execute(request("stage", "execute", { proposalId: proposed.proposalId }), guard),
+      ).resolves.toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+      expect(git(["ls-files", "--", "other.js"])).toBe("");
+    });
+
+    it("still refuses a redemption whose candidate bytes changed after the proposal", async () => {
+      writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+      const runtime = runtimeService("supervised-coding");
+      const proposed = await runtime.execute(
+        request("stage", "propose", { paths: ["other.js"] }),
+        guard,
+      );
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      writeFileSync(join(root, "other.js"), "export const other = 4;\n");
+      await expect(
+        runtime.execute(request("stage", "execute", { proposalId: proposed.proposalId }), guard),
+      ).resolves.toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+    });
+
+    it("prepares a commit from the facts of its two bracketing reads", async () => {
+      const ticket = ticketOf(await service.beginVerification());
+      if (ticket === undefined) throw new Error("verification ticket unavailable");
+      expect(await service.completeVerification(ticket, report())).toBe(true);
+      const { value, spawned, started } = await counted(() =>
+        service.propose("feat: counted commit"),
+      );
+      expect(value).toMatchObject({ status: "approval-required" });
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.commitPrepare);
+    });
+
+    it("executes a commit in the processes its governed steps need", async () => {
+      const id = await verifiedProposal();
+      const approval = await claim(id);
+      const { value, spawned, started } = await counted(() => service.execute(id, approval));
+      expect(value).toMatchObject({ status: "succeeded" });
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.commitExecute);
+    });
+
+    it("decides the signature requirement from the branch and the remote list alone", async () => {
+      git(["config", "--unset", "commit.gpgsign"]);
+      withProtection(requiresSignatures);
+      const id = await verifiedProposal();
+      const approval = await claim(id);
+      const { value, spawned, started } = await counted(() => service.execute(id, approval));
+      expect(value).toMatchObject({ status: "succeeded" });
+      expect(git(["log", "-1", "--format=%G?"])).toBe("G");
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.commitExecuteSigningUnset);
+    });
+
+    function branchingService(): { readonly service: RuntimeGitService; adopted: () => boolean } {
+      git(["checkout", "-qf", "dev"]);
+      const base = { ...context(), baseRef: "dev", headRef: "dev" };
+      let adopted = false;
+      const branching = new RuntimeGitService({
+        ...options,
+        context: (): VerifiedCommitRunContext => base,
+        mode: (): "autonomous-delivery" => "autonomous-delivery",
+        invalidateVerification: (): void => undefined,
+        taskBranch: {
+          admit: (): "admitted" => "admitted",
+          adopt: (): boolean => {
+            adopted = true;
+            return true;
+          },
+        },
+      });
+      return { service: branching, adopted: () => adopted };
+    }
+    const branchRequest = {
+      action: "git",
+      actionId: "b",
+      idempotencyKey: "b",
+      operation: "branch",
+      branchName: "keiko/counted",
+    } as const;
+
+    it("creates a task branch from the base branch in the processes the step needs", async () => {
+      const { service: branching, adopted } = branchingService();
+      const { value, spawned, started } = await counted(() =>
+        branching.execute(branchRequest, guard),
+      );
+      expect(value).toMatchObject({ kind: "branch", status: "succeeded" });
+      expect(adopted()).toBe(true);
+      expect(git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("keiko/counted");
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.branch);
+    });
+
+    it("answers whether a task branch exists with one reference lookup, not a worktree snapshot", async () => {
+      const elsewhere = git(["commit-tree", "--no-gpg-sign", "-p", "dev", "-m", "x", "dev^{tree}"]);
+      git(["branch", "keiko/counted", elsewhere]);
+      const { service: branching, adopted } = branchingService();
+      const { value, spawned, started } = await counted(() =>
+        branching.execute(branchRequest, guard),
+      );
+      expect(value).toMatchObject({ kind: "branch", status: "blocked", reason: "branch-exists" });
+      expect(adopted()).toBe(false);
+      expect(started).toContain(
+        "rev-parse --verify --quiet --end-of-options refs/heads/keiko/counted",
+      );
+      expect(spawned, started).toBeLessThanOrEqual(spawnBudget.branchExists);
+    });
+
+    it("still switches to a branch that already stands on the run's commit", async () => {
+      const { service: branching, adopted } = branchingService();
+      git(["branch", "keiko/counted", "dev"]);
+      await expect(branching.execute(branchRequest, guard)).resolves.toMatchObject({
+        kind: "branch",
+        status: "succeeded",
+      });
+      expect(adopted()).toBe(true);
+      expect(git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("keiko/counted");
+    });
+
+    it("refuses an unstage redemption whose staged tree moved after the proposal", async () => {
+      const runtime = runtimeService("supervised-coding");
+      const proposed = await runtime.execute(
+        request("unstage", "propose", { paths: ["code.js"] }),
+        guard,
+      );
+      if (proposed.kind !== "unstage") throw new Error("unstage proposal unavailable");
+      writeFileSync(join(root, "extra.js"), "export const extra = 1;\n");
+      git(["add", "extra.js"]);
+      await expect(
+        runtime.execute(request("unstage", "execute", { proposalId: proposed.proposalId }), guard),
+      ).resolves.toMatchObject({ kind: "unstage", status: "drift", reason: "candidate-drift" });
+      expect(git(["diff", "--cached", "--name-only"])).toContain("code.js");
+    });
+
+    it("refuses a stage redemption whose head moved after the proposal", async () => {
+      writeFileSync(join(root, "other.js"), "export const other = 3;\n");
+      const runtime = runtimeService("supervised-coding");
+      const proposed = await runtime.execute(
+        request("stage", "propose", { paths: ["other.js"] }),
+        guard,
+      );
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      git(["commit", "-qm", "moved", "--no-gpg-sign"]);
+      await expect(
+        runtime.execute(request("stage", "execute", { proposalId: proposed.proposalId }), guard),
+      ).resolves.toMatchObject({ kind: "stage", status: "drift", reason: "candidate-drift" });
+      expect(git(["ls-files", "--", "other.js"])).toBe("");
+    });
+  });
+
   it("reconciles an interrupted receipt from live commit objects without replaying its approval", async () => {
     const id = await verifiedProposal();
     const approval = await claim(id);
