@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,11 +8,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   beginTurnIndex,
   captureTurnIndex,
+  reopenTurnIndex,
   restoreTurnIndex,
   settleTurnIndex,
 } from "./opencodeTurnIndex.js";
 
 const roots: string[] = [];
+/** What the turn's governed staging named; the run's record is the production source of it. */
+const GOVERNED = ["a.txt", "b.txt", "p.txt", "new.txt"];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -76,7 +79,7 @@ describe("turn index restore", () => {
     });
     expect(staged(root)).toEqual(["a.txt", "new.txt"]);
 
-    await expect(restoreTurnIndex(root, record)).resolves.toEqual({
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
       outcome: "restored",
       restoredCount: 2,
     });
@@ -100,7 +103,7 @@ describe("turn index restore", () => {
       git(root, "add", "a.txt", "b.txt");
     });
 
-    await expect(restoreTurnIndex(root, record)).resolves.toEqual({
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
       outcome: "restored",
       restoredCount: 2,
     });
@@ -118,7 +121,9 @@ describe("turn index restore", () => {
     });
     expect(staged(root)).toEqual([]);
 
-    await expect(restoreTurnIndex(root, record)).resolves.toMatchObject({ outcome: "restored" });
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toMatchObject({
+      outcome: "restored",
+    });
 
     expect(staged(root)).toEqual(["p.txt"]);
   });
@@ -133,7 +138,7 @@ describe("turn index restore", () => {
     git(root, "add", "a.txt");
     const before = git(root, "ls-files", "-s");
 
-    await expect(restoreTurnIndex(root, record)).resolves.toEqual({
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
       outcome: "changed-after-turn",
       restoredCount: 0,
     });
@@ -150,7 +155,9 @@ describe("turn index restore", () => {
     writeFileSync(join(root, "p.txt"), "staged later\n");
     git(root, "add", "p.txt");
 
-    await expect(restoreTurnIndex(root, record)).resolves.toMatchObject({ outcome: "restored" });
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toMatchObject({
+      outcome: "restored",
+    });
 
     expect(staged(root)).toEqual(["p.txt"]);
   });
@@ -165,7 +172,7 @@ describe("turn index restore", () => {
     writeFileSync(join(root, "b.txt"), "b staged later\n");
     git(root, "add", "b.txt");
 
-    await expect(restoreTurnIndex(root, record)).resolves.toEqual({
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
       outcome: "head-moved",
       restoredCount: 0,
     });
@@ -180,7 +187,9 @@ describe("turn index restore", () => {
     writeFileSync(join(root, "a.txt"), "a changed\n");
     git(root, "add", "a.txt");
 
-    await expect(restoreTurnIndex(root, record)).resolves.toMatchObject({ outcome: "restored" });
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toMatchObject({
+      outcome: "restored",
+    });
 
     expect(staged(root)).toEqual([]);
   });
@@ -190,17 +199,124 @@ describe("turn index restore", () => {
     const idle = await turn(root, () => {
       writeFileSync(join(root, "a.txt"), "edited only\n");
     });
-    await expect(restoreTurnIndex(root, idle)).resolves.toEqual({
+    await expect(restoreTurnIndex(root, idle, GOVERNED)).resolves.toEqual({
       outcome: undefined,
       restoredCount: 0,
     });
-    await expect(restoreTurnIndex(root, undefined)).resolves.toMatchObject({ outcome: undefined });
+    await expect(restoreTurnIndex(root, undefined, GOVERNED)).resolves.toMatchObject({
+      outcome: undefined,
+    });
 
     const plain = realpathSync(mkdtempSync(join(tmpdir(), "keiko-turn-index-plain-")));
     roots.push(plain);
     mkdirSync(join(plain, "src"));
     expect(await captureTurnIndex(plain)).toBeUndefined();
     const record = await turn(plain, () => undefined);
-    await expect(restoreTurnIndex(plain, record)).resolves.toMatchObject({ outcome: undefined });
+    await expect(restoreTurnIndex(plain, record, GOVERNED)).resolves.toMatchObject({
+      outcome: undefined,
+    });
+  });
+
+  it("leaves what the person staged in the Git window while the turn ran", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+      writeFileSync(join(root, "p.txt"), "person staged during the turn\n");
+      git(root, "add", "p.txt");
+    });
+
+    await expect(restoreTurnIndex(root, record, ["a.txt"])).resolves.toEqual({
+      outcome: "restored",
+      restoredCount: 1,
+    });
+
+    expect(staged(root)).toEqual(["p.txt"]);
+    await expect(restoreTurnIndex(root, record, [])).resolves.toMatchObject({
+      outcome: undefined,
+    });
+  });
+
+  it("uses the live index for a step that began after the turn last settled", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+    });
+    // A continuation step begins and stages another path before the person presses undo.
+    reopenTurnIndex(record);
+    writeFileSync(join(root, "b.txt"), "b changed by step two\n");
+    git(root, "add", "b.txt");
+
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
+      outcome: "restored",
+      restoredCount: 2,
+    });
+
+    expect(staged(root)).toEqual([]);
+  });
+
+  it("is an honest no-op when the index is already at the turn start", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+    });
+    await restoreTurnIndex(root, record, GOVERNED);
+
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
+      outcome: undefined,
+      restoredCount: 0,
+    });
+  });
+
+  it("refuses to guess at an intent-to-add entry", async () => {
+    const root = repository();
+    writeFileSync(join(root, "new.txt"), "new\n");
+    git(root, "add", "-N", "new.txt");
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+    });
+
+    await expect(restoreTurnIndex(root, record, GOVERNED)).resolves.toEqual({
+      outcome: "unavailable",
+      restoredCount: 0,
+    });
+
+    expect(staged(root)).toEqual(["a.txt"]);
+  });
+
+  it("restores the paths within its bound and reports the rest as partial", async () => {
+    const root = repository();
+    const names = Array.from({ length: 70 }, (_unused, index) => `person-${String(index)}.txt`);
+    for (const name of names) writeFileSync(join(root, name), "committed\n");
+    git(root, "add", "-A");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "more files");
+    for (const name of names) writeFileSync(join(root, name), "person staged\n");
+    git(root, "add", ...names);
+    const record = await turn(root, () => {
+      for (const name of names) writeFileSync(join(root, name), "turn staged\n");
+      git(root, "add", ...names);
+    });
+
+    const result = await restoreTurnIndex(root, record, names);
+
+    expect(result).toEqual({ outcome: "partial", restoredCount: 64 });
+    expect(staged(root)).toHaveLength(70);
+  });
+
+  it("changes nothing and throws when Git's index lock is held", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed\n");
+      git(root, "add", "a.txt");
+    });
+    writeFileSync(join(root, ".git", "index.lock"), "");
+    const before = readFileSync(join(root, ".git", "index"));
+
+    await expect(restoreTurnIndex(root, record, GOVERNED)).rejects.toThrow();
+
+    expect(readFileSync(join(root, ".git", "index")).equals(before)).toBe(true);
   });
 });

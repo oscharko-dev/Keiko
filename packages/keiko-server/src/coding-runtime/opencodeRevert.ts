@@ -25,6 +25,7 @@ import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
+import { governedIndexPaths, resetGovernedIndexPaths } from "./governedIndexPaths.js";
 import {
   beginTurnIndex,
   restoreTurnIndex,
@@ -369,7 +370,11 @@ async function restoreIndexOrReport(
   run: OpenCodeRevertRun,
 ): Promise<Awaited<ReturnType<typeof restoreTurnIndex>>> {
   try {
-    const restored = await restoreTurnIndex(run.workspaceRoot, run.turnIndex);
+    const restored = await restoreTurnIndex(
+      run.workspaceRoot,
+      run.turnIndex,
+      governedIndexPaths(run.runId),
+    );
     const failure: unknown = run.turnIndex?.failure;
     if (failure !== undefined) reportIndexFailure(ports, run, failure);
     return restored;
@@ -661,6 +666,7 @@ function freshAgentImages(): OpenCodeAgentImages {
 
 /** A new turn starts: neither the last turn's settled image nor its edits prove anything now. */
 export function beginOpenCodeTurnImages(run: OpenCodeRevertRun): void {
+  resetGovernedIndexPaths(run.runId);
   run.turnIndex = beginTurnIndex(run.workspaceRoot);
   run.turnImage = undefined;
   run.agentImages = freshAgentImages();

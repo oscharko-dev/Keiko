@@ -78,6 +78,7 @@ import {
   type RuntimeGitTaskBranchPort,
 } from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
+import { noteGovernedIndexPaths } from "../coding-runtime/governedIndexPaths.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -1220,7 +1221,11 @@ export class RuntimeGitService {
       context.correlationId,
     );
     const status = outcome.outcome.status;
-    if (status === "succeeded") return this.result(proposal, "succeeded", "none");
+    if (status === "succeeded") {
+      // The undo of the turn puts back only what governed staging changed (U-34b).
+      noteGovernedIndexPaths(context.runId, proposal.command.pathspecs);
+      return this.result(proposal, "succeeded", "none");
+    }
     if (status === "blocked") return this.result(proposal, "blocked", outcome.outcome.category);
     if (status === "approval-required")
       return this.result(proposal, "approval-required", "approval-required");

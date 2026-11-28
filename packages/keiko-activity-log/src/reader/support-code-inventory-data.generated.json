@@ -1735,6 +1735,7 @@
     "keiko-server/coding-runtime/devLaneSecureWorkspaceTextRead",
     "keiko-server/coding-runtime/explicitSkillInvocation",
     "keiko-server/coding-runtime/gitOperationRequirements",
+    "keiko-server/coding-runtime/governedIndexPaths",
     "keiko-server/coding-runtime/governedSyncHeads",
     "keiko-server/coding-runtime/governedTaskBranches",
     "keiko-server/coding-runtime/governedToolModelContent",

@@ -198,6 +198,7 @@ import {
   type OpenCodeRevertRunPort,
   type OpenCodeStagedRevert,
 } from "./opencodeRevert.js";
+import { reopenTurnIndex } from "./opencodeTurnIndex.js";
 import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
@@ -1430,12 +1431,18 @@ async function armAndPostTurn(
   origin: CodingRuntimeTurnOrigin | undefined,
 ): Promise<boolean> {
   if (!run.runtimeAdapter.armTurn()) return false;
+  // A step that continues the turn makes the image the turn last settled on stale.
+  if (origin !== undefined) reopenTurnIndex(run.turnIndex);
   // A scheduled wake posts nothing: the runtime fires the due schedule into the armed turn.
   if (origin === "schedule-wake")
     return startScheduledWakeTurn(run, { activityLog: sinks.activityLog }) && run.ready;
   // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
   // continuation of the human's request keeps that request's images: its undo reaches back to it.
-  if (origin === undefined) beginOpenCodeTurnImages(run);
+  if (origin === undefined) {
+    beginOpenCodeTurnImages(run);
+    // The index start is read before the model can stage anything.
+    await run.turnIndex?.start;
+  }
   return postTurnPrompt(run, text, initialContext, inputs, sinks, origin);
 }
 

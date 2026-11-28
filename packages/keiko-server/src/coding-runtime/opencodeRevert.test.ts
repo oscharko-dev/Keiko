@@ -27,7 +27,8 @@ import {
   recordRevertTurnBlocked,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
-import { beginTurnIndex } from "./opencodeTurnIndex.js";
+import { noteGovernedIndexPaths, resetGovernedIndexPaths } from "./governedIndexPaths.js";
+import { beginTurnIndex, reopenTurnIndex } from "./opencodeTurnIndex.js";
 import type { OpenCodeV2FileDiff } from "./opencodeV2HttpClient.js";
 
 const RUN_ID = "run-340282366920938463463374607431768211455";
@@ -38,6 +39,7 @@ const SECRET = "the-model-wrote-this-secret";
 const roots: string[] = [];
 
 afterEach(() => {
+  resetGovernedIndexPaths(RUN_ID);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -1114,6 +1116,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
+    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await agentWrote(run, ["a.txt"]);
@@ -1140,6 +1143,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
+    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await begun.settled;
@@ -1161,6 +1165,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
+    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await begun.settled;
@@ -1180,5 +1185,42 @@ describe("undo and the Git index (U-34b)", () => {
       },
       { op: "coding-runtime.revert.applied", extra: { indexOutcome: "unavailable" } },
     ]);
+  });
+
+  it("unstages what a continuation step staged after the turn last settled, on a busy undo", async () => {
+    const { root, begun } = await stagedTurn();
+    const { port, run, log } = subject({ root, busy: true });
+    run.turnIndex = begun;
+    noteGovernedIndexPaths(RUN_ID, ["a.txt", "b.txt"]);
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+    await begun.settled;
+    // Step two begins: the settled image is stale, and step two stages another file.
+    reopenTurnIndex(run.turnIndex);
+    writeFileSync(join(root, "b.txt"), "step two\n");
+    gitIn(root, "add", "b.txt");
+    await agentWrote(run, ["a.txt"]);
+
+    await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "restored" });
+  });
+
+  it("restores nothing in the index that governed staging did not stage", async () => {
+    const { root, begun } = await stagedTurn();
+    const { port, run, log } = subject({ root });
+    run.turnIndex = begun;
+    recordOpenCodeTurnImage(run, log);
+    await run.turnImage;
+    await agentWrote(run, ["a.txt"]);
+    resetGovernedIndexPaths(RUN_ID);
+
+    await port.revertTurn(RUN_ID, "undo", CORRELATION_ID);
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
+    await expect(port.revertState(RUN_ID)).resolves.not.toHaveProperty("index");
   });
 });
