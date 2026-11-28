@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5d41d0ba055d4a31a241bc88ef3f38cb94a32be2fd0235623661c618c1e3943f"
+    "catalogDigest": "50e1746c21caed1ac89dfd76b497a861c471229a331e484b30f6cc76f80fcf3e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 739,
-    "proofCount": 763,
-    "resolvedProofCount": 763,
-    "failureClassCount": 419,
+    "operationCount": 741,
+    "proofCount": 766,
+    "resolvedProofCount": 766,
+    "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -309,6 +309,7 @@
         "gateway.prompt.admission-failed",
         "gateway.prompt.counter-cooldown",
         "gateway.prompt.counter-failed",
+        "gateway.prompt.usage-rejected",
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
@@ -755,6 +756,7 @@
         "git.journey-observation",
         "git.journey-outcome.recorded",
         "git.journey-readiness.refreshed",
+        "git.large-files-streamed",
         "git.pr-description",
         "git.pr-description.receipt",
         "git.process.failed",
@@ -951,7 +953,7 @@
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
     "gateway-setup-target": ["model-gateway.dependency-failure"],
     "gateway-setup-metadata": ["model-gateway.dependency-failure"],
-    "gateway-context-admission": ["model-gateway.dependency-failure"],
+    "gateway-context-admission": ["model-gateway.rejection"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
     "activity-log-contract": ["lifecycle-crash.loss"],
     "activity-log-loss": ["lifecycle-crash.loss"],
@@ -1169,6 +1171,7 @@
     "git-delivery-readiness-provider": ["editor-delivery.dependency-failure"],
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
+    "git-large-file-streaming": ["editor-delivery.dependency-failure"],
     "git-raw-conversion-settlement": ["editor-delivery.dependency-failure"],
     "files-copy-containment-refusal": ["bff.rejection"],
     "files-search-availability": ["bff.dependency-failure"],
@@ -2482,6 +2485,12 @@
     "gateway.prompt.counter-failed.fallback": [
       "packages/keiko-model-gateway/src/provider-token-counter.test.ts"
     ],
+    "gateway.prompt.usage-rejected.implausibly-low": [
+      "packages/keiko-model-gateway/src/prompt-calibration.test.ts"
+    ],
+    "gateway.prompt.usage-rejected.implausibly-high": [
+      "packages/keiko-model-gateway/src/prompt-calibration.test.ts"
+    ],
     "gateway.readiness.automatic.completed.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
@@ -2715,6 +2724,9 @@
     ],
     "git.journey-readiness.refreshed.emitted-line": [
       "packages/keiko-server/src/gitDelivery/journeyRoutes.test.ts"
+    ],
+    "git.large-files-streamed.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],
     "git.pr-description.emitted-line": [
       "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts",
