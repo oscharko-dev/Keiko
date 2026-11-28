@@ -686,6 +686,24 @@ type VerificationTicketIdentity = Pick<VerifiedCommitRunContext, "runId" | "corr
   readonly verificationGeneration: number;
 };
 
+/** What a recorded result may carry beyond its status and reason. */
+interface VerifiedCommitRecordExtras {
+  readonly headSha?: string | undefined;
+  readonly details?: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations">;
+  readonly activity?: Pick<
+    VerifiedCommitActivityFields,
+    | "reviewIncompleteCause"
+    | "reviewFileCount"
+    | "reviewRenameCount"
+    | "reviewPathsTruncated"
+    | "messagePolicyMode"
+    | "messagePolicySource"
+    | "signing"
+    | "signingReadFailure"
+  >;
+  readonly proofAgeMs?: number | undefined;
+}
+
 class VerifiedCommitController implements VerifiedCommitService {
   // Weak, body-free log identities survive invalidation without retaining any authority or facts.
   private readonly ticketIdentities = new WeakMap<object, VerificationTicketIdentity>();
@@ -895,22 +913,17 @@ class VerifiedCommitController implements VerifiedCommitService {
     const proofAgeMs = this.now() - verification.startedAtMs;
     const driftReason = this.proofDriftReason(context, verification, facts);
     if (driftReason !== undefined)
-      return this.record(context, binding, "drift", driftReason, undefined, {}, {}, proofAgeMs);
+      return this.record(context, binding, "drift", driftReason, { proofAgeMs });
     const messagePolicy = await this.options.messageAllowed(
       message,
       context.workspace,
       context.correlationId,
     );
     if (!messagePolicyAllowed(messagePolicy))
-      return this.record(
-        context,
-        binding,
-        "blocked",
-        "message-policy",
-        undefined,
-        messagePolicyViolationDetails(messagePolicy),
-        messagePolicyActivity(messagePolicy),
-      );
+      return this.record(context, binding, "blocked", "message-policy", {
+        details: messagePolicyViolationDetails(messagePolicy),
+        activity: messagePolicyActivity(messagePolicy),
+      });
     if (hasIssueClosingDirective(message))
       return this.record(context, binding, "blocked", "issue-directive");
     return this.prepareProposal(context, facts, binding, message, !verification.passed);
@@ -997,15 +1010,9 @@ class VerifiedCommitController implements VerifiedCommitService {
     };
     this.proposals.clear();
     this.proposals.set(binding.proposalId, proposal);
-    return this.record(
-      context,
-      binding,
-      "approval-required",
-      "approval-required",
-      undefined,
-      {},
-      reviewActivity(review, read.renameCount),
-    );
+    return this.record(context, binding, "approval-required", "approval-required", {
+      activity: reviewActivity(review, read.renameCount),
+    });
   }
 
   private reviewIncomplete(
@@ -1014,7 +1021,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     cause: VerifiedCommitReviewIncompleteCause,
   ): VerifiedCommitResult {
     const activity = { reviewIncompleteCause: cause };
-    return this.record(context, binding, "blocked", "review-incomplete", undefined, {}, activity);
+    return this.record(context, binding, "blocked", "review-incomplete", { activity });
   }
 
   private binding(
@@ -1298,15 +1305,11 @@ class VerifiedCommitController implements VerifiedCommitService {
           : undefined;
       if (result.outcome.status === "succeeded" && headSha === undefined)
         return this.record(context, binding, "recovery-required", "execution-uncertain");
-      return this.record(
-        context,
-        binding,
-        kernelStatus(result),
-        kernelReason(result),
+      return this.record(context, binding, kernelStatus(result), kernelReason(result), {
         headSha,
-        kernelDetails(result),
-        signingActivity(result),
-      );
+        details: kernelDetails(result),
+        activity: signingActivity(result),
+      });
     } catch (error) {
       this.log(context, "execute", { state: "failed", ...verifiedCommitErrorFields(error) }, true);
       return this.record(context, binding, "recovery-required", "execution-uncertain");
@@ -1344,20 +1347,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     binding: VerifiedCommitBinding,
     status: VerifiedCommitStatus,
     reason: VerifiedCommitReason,
-    headSha?: string,
-    details: Pick<VerifiedCommitResult, "blockReason" | "preflightFindings" | "violations"> = {},
-    activity: Pick<
-      VerifiedCommitActivityFields,
-      | "reviewIncompleteCause"
-      | "reviewFileCount"
-      | "reviewRenameCount"
-      | "reviewPathsTruncated"
-      | "messagePolicyMode"
-      | "messagePolicySource"
-      | "signing"
-      | "signingReadFailure"
-    > = {},
-    proofAgeMs?: number,
+    { headSha, details = {}, activity = {}, proofAgeMs }: VerifiedCommitRecordExtras = {},
   ): VerifiedCommitResult {
     const result = this.result(binding, status, reason, headSha, details);
     if (!this.persist(context, binding, status, reason, result))
