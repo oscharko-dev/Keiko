@@ -2724,6 +2724,78 @@ Not run yet:
 - The repeat on x64 hardware, deferred by the repository owner on 2026-11-25.
 - The two Windows capabilities and the profile list entries through the supervisor itself.
 
+### What Keiko answers for each result (#4493, 2026-11-27)
+
+Each "does not work" above ends in one of these answers. None of them is a silent failure. Where Keiko
+refuses before the step starts, it names a closed reason. Where the tool itself fails inside the tree,
+the step fails, and its verification counts as failed, never as passed.
+
+| Result above                                                | What Keiko does in Milestone 1 (shipped since 1.5.9)                                                                                                                                                                                                                                      | Closed value or record                                                                                                                |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js child with pipes or IPC hangs (libuv 1.52.1)        | The step runs the confined step Node.js (official 26.13.1 plus libuv#5181), pinned by digest; a runtime without it (`absent`) or with a build that does not match the pin (`mismatch`) still runs the step, and a project that starts such a child can then hang until the step times out | `editor.verification.windows-step-supervisor` `stepNode=patched\|absent\|mismatch`; `editor.verification.windows-step-node`           |
+| Node.js and Java real-path walk to `C:\`                    | Every grant root is named through its own `subst` drive letter; the grants keep the real paths                                                                                                                                                                                            | `editor.verification.windows-step-drives`; no free letter: isolation unavailable, "no drive letter could name the step's directories" |
+| Toolchain an administrator placed outside `Program Files`   | The supervisor cannot write its grant and refuses the step before launch                                                                                                                                                                                                                  | `editor.verification.windows-step-refused` `phase=before-launch` with the supervisor's `refusalCode`                                  |
+| Windows PowerShell 5.1 and PowerShell 7                     | Not offered as a step; a project command that starts PowerShell fails inside the tree with the tool's own registry error and the verification fails                                                                                                                                       | Recorded limitation (ADR-0043 D21 "Closed refusals")                                                                                  |
+| `npm install` from the registry (no network in the tree)    | The dependency installation runs outside the tree through the host-shell entry of #4522, under the mode's approval rules                                                                                                                                                                  | ADR-0043 D17                                                                                                                          |
+| `cmd` pipeline ends `0xC0000008`                            | The exit code is reported as the step's exit; the step fails                                                                                                                                                                                                                              | `rootExitCode` on `runtime.confinement.tree-reaped`                                                                                   |
+| Git outside a repository: "Permission denied" on the parent | No change; a verification step runs only inside the workspace                                                                                                                                                                                                                             | —                                                                                                                                     |
+| UNC path                                                    | Not supported: it takes no drive letter and the tree has no network capability, so the step fails inside the tree (`UNKNOWN`, "Network access is denied")                                                                                                                                 | Open: a closed refusal before launch is the #4497 criterion for unsupported forms                                                     |
+| Credential-named files readable through an access entry     | The step runs on a private copy of the workspace without credential-named entries and without links                                                                                                                                                                                       | ADR-0043 D21; canary proof in #4496                                                                                                   |
+| Start without an interactive desktop                        | Refused with its own reason and a Workbench sentence                                                                                                                                                                                                                                      | `runtime-supervisor-no-desktop` (#4495)                                                                                               |
+| Supervisor missing or not matching its pin                  | Refused; nothing runs unconfined                                                                                                                                                                                                                                                          | isolation unavailable, "the Windows step supervisor could not be verified against its pin"                                            |
+
+Still not run in Milestone 1, and therefore not supported claims: nvm-windows, a Remote Desktop
+session and the x64 repeat. They are tracked in #4561.
+
+### Rules that differ from macOS and Linux (#4493, #4496, 2026-11-27)
+
+The counterpart of a Windows verification step is the container step that macOS runs, and Linux
+where bubblewrap is not available. On macOS a governed verification step runs only in Docker or
+Podman; Linux runs it in bubblewrap first and falls back to the container step
+(`selectExecutionRootBackend`, `packages/keiko-sandbox/src/select.ts`; ADR-0043). The container step uses `--network=none`, a read-only
+image root with a `/tmp` tmpfs, the execution root bind-mounted read-write, and the container's own
+process namespace and lifetime (`containerArgs`, `packages/keiko-sandbox/src/backends.ts`). Without a
+container runtime, macOS verifies through the project check in the model's own confined shell
+(`shellCarriesCheck`, #4523), not through a step.
+
+The table has one row per rule of a step. "Equal" and "stricter" need no decision. A row whose rule
+differs needed the Product Owner's recorded approval before Milestone 1 closes. Two of them, the
+shell and a toolchain an administrator placed outside `Program Files`, were decided with Gate G1 on
+2026-11-25. On 2026-11-27 the Product Owner approved the other five (toolchain, grantable toolchain
+folders, step Node.js, Maven `test` and path naming), marked "differs: approved 2026-11-27"; #4496
+quotes that approval. The same decision accepts the ARM64 guest
+results for Milestone 1 and keeps the x64 repeat and the live container path mandatory in #4561.
+
+| Rule                                                      | Container step (macOS, Linux)                                  | Windows AppContainer step (1.5.10)                                                                                                                                                                           | Status                                                               |
+| --------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| Network                                                   | `--network=none`; the container's own loopback only            | no network capability: no loopback, no local network, no internet                                                                                                                                            | equal for verification steps                                         |
+| Writable area                                             | the execution root and `/tmp`; writes land in the workspace    | a private copy of the workspace and the step's private state; writes stay in the copy, which is discarded at run end, so the real workspace is never changed (see the next row for what the copy leaves out) | stricter: build outputs stay in the discarded copy                   |
+| Credential-named files                                    | readable: `containerArgs` bind-mounts the whole execution root | the private copy omits them and every link; no size bound, `.git` copied, no crash sweep of leftover copies                                                                                                  | stricter, with the copy's limits listed here                         |
+| Process tree end                                          | the container's process namespace ends with the step           | Job Object: a detached child and a watcher end with the step                                                                                                                                                 | equal                                                                |
+| Toolchain                                                 | the image's toolchain                                          | the person's own toolchain on the host: `Program Files` through its package entries, other folders by an explicit read grant                                                                                 | differs: approved 2026-11-27                                         |
+| Grantable toolchain folders                               | none, the image brings its toolchain                           | at least one level below a drive (`C:\apache-maven-3.9.9`)                                                                                                                                                   | differs: approved 2026-11-27                                         |
+| Step Node.js                                              | the image's Node.js                                            | the shipped step Node.js: official 26.13.1 plus libuv#5181, unsigned, pinned by digest                                                                                                                       | differs: approved 2026-11-27                                         |
+| Maven `test`                                              | skipped as a script ("no script")                              | `mvn -B -o test` in the tree, reading the person's local repository read-only behind the run's own                                                                                                           | differs: approved 2026-11-27                                         |
+| Path naming                                               | container paths                                                | each grant root through its own `subst` drive letter; this replaces the Gate G1 capabilities, which Windows refuses (error 87)                                                                               | differs: approved 2026-11-27                                         |
+| Shell                                                     | the image's `sh`                                               | `cmd.exe`; Windows PowerShell 5.1 and PowerShell 7 do not start                                                                                                                                              | differs: recorded limitation in Gate G1                              |
+| Toolchain an administrator placed outside `Program Files` | not applicable                                                 | refused before launch                                                                                                                                                                                        | differs: closed refusal in Gate G1                                   |
+| Standard user, no service                                 | the container runtime needs its own installation               | no installation and no elevation; the step needs the person's interactive desktop session                                                                                                                    | Windows needs less                                                   |
+| Container runtime present                                 | the container step                                             | the container step first, the AppContainer step only without one (`select.ts`, ADR-0043 D21)                                                                                                                 | equal; the live container path on Windows needs x64 hardware (#4561) |
+
+### Children 6 to 9 against these results (#4493, 2026-11-27)
+
+Two children depend on a result above and need an update. Two do not.
+
+- **#4497 (update needed):** its criterion for unsupported forms lists "another volume". The
+  measurement above shows that a second local NTFS volume works in the tree, so that criterion should
+  refuse only UNC, device and over-long paths, and name a second local volume as supported.
+- **#4500 (update needed):** the native tool profile gives the model a shell. On Windows that shell is
+  `cmd.exe`, because PowerShell does not start in the tree, and a Node.js child with pipes needs the
+  step Node.js. Its scope should name both.
+- **#4498 (no update needed):** its environment criterion relies on the supervisor's environment guard,
+  which is also the likely cause of the PowerShell result. The criterion holds as written.
+- **#4499 (no update needed):** no dependency on an unproven result; the Windows step has no network.
+
 ## Update impact
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
