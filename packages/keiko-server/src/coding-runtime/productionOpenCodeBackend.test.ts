@@ -1719,6 +1719,24 @@ describe("production native retry projection", () => {
     }
   });
 
+  it("publishes the refused agent model count once, as a valid body-free runtime event (U-53)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-agent-models-"));
+    try {
+      const f = retryActivityFixture(root);
+      f.activity.observeAgentModels?.(2);
+      expect(f.events).toEqual([]);
+      f.activity.arm();
+      f.activity.observeAgentModels?.(2);
+      expect(f.events).toMatchObject([
+        { kind: "native-agent-models-refused", refusedAgentModelCount: 2 },
+      ]);
+      expect(f.events.every((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toBe(true);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("publishes the active subagent count as a valid body-free runtime event (U-52)", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-native-subagents-"));
     try {

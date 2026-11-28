@@ -1503,3 +1503,24 @@ describe("verification gap on a failed run", () => {
     ).toBe(false);
   });
 });
+
+// U-53: a per-agent model the repository named but the gateway does not serve is refused; the
+// person is told, with a count and never a model name, in the run's details.
+describe("a refused repository agent model fact (U-53)", () => {
+  const fact = (count: number): CodingWorkbenchRuntimeSseEvent =>
+    runtimeEvent({ eventKind: "native-agent-models-refused", refusedAgentModelCount: count });
+
+  it.each([
+    ["en", 1, "1 agent model setting from the repository was not used"],
+    ["en", 2, "2 agent model settings from the repository were not used"],
+    ["de", 1, "1 Agenten-Modelleinstellung aus dem Repository wurde nicht verwendet"],
+    ["de", 2, "2 Agenten-Modelleinstellungen aus dem Repository wurden nicht verwendet"],
+  ] as const)("says in %s how many were not used (%i)", (language, count, text) => {
+    const translate: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench(language, key, values);
+    const detail = eventDetail(fact(count), translate);
+    expect(detail).toContain(text);
+    expect(detail).toMatch(/[Gg]ateway/u);
+    expect(eventTitle(fact(count), translate)).not.toContain("codingWorkbench.");
+  });
+});

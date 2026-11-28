@@ -1433,6 +1433,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
       /** Required only on native-subagents-changed (U-52): the run's active subagent sessions. */
       readonly activeSubagentCount?: number | undefined;
+      /** Required only on native-agent-models-refused (U-53): repository agent models not used. */
+      readonly refusedAgentModelCount?: number | undefined;
     };
 
 // The text of a request. A slash command takes its arguments from it, and a command such as

@@ -613,6 +613,7 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
         "observation-streamed",
         "native-retry-changed",
         "native-subagents-changed",
+        "native-agent-models-refused",
         "permission-requested",
         "diff-summarized",
         "verification-summarized",

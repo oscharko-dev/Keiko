@@ -1064,6 +1064,7 @@ function safeActivityController(
       if (tools.armed) rememberAdmittedChild(tools, input);
     },
     observeSubagents: subagentObserver(runId, () => tools.armed, onRuntimeEvent),
+    observeAgentModels: agentModelsObserver(runId, () => tools.armed, onRuntimeEvent),
     clear: (): void => {
       tools.armed = false;
       tools.binding = undefined;
@@ -1296,6 +1297,25 @@ function subagentObserver(
       occurredAt: new Date().toISOString(),
       kind: "native-subagents-changed",
       activeSubagentCount: count,
+    });
+  };
+}
+
+// How many per-agent model settings of the repository the run refused (U-53): a count alone, once.
+function agentModelsObserver(
+  runId: string,
+  isArmed: () => boolean,
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): (refusedCount: number) => void {
+  return (refusedCount) => {
+    if (!isArmed()) return;
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: "event-child-status-0",
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-agent-models-refused",
+      refusedAgentModelCount: refusedCount,
     });
   };
 }

@@ -466,6 +466,7 @@ interface OpenCodeRuntimeCompositionModule {
         readonly occurredAt: string;
       }) => void;
       readonly clear: () => void;
+      readonly observeAgentModels?: (refusedCount: number) => void;
       readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
       readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
@@ -5103,10 +5104,19 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
   // and one body-free line records their counts.
   it("binds the agents' gateway models and records the offered and configured counts", async () => {
     const activityLog = createBufferedServerLogSink();
+    const observeAgentModels = vi.fn();
     const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
       mode: "autonomous-delivery",
       readToolProfile: () => "native",
       activityLog,
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: (): true => true,
+        recordDrops: vi.fn(),
+        settleTool: vi.fn(),
+        observeAgentModels,
+      },
       configDocuments: () =>
         Promise.resolve([
           { agents: { explore: { model: "gemma-small" }, general: { model: "openai/gpt-x" } } },
@@ -5147,6 +5157,8 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
         refusedAgentCount: 1,
       });
       expect(JSON.stringify(bound)).not.toContain("gemma-small");
+      // U-53: the one refused override reaches the run's observer as a count, once.
+      expect(observeAgentModels).toHaveBeenCalledExactlyOnceWith(1);
     } finally {
       await fixture.stop();
     }

@@ -425,6 +425,19 @@ export function eventTitle(
     : runStateLabel(event.state, t);
 }
 
+// U-53: how many repository agent models the run did not use, as a count with the reason.
+function eventAgentModelsDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.eventKind !== "native-agent-models-refused")
+    return "";
+  const count = event.refusedAgentModelCount ?? 0;
+  return count === 1
+    ? t("codingWorkbench.event.agentModelsRefused.one")
+    : t("codingWorkbench.event.agentModelsRefused", { count });
+}
+
 export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
@@ -435,6 +448,7 @@ export function eventDetail(
     eventStoppedDetail(event, t),
     eventOutcomeDetail(event, t),
     eventContentTrustDetail(event, t),
+    eventAgentModelsDetail(event, t),
   ]
     .filter((part) => part.length > 0)
     .join(" ");

@@ -759,6 +759,8 @@ export interface OpenCodeRuntimeCompositionInput {
         readonly clear: () => void;
         /** The run's active subagent count while its own session is idle (U-52). */
         readonly observeSubagents?: ((count: number) => void) | undefined;
+        /** How many repository agent model settings the run refused, told once armed (U-53). */
+        readonly observeAgentModels?: ((refusedCount: number) => void) | undefined;
         readonly ingest: (
           signal: import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
         ) => boolean;
@@ -962,6 +964,8 @@ interface PreparedRun {
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
+  /** How many per-agent model settings of the repository this run did not use (U-53). */
+  refusedAgentModels?: number | undefined;
   /**
    * The run's effective autonomy mode: the launch environment's, narrowed when the operator resumes
    * the run with a narrower mode (#3897 audit). Native policy decisions always read this value.
@@ -2219,7 +2223,7 @@ async function materializePrepare(
   persistPreparedRun(runs, request, runRoot, password, configDigest, {
     continuation,
     mcp,
-    media: promptMedia(input),
+    ...preparedFacts(input, agentModels),
   });
   recordNativeFormatterBound(
     input.activityLog,
@@ -2230,6 +2234,17 @@ async function materializePrepare(
   recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
+}
+
+// The prompt media the run's model accepts and the agent model settings it refused (U-53).
+function preparedFacts(
+  input: OpenCodeRuntimeCompositionInput,
+  agentModels: OpenCodeAgentModelBinding | undefined,
+): { readonly media: PromptMediaInputs | undefined; readonly refusedAgentModels?: number } {
+  return {
+    media: promptMedia(input),
+    ...(agentModels === undefined ? {} : { refusedAgentModels: agentModels.refusedCount }),
+  };
 }
 
 /** The launch environment: the profile's, the run's sanitized build settings and the inherited names. */
@@ -2709,9 +2724,10 @@ function persistPreparedRun(
     readonly continuation?: RunContinuation | undefined;
     readonly mcp?: OpenCodeNativeMcpAdmission | undefined;
     readonly media?: PromptMediaInputs | undefined;
+    readonly refusedAgentModels?: number | undefined;
   } = {},
 ): void {
-  const { continuation, mcp, media } = extras;
+  const { continuation, mcp, media, refusedAgentModels } = extras;
   const run = preparedRun(
     request.runId,
     runRoot,
@@ -2727,6 +2743,7 @@ function persistPreparedRun(
     run.mcpOAuth = mcp.oauth;
   }
   if (media !== undefined) run.media = media;
+  run.refusedAgentModels = refusedAgentModels;
   runs.set(request.runId, run);
 }
 
@@ -2971,6 +2988,7 @@ async function handshake(
       return { ok: false, reason: result.phase };
     }
     input.safeActivity?.arm(result.sessionId, input.toolProfile);
+    announceRefusedAgentModels(input, run);
     if (runs.get(request.runId) !== run) {
       await closeOnce(adapter, () => {
         adapter = undefined;
@@ -3015,6 +3033,15 @@ async function closeFailedHandshakeAdapter(
   } catch (error) {
     recordCompositionDisposalFailure(diagnostics, runId, "handshake-adapter-close", error);
   }
+}
+
+// The person is told, once the run is armed, how many repository agent models it did not use (U-53).
+function announceRefusedAgentModels(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+): void {
+  const refused = run.refusedAgentModels ?? 0;
+  if (refused > 0) input.safeActivity?.observeAgentModels?.(refused);
 }
 
 // The run's native session tree reports its active subagent count to the run's observer (U-52).

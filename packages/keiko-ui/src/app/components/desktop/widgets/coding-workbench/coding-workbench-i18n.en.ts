@@ -1367,6 +1367,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.native-retry-changed": "OpenCode retry state updated",
   "codingWorkbench.event.native-subagents-changed": "Subagent activity updated",
+  "codingWorkbench.event.native-agent-models-refused": "Agent model settings not used",
+  "codingWorkbench.event.agentModelsRefused":
+    "{count} agent model settings from the repository were not used: the model is not served by Keiko's gateway, so these agents use the run's model.",
+  "codingWorkbench.event.agentModelsRefused.one":
+    "1 agent model setting from the repository was not used: the model is not served by Keiko's gateway, so this agent uses the run's model.",
   "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
   "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
   "codingWorkbench.event.model-gateway-retry-stopped": "Model gateway retry stopped",

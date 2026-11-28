@@ -2706,6 +2706,36 @@ describe("explicit Coding Jira administrative connector scope", () => {
   });
 });
 
+describe("the refused agent model count fact (U-53)", () => {
+  const fact = {
+    schemaVersion: "1",
+    cursor: "run-1:3",
+    sequence: 3,
+    occurredAt: "2026-11-28T05:00:00.000Z",
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-agent-models-refused",
+    refusedAgentModelCount: 2,
+  };
+
+  it("admits a positive count on its own kind only", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(fact).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, refusedAgentModelCount: -1 }).ok).toBe(
+      false,
+    );
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, refusedAgentModelCount: "2" }).ok,
+    ).toBe(false);
+    const { refusedAgentModelCount: _count, ...withoutCount } = fact;
+    expect(validateCodingWorkbenchRuntimeSseEvent(withoutCount).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind: "runtime-health" }).ok,
+    ).toBe(false);
+  });
+});
+
 describe("the native subagent count fact (U-52)", () => {
   const fact = {
     schemaVersion: "1",

@@ -52,6 +52,7 @@ export type CodingRuntimeEventHubInput =
         { kind: "runtime-event" }
       >["nativeRetry"];
       readonly activeSubagentCount?: number | undefined;
+      readonly refusedAgentModelCount?: number | undefined;
       readonly verificationSummary?: Extract<
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
@@ -528,6 +529,7 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
           "verificationSummary",
           "nativeRetry",
           "activeSubagentCount",
+          "refusedAgentModelCount",
           "eventKind",
           "failureCode",
           "kind",

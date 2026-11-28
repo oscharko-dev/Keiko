@@ -270,6 +270,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "observation-streamed"
   | "native-retry-changed"
   | "native-subagents-changed"
+  | "native-agent-models-refused"
   | "permission-requested"
   | "diff-summarized"
   | "verification-summarized"
@@ -290,6 +291,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "observation-streamed",
     "native-retry-changed",
     "native-subagents-changed",
+    "native-agent-models-refused",
     "permission-requested",
     "diff-summarized",
     "verification-summarized",
@@ -793,6 +795,12 @@ export interface CodingWorkbenchRuntimeEvent {
    * the run's own session is idle (U-52). A count, never a name or text; 0 clears.
    */
   readonly activeSubagentCount?: number | undefined;
+  /**
+   * Required only on native-agent-models-refused (U-53): how many per-agent model settings of the
+   * repository the run did not use because the Model Gateway does not serve the model. A count,
+   * never a model or agent name (the repository file is untrusted).
+   */
+  readonly refusedAgentModelCount?: number | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly requestedMode?: CodingWorkbenchMode | undefined;

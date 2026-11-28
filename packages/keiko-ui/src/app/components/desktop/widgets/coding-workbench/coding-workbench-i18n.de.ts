@@ -1416,6 +1416,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.native-retry-changed": "OpenCode-Wiederholungsstatus aktualisiert",
   "codingWorkbench.event.native-subagents-changed": "Unteragenten-Aktivität aktualisiert",
+  "codingWorkbench.event.native-agent-models-refused":
+    "Agenten-Modelleinstellungen nicht verwendet",
+  "codingWorkbench.event.agentModelsRefused":
+    "{count} Agenten-Modelleinstellungen aus dem Repository wurden nicht verwendet: Das Modell wird nicht vom Keiko-Gateway bereitgestellt, daher nutzen diese Agenten das Modell des Laufs.",
+  "codingWorkbench.event.agentModelsRefused.one":
+    "1 Agenten-Modelleinstellung aus dem Repository wurde nicht verwendet: Das Modell wird nicht vom Keiko-Gateway bereitgestellt, daher nutzt dieser Agent das Modell des Laufs.",
   "codingWorkbench.event.model-gateway-retrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "codingWorkbench.event.model-gateway-recovered": "Modell-Gateway antwortet wieder",
   "codingWorkbench.event.model-gateway-retry-stopped": "Wiederholung beim Modell-Gateway beendet",
