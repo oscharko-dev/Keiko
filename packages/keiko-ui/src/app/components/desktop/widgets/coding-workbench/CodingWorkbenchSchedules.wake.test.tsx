@@ -92,20 +92,49 @@ describe("the schedule list after a scheduled wake fires (U-57)", () => {
     expect(fetchCodingSchedules).toHaveBeenCalledTimes(1 + SCHEDULE_REREAD_MAX_ATTEMPTS);
   });
 
-  it("arms no timer for a wake far beyond a day, so no request burst follows", async () => {
+  // #4573: a window that stays in view must still learn of a wake more than a day away.
+  it("reaches a wake far beyond a day in bounded timer steps without a request burst", async () => {
     const armed = vi.spyOn(window, "setTimeout");
-    lists([active(40 * 24 * 3_600_000, 0)]);
+    const day = 24 * 3_600_000;
+    lists([active(40 * day, 0)], [active(40 * day + 3_600_000, 1)]);
     render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
     await flush();
-    const wakeTimers = armed.mock.calls.filter(
-      ([, delay]) => typeof delay === "number" && delay >= SCHEDULE_REREAD_GRACE_MS,
+    const delays = armed.mock.calls.flatMap(([, delay]) =>
+      typeof delay === "number" && delay >= SCHEDULE_REREAD_GRACE_MS ? [delay] : [],
     );
-    expect(wakeTimers).toEqual([]);
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(day);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_600_000);
+      await vi.advanceTimersByTimeAsync(39 * day);
     });
     expect(fetchCodingSchedules).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(day + SCHEDULE_REREAD_GRACE_MS);
+    });
+    expect(fetchCodingSchedules).toHaveBeenCalledTimes(2);
     armed.mockRestore();
+  });
+
+  it("keeps retrying, up to a bound, when the refresh at the wake fails", async () => {
+    let reads = 0;
+    vi.mocked(fetchCodingSchedules).mockImplementation(() => {
+      reads += 1;
+      return reads === 1
+        ? Promise.resolve({ taskId: "task-7", schedules: [active(5_000, 0)] })
+        : Promise.reject(new Error("offline"));
+    });
+    render(<CodingWorkbenchSchedules taskId="task-7" runActive={false} />);
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000 + SCHEDULE_REREAD_GRACE_MS);
+    });
+    expect(reads).toBe(2);
+    for (let step = 0; step < SCHEDULE_REREAD_MAX_ATTEMPTS + 5; step += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SCHEDULE_REREAD_GRACE_MS);
+      });
+    }
+    expect(reads).toBe(1 + SCHEDULE_REREAD_MAX_ATTEMPTS);
   });
 
   it("re-arms with a fresh attempt budget when the next wake changes", async () => {

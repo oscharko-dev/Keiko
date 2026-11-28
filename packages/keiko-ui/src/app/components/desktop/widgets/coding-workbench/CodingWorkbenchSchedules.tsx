@@ -22,7 +22,6 @@ import styles from "./CodingHistory.module.css";
 export const SCHEDULE_REREAD_GRACE_MS = 16_000;
 export const SCHEDULE_REREAD_MAX_ATTEMPTS = 20;
 const SCHEDULE_REREAD_MAX_ARM_MS = 24 * 60 * 60 * 1_000;
-const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * The scheduled continuations of the shown task (#4271, ADR-0137 D10): what the task's model
@@ -78,11 +77,22 @@ function useTaskSchedules(
   const [actionFailedFor, setActionFailedFor] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
-  useScheduleList(taskId, `${String(runActive)}:${String(revision)}`, setSchedules, setListFailed);
+  // Counts finished reads, failed ones too: each one lets the wake timer be armed again.
+  const [settledReads, setSettledReads] = useState(0);
+  const markSettled = useCallback((): void => {
+    setSettledReads((current) => current + 1);
+  }, []);
+  useScheduleList(
+    taskId,
+    `${String(runActive)}:${String(revision)}`,
+    setSchedules,
+    setListFailed,
+    markSettled,
+  );
   const reread = useCallback((): void => {
     setRevision((current) => current + 1);
   }, []);
-  useWakeReread(taskId === undefined ? NO_SCHEDULES : schedules, reread);
+  useWakeReread(taskId === undefined ? NO_SCHEDULES : schedules, settledReads, reread);
   const act = useCallback(
     async (scheduleId: string, action: CodingWorkbenchScheduleAction): Promise<void> => {
       if (taskId === undefined) return;
@@ -110,6 +120,7 @@ function useScheduleList(
   refresh: string,
   setSchedules: (schedules: readonly CodingWorkbenchSchedule[]) => void,
   setFailed: (failed: boolean) => void,
+  onSettled: () => void,
 ): void {
   useEffect(() => {
     if (taskId === undefined) {
@@ -121,17 +132,19 @@ function useScheduleList(
       (result) => {
         setSchedules(result.schedules);
         setFailed(false);
+        onSettled();
       },
       (error: unknown) => {
         if (abort.signal.aborted) return;
         setFailed(true);
         reportScheduleFailure("list", error);
+        onSettled();
       },
     );
     return (): void => {
       abort.abort();
     };
-  }, [taskId, refresh, setSchedules, setFailed]);
+  }, [taskId, refresh, setSchedules, setFailed, onSettled]);
 }
 
 const NO_SCHEDULES: readonly CodingWorkbenchSchedule[] = [];
@@ -147,10 +160,18 @@ function nextWakeAt(schedules: readonly CodingWorkbenchSchedule[]): number | und
 }
 
 // Read the list again when the next wake is due and when the window is shown again: either may be
-// the first moment this window can learn that a wake the server started has run.
-function useWakeReread(schedules: readonly CodingWorkbenchSchedule[], reread: () => void): void {
+// the first moment this window can learn that a wake the server started has run. A timer never
+// waits longer than SCHEDULE_REREAD_MAX_ARM_MS: a farther wake is reached in bounded steps, each
+// of which only checks the clock. The next timer is armed after every finished read, a failed one
+// included, so the bounded retries do not depend on the list changing.
+function useWakeReread(
+  schedules: readonly CodingWorkbenchSchedule[],
+  settledReads: number,
+  reread: () => void,
+): void {
   const attempts = useRef(0);
   const seen = useRef("");
+  const [clockChecks, setClockChecks] = useState(0);
   const signature = schedules
     .map((one) => `${one.id}:${one.status}:${String(one.runCount)}:${one.dueAt ?? ""}`)
     .join("|");
@@ -162,20 +183,22 @@ function useWakeReread(schedules: readonly CodingWorkbenchSchedule[], reread: ()
     }
     if (wakeAt === undefined || attempts.current >= SCHEDULE_REREAD_MAX_ATTEMPTS) return;
     const untilWake = Math.max(wakeAt - Date.now(), 0);
-    // A wake more than a day away arms nothing (the focus and visibility reads remain), and no
-    // delay exceeds what a timer holds: a larger one fires at once and would burn every attempt.
-    if (untilWake > SCHEDULE_REREAD_MAX_ARM_MS) return;
+    // No delay exceeds what a timer holds: a larger one fires at once and would burn every attempt.
     const timer = window.setTimeout(
       () => {
+        if (Date.now() < wakeAt) {
+          setClockChecks((current) => current + 1);
+          return;
+        }
         attempts.current += 1;
         reread();
       },
-      Math.min(untilWake + SCHEDULE_REREAD_GRACE_MS, MAX_TIMER_DELAY_MS),
+      Math.min(untilWake + SCHEDULE_REREAD_GRACE_MS, SCHEDULE_REREAD_MAX_ARM_MS),
     );
     return (): void => {
       window.clearTimeout(timer);
     };
-  }, [schedules, signature, wakeAt, reread]);
+  }, [schedules, signature, wakeAt, reread, settledReads, clockChecks]);
   useEffect(() => {
     const onReturn = (): void => {
       if (document.visibilityState === "visible") reread();
