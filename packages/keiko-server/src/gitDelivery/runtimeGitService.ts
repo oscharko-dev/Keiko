@@ -1258,7 +1258,7 @@ export class RuntimeGitService {
     );
     const status = outcome.outcome.status;
     if (status === "succeeded") {
-      if (transitions === undefined) noteGovernedIndexUnproven(context.runId);
+      if (transitions === undefined) noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
       else noteGovernedIndexTransitions(context.runId, transitions);
       return this.result(proposal, "succeeded", "none");
     }

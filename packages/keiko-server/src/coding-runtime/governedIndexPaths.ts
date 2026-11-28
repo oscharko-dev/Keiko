@@ -8,7 +8,7 @@
  * one, and the end-of-turn index is never accepted as proof of what Keiko wrote.
  *
  * The record is bounded: the run least recently written is forgotten first, and a run keeps a
- * bounded number of paths (`truncated` says the cap cut some, or that a mutation's entries could
+ * bounded number of paths, owned and withdrawn together (`truncated` says the cap cut some, or that a mutation's entries could
  * not be read). A forgotten, cut or restarted record cannot be told from a person's own staging, so
  * the undo reports any changed path it does not name as a closed outcome instead of claiming it
  * restored everything.
@@ -83,7 +83,10 @@ function noteTransition(held: Held, { path, before, after }: GovernedIndexTransi
     held.written.delete(path);
     held.previous.delete(path);
     held.foreign.add(path);
-  } else if (previous !== undefined || held.written.size < GOVERNED_INDEX_PATHS_MAX_PER_RUN) {
+  } else if (
+    previous !== undefined ||
+    held.written.size + held.foreign.size < GOVERNED_INDEX_PATHS_MAX_PER_RUN
+  ) {
     held.written.set(path, after);
     if (previous === undefined) held.previous.set(path, before);
   } else {
@@ -101,9 +104,19 @@ export function noteGovernedIndexTransitions(
   keepHeld(runId, held);
 }
 
-/** A governed mutation succeeded but the entries it wrote could not be read: not provable. */
-export function noteGovernedIndexUnproven(runId: string): void {
+/**
+ * A governed mutation succeeded but the entries it wrote could not be read: not provable. Every
+ * held path the mutation's scope covers may have been changed by it unobserved, so the earlier
+ * `previous`/`written` pair no longer proves what the index held: the path counts as the person's.
+ */
+export function noteGovernedIndexUnproven(runId: string, pathspecs: readonly string[]): void {
   const held = takeHeld(runId);
+  for (const path of [...held.written.keys()]) {
+    if (!isGovernedIndexPath(path, pathspecs)) continue;
+    held.written.delete(path);
+    held.previous.delete(path);
+    held.foreign.add(path);
+  }
   held.truncated = true;
   keepHeld(runId, held);
 }

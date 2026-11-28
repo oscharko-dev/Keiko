@@ -838,6 +838,30 @@ describe("the paths governed staging records for the turn's undo", () => {
     expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
   });
 
+  it("withdraws a path from Undo when a later governed stage of it could not be observed", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    writeFileSync(join(root, "other.js"), "export const other = 1;\n");
+    const gitService = service("none");
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    expect(governedIndexRecord("run-branch").paths).toEqual(["code.js"]);
+
+    // The person stages another state of the file, then an intent-to-add entry makes the next
+    // governed stage's index unreadable: the first recorded pair no longer proves anything.
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    git(root, ["add", "code.js"]);
+    git(root, ["add", "-N", "other.js"]);
+    writeFileSync(join(root, "code.js"), "export const value = 2;\n");
+    await expect(proposeAndRedeem(gitService, "stage")).resolves.toMatchObject({
+      status: "succeeded",
+    });
+
+    const record = governedIndexRecord("run-branch");
+    expect(record.paths).toEqual([]);
+    expect(record.truncated).toBe(true);
+  });
+
   it("records nothing for a stage that drifted, was refused or never ran", async () => {
     writeFileSync(join(root, "code.js"), "export const value = 2;\n");
     const gitService = service("none");

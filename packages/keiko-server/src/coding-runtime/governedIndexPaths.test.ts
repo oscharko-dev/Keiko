@@ -85,9 +85,46 @@ describe("governed index paths", () => {
 
   it("says the record is incomplete when a mutation's entries could not be read", () => {
     const id = run("unproven");
-    noteGovernedIndexUnproven(id);
+    noteGovernedIndexUnproven(id, ["a.ts"]);
 
     expect(governedIndexRecord(id).truncated).toBe(true);
+  });
+
+  it("takes back ownership of every held path in an unobserved mutation's scope, and only those", () => {
+    const id = run("unproven-scope");
+    noteGovernedIndexTransitions(id, writes("a.ts", "dir/b.ts", "other/c.ts"));
+    noteGovernedIndexUnproven(id, ["a.ts", "dir"]);
+
+    const record = governedIndexRecord(id);
+    expect(record.paths).toEqual(["other/c.ts"]);
+    expect(record.truncated).toBe(true);
+    // The person's later state for a withdrawn path is never recorded again this turn.
+    noteGovernedIndexTransitions(id, writes("a.ts"));
+    expect(governedIndexRecord(id).paths).toEqual(["other/c.ts"]);
+  });
+
+  it("counts the paths withdrawn from ownership against the per-run bound", () => {
+    const id = run("cap-foreign");
+    const rounds = 3;
+    for (let round = 0; round < rounds; round += 1) {
+      const paths = Array.from(
+        { length: GOVERNED_INDEX_PATHS_MAX_PER_RUN },
+        (_unused, index) => `r${String(round)}-${String(index)}.ts`,
+      );
+      noteGovernedIndexTransitions(id, writes(...paths));
+      // A person changes every one of them before the second governed mutation.
+      noteGovernedIndexTransitions(
+        id,
+        paths.map((path) => ({ path, before: "100644 cccc", after: RESTAGED })),
+      );
+    }
+
+    const record = governedIndexRecord(id);
+    expect(record.paths).toEqual([]);
+    expect(record.truncated).toBe(true);
+    // Reaching the bound never makes a person-owned path eligible again.
+    noteGovernedIndexTransitions(id, writes("r0-0.ts"));
+    expect(governedIndexRecord(id).paths).toEqual([]);
   });
 
   it("cuts a run at its bound and says the record is incomplete", () => {
