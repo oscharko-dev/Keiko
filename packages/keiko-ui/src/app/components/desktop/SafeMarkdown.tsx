@@ -582,7 +582,7 @@ function renderTableNode(
       const inCell = tableEndsInCell(node);
       return (
         <div key={key} className="sm-table-wrapper">
-          <table className="sm-table">
+          <table className="sm-table" style={TABLE_WRAP_STYLE}>
             {renderChildren(node, key, options, inCell ? trailing : undefined)}
           </table>
           {inCell ? null : trailing}
@@ -617,6 +617,11 @@ function renderTableNode(
       return null;
   }
 }
+
+// `.sm-root` wraps with `overflow-wrap: anywhere`, which lets a table shrink a column until each
+// word breaks letter by letter. A table breaks only a word that cannot fit on its own line, so its
+// wrapper scrolls instead; `.sm-inline-code` keeps `anywhere`, so a long path still breaks.
+const TABLE_WRAP_STYLE: CSSProperties = { overflowWrap: "break-word" };
 
 const BLOCKED_CITATION_MESSAGE = "PDF preview unavailable";
 

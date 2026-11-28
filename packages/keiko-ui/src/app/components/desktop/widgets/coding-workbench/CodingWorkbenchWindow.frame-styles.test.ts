@@ -87,3 +87,15 @@ describe("Coding Workbench native approval styles", () => {
     expect(block).toContain("border-block-start:");
   });
 });
+
+describe("Coding Workbench conversation width", () => {
+  // Owner, 2026-11-28: the Workbench conversation is as wide as the Chat window's. A fixed 760 px
+  // column left most of a wide window empty and squeezed answer tables and code into it. The stream
+  // now fills the window like `.chatw-scroll`, so widening the window gives wide content room.
+  it("lets the session stream content fill the window width", () => {
+    const block = cssBlock(".sessionStream > *");
+
+    expect(block).toContain("width: 100%;");
+    expect(block).not.toMatch(/760px|min\(/u);
+  });
+});

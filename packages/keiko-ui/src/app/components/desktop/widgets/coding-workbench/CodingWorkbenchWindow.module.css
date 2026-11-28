@@ -449,8 +449,10 @@
   scrollbar-gutter: stable both-edges;
 }
 
+/* The conversation is as wide as the Chat window's (owner, 2026-11-28): no fixed column, so a wide
+   window gives answer tables and code room. */
 .sessionStream > * {
-  width: min(100%, 760px);
+  width: 100%;
   flex: 0 0 auto;
 }
 
