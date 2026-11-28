@@ -167,8 +167,9 @@ async function inspectWorkingFile(
     symlinks: "read-only",
   });
   if (isGitStageLargeFile(file)) return inspectLargeWorkingFile(scan, file, index);
-  if (index === undefined)
-    return { status: " ", bytes: file.bytes.length, untracked: file.mode !== "0" };
+  // An untracked regular file is judged by its existence alone: no byte of it is compared, held or
+  // kept, so it spends none of the content budget that bounds the files whose bytes are compared.
+  if (index === undefined) return { status: " ", bytes: 0, untracked: file.mode !== "0" };
   if (file.mode === "0") return { status: "D", bytes: 0, untracked: false };
   if (!sameMode(file.mode, index.mode, await scan.fileMode()))
     return { status: "M", bytes: file.bytes.length, untracked: false };

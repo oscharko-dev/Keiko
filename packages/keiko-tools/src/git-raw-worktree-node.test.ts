@@ -378,10 +378,15 @@ describe("paths the workspace deny list protects", () => {
   });
 
   it("still fails closed, with its closed code, when the content budget leaves the snapshot incomplete", async () => {
-    // Nine untracked files of exactly 1 MiB: the eighth exhausts the 8 MiB content budget and the
-    // ninth marks the inspection incomplete.
+    // Nine tracked files of exactly 1 MiB, each changed: their bytes are compared, so the eighth
+    // exhausts the 8 MiB content budget and the ninth marks the inspection incomplete.
     for (let index = 0; index < 9; index += 1) {
       writeFileSync(join(root, `blob-${String(index)}.bin`), Buffer.alloc(1_048_576, index));
+    }
+    git(["add", "."]);
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "blobs"]);
+    for (let index = 0; index < 9; index += 1) {
+      writeFileSync(join(root, `blob-${String(index)}.bin`), Buffer.alloc(1_048_576, index + 100));
     }
     const deps = { workspace, processEnv: { PATH: process.env.PATH } };
     const raw = await readGitRawChanges(deps);
@@ -397,5 +402,17 @@ describe("paths the workspace deny list protects", () => {
       code: "git-raw-snapshot-incomplete",
       message: "git-raw-snapshot-incomplete",
     });
+  });
+
+  // 301 ordinary untracked files of 32 KiB are 9.6 MB in all, yet far below any path bound: an
+  // untracked file is judged by its existence, so its size never spends the content budget.
+  it("lists every untracked file without spending the content budget on their bytes", async () => {
+    mkdirSync(join(root, "wide"));
+    for (let index = 0; index < 301; index += 1) {
+      writeFileSync(join(root, "wide", `file-${String(index)}.txt`), Buffer.alloc(32_768, 97));
+    }
+    const raw = await readGitRawChanges({ workspace, processEnv: { PATH: process.env.PATH } });
+    expect(raw.truncated).toBe(false);
+    expect(raw.changes.filter((change) => change.untracked)).toHaveLength(301);
   });
 });
