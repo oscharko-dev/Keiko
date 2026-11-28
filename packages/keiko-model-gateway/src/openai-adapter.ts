@@ -2150,7 +2150,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         yield* textChunksOf(chunk, lanes, acc, report);
         applyChunkMetadata(chunk, acc, report);
-        if (acc.usage !== undefined) report.providerUsage = providerReportedUsageOf(acc.usage);
+        report.providerUsage = providerReportedUsageOf(acc.usage) ?? report.providerUsage;
       }
       // An explicit provider refusal must retain its refusal class even if the stream then closes.
       if (!completion.sawDone && !acc.sawFinishReason && acc.refusal.length === 0) {

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ProviderEmptyAnswerError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { GATEWAY_EMPTY_ANSWER_EVIDENCE } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { ACTIVITY_LOG_OPERATION_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import type {
@@ -155,6 +156,43 @@ describe("OpenAiAdapter streamed empty answer: provider usage evidence (O-11)", 
     const extra = streamedExtra(log.events);
     expect(extra).toMatchObject({ outcome: "completed", providerCompletionTokens: 3 });
     expect(extra).not.toHaveProperty("emptyAnswerEvidence");
+  });
+
+  it("keeps a good provider usage when a later chunk carries an empty usage record", async () => {
+    const log = recorder();
+
+    await readAll(
+      [
+        reasoning("thinking"),
+        finish("stop"),
+        usageChunk({ prompt_tokens: 9, completion_tokens: 1800 }),
+        usageChunk({}),
+        DONE,
+      ],
+      log.sink,
+    );
+
+    expect(streamedExtra(log.events)).toMatchObject({
+      providerCompletionTokens: 1800,
+      emptyAnswerEvidence: "provider-reported-output",
+    });
+  });
+
+  it("pins every registered emptyAnswerEvidence vocabulary to the contract's", () => {
+    const registered = ACTIVITY_LOG_OPERATION_REGISTRY.filter(
+      (registration) => "emptyAnswerEvidence" in registration.fields,
+    );
+    expect(registered.map((registration) => registration.op).sort()).toEqual([
+      "chat.response.streamed",
+      "coding-sidecar.gateway.turn-failed",
+      "gateway.stream.failed",
+    ]);
+    for (const registration of registered) {
+      const fields = registration.fields as unknown as Readonly<
+        Record<string, { readonly values?: readonly string[] }>
+      >;
+      expect(fields.emptyAnswerEvidence?.values).toEqual([...GATEWAY_EMPTY_ANSWER_EVIDENCE]);
+    }
   });
 
   it("keeps the registered classification vocabulary equal to the contract's", () => {
