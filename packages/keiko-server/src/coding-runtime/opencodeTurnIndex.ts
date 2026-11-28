@@ -1,6 +1,11 @@
 import { createGitProcessRunner, gitEnv } from "@oscharko-dev/keiko-git";
 import type { GitProcessResult } from "@oscharko-dev/keiko-git";
-import { isGovernedIndexPath, type GovernedIndexRecord } from "./governedIndexPaths.js";
+import {
+  AT_HEAD,
+  type GovernedIndexRecord,
+  type GovernedIndexTransition,
+  isGovernedIndexPath,
+} from "./governedIndexPaths.js";
 import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
@@ -16,12 +21,13 @@ import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/kei
  * live index only when every touched path still holds exactly the state the turn left (a person's
  * staging after the turn is never overwritten) and every restored path then verifiably holds its
  * turn-start state. A path the person staged before the turn keeps that staging, since the
- * turn-start entry is what is restored. Anything that cannot be proven changes nothing and says so
+ * turn-start entry is what is restored. The "state the turn left" is never read off the end-of-turn
+ * index: governed staging records the entry each of its mutations wrote, and a path is restored
+ * only while the index still holds that recorded entry, so a person's own staging of the same path
+ * (before the turn settled or after it) is never mistaken for the turn's. Anything that cannot be proven changes nothing and says so
  * with a closed outcome. Restore leaves the index at the turn start: the files need staging again.
  */
 
-/** The state of a path no staged change touches: its index entry is HEAD's own. */
-const AT_HEAD = "=head";
 const ABSENT_MODE = "000000";
 const READ_MAX_BYTES = 16 * 1_024 * 1_024;
 const GIT_TIMEOUT_MS = 60_000;
@@ -90,9 +96,11 @@ function succeeded(result: GitProcessResult): boolean {
  * path, a malformed record or a read that failed cannot be proven, so the whole image is `undefined`.
  */
 async function readIndexImage(run: GitRun): Promise<IndexRead> {
-  const head = await run(["rev-parse", "--verify", "-q", "HEAD"]);
-  const headSha = head.stdout.trim();
-  if (!succeeded(head) || headSha === "") return undefined;
+  const headSha = await readHeadOrEmptyTree(run);
+  return headSha === undefined ? undefined : readIndexAgainst(run, headSha);
+}
+
+async function readIndexAgainst(run: GitRun, headSha: string): Promise<IndexRead> {
   const raw = await run([
     "diff-index",
     "--cached",
@@ -109,6 +117,26 @@ async function readIndexImage(run: GitRun): Promise<IndexRead> {
   // exactly, so an index holding one cannot be proven.
   if (await hasIntentToAdd(run, parsed.emptyAdditions)) return "unreadable";
   return { headSha, staged: parsed.staged };
+}
+
+/** The object ids of the empty tree, which an unborn branch's index is staged against. */
+const EMPTY_TREE_IDS: ReadonlyMap<string, string> = new Map([
+  ["sha1", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"],
+  ["sha256", "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"],
+]);
+
+/**
+ * The commit the index is compared against: HEAD, or the empty tree in a repository whose branch
+ * has no commit yet (every staged path is then an addition). `undefined` when there is no
+ * repository to read.
+ */
+async function readHeadOrEmptyTree(run: GitRun): Promise<string | undefined> {
+  const head = await run(["rev-parse", "--verify", "-q", "HEAD"]);
+  const headSha = head.stdout.trim();
+  if (succeeded(head) && headSha !== "") return headSha;
+  const format = await run(["rev-parse", "--show-object-format"]);
+  if (!succeeded(format)) return undefined;
+  return EMPTY_TREE_IDS.get(format.stdout.trim());
 }
 
 const RAW_RECORD = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])$/u;
@@ -152,21 +180,32 @@ function parseRawRecord(
   return { path, state: `${match[2] ?? ""} ${match[4] ?? ""}`, emptyAddition };
 }
 
+/** The flags of every `size: N flags: HEX` line of `ls-files --debug`, read token by token. */
+function indexEntryFlags(listing: string): number[] {
+  const flags: number[] = [];
+  for (const line of listing.split("\n")) {
+    const [size, count, label, hex, ...rest] = line.trim().split(/\s+/u);
+    if (size !== "size:" || label !== "flags:" || rest.length > 0) continue;
+    if (!/^\d+$/u.test(count ?? "") || !/^[0-9a-f]+$/u.test(hex ?? "")) continue;
+    flags.push(Number.parseInt(hex ?? "0", 16));
+  }
+  return flags;
+}
+
 /** Reads the extended index flags of the candidates; a path whose flags cannot be read counts as one. */
 async function hasIntentToAdd(run: GitRun, paths: readonly string[]): Promise<boolean> {
   for (let offset = 0; offset < paths.length; offset += INTENT_TO_ADD_BATCH) {
     const batch = paths.slice(offset, offset + INTENT_TO_ADD_BATCH);
     const listing = await run(["ls-files", "--stage", "--debug", "--", ...batch]);
     if (!succeeded(listing)) return true;
-    const flags = [...listing.stdout.matchAll(/^\s+size: \d+\s+flags: ([0-9a-f]+)$/gmu)];
+    const flags = indexEntryFlags(listing.stdout);
     if (flags.length !== batch.length) return true;
-    if (flags.some((flag) => (Number.parseInt(flag[1] ?? "0", 16) & INTENT_TO_ADD_FLAG) !== 0))
-      return true;
+    if (flags.some((flag) => (flag & INTENT_TO_ADD_FLAG) !== 0)) return true;
   }
   return false;
 }
 
-/** Reads the index of the workspace; `undefined` when it is not a repository with a commit. */
+/** Reads the index of the workspace; `undefined` when it is not a repository. */
 export function captureTurnIndex(root: string): Promise<IndexRead> {
   return readIndexImage(gitRunner(root));
 }
@@ -177,6 +216,40 @@ function captureInto(root: string, record: { failure?: unknown }): Promise<Index
     record.failure ??= error;
     return undefined;
   });
+}
+
+/**
+ * What one governed mutation changed in the index: the state before and after of every path under
+ * `pathspecs` whose entry differs. `undefined` when either read cannot be proven; `[]` when the
+ * mutation did not run.
+ */
+export async function readGovernedTransitions<T>(
+  root: string,
+  pathspecs: readonly string[],
+  mutate: () => Promise<T>,
+  succeeded: (value: T) => boolean,
+): Promise<{ value: T; transitions: readonly GovernedIndexTransition[] | undefined }> {
+  const run = gitRunner(root);
+  const before = await readStagedStates(run);
+  const value = await mutate();
+  if (!succeeded(value)) return { value, transitions: [] };
+  const after = await readStagedStates(run);
+  if (typeof before !== "object" || typeof after !== "object")
+    return { value, transitions: undefined };
+  const paths = new Set([...before.staged.keys(), ...after.staged.keys()]);
+  const transitions = [...paths]
+    .filter((path) => isGovernedIndexPath(path, pathspecs))
+    .sort(compareCodeUnits)
+    .map((path) => ({ path, before: stateOf(before, path), after: stateOf(after, path) }))
+    .filter((transition) => transition.before !== transition.after);
+  return { value, transitions };
+}
+
+// One process against the symbolic HEAD; a branch without a commit (or any read that failed) takes
+// the full read, which also tells an unborn branch from a folder that is no repository.
+async function readStagedStates(run: GitRun): Promise<IndexRead> {
+  const quick = await readIndexAgainst(run, "HEAD");
+  return quick === "unreadable" ? readIndexImage(run) : quick;
 }
 
 /** A new human turn begins: its index start is read now. */
@@ -253,13 +326,21 @@ export function settleTurnIndex(root: string, record: TurnIndexRecord): void {
   record.settled = captureInto(root, record);
 }
 
+/** Paths in code-unit order: deterministic and independent of the machine's locale. */
+function compareCodeUnits(first: string, second: string): number {
+  if (first === second) return 0;
+  return first < second ? -1 : 1;
+}
+
 function stateOf(image: TurnIndexImage, path: string): string {
   return image.staged.get(path) ?? AT_HEAD;
 }
 
 function touchedPaths(start: TurnIndexImage, left: TurnIndexImage): readonly string[] {
   const paths = new Set([...start.staged.keys(), ...left.staged.keys()]);
-  return [...paths].filter((path) => stateOf(start, path) !== stateOf(left, path)).sort();
+  return [...paths]
+    .filter((path) => stateOf(start, path) !== stateOf(left, path))
+    .sort(compareCodeUnits);
 }
 
 /**
@@ -309,14 +390,22 @@ async function restoreTouched(
 ): Promise<TurnIndexRestoreResult> {
   const { start, live, left } = images;
   const changed = touchedPaths(start, left);
-  const touched = changed.filter((path) => isGovernedIndexPath(path, governed.paths));
+  const touched = changed.filter((path) => governed.written.has(path));
   // A changed path the record does not name is the person's own staging, or the turn's when the
   // record was forgotten, cut or lost with a restart. It stays, and the outcome says so.
   const unrecorded = unrecordedOutcome(changed.length > touched.length, governed);
   // An undo asked again after a restore finds the index already at the turn start: nothing to do.
-  if (touched.length === 0 || touched.every((path) => stateOf(live, path) === stateOf(start, path)))
+  if (touched.every((path) => stateOf(live, path) === stateOf(start, path)))
     return { outcome: unrecorded, restoredCount: 0 };
-  const result = await restoreInTransaction(root, { start, left, touched });
+  // A path the person staged after Keiko wrote it is theirs: the recorded entry is gone from it.
+  if (touched.some((path) => stateOf(live, path) !== governed.written.get(path)))
+    return { outcome: "changed-after-turn", restoredCount: 0 };
+  const result = await restoreInTransaction(root, {
+    start,
+    left,
+    touched,
+    written: governed.written,
+  });
   return result.outcome === "restored" && unrecorded !== undefined
     ? { outcome: unrecorded, restoredCount: result.restoredCount }
     : result;
@@ -334,6 +423,8 @@ interface RestorePlan {
   readonly start: TurnIndexImage;
   readonly left: TurnIndexImage;
   readonly touched: readonly string[];
+  /** The entry governed staging wrote for each path: the only state an undo may take back. */
+  readonly written: ReadonlyMap<string, string>;
 }
 
 type TransactionResult = "applied" | "changed" | "failed";
@@ -371,9 +462,10 @@ async function restoreCopy(
   const inside = await readIndexImage(run);
   if (inside === undefined || inside === "unreadable") return "failed";
   // Under the lock, on the copy that will replace the index: every touched path still holds
-  // exactly what the turn left, so a person's staging after the turn is never overwritten.
+  // exactly the entry governed staging wrote, so a person's staging of the same path is never
+  // overwritten (the end-of-turn index is no proof of what Keiko wrote).
   if (inside.headSha !== plan.left.headSha) return "changed";
-  if (plan.touched.some((path) => stateOf(inside, path) !== stateOf(plan.left, path)))
+  if (plan.touched.some((path) => stateOf(inside, path) !== plan.written.get(path)))
     return "changed";
   if (!(await applyStartState(run, plan))) return "failed";
   const after = await readIndexImage(run);
@@ -388,7 +480,13 @@ async function applyStartState(run: GitRun, plan: RestorePlan): Promise<boolean>
   const atHead = plan.touched.filter((path) => stateOf(plan.start, path) === AT_HEAD);
   for (let offset = 0; offset < atHead.length; offset += RESTORE_BATCH) {
     const batch = atHead.slice(offset, offset + RESTORE_BATCH);
-    const restored = await run(["restore", "--staged", "--source=HEAD", "--", ...batch]);
+    const restored = await run([
+      "restore",
+      "--staged",
+      `--source=${plan.start.headSha}`,
+      "--",
+      ...batch,
+    ]);
     if (!succeeded(restored)) return false;
   }
   for (const path of plan.touched) {

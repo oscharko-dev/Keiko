@@ -1542,7 +1542,9 @@ describe("verified Code-task commit service", () => {
     const spawnBudget = {
       status: 12,
       stagePropose: 17,
-      stageExecute: 41,
+      // 41 plus the two reads that record which index entries the staging wrote (one before, one
+      // after), which the undo of the turn needs to leave a person's own staging alone (U-34b).
+      stageExecute: 43,
       unstagePropose: 17,
       commitPrepare: 25,
       commitExecute: 52,
@@ -3200,6 +3202,10 @@ describe("productive runtime status/diff/stage lane", () => {
       writeFileSync(join(root, path), `${content.join("\r\n")}\r\n`);
     }
 
+    afterEach(() => {
+      stagedPortOverride.value = undefined;
+    });
+
     it("counts one changed line of a CRLF worktree file under core.autocrlf=true", async () => {
       git(["config", "core.autocrlf", "true"]);
       commitLf("Zins.java");
@@ -3289,10 +3295,6 @@ describe("productive runtime status/diff/stage lane", () => {
       const diff = await runtimeGitDiff(context(), execution, "unstaged", [path]);
       expect(diff.files).toEqual([expect.objectContaining({ path, truncated: true })]);
     }
-
-    afterEach(() => {
-      stagedPortOverride.value = undefined;
-    });
 
     it("says counts are unavailable for a file Git would filter, never a wrong number", async () => {
       git(["config", "core.autocrlf", "true"]);

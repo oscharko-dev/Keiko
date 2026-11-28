@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  AT_HEAD,
   GOVERNED_INDEX_PATHS_MAX_PER_RUN,
   GOVERNED_INDEX_PATHS_MAX_RUNS,
   governedIndexRecord,
   isGovernedIndexPath,
-  noteGovernedIndexPaths,
+  noteGovernedIndexTransitions,
+  noteGovernedIndexUnproven,
   resetGovernedIndexPaths,
 } from "./governedIndexPaths.js";
 
@@ -17,40 +19,81 @@ function run(name: string): string {
   return id;
 }
 
+const STAGED = "100644 aaaa";
+const RESTAGED = "100644 bbbb";
+
+function writes(...paths: string[]): { path: string; before: string; after: string }[] {
+  return paths.map((path) => ({ path, before: AT_HEAD, after: STAGED }));
+}
+
 afterEach(() => {
   for (const id of created.splice(0)) resetGovernedIndexPaths(id);
 });
 
 describe("governed index paths", () => {
-  it("keeps each run's paths apart and normalizes a directory's trailing slash", () => {
+  it("keeps each run's paths apart with the entry each mutation wrote", () => {
     const first = run("first");
     const second = run("second");
-    noteGovernedIndexPaths(first, ["src/a.ts", "docs/"]);
-    noteGovernedIndexPaths(second, ["other.ts"]);
+    noteGovernedIndexTransitions(first, writes("src/a.ts", "docs/b.ts"));
+    noteGovernedIndexTransitions(second, writes("other.ts"));
 
-    expect(governedIndexRecord(first)).toEqual({ paths: ["src/a.ts", "docs"], truncated: false });
-    expect(governedIndexRecord(second)).toEqual({ paths: ["other.ts"], truncated: false });
-    expect(governedIndexRecord(run("none"))).toEqual({ paths: [], truncated: false });
+    expect(governedIndexRecord(first)).toEqual({
+      paths: ["src/a.ts", "docs/b.ts"],
+      written: new Map([
+        ["src/a.ts", STAGED],
+        ["docs/b.ts", STAGED],
+      ]),
+      truncated: false,
+    });
+    expect(governedIndexRecord(second).paths).toEqual(["other.ts"]);
+    expect(governedIndexRecord(run("none"))).toEqual({
+      paths: [],
+      written: new Map(),
+      truncated: false,
+    });
   });
 
-  it("accumulates over a turn and forgets everything when a new human turn begins", () => {
+  it("accumulates over a turn, keeps the latest entry and forgets everything when a new human turn begins", () => {
     const id = run("turn");
-    noteGovernedIndexPaths(id, ["a.ts"]);
-    noteGovernedIndexPaths(id, ["b.ts", "a.ts"]);
+    noteGovernedIndexTransitions(id, writes("a.ts"));
+    noteGovernedIndexTransitions(id, [
+      ...writes("b.ts"),
+      { path: "a.ts", before: STAGED, after: RESTAGED },
+    ]);
     expect(governedIndexRecord(id).paths).toEqual(["a.ts", "b.ts"]);
+    expect(governedIndexRecord(id).written.get("a.ts")).toBe(RESTAGED);
 
     resetGovernedIndexPaths(id);
 
-    expect(governedIndexRecord(id)).toEqual({ paths: [], truncated: false });
+    expect(governedIndexRecord(id).paths).toEqual([]);
+  });
+
+  it("drops a path a person changed between two governed mutations and never records it again", () => {
+    const id = run("interleaved");
+    noteGovernedIndexTransitions(id, writes("a.ts"));
+    // The second mutation found something else than what the first wrote: the person staged it.
+    noteGovernedIndexTransitions(id, [{ path: "a.ts", before: "100644 cccc", after: RESTAGED }]);
+    noteGovernedIndexTransitions(id, writes("a.ts"));
+
+    expect(governedIndexRecord(id).paths).toEqual([]);
+  });
+
+  it("says the record is incomplete when a mutation's entries could not be read", () => {
+    const id = run("unproven");
+    noteGovernedIndexUnproven(id);
+
+    expect(governedIndexRecord(id).truncated).toBe(true);
   });
 
   it("cuts a run at its bound and says the record is incomplete", () => {
     const id = run("cap");
-    const over = Array.from(
-      { length: GOVERNED_INDEX_PATHS_MAX_PER_RUN + 3 },
-      (_unused, index) => `f${String(index)}.ts`,
+    const over = writes(
+      ...Array.from(
+        { length: GOVERNED_INDEX_PATHS_MAX_PER_RUN + 3 },
+        (_unused, index) => `f${String(index)}.ts`,
+      ),
     );
-    noteGovernedIndexPaths(id, over);
+    noteGovernedIndexTransitions(id, over);
 
     const record = governedIndexRecord(id);
 
@@ -60,10 +103,10 @@ describe("governed index paths", () => {
 
   it("forgets the run written least recently once too many runs are held", () => {
     const oldest = run("lru-0");
-    noteGovernedIndexPaths(oldest, ["old.ts"]);
+    noteGovernedIndexTransitions(oldest, writes("old.ts"));
     for (let index = 1; index <= GOVERNED_INDEX_PATHS_MAX_RUNS; index += 1) {
       const id = run(`lru-${String(index)}`);
-      noteGovernedIndexPaths(id, ["x.ts"]);
+      noteGovernedIndexTransitions(id, writes("x.ts"));
     }
 
     expect(governedIndexRecord(oldest).paths).toEqual([]);

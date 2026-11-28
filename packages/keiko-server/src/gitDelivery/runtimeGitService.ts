@@ -81,7 +81,11 @@ import {
   type RuntimeGitTaskBranchPort,
 } from "./runtimeGitBranch.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
-import { noteGovernedIndexPaths } from "../coding-runtime/governedIndexPaths.js";
+import {
+  noteGovernedIndexTransitions,
+  noteGovernedIndexUnproven,
+} from "../coding-runtime/governedIndexPaths.js";
+import { readGovernedTransitions } from "../coding-runtime/opencodeTurnIndex.js";
 import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -1227,27 +1231,35 @@ export class RuntimeGitService {
     // Unsaved editor bytes matter to what staging records, never to what unstaging gives back.
     const buffersSettled = (): boolean =>
       proposal.command.kind === "unstage" || context.buffersClean();
-    const outcome = await executeGovernedMutation(
-      proposal.command,
-      claim,
-      context.workspace,
-      this.options.mutationDeps,
-      {
-        ...this.options.execution,
-        signal: context.signal,
-        beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
-        ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
-        snapshotReader: () =>
-          readGitRawWorktreeSnapshotAtHead(
-            runtimeGitReadDeps(context, this.options.execution ?? {}),
-          ),
-      },
-      context.correlationId,
+    // The undo of the turn puts back only what governed staging changed, and only while the index
+    // still holds the entry the mutation wrote: the entries are read around the mutation (U-34b).
+    const { value: outcome, transitions } = await readGovernedTransitions(
+      context.workspace.root,
+      proposal.command.pathspecs,
+      () =>
+        executeGovernedMutation(
+          proposal.command,
+          claim,
+          context.workspace,
+          this.options.mutationDeps,
+          {
+            ...this.options.execution,
+            signal: context.signal,
+            beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
+            ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
+            snapshotReader: () =>
+              readGitRawWorktreeSnapshotAtHead(
+                runtimeGitReadDeps(context, this.options.execution ?? {}),
+              ),
+          },
+          context.correlationId,
+        ),
+      (result) => result.outcome.status === "succeeded",
     );
     const status = outcome.outcome.status;
     if (status === "succeeded") {
-      // The undo of the turn puts back only what governed staging changed (U-34b).
-      noteGovernedIndexPaths(context.runId, proposal.command.pathspecs);
+      if (transitions === undefined) noteGovernedIndexUnproven(context.runId);
+      else noteGovernedIndexTransitions(context.runId, transitions);
       return this.result(proposal, "succeeded", "none");
     }
     if (status === "blocked") return this.result(proposal, "blocked", outcome.outcome.category);

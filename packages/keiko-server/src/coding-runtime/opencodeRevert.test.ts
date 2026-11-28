@@ -27,7 +27,12 @@ import {
   recordRevertTurnBlocked,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
-import { noteGovernedIndexPaths, resetGovernedIndexPaths } from "./governedIndexPaths.js";
+import {
+  AT_HEAD,
+  noteGovernedIndexTransitions,
+  resetGovernedIndexPaths,
+} from "./governedIndexPaths.js";
+import { captureTurnIndex } from "./opencodeTurnIndex.js";
 import {
   awaitTurnIndexStart,
   beginTurnIndex,
@@ -1044,6 +1049,16 @@ function gitIn(root: string, ...args: string[]): string {
 }
 
 /** A committed repository whose `a.txt` the turn then stages, as the governed staging does. */
+/** What governed staging records after its mutation: the entry the index now holds per path. */
+async function noteGoverned(root: string, paths: readonly string[]): Promise<void> {
+  const image = await captureTurnIndex(root);
+  if (typeof image !== "object") throw new Error("fixture index unreadable");
+  noteGovernedIndexTransitions(
+    RUN_ID,
+    paths.map((path) => ({ path, before: AT_HEAD, after: image.staged.get(path) ?? AT_HEAD })),
+  );
+}
+
 async function stagedTurn(): Promise<{
   readonly root: string;
   readonly begun: ReturnType<typeof beginTurnIndex>;
@@ -1121,7 +1136,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
-    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
+    await noteGoverned(root, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await agentWrote(run, ["a.txt"]);
@@ -1148,7 +1163,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
-    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
+    await noteGoverned(root, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await begun.settled;
@@ -1170,7 +1185,7 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root });
     run.turnIndex = begun;
-    noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
+    await noteGoverned(root, ["a.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await begun.settled;
@@ -1206,7 +1221,7 @@ describe("undo and the Git index (U-34b)", () => {
       if (aborted) stop.abort();
       await awaitTurnIndexStart(hung, stop.signal, aborted ? 600_000 : 0);
       run.turnIndex = hung;
-      noteGovernedIndexPaths(RUN_ID, ["a.txt"]);
+      await noteGoverned(root, ["a.txt"]);
       recordOpenCodeTurnImage(run, log);
       await run.turnImage;
       await agentWrote(run, ["a.txt"]);
@@ -1229,7 +1244,6 @@ describe("undo and the Git index (U-34b)", () => {
     const { root, begun } = await stagedTurn();
     const { port, run, log } = subject({ root, busy: true });
     run.turnIndex = begun;
-    noteGovernedIndexPaths(RUN_ID, ["a.txt", "b.txt"]);
     recordOpenCodeTurnImage(run, log);
     await run.turnImage;
     await begun.settled;
@@ -1237,6 +1251,7 @@ describe("undo and the Git index (U-34b)", () => {
     reopenTurnIndex(run.turnIndex);
     writeFileSync(join(root, "b.txt"), "step two\n");
     gitIn(root, "add", "b.txt");
+    await noteGoverned(root, ["a.txt", "b.txt"]);
     await agentWrote(run, ["a.txt"]);
 
     await expect(port.revertTurn(RUN_ID, "undo", CORRELATION_ID)).resolves.toMatchObject({
