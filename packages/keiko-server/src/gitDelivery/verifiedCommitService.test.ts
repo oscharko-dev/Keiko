@@ -2253,7 +2253,11 @@ describe("productive runtime status/diff/stage lane", () => {
         expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 302 });
         if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
         const review = gitService.review(proposed.proposalId)?.review;
-        expect(review).toMatchObject({ fileCount: 302, pathsTruncated: true });
+        expect(review).toMatchObject({
+          fileCount: 302,
+          pathsTruncated: true,
+          requested: ["src", "test"],
+        });
         expect(review?.paths).toHaveLength(CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
         expect(await execute(gitService, "stage", proposed.proposalId)).toMatchObject({
           status: "succeeded",
@@ -2291,6 +2295,7 @@ describe("productive runtime status/diff/stage lane", () => {
       const proposed = await index(gitService, "stage", ["."]);
       if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
       expect(proposed).toMatchObject({ status: "ready" });
+      expect(gitService.review(proposed.proposalId)?.review.requested).toEqual(["."]);
       await execute(gitService, "stage", proposed.proposalId);
       expect(git(["status", "--porcelain"])).not.toMatch(/^.[MD?]/mu);
       expect(git(["ls-files", "deep", "top.js"]).split("\n")).toEqual(["deep/a.js", "top.js"]);

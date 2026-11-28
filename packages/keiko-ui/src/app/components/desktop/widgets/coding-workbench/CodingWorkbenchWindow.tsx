@@ -3135,6 +3135,24 @@ function detailMessageProps(
   };
 }
 
+// The scope a Git stage or unstage asked for, shown above the (possibly truncated) file list so
+// that "." never looks like a few hand-picked files (U-28). An explicit file list that equals the
+// carried paths needs no second line.
+function ApprovalRequestedScope({
+  review,
+  t,
+}: {
+  readonly review: NonNullable<UseCodingWorkbenchApprovalReviewResult["review"]>;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const requested = review.requested;
+  if (requested === undefined || requested.join("\n") === review.paths.join("\n")) return null;
+  const text = requested.includes(".")
+    ? t("codingWorkbench.approval.changes.scopeWorkspace")
+    : t("codingWorkbench.approval.changes.scope", { scope: requested.join(", ") });
+  return <p className={styles.approvalResearchTitle}>{text}</p>;
+}
+
 // The reviewable facts of a changeset the operator is deciding about: the counts, the file list,
 // and the honest note when the list is truncated. Extracted from `ApprovalChangedFiles` so that
 // function stays inside the 50-line budget (AGENTS.md §6) — behaviour unchanged, only moved.
@@ -3160,6 +3178,7 @@ function ApprovalReviewBody({
           })}
         />
       </dl>
+      <ApprovalRequestedScope review={review} t={t} />
       <ul
         className={styles.approvalChangedFiles}
         // The list scrolls once it is long, so a keyboard user must be able to reach it.

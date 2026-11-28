@@ -107,6 +107,31 @@ describe("coding workbench runtime approval review channel", () => {
     );
   });
 
+  // U-28: the scope a Git stage asked for is optional (an edit changeset has none), bounded like the
+  // path list and may be the workspace itself.
+  it("accepts an optional requested scope and rejects an unbounded or escaping one", () => {
+    expect(errorsFor(activeReview({}))).toEqual([]);
+    expect(errorsFor(activeReview({ requested: ["src", "test"] }))).toEqual([]);
+    expect(errorsFor(activeReview({ requested: ["."] }))).toEqual([]);
+    const tooMany = Array.from(
+      { length: CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS + 1 },
+      (_value, index) => `dir${String(index)}`,
+    );
+    expect(errorsFor(activeReview({ requested: tooMany }))).toContain(
+      "pendingApprovalReview.requested exceeds the request bound",
+    );
+    expect(errorsFor(activeReview({ requested: [] }))).toContain(
+      "pendingApprovalReview.requested must be a non-empty array",
+    );
+    expect(errorsFor(activeReview({ requested: ["src", "src"] }))).toContain(
+      "pendingApprovalReview.requested must be unique",
+    );
+    for (const entry of ["../out", "/abs", "a\\b", 3])
+      expect(errorsFor(activeReview({ requested: [entry] }))).toContain(
+        "pendingApprovalReview.requested[0] is not a contained path",
+      );
+  });
+
   it("rejects counts that are negative, fractional or unbounded", () => {
     expect(errorsFor(activeReview({ addedLines: -1 }))).toContain(
       "pendingApprovalReview.addedLines must be a bounded non-negative integer",

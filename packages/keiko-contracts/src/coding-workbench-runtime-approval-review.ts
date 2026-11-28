@@ -157,6 +157,13 @@ export interface CodingWorkbenchRuntimePendingApprovalReview {
   readonly paths: readonly string[];
   /** True when the changeset declared more files than `paths` carries. */
   readonly pathsTruncated: boolean;
+  /**
+   * The scope the model asked for, when it differs from the files it expanded to (U-28): a Git
+   * stage or unstage request may name directories or `.`, and `paths` then lists only the first
+   * files of that expansion. At most 50 entries, each a contained relative path or `.`. Absent for
+   * an edit changeset, whose `paths` are the request.
+   */
+  readonly requested?: readonly string[];
   /** Files the changeset declares — may exceed `paths.length` when truncated. */
   readonly fileCount: number;
   readonly addedLines: number;
@@ -226,6 +233,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "requestId",
         "paths",
         "pathsTruncated",
+        "requested",
         "fileCount",
         "addedLines",
         "deletedLines",
@@ -255,6 +263,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   if (typeof value.pathsTruncated !== "boolean") {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
   }
+  if (value.requested !== undefined) validateRequestedScope(value.requested, errors);
   validateReviewCount(value.fileCount, "fileCount", errors);
   validateReviewCount(value.addedLines, "addedLines", errors);
   validateReviewCount(value.deletedLines, "deletedLines", errors);
@@ -464,6 +473,24 @@ function validateReviewFileCountConsistency(
   if (value.fileCount !== carried) {
     errors.push("pendingApprovalReview.fileCount must match the carried path list");
   }
+}
+
+function validateRequestedScope(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push("pendingApprovalReview.requested must be a non-empty array");
+    return;
+  }
+  if (value.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS) {
+    errors.push("pendingApprovalReview.requested exceeds the request bound");
+    return;
+  }
+  if (new Set(value).size !== value.length) {
+    errors.push("pendingApprovalReview.requested must be unique");
+  }
+  value.forEach((entry, index) => {
+    if (entry !== "." && !isReviewablePath(entry))
+      errors.push(`pendingApprovalReview.requested[${String(index)}] is not a contained path`);
+  });
 }
 
 function validateReviewPaths(value: unknown, errors: string[], fromRepository = false): void {

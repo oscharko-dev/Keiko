@@ -3865,6 +3865,52 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
+  // U-28 audit: the card names the scope the model asked for, so "." never looks like a few
+  // hand-picked files and the operator sees it above a list that is cut at fifty.
+  it.each([
+    [["src", "test"], "Scope: src, test"],
+    [["."], "Scope: entire workspace (.)"],
+  ])("U-28: names the requested scope %j above the file list", async (requested, text) => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/a.js", "src/b.js"],
+        pathsTruncated: true,
+        requested,
+        fileCount: 302,
+        addedLines: 604,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    const scope = within(changes).getByText(text);
+    const list = within(changes).getByRole("list");
+    expect(scope.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("U-28: shows no scope line when the request is the listed files themselves", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths: ["src/a.js"],
+        pathsTruncated: false,
+        requested: ["src/a.js"],
+        fileCount: 1,
+        addedLines: 1,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+    expect(screen.queryByText(/^Scope:/u)).not.toBeInTheDocument();
+  });
+
   // Workbench audit, 2026-09-03: a transient failure while the operator is deciding a file-edit
   // approval left them with no way to see which files would be written other than denying blind.
   it("#2802/finding 7: offers a retry for unavailable changed files and calls it on click", async () => {

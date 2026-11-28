@@ -1188,6 +1188,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.changes.lineCounts": "+{added} / -{deleted}",
   "codingWorkbench.approval.changes.truncated":
     "Only the first {shown} of {total} files are listed.",
+  "codingWorkbench.approval.changes.scope": "Scope: {scope}",
+  "codingWorkbench.approval.changes.scopeWorkspace": "Scope: entire workspace (.)",
   "codingWorkbench.approval.changes.countsUnavailable":
     "Line counts are unavailable because a file is too large to count.",
   "codingWorkbench.approval.changes.loading": "Loading the changed files…",

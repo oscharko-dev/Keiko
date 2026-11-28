@@ -349,6 +349,7 @@ interface RuntimeGitOptions extends VerifiedCommitServiceOptions {
 function buildStageProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  requested: readonly string[],
   paths: readonly string[],
   worktreeDigest: string,
   review: StageSelectionReview,
@@ -362,7 +363,7 @@ function buildStageProposal(
     worktreeDigest,
     verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
   };
-  return assembleProposal(context, facts, command, review, nowMs, proposalId);
+  return assembleProposal(context, facts, command, requested, review, nowMs, proposalId);
 }
 
 // An unstage proposal binds the same head, base and staged tree as a stage proposal, and carries
@@ -372,6 +373,7 @@ function buildStageProposal(
 function buildUnstageProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  requested: readonly string[],
   paths: readonly string[],
   review: StageSelectionReview,
   nowMs: number,
@@ -382,13 +384,14 @@ function buildUnstageProposal(
     pathspecs: [...paths],
     verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
   };
-  return assembleProposal(context, facts, command, review, nowMs, proposalId);
+  return assembleProposal(context, facts, command, requested, review, nowMs, proposalId);
 }
 
 function assembleProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
   command: GitStageCommand | GitUnstageCommand,
+  requested: readonly string[],
   review: StageSelectionReview,
   nowMs: number,
   proposalId: string,
@@ -418,6 +421,8 @@ function assembleProposal(
       requestId: proposalId,
       paths: paths.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS),
       pathsTruncated: paths.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
+      // The scope the model asked for stays visible beside the expansion the operator approves.
+      requested: [...requested],
       fileCount: review.fileCount,
       addedLines: review.addedLines,
       deletedLines: review.deletedLines,
@@ -903,6 +908,7 @@ export class RuntimeGitService {
     const proposal = buildStageProposal(
       context,
       facts,
+      requested,
       paths,
       worktreeDigest,
       review,
@@ -940,6 +946,7 @@ export class RuntimeGitService {
     const proposal = buildUnstageProposal(
       context,
       facts,
+      requested,
       selection.map((entry) => entry.path),
       review,
       this.now(),
