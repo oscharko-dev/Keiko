@@ -397,6 +397,39 @@ describe("a large file stages", () => {
     ).toEqual([]);
   });
 
+  it("publishes nothing when a check fails after the objects were written", async () => {
+    const repo = repository();
+    writeGenerated(repo);
+    const approved = git(repo, ["hash-object", "--no-filters", "--", "large.json"]).trim();
+    const indexBefore = git(repo, ["ls-files", "-s"]);
+    let checks = 0;
+    const failingLast = { ...context(repo), check: () => Promise.resolve(++checks < 2) };
+    await expect(
+      stageExactFiles(failingLast, request(repo, ["large.json"]), "exact"),
+    ).resolves.toBe(false);
+    expect(checks).toBe(2);
+    expect(existsSync(join(repo, ".git", "objects", approved.slice(0, 2), approved.slice(2)))).toBe(
+      false,
+    );
+    expect(git(repo, ["ls-files", "-s"])).toBe(indexBefore);
+  });
+
+  it("stages a file above core.bigFileThreshold, which Git writes as a pack", async () => {
+    const repo = repository();
+    git(repo, ["config", "core.bigFileThreshold", "1m"]);
+    writeGenerated(repo);
+    const approved = git(repo, ["hash-object", "--no-filters", "--", "large.json"]).trim();
+    await expect(
+      stageExactFiles(context(repo), request(repo, ["large.json"]), "exact"),
+    ).resolves.toBe(true);
+    expect(git(repo, ["rev-parse", ":large.json"]).trim()).toBe(approved);
+    expect(git(repo, ["cat-file", "-t", approved]).trim()).toBe("blob");
+    expect(readdirSync(join(repo, ".git", "objects", "pack")).some((n) => n.endsWith(".idx"))).toBe(
+      true,
+    );
+    expect(git(repo, ["fsck", "--strict"])).toBe("");
+  });
+
   it("publishes the approved bytes' object only after every check passed", async () => {
     const repo = repository();
     writeGenerated(repo);

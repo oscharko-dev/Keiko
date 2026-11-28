@@ -5,6 +5,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -27,9 +28,10 @@ import {
 } from "./gitIndexTransaction.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 let root: string;
-function git(args: readonly string[], cwd = root): string {
+function git(args: readonly string[], cwd = root, input?: string): string {
   return execFileSync("git", [...args], {
     cwd,
+    ...(input === undefined ? {} : { input }),
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
@@ -296,7 +298,7 @@ describe("the object quarantine of an index transaction", () => {
     await withGitIndexTransaction(
       root,
       (transaction) => {
-        const quarantine = transaction.openObjectQuarantine();
+        const quarantine = transaction.openObjectQuarantine(40);
         directory = quarantine.directory;
         id = quarantined("candidate\n", quarantine.directory);
         expect(existsSync(join(root, ".git", "objects", id.slice(0, 2), id.slice(2)))).toBe(false);
@@ -315,7 +317,7 @@ describe("the object quarantine of an index transaction", () => {
       withGitIndexTransaction(
         root,
         (transaction) => {
-          const quarantine = transaction.openObjectQuarantine();
+          const quarantine = transaction.openObjectQuarantine(40);
           writeFileSync(join(quarantine.directory, "stray"), "x");
           quarantine.publish();
           return Promise.resolve(true);
@@ -323,5 +325,127 @@ describe("the object quarantine of an index transaction", () => {
         () => false,
       ),
     ).rejects.toThrow("git-object-quarantine-invalid");
+  });
+
+  // Validation covers the whole tree before the first rename: a valid object listed before an
+  // invalid one must not be published by a publication that then throws.
+  it("publishes nothing when any entry of the quarantine is invalid", async () => {
+    let id = "";
+    await expect(
+      withGitIndexTransaction(
+        root,
+        (transaction) => {
+          const quarantine = transaction.openObjectQuarantine(40);
+          id = quarantined("first\n", quarantine.directory);
+          mkdirSync(join(quarantine.directory, "zz"));
+          writeFileSync(join(quarantine.directory, "zz", "x".repeat(38)), "bad");
+          quarantine.publish();
+          return Promise.resolve(true);
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("git-object-quarantine-invalid");
+    expect(existsSync(join(root, ".git", "objects", id.slice(0, 2), id.slice(2)))).toBe(false);
+  });
+
+  it("refuses a loose object whose name does not fit the repository's object format", async () => {
+    await expect(
+      withGitIndexTransaction(
+        root,
+        (transaction) => {
+          const quarantine = transaction.openObjectQuarantine(40);
+          mkdirSync(join(quarantine.directory, "ab"));
+          writeFileSync(join(quarantine.directory, "ab", "c".repeat(50)), "x");
+          quarantine.publish();
+          return Promise.resolve(true);
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("git-object-quarantine-invalid");
+  });
+
+  it("skips an object a concurrent writer already published", async () => {
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        const quarantine = transaction.openObjectQuarantine(40);
+        const id = quarantined("raced\n", quarantine.directory);
+        git(["hash-object", "-w", "--stdin"], root, "raced\n");
+        expect(() => {
+          quarantine.publish();
+        }).not.toThrow();
+        expect(git(["cat-file", "-p", id])).toBe("raced");
+        return Promise.resolve(true);
+      },
+      () => false,
+    );
+  });
+
+  it("publishes a pack with its index last and refuses a pack without an index", async () => {
+    const make = (quarantine: string): void => {
+      writeFileSync(join(root, "big.bin"), "x".repeat(4096));
+      execFileSync("git", ["-c", "core.bigFileThreshold=1", "hash-object", "-w", "--", "big.bin"], {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_OBJECT_DIRECTORY: quarantine,
+        },
+      });
+    };
+    let packed = "";
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        const quarantine = transaction.openObjectQuarantine(40);
+        make(quarantine.directory);
+        packed = readdirSync(join(quarantine.directory, "pack")).sort().join(",");
+        quarantine.publish();
+        return Promise.resolve(true);
+      },
+      () => false,
+    );
+    const names = packed.split(",");
+    expect(names.some((n) => n.endsWith(".pack"))).toBe(true);
+    expect(names.some((n) => n.endsWith(".idx"))).toBe(true);
+    for (const name of names)
+      expect(existsSync(join(root, ".git", "objects", "pack", name))).toBe(true);
+    git(["fsck", "--strict"]);
+    await expect(
+      withGitIndexTransaction(
+        root,
+        (transaction) => {
+          const quarantine = transaction.openObjectQuarantine(40);
+          mkdirSync(join(quarantine.directory, "pack"));
+          writeFileSync(join(quarantine.directory, "pack", `pack-${"a".repeat(40)}.pack`), "x");
+          quarantine.publish();
+          return Promise.resolve(true);
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("git-object-quarantine-invalid");
+  });
+
+  it("publishes only when the transaction accepts the result, just before the index moves", async () => {
+    let id = "";
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        id = quarantined("accepted\n", transaction.openObjectQuarantine(40).directory);
+        return Promise.resolve(false);
+      },
+      (accepted) => accepted,
+    );
+    expect(existsSync(join(root, ".git", "objects", id.slice(0, 2), id.slice(2)))).toBe(false);
+    await withGitIndexTransaction(
+      root,
+      (transaction) => {
+        id = quarantined("accepted\n", transaction.openObjectQuarantine(40).directory);
+        return Promise.resolve(true);
+      },
+      (accepted) => accepted,
+    );
+    expect(git(["cat-file", "-p", id])).toBe("accepted");
   });
 });

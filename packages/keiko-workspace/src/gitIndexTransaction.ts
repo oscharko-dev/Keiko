@@ -28,7 +28,8 @@ import { resolveWithinWorkspace } from "./paths.js";
 const MAX_INDEX_BYTES = 16_777_216;
 /**
  * A private object directory for candidate objects Git writes by path: nothing in it is visible to
- * the repository until `publish` moves the objects that passed every check into the live store, so
+ * the repository until the transaction publishes the objects into the live store once every check
+ * passed (`publish` is idempotent and only for that moment and for tests), so
  * bytes that were refused never become readable Git objects. It lives inside the live `objects`
  * directory (as Git's own receive quarantine does), so publishing is a rename on one filesystem.
  */
@@ -40,7 +41,11 @@ export interface GitObjectQuarantine {
 export interface GitIndexTransaction {
   readonly temporaryIndexPath: string;
   readonly check: () => boolean;
-  readonly openObjectQuarantine: () => GitObjectQuarantine;
+  // `hashLength` is the repository's object-id length (40 or 64): it fixes the one loose-object and
+  // pack name shape the quarantine may hold. The objects are published by the transaction itself,
+  // right before the index is promoted, after every check passed; a refused or failed transaction
+  // never publishes anything.
+  readonly openObjectQuarantine: (hashLength: number) => GitObjectQuarantine;
 }
 
 /**
@@ -68,7 +73,7 @@ export async function withGitIndexTransaction<T>(
   const temporaryIndexPath = join(base.path, `.keiko-index-${randomUUID()}`);
   const check = (): boolean => sameDirectory(base.path, directory) && sameLock(lock, descriptor);
   const temporary = { owned: false };
-  const quarantines: string[] = [];
+  const quarantines: GitObjectQuarantine[] = [];
   try {
     if (!check()) throw new Error("git-index-metadata-drift");
     const indexExisted = await copyIndex(fs, base.path, temporaryIndexPath, () => {
@@ -77,56 +82,133 @@ export async function withGitIndexTransaction<T>(
     const result = await mutate({
       temporaryIndexPath,
       check,
-      openObjectQuarantine: () => openObjectQuarantine(base.path, quarantines),
+      openObjectQuarantine: (hashLength) =>
+        openObjectQuarantine(base.path, hashLength, quarantines),
     });
     if (accept(result)) {
       if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
         throw new Error("git-index-metadata-drift");
       if (!accept(result)) throw new Error("git-index-authority-denied");
+      for (const quarantine of quarantines) quarantine.publish();
       promoteIndex(base.path, temporaryIndexPath, indexExisted);
     }
     return result;
   } finally {
-    for (const quarantine of quarantines) rmSync(quarantine, { recursive: true, force: true });
+    for (const quarantine of quarantines)
+      rmSync(quarantine.directory, { recursive: true, force: true });
     cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
   }
 }
 const LOOSE_FAN_OUT = /^[0-9a-f]{2}$/u;
-const LOOSE_OBJECT_REST = /^[0-9a-f]{38,62}$/u;
 // The live object directory a gitdir writes to: a linked worktree shares its main repository's.
 function liveObjectsOf(gitdir: string): string {
   const live = join(branchRefsBase(gitdir), "objects");
   if (!lstatSync(live).isDirectory()) throw new Error("git-object-store-unavailable");
   return live;
 }
-function openObjectQuarantine(gitdir: string, owned: string[]): GitObjectQuarantine {
+function openObjectQuarantine(
+  gitdir: string,
+  hashLength: number,
+  owned: GitObjectQuarantine[],
+): GitObjectQuarantine {
+  if (hashLength !== 40 && hashLength !== 64) throw new Error("git-object-quarantine-invalid");
   const liveDirectory = liveObjectsOf(gitdir);
   const directory = join(liveDirectory, `incoming-keiko-${randomUUID()}`);
   mkdirSync(directory, { mode: 0o700 });
-  owned.push(directory);
-  return {
+  const quarantine: GitObjectQuarantine = {
     directory,
     liveDirectory,
     publish: (): void => {
-      publishQuarantine(directory, liveDirectory);
+      publishQuarantine(directory, liveDirectory, hashLength);
     },
   };
+  owned.push(quarantine);
+  return quarantine;
 }
-// Moves every loose object of the quarantine into the live store; an object that is already there
-// is the same content, so it is left alone. Any other entry in the quarantine fails closed.
-function publishQuarantine(directory: string, liveDirectory: string): void {
-  for (const fanOut of readdirSync(directory)) {
-    if (!LOOSE_FAN_OUT.test(fanOut)) throw new Error("git-object-quarantine-invalid");
+interface QuarantinedFile {
+  readonly source: string;
+  readonly target: string;
+}
+function regularFile(path: string): boolean {
+  const stat = lstatSync(path);
+  return stat.isFile() && !stat.isSymbolicLink();
+}
+// The loose objects of the quarantine: `xx/<hashLength - 2 hex characters>`, regular files only.
+function looseObjectsOf(
+  directory: string,
+  liveDirectory: string,
+  hashLength: number,
+): readonly QuarantinedFile[] {
+  const rest = new RegExp(`^[0-9a-f]{${String(hashLength - 2)}}$`, "u");
+  const files: QuarantinedFile[] = [];
+  for (const fanOut of readdirSync(directory).filter((name) => name !== "pack")) {
     const source = join(directory, fanOut);
-    if (!lstatSync(source).isDirectory()) throw new Error("git-object-quarantine-invalid");
-    mkdirSync(join(liveDirectory, fanOut), { recursive: true });
-    for (const rest of readdirSync(source)) {
-      const object = join(source, rest);
-      if (!LOOSE_OBJECT_REST.test(rest) || !lstatSync(object).isFile())
+    if (!LOOSE_FAN_OUT.test(fanOut) || !lstatSync(source).isDirectory())
+      throw new Error("git-object-quarantine-invalid");
+    for (const name of readdirSync(source)) {
+      if (!rest.test(name) || !regularFile(join(source, name)))
         throw new Error("git-object-quarantine-invalid");
-      const target = join(liveDirectory, fanOut, rest);
-      if (lstatSync(target, { throwIfNoEntry: false }) === undefined) renameSync(object, target);
+      files.push({ source: join(source, name), target: join(liveDirectory, fanOut, name) });
     }
+  }
+  return files;
+}
+const PACK_PART_ORDER = ["pack", "rev", "idx"] as const;
+// A file Git above `core.bigFileThreshold` wrote as a pack: `pack-<id>.pack`, optionally `.rev`, and
+// `.idx`. Readers find a pack through its index, so the index is published last. A pack without its
+// index or an index without its pack, or any other name, is refused.
+function packFilesOf(
+  directory: string,
+  liveDirectory: string,
+  hashLength: number,
+): readonly QuarantinedFile[] {
+  const packs = join(directory, "pack");
+  if (lstatSync(packs, { throwIfNoEntry: false }) === undefined) return [];
+  const name = new RegExp(`^pack-[0-9a-f]{${String(hashLength)}}\\.(pack|rev|idx)$`, "u");
+  const names = readdirSync(packs);
+  const stems = new Set(names.map((entry) => entry.slice(0, entry.lastIndexOf("."))));
+  const ordered = [...stems].flatMap((stem) =>
+    PACK_PART_ORDER.map((part) => `${stem}.${part}`).filter((entry) => names.includes(entry)),
+  );
+  const complete = [...stems].every(
+    (stem) => names.includes(`${stem}.pack`) && names.includes(`${stem}.idx`),
+  );
+  if (
+    !lstatSync(packs).isDirectory() ||
+    !complete ||
+    ordered.length !== names.length ||
+    !names.every((entry) => name.test(entry) && regularFile(join(packs, entry)))
+  )
+    throw new Error("git-object-quarantine-invalid");
+  return ordered.map((entry) => ({
+    source: join(packs, entry),
+    target: join(liveDirectory, "pack", entry),
+  }));
+}
+// Moves the quarantine into the live store. The whole tree is validated before the first rename, so
+// an invalid entry never leaves a partial publication. An object that is already there (an earlier
+// write, or a concurrent writer of the same object) is the same content under the same name and is
+// left alone.
+function publishQuarantine(directory: string, liveDirectory: string, hashLength: number): void {
+  const plan = [
+    ...looseObjectsOf(directory, liveDirectory, hashLength),
+    ...packFilesOf(directory, liveDirectory, hashLength),
+  ];
+  for (const file of plan) {
+    mkdirSync(dirname(file.target), { recursive: true });
+    moveIfAbsent(file);
+  }
+}
+function moveIfAbsent(file: QuarantinedFile): void {
+  if (lstatSync(file.target, { throwIfNoEntry: false }) !== undefined) return;
+  try {
+    renameSync(file.source, file.target);
+  } catch (error) {
+    // A concurrent writer of the same object may win the race; Windows then reports EEXIST or EPERM
+    // for a rename onto an existing file. Only that case is success; every other error is rethrown.
+    const code = (error as NodeJS.ErrnoException).code;
+    const raced = code === "EEXIST" || code === "EPERM" || code === "EACCES";
+    if (!raced || lstatSync(file.target, { throwIfNoEntry: false }) === undefined) throw error;
   }
 }
 // The private copy replaces the live index. An index that was absent under Git's own lock is still

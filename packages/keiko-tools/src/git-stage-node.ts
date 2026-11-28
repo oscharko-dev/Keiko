@@ -1061,6 +1061,9 @@ async function updatePrivateIndex(
       ["update-index", "-z", "--index-info"],
       part,
       temporaryIndexPath,
+      undefined,
+      // Git reads the unpublished objects through the quarantine while it names them in the index.
+      ctx.objectQuarantine,
     );
     if (result.exitCode !== 0 || result.truncated) return false;
   }
@@ -1098,16 +1101,13 @@ export async function stageExactFiles(
       )
         return false;
       // Objects Git writes by path stay private until every identity and content check passed.
-      const quarantine = transaction.openObjectQuarantine();
-      const entries = await indexEntries(
-        { ...ctx, objectQuarantine: quarantine },
-        files,
-        gitHeadObjectIdLength(expected.head),
-        lineEndings,
-      );
+      // The transaction publishes them itself, right before the index is promoted.
+      const hashLength = gitHeadObjectIdLength(expected.head);
+      const scoped = { ...ctx, objectQuarantine: transaction.openObjectQuarantine(hashLength) };
+      const entries = await indexEntries(scoped, files, hashLength, lineEndings);
       if (entries === undefined) return false;
-      quarantine.publish();
-      if (!(await updatePrivateIndex(ctx, transaction.temporaryIndexPath, entries))) return false;
+      if (!(await updatePrivateIndex(scoped, transaction.temporaryIndexPath, entries)))
+        return false;
       return transaction.check() && (await ctx.check());
     },
     (result) => {
