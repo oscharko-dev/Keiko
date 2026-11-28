@@ -1429,11 +1429,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The check could not start, so the changes were not checked. The step above names the reason, for example a refused permission or a tool this computer lacks. Your changes stay in the task workspace. Remove that reason, then ask Keiko to run the check again.",
   "codingWorkbench.event.failure.verificationGap.budget-exhausted":
     "The run used up its budget of tool calls or changed bytes before a check could run, so the changes were not checked. Your changes stay in the task workspace. Start a new run to check them with a fresh budget.",
-  "codingWorkbench.event.runCheck.action": "Run the check now",
-  "codingWorkbench.event.runCheck.request":
-    "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
   "codingWorkbench.event.runFailed": "Coding run failed",
-  "codingWorkbench.event.runUnverified": "Changes not checked",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

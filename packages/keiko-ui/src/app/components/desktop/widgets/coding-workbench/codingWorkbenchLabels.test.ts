@@ -23,7 +23,6 @@ import {
   changesetDeliveryAlert,
   eventDetail,
   eventOffersErrorReport,
-  eventOffersRunCheck,
   eventTitle,
   generatingRunState,
   modelSourceLabel,
@@ -443,25 +442,24 @@ describe("eventDetail auxiliary outcome", () => {
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(key);
   });
-  // #4491 night walk: the card of a run that ended without a passing check after its last change
-  // is titled by that gap; "Coding run failed" above "the changes were not checked" contradicted
-  // a model that reported its tests green.
-  it("titles a verification gap by what is missing", () => {
+  // Follows the 2026-11-28 owner decision: no special "Changes not checked" title exists any more.
+  // A run that settled failed on a verification gap (a failed check, a check that could not start, a
+  // spent budget, or an old stored row) is the ordinary failed run, with its detail sentence.
+  it("titles a verification gap as the ordinary failed run", () => {
     const settled = runtimeEvent({
       kind: "status",
       state: "failed",
       failureCode: "verification-not-evidenced",
     });
-    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runUnverified");
-    // Moved from the F9 cause table above: the card still names its closed cause.
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
     expect(eventDetail(settled, t)).toBe(
       "codingWorkbench.event.failure.verification-not-evidenced",
     );
-    expect(translateCodingWorkbench("en", "codingWorkbench.event.runUnverified")).toBe(
-      "Changes not checked",
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.runFailed")).toBe(
+      "Coding run failed",
     );
-    expect(translateCodingWorkbench("de", "codingWorkbench.event.runUnverified")).toBe(
-      "Änderungen nicht geprüft",
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.runFailed")).toBe(
+      "Coding-Lauf fehlgeschlagen",
     );
   });
 });
@@ -1493,8 +1491,9 @@ describe("runtimeUnavailableMessageKey", () => {
   );
 });
 
-// #4491: the verification-not-evidenced card names the gap the settlement carries, offers the check
-// and never the error report; every other failed run keeps the report.
+// #4491, amended by the 2026-11-28 owner decision: the verification-not-evidenced card names the gap
+// the settlement carries and never offers the error report or a check button; every other failed run
+// keeps the report.
 describe("verification gap on a failed run", () => {
   const failed = (extra: Record<string, unknown>): CodingWorkbenchRuntimeSseEvent =>
     runtimeEvent({ kind: "status", state: "failed", ...extra, eventKind: undefined });
@@ -1516,23 +1515,14 @@ describe("verification gap on a failed run", () => {
     );
   });
 
-  it("offers the check, not the error report, exactly on verification-not-evidenced", () => {
+  it("offers no error report exactly on verification-not-evidenced", () => {
     const gap = failed({
       failureCode: "verification-not-evidenced",
       verificationGap: "check-failed",
     });
-    expect(eventOffersRunCheck(gap, true)).toBe(true);
-    expect(eventOffersRunCheck(gap, false)).toBe(false);
     expect(eventOffersErrorReport(gap)).toBe(false);
     const other = failed({ failureCode: "runtime-failed" });
-    expect(eventOffersRunCheck(other, true)).toBe(false);
     expect(eventOffersErrorReport(other)).toBe(true);
-    expect(
-      eventOffersRunCheck(
-        failed({ failureCode: "verification-not-evidenced", state: "cancelled" }),
-        true,
-      ),
-    ).toBe(false);
   });
 });
 

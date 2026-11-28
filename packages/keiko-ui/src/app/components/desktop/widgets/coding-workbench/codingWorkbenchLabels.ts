@@ -418,8 +418,6 @@ export function eventTitle(
   t: CodingWorkbenchTranslate,
 ): string {
   if (event.kind !== "status") return t(`codingWorkbench.event.${event.eventKind}`);
-  // A verification gap names what is missing, as its sentence does, not a generic failure (#4491).
-  if (isVerificationGapEvent(event)) return t("codingWorkbench.event.runUnverified");
   return event.state === "failed"
     ? t("codingWorkbench.event.runFailed")
     : runStateLabel(event.state, t);
@@ -554,9 +552,9 @@ const identityTranslate: CodingWorkbenchTranslate = (key) => key;
  * action that is not there.
  */
 export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): boolean {
-  // A run whose changes were not checked has nothing broken to report, with or without a check to
-  // offer, so it never offers the error report.
-  if (isVerificationGapEvent(event)) return false;
+  // A run whose changes were not checked or whose check failed has nothing broken inside Keiko to
+  // report, so it never offers the error report.
+  if (isVerificationGapFailure(event)) return false;
   if (event.kind === "status" && event.state === "failed") return true;
   if (turnFailureDetail(event, identityTranslate).length > 0) return false;
   const key = runFailureMessageKey(event);
@@ -567,24 +565,12 @@ export function eventOffersErrorReport(event: CodingWorkbenchRuntimeSseEvent): b
 }
 
 /** True exactly when the event is a run settled `failed` with `verification-not-evidenced` (#4491). */
-function isVerificationGapEvent(event: CodingWorkbenchRuntimeSseEvent): boolean {
+function isVerificationGapFailure(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return (
     event.kind === "status" &&
     event.state === "failed" &&
     event.failureCode === "verification-not-evidenced"
   );
-}
-
-/**
- * True when the card of a verification gap can offer "Run the check now": only while a new request
- * can be sent (`runCheckAvailable`). The card's sentence names the gap and the next step without
- * naming a control, so it reads correctly with or without the button.
- */
-export function eventOffersRunCheck(
-  event: CodingWorkbenchRuntimeSseEvent,
-  runCheckAvailable: boolean,
-): boolean {
-  return runCheckAvailable && isVerificationGapEvent(event);
 }
 
 function turnFailureDetail(

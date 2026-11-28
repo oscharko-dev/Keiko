@@ -57,12 +57,7 @@ import {
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
-import {
-  eventDetail,
-  eventOffersErrorReport,
-  eventOffersRunCheck,
-  eventTitle,
-} from "./codingWorkbenchLabels";
+import { eventDetail, eventOffersErrorReport, eventTitle } from "./codingWorkbenchLabels";
 import {
   formatRunDuration,
   modelGatewayRetrying,
@@ -227,12 +222,6 @@ export interface CodingWorkbenchTimelineProps {
   readonly questions: UseCodingWorkbenchQuestionsResult;
   readonly focusRef?: RefObject<HTMLHeadingElement | null>;
   /**
-   * Asks the task's model to run the project's check, as the person's own request. Present only
-   * while a new request can be sent; the card of a run whose changes were not checked offers it
-   * as "Run the check now" (#4491).
-   */
-  readonly onRunCheck?: (() => void) | undefined;
-  /**
    * The id of the tool call the run's pending approval holds back (the ask's `callId`). While the
    * run waits for the person, exactly that call's row reads "Waiting for approval" instead of
    * "Running". Absent when no approval is pending or the ask names no call: no row is marked then,
@@ -245,9 +234,6 @@ export interface CodingWorkbenchTimelineProps {
   readonly pausedForTrust?: boolean | undefined;
 }
 
-// The action reaches the failure card through a context: the card sits several rows below the
-// timeline, and none of those rows otherwise carries an action.
-const RunCheckContext = createContext<(() => void) | undefined>(undefined);
 // The call a pending approval holds back reaches the tool rows through a context for the same reason.
 const AwaitingApprovalCallIdContext = createContext<string | undefined>(undefined);
 // Whether the run is over, so no row can still be waiting for a decision.
@@ -307,7 +293,6 @@ export function Timeline({
   activity,
   questions,
   focusRef,
-  onRunCheck,
   awaitingApprovalCallId,
   pausedForTrust = false,
 }: CodingWorkbenchTimelineProps): ReactNode {
@@ -322,7 +307,6 @@ export function Timeline({
   if (!active && allItems.length + questions.questions.length === 0 && !attention) return null;
   return (
     <TimelineContexts
-      onRunCheck={onRunCheck}
       awaitingApprovalCallId={awaitingApprovalCallId}
       runEnded={!active}
       heldForTrust={pausedForTrust}
@@ -351,17 +335,15 @@ export function Timeline({
   );
 }
 
-// What the rows below read from the run instead of from their own props: the person's action on a
-// failure card, the call a pending approval holds back, whether the run is over, and the model texts.
+// What the rows below read from the run instead of from their own props: the call a pending
+// approval holds back, whether the run is over, and the model texts.
 function TimelineContexts({
-  onRunCheck,
   awaitingApprovalCallId,
   runEnded,
   heldForTrust,
   modelTexts,
   children,
 }: {
-  readonly onRunCheck: (() => void) | undefined;
   readonly awaitingApprovalCallId: string | undefined;
   readonly runEnded: boolean;
   readonly heldForTrust: boolean;
@@ -369,15 +351,13 @@ function TimelineContexts({
   readonly children: ReactNode;
 }): ReactNode {
   return (
-    <RunCheckContext.Provider value={onRunCheck}>
-      <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
-        <RunEndedContext.Provider value={runEnded}>
-          <HeldForTrustContext.Provider value={heldForTrust}>
-            <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
-          </HeldForTrustContext.Provider>
-        </RunEndedContext.Provider>
-      </AwaitingApprovalCallIdContext.Provider>
-    </RunCheckContext.Provider>
+    <AwaitingApprovalCallIdContext.Provider value={awaitingApprovalCallId}>
+      <RunEndedContext.Provider value={runEnded}>
+        <HeldForTrustContext.Provider value={heldForTrust}>
+          <ModelTextsContext.Provider value={modelTexts}>{children}</ModelTextsContext.Provider>
+        </HeldForTrustContext.Provider>
+      </RunEndedContext.Provider>
+    </AwaitingApprovalCallIdContext.Provider>
   );
 }
 
@@ -2337,7 +2317,7 @@ function EventRow({
         </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
-        <RunFailureReport event={item.event} t={t} />
+        <RunFailureReport event={item.event} />
       </details>
     </li>
   );
@@ -2346,27 +2326,13 @@ function EventRow({
 /**
  * A run that settled `failed` offers the existing user-initiated error report. The server uses the
  * run id as the run's Activity Log correlation id, so the report selects that run's lines; an id
- * that is not a valid correlation id falls back to the most recent registered failure. A run whose
- * changes were not checked offers "Run the check now" instead (#4491): nothing broke inside Keiko,
- * and the button is the person's own request to run the check, so it is shown as their message.
+ * that is not a valid correlation id falls back to the most recent registered failure.
  */
 function RunFailureReport({
   event,
-  t,
 }: {
   readonly event: CodingWorkbenchRuntimeSseEvent;
-  readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  const onRunCheck = useContext(RunCheckContext);
-  if (onRunCheck !== undefined && eventOffersRunCheck(event, true)) {
-    return (
-      <p className={styles.timelineDetail} data-run-check="">
-        <button type="button" className={styles.cmpRunCheckAction} onClick={onRunCheck}>
-          {t("codingWorkbench.event.runCheck.action")}
-        </button>
-      </p>
-    );
-  }
   if (!eventOffersErrorReport(event)) return null;
   const correlationId = isActivityLogCorrelationId(event.runId) ? event.runId : undefined;
   return (

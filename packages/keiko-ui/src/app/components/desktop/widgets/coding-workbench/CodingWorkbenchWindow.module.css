@@ -1411,29 +1411,6 @@
   overflow-wrap: anywhere;
 }
 
-.cmpRunCheckAction {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  background: var(--surface-primary);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-caption);
-  cursor: pointer;
-}
-
-.cmpRunCheckAction:hover {
-  background: var(--surface-secondary);
-}
-
-.cmpRunCheckAction:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
 .messageText {
   min-width: 0;
   margin-top: var(--space-2);

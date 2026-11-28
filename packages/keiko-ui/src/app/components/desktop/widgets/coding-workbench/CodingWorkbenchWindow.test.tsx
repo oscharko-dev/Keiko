@@ -899,12 +899,13 @@ describe("CodingWorkbenchWindow", () => {
       ];
     }
 
-    // #4491: a run whose changes were not checked names the gap and offers the check; the button
-    // starts the check through the composer's own start path, as the person's own request.
-    it("offers Run the check now on a not-verified run and starts the check as the person's request", () => {
+    // Follows the 2026-11-28 owner decision: a stored run of an older version (failed,
+    // verification-not-evidenced, no-check-run) carries no "Changes not checked" notice and no "Run
+    // the check now" button any more; it reads as the ordinary failed run with its gap sentence.
+    it("renders an older stored not-checked run without the notice and without a check button", () => {
       taskSessionHookMock.mockReturnValue(restoredSession());
       activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
-      const liveActions = renderWorkbench(
+      renderWorkbench(
         liveState({
           canStart: true,
           run: {
@@ -923,20 +924,13 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
-      const [card] = settledRows("Changes not checked");
+      const [card] = settledRows("Coding run failed");
       expect(card).toHaveTextContent("no check ran after the last change");
-      expect(card).not.toHaveTextContent("Coding run failed");
+      expect(screen.queryByText("Changes not checked")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
       expect(
         within(card as HTMLElement).queryByRole("button", { name: "Create error report" }),
       ).toBeNull();
-      fireEvent.click(
-        within(card as HTMLElement).getByRole("button", { name: "Run the check now" }),
-      );
-
-      expect(liveActions.start).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(liveActions.start).mock.calls[0]?.[0]).toBe(
-        "Run the project's check now (its tests, type check or build), repair a failure you can fix, and tell me the result.",
-      );
     });
 
     it("keeps the server's own activity projection while it is still held", () => {

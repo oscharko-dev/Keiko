@@ -1479,11 +1479,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Prüfung konnte nicht starten, deshalb wurden die Änderungen nicht geprüft. Der Schritt darüber nennt den Grund, zum Beispiel eine abgelehnte Berechtigung oder ein Werkzeug, das auf diesem Computer fehlt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Beseitige diesen Grund und lass Keiko die Prüfung dann erneut ausführen.",
   "codingWorkbench.event.failure.verificationGap.budget-exhausted":
     "Der Lauf hat sein Budget an Werkzeugaufrufen oder geänderten Bytes verbraucht, bevor eine Prüfung laufen konnte, deshalb wurden die Änderungen nicht geprüft. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Starte einen neuen Lauf, um sie mit frischem Budget zu prüfen.",
-  "codingWorkbench.event.runCheck.action": "Prüfung nachholen",
-  "codingWorkbench.event.runCheck.request":
-    "Führe jetzt die Prüfung des Projekts aus (Tests, Typprüfung oder Build), behebe einen Fehler, den du beheben kannst, und sag mir das Ergebnis.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
-  "codingWorkbench.event.runUnverified": "Änderungen nicht geprüft",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
   "codingWorkbench.event.turnFailure.stream-incomplete":

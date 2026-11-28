@@ -3517,9 +3517,10 @@ describe("Timeline — error report on a failed run", () => {
   });
 });
 
-// #4491: a run that changed code without a passing check after its last change names the concrete
-// gap in one plain sentence and offers "Run the check now" in place of the error report: nothing
-// broke inside Keiko, and the person can act on the sentence.
+// #4491, amended by the 2026-11-28 owner decision: a run that failed on a verification gap (a failed
+// check, a check that could not start, a spent budget, or an old stored row) names the concrete gap
+// in one plain sentence under the ordinary failed-run title. It offers neither the error report nor
+// any "Run the check now" button: nothing broke inside Keiko, and the button no longer exists.
 describe("Timeline — verification gap on a failed run", () => {
   const RUN_ID = "run-272120967981827964065820685403290179367";
   const GAP_SENTENCES = {
@@ -3552,56 +3553,35 @@ describe("Timeline — verification gap on a failed run", () => {
     };
   }
 
-  function renderGap(
-    gap: keyof typeof GAP_SENTENCES | undefined,
-    onRunCheck?: () => void,
-  ): ReturnType<typeof render> {
+  function renderGap(gap: keyof typeof GAP_SENTENCES | undefined): ReturnType<typeof render> {
     return render(
       <Timeline
         events={[gapEvent(gap)]}
         activity={activityLike(bareFeed())}
         questions={IDLE_QUESTIONS}
-        onRunCheck={onRunCheck}
       />,
     );
   }
 
   it.each(Object.entries(GAP_SENTENCES))(
-    "names the gap %s and ends with what the person can do",
+    "names the gap %s under the ordinary failed-run title, with no check button",
     (gap, sentence) => {
-      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES, vi.fn());
+      const { container } = renderGap(gap as keyof typeof GAP_SENTENCES);
       expect(container).toHaveTextContent(sentence);
-      expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+      expect(container).toHaveTextContent(/Coding run failed/u);
+      expect(container).not.toHaveTextContent(/Changes not checked/u);
       expect(container).not.toHaveTextContent(/internal error/iu);
+      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
     },
   );
 
-  it("offers Run the check now and no error report, and the button submits the request", () => {
-    const onRunCheck = vi.fn();
-    renderGap("check-failed", onRunCheck);
-
-    expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run the check now" }));
-    expect(onRunCheck).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the generic sentence, with the button, for a run settled before the gap was recorded", () => {
-    const { container } = renderGap(undefined, vi.fn());
+  it("keeps the generic sentence for a run settled before the gap was recorded", () => {
+    const { container } = renderGap(undefined);
     expect(container).toHaveTextContent(/The task is not verified/u);
-    expect(screen.getByRole("button", { name: "Run the check now" })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent(/Changes not checked/u);
+    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-  });
-
-  it("shows neither button when a new request cannot be sent, and the sentence still reads right", () => {
-    for (const gap of Object.keys(GAP_SENTENCES) as (keyof typeof GAP_SENTENCES)[]) {
-      const { container, unmount } = renderGap(gap);
-      expect(container).toHaveTextContent(GAP_SENTENCES[gap]);
-      // The sentence names the next step, never a control that may not be on the card.
-      expect(container).not.toHaveTextContent(/Run the check now|Select/u);
-      expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
-      unmount();
-    }
   });
 
   it("restores the gap with the settled snapshot after a reload", () => {
@@ -3623,14 +3603,12 @@ describe("Timeline — verification gap on a failed run", () => {
         events={[{ ...gapEvent(), failureCode: "runtime-failed" }]}
         activity={activityLike(bareFeed())}
         questions={IDLE_QUESTIONS}
-        onRunCheck={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run the check now" })).toBeNull();
   });
 
-  it("speaks German on the card and on the button", async () => {
+  it("speaks German on the card, with the ordinary failed-run title and no button", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     try {
@@ -3640,12 +3618,13 @@ describe("Timeline — verification gap on a failed run", () => {
             events={[gapEvent("no-check-run")]}
             activity={activityLike(bareFeed())}
             questions={IDLE_QUESTIONS}
-            onRunCheck={vi.fn()}
           />
         </I18nProvider>,
       );
       expect(container).toHaveTextContent(/lief keine Prüfung/u);
-      expect(screen.getByRole("button", { name: "Prüfung nachholen" })).toBeInTheDocument();
+      expect(container).toHaveTextContent(/Coding-Lauf fehlgeschlagen/u);
+      expect(container).not.toHaveTextContent(/Änderungen nicht geprüft/u);
+      expect(screen.queryByRole("button", { name: "Prüfung nachholen" })).toBeNull();
     } finally {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
     }

@@ -2401,14 +2401,6 @@ function WorkbenchColumns(
                   )
                 }
                 pausedForTrust={state.run.value?.pauseReason === "workspace-script-trust"}
-                onRunCheck={
-                  canStartAtLocation(state, locationState, taskBranchMove) &&
-                  state.mutation.status !== "pending"
-                    ? (): void => {
-                        taskActions.composer.onStart(t("codingWorkbench.event.runCheck.request"));
-                      }
-                    : undefined
-                }
               />
             </ListFollowContext.Provider>
             <CodingWorkbenchRevertBar
