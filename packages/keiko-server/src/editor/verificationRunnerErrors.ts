@@ -94,3 +94,12 @@ export class PackageSelectionRequiredError extends VerificationRunnerError {
     this.candidates = candidates;
   }
 }
+
+// The plan a verification would run no longer is the plan the person approved: a script, a
+// lifecycle script or the package resolution changed between the approval and the effect. The
+// closed code stays `BAD_REQUEST`; the governed tool maps this class to its own refusal.
+export class VerificationPlanChangedError extends VerificationRunnerError {
+  public constructor() {
+    super("BAD_REQUEST", "The verification plan changed after it was approved.");
+  }
+}

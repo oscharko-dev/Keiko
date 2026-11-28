@@ -59,6 +59,7 @@ import type {
 import {
   PackageSelectionRequiredError,
   VerificationRunnerError,
+  VerificationPlanChangedError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
 import {
@@ -1822,18 +1823,19 @@ async function runVerificationCall(
   signal: Parameters<VerificationRunnerExecute>[1],
   guard: Parameters<VerificationRunnerExecute>[2],
 ): Promise<VerificationPortResult> {
-  const kind = verificationRunnerEntry(input, request, guard, signal);
-  if (typeof kind !== "string") return kind;
+  const entry = verificationRunnerEntry(input, request, guard, signal);
+  if (!("kind" in entry)) return entry;
+  const { kind, bound } = entry;
   // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
   // catalog's ceilings both run from admission, so the wait below must be measured from here
   // and not from the moment the first attempt failed (owner review, PR #3452).
   const enteredAtMs = Date.now();
   const editRevision = input.verificationRevision?.();
   const executed = input.verificationAdmitted?.();
-  let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+  let attempt = await runVerificationAttempt(input, request, kind, guard, signal, bound);
   if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
     if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
-      attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+      attempt = await runVerificationAttempt(input, request, kind, guard, signal, bound);
     }
   }
   if (attempt.outcome === "refused") return attempt.result;
@@ -1873,7 +1875,7 @@ function verificationPlanChanged(
     { readonly action: "verification" }
   >,
   kind: VerificationKind,
-): VerificationPortResult | undefined {
+): VerificationPortResult | string | undefined {
   // The digest rides on the approval record this very call spent, so it is bound to this call.
   const bound = input.approvalProofVerifier?.takeApprovedPlan({
     runId: input.authorityRef.runId,
@@ -1884,7 +1886,9 @@ function verificationPlanChanged(
   // ones the person saw, so the call fails closed instead of running unbound.
   const preview = input.verificationRunner.previewCommands;
   if (preview !== undefined && verificationPlanDigestOf(input, preview, request, kind) === bound) {
-    return undefined;
+    // The runner proves the same digest again on the plan it builds for the effect itself, on
+    // every attempt (the wait for script trust and the captures below leave this check behind).
+    return bound;
   }
   return verificationPortRefusal(input, "verification-plan-changed");
 }
@@ -1913,6 +1917,12 @@ function verificationPlanDigestOf(
   }
 }
 
+interface VerificationEntry {
+  readonly kind: VerificationKind;
+  /** The plan digest the person approved, still to be proven against the plan the effect builds. */
+  readonly bound: string | undefined;
+}
+
 function verificationRunnerEntry(
   input: ProductionManagedWorktreeToolInput,
   request: Extract<
@@ -1921,13 +1931,16 @@ function verificationRunnerEntry(
   >,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): VerificationKind | VerificationPortResult {
+): VerificationEntry | VerificationPortResult {
   const refusal = verificationLivenessRefusal(input, guard, signal);
   if (refusal !== undefined) {
     return verificationPortRefusal(input, "verification-authority-revoked", refusal);
   }
   const kind = verificationKind(request.verifierId);
-  if (kind !== undefined) return verificationPlanChanged(input, request, kind) ?? kind;
+  if (kind !== undefined) {
+    const bound = verificationPlanChanged(input, request, kind);
+    return typeof bound === "object" ? bound : { kind, bound };
+  }
   input.verificationBlocked?.(
     "verification-verifier-unsupported",
     codingVerificationTargetDigest(request.verifierId, request.targetPath),
@@ -2020,6 +2033,7 @@ async function runVerificationAttempt(
   kind: VerificationKind,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
+  bound: string | undefined,
 ): Promise<VerificationAttempt> {
   // Built on demand, never in advance: `verificationPortRefusal` EMITS the refusal diagnostic as a
   // side effect, so materialising it up front would report a revoked authority on every attempt
@@ -2033,7 +2047,7 @@ async function runVerificationAttempt(
     const beforeRun = verificationLivenessRefusal(input, guard, signal);
     if (beforeRun !== undefined) return revoked(beforeRun);
     const { report, failureOutput } = await input.verificationRunner.runToReport(
-      verificationRunInput(input, request, kind),
+      verificationRunInput(input, request, kind, bound),
       signal ?? new AbortController().signal,
     );
     const afterRun = verificationLivenessRefusal(input, guard, signal);
@@ -2041,6 +2055,14 @@ async function runVerificationAttempt(
     const commitProof = await completeCandidateVerification(input, begun, report, guard, signal);
     return { outcome: "completed", report, failureOutput, commitProof };
   } catch (error) {
+    // The plan built for the effect is no longer the one the person approved: the same closed
+    // refusal as the entry check, before any step started.
+    if (error instanceof VerificationPlanChangedError) {
+      return {
+        outcome: "refused",
+        result: verificationPortRefusal(input, "verification-plan-changed"),
+      };
+    }
     return { outcome: "threw", error };
   }
 }
@@ -2697,6 +2719,7 @@ function verificationRunInput(
     { readonly action: "verification" }
   >,
   kind: VerificationKind,
+  expectedPlanDigest: string | undefined,
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
   recordVerificationTarget(input, request, kind);
@@ -2711,6 +2734,7 @@ function verificationRunInput(
     ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
     // Read at the attempt, not frozen at construction: the run's mode is the live selection.
     autonomyMode: effectiveModeOf(input),
+    ...(expectedPlanDigest === undefined ? {} : { expectedPlanDigest }),
   };
 }
 

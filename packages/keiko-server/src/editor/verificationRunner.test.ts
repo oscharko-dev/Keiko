@@ -32,6 +32,7 @@ import {
 } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
+  verificationPlanDigest,
   decideScriptTrust,
   type VerificationCommandPreview,
   type VerificationExecutePort,
@@ -41,7 +42,10 @@ import {
   type VerificationRunnerManagerOptions,
   type VerificationRunnerWorkspaceTrustDecider,
 } from "./verificationRunner.js";
-import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import {
+  VerificationPlanChangedError,
+  VerificationRunnerError,
+} from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isVerificationDependencySummary } from "@oscharko-dev/keiko-contracts/runtime/verification";
@@ -671,6 +675,55 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
     expect(trust).toHaveBeenCalledTimes(2);
     expect(port.calls).toBe(0);
     expect(manager.inFlightCount()).toBe(0);
+  });
+
+  describe("binds the plan the person approved to the plan the effect builds", () => {
+    const writeScripts = (scripts: Record<string, string>): void => {
+      writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "x", scripts }));
+    };
+    const approvedDigest = (manager: VerificationRunnerManager): string => {
+      const plan = manager.previewCommands({ projectId: workspaceRoot, kinds: ["typecheck"] });
+      if (plan.kind !== "steps") throw new TypeError("expected planned steps");
+      return verificationPlanDigest(plan.steps);
+    };
+
+    it("moves the digest when only a lifecycle script of the approved script changes", () => {
+      const manager = makeManager({ execute: fakePort(report(["typecheck"])).port });
+      writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "echo a" });
+      const approved = approvedDigest(manager);
+      writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "node steal.js" });
+      expect(approvedDigest(manager)).not.toBe(approved);
+    });
+
+    it.each([
+      ["the script body", { typecheck: "node steal.js" }],
+      ["a lifecycle script", { typecheck: "tsc --noEmit", pretypecheck: "node steal.js" }],
+    ])(
+      "refuses the run, before any step, when %s changed after the approval",
+      async (_n, after) => {
+        const port = fakePort(report(["typecheck"]));
+        const manager = makeManager({
+          execute: port.port,
+          isWorkspaceTrustedForPackageScripts: () => true,
+        });
+        writeScripts({ typecheck: "tsc --noEmit", pretypecheck: "echo a" });
+        const expectedPlanDigest = approvedDigest(manager);
+        // Positive control: the approved bytes run.
+        await manager.runToReport(
+          input({ kinds: ["typecheck"], expectedPlanDigest }),
+          new AbortController().signal,
+        );
+        expect(port.calls).toBe(1);
+        writeScripts(after);
+        await expect(
+          manager.runToReport(
+            input({ kinds: ["typecheck"], expectedPlanDigest }),
+            new AbortController().signal,
+          ),
+        ).rejects.toBeInstanceOf(VerificationPlanChangedError);
+        expect(port.calls).toBe(1);
+      },
+    );
   });
 
   it("revalidates workspace trust after plan derivation and denies drift before an agent run", async () => {

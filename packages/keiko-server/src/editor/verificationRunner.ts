@@ -77,6 +77,7 @@ import {
 } from "./verificationExecutionLog.js";
 import {
   PackageSelectionRequiredError,
+  VerificationPlanChangedError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
   type VerificationRunnerErrorCode,
@@ -336,6 +337,10 @@ export interface VerificationRunInput {
   // narrower modes, and every caller that supplies none, keep the operator's explicit decision.
   // Never accepted from a parsed client payload.
   readonly autonomyMode?: CodingWorkbenchMode | undefined;
+  // Server-owned: the digest of the plan the person approved. The plan built for the effect itself
+  // (after any trust wait, so on every retry) must digest to it, or the run refuses before any step
+  // starts. Never accepted from a parsed client payload.
+  readonly expectedPlanDigest?: string | undefined;
 }
 
 export interface VerificationRunStart {
@@ -423,6 +428,50 @@ export interface VerificationPreviewStep {
   /** The package script behind the step and its body, so the person sees what `npm run x` runs. */
   readonly scriptName?: string | undefined;
   readonly scriptBody?: string | undefined;
+  /**
+   * The digest of EVERY script of the step's package: npm runs the script's pre and post
+   * lifecycle scripts and any script the body calls, none of which the body above shows.
+   */
+  readonly scriptsDigest?: string | undefined;
+}
+
+/**
+ * The digest of what a plan runs: command, arguments, folder, script body and the digest of the
+ * package's whole script table of every step, in order. The approval card's preview and the run's
+ * own plan both digest through here.
+ */
+export function verificationPlanDigest(steps: readonly VerificationPreviewStep[]): string {
+  const canonical = steps.map((step) => [
+    step.command,
+    [...step.args],
+    step.cwd ?? null,
+    step.scriptBody ?? null,
+    step.scriptsDigest ?? null,
+  ]);
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+}
+
+function scriptTableDigest(scripts: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(scripts).sort(([left], [right]) => compareStrings(left, right));
+  return createHash("sha256").update(JSON.stringify(entries), "utf8").digest("hex");
+}
+
+/** The runnable steps of a plan as the approval preview and the effect's own check both see them. */
+function previewStepsOf(
+  all: VerificationPlan["steps"],
+  scripts: Readonly<Record<string, string>>,
+): readonly VerificationPreviewStep[] {
+  const scriptsDigest = scriptTableDigest(scripts);
+  return all
+    .filter((step) => step.skipReason === undefined)
+    .map((step) => ({
+      command: step.command,
+      args: step.args,
+      ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+      ...(step.scriptName === undefined || scripts[step.scriptName] === undefined
+        ? {}
+        : { scriptName: step.scriptName, scriptBody: scripts[step.scriptName], scriptsDigest }),
+    }));
 }
 
 /**
@@ -876,6 +925,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const pkg = this.resolvePackage(workspace, input, fs);
     const maven = pkg === undefined && this.runsMaven(workspace, fs, isolation);
     const { script: scriptSteps, all: steps } = this.plannedSteps(workspace, fs, input, pkg, maven);
+    this.assertApprovedPlan(input, steps, detectScripts(workspace, fs, pkg?.dir).scripts);
     const trust = this.assertWorkspaceTrustForSteps(
       resolved,
       scriptSteps,
@@ -891,6 +941,20 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       trust,
       runnerWorkspace: maven ? MAVEN_RUNNER : (pkg?.workspace ?? workspace),
     };
+  }
+
+  // The plan the effect is about to run must be the one the person approved. Built from the same
+  // projection as the preview, on the bytes read for this very plan, so a retry after a trust wait
+  // re-proves it and a script changed between approval and execution refuses before any step starts.
+  private assertApprovedPlan(
+    input: VerificationRunInput,
+    steps: VerificationPlan["steps"],
+    scripts: Readonly<Record<string, string>>,
+  ): void {
+    if (input.expectedPlanDigest === undefined) return;
+    if (verificationPlanDigest(previewStepsOf(steps, scripts)) !== input.expectedPlanDigest) {
+      throw new VerificationPlanChangedError();
+    }
   }
 
   // The ONE place the steps of a verification are planned. `execute` and the approval preview both
@@ -1455,20 +1519,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
     const { all } = this.plannedSteps(workspace, fs, input, pkg, false);
     const scripts = detectScripts(workspace, fs, pkg?.dir).scripts;
-    return {
-      kind: "steps",
-      probeFailures,
-      steps: all
-        .filter((step) => step.skipReason === undefined)
-        .map((step) => ({
-          command: step.command,
-          args: step.args,
-          ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
-          ...(step.scriptName === undefined || scripts[step.scriptName] === undefined
-            ? {}
-            : { scriptName: step.scriptName, scriptBody: scripts[step.scriptName] }),
-        })),
-    };
+    return { kind: "steps", probeFailures, steps: previewStepsOf(all, scripts) };
   };
 
   private scriptTrust(

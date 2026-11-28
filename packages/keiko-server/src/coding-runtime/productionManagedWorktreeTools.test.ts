@@ -69,6 +69,7 @@ import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import { CODING_TOOL_MAX_READ_BYTES, CODING_TOOL_READ_MAX_WINDOW_LINES } from "./codingToolIpc.js";
 import {
   PackageSelectionRequiredError,
+  VerificationPlanChangedError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
@@ -1967,6 +1968,7 @@ describe("production managed worktree tools", () => {
       readonly packageDir?: string;
       readonly targetPath?: string;
       readonly planner?: "absent" | "throws";
+      readonly runnerRefuses?: "plan-changed";
     }): Promise<{
       readonly result: unknown;
       readonly runToReport: ReturnType<typeof vi.fn>;
@@ -1979,8 +1981,12 @@ describe("production managed worktree tools", () => {
       const replanned: Parameters<
         NonNullable<ProductionManagedWorktreeToolInput["verificationRunner"]["previewCommands"]>
       >[0][] = [];
-      const runToReport = vi.fn(() =>
-        Promise.reject(new VerificationRunnerError("NO_RUNNABLE_STEPS", "stop after the check")),
+      const runToReport = vi.fn((_input: { readonly expectedPlanDigest?: string }) =>
+        Promise.reject(
+          options.runnerRefuses === "plan-changed"
+            ? new VerificationPlanChangedError()
+            : new VerificationRunnerError("NO_RUNNABLE_STEPS", "stop after the check"),
+        ),
       );
       const digest = verificationPlanDigest(
         (stepsOf(options.approved) as Extract<VerificationCommandPreview, { kind: "steps" }>).steps,
@@ -2072,6 +2078,18 @@ describe("production managed worktree tools", () => {
         }),
       ]);
       expect(JSON.stringify(records)).not.toContain("rm -rf");
+    });
+
+    it("hands the approved digest to the runner and maps its plan-changed refusal at the effect", async () => {
+      const { result, runToReport } = await runApproved({
+        approved: "vitest run",
+        now: "vitest run",
+        runnerRefuses: "plan-changed",
+      });
+      const expected = verificationPlanDigest(stepsOf("vitest run").steps);
+      expect(runToReport).toHaveBeenCalledTimes(1);
+      expect(runToReport.mock.calls[0]?.[0]).toMatchObject({ expectedPlanDigest: expected });
+      expect(result).toMatchObject({ status: "failed", reasonCode: "verification-plan-changed" });
     });
 
     it("fails closed when the card showed commands but the runner cannot plan them again", async () => {

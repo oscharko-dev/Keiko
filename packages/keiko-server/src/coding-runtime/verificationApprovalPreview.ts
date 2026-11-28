@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { CodingWorkbenchVerificationPreview } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_VERIFICATION_PREVIEW_COMMAND_MAX_CHARS,
@@ -8,10 +7,11 @@ import {
 import { redact, redactContent } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
-import type {
-  VerificationCommandPreview,
-  VerificationPreviewInput,
-  VerificationPreviewStep,
+import {
+  verificationPlanDigest,
+  type VerificationCommandPreview,
+  type VerificationPreviewInput,
+  type VerificationPreviewStep,
 } from "../editor/verificationRunner.js";
 import type {
   CodingVerificationPreviewPort,
@@ -46,20 +46,9 @@ function shellWord(word: string): string {
   return /^[\w@%+=:,./-]+$/u.test(word) ? word : JSON.stringify(word);
 }
 
-/**
- * The digest of what a plan runs: command, arguments, folder and script body of every step, in order. The
- * approval card's preview and the run's own re-plan both digest through here.
- */
-export function verificationPlanDigest(steps: readonly VerificationPreviewStep[]): string {
-  // The script body is part of what runs: `npm run test` is the same words for any body.
-  const canonical = steps.map((step) => [
-    step.command,
-    [...step.args],
-    step.cwd ?? null,
-    step.scriptBody ?? null,
-  ]);
-  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
-}
+// The digest of what a plan runs lives with the runner that plans it, so the preview and the
+// effect's own check cannot drift apart.
+export { verificationPlanDigest };
 
 /**
  * The person reads this text, so it loses only the credential floor (owner decision 2026-11-04);
