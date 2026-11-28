@@ -15887,6 +15887,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "already-staged",
+          "index-changed",
           "interrupt-failed",
           "nothing-staged",
           "nothing-to-undo",

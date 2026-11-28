@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a3ce2da6c8b49fe3b692e496a6e5f920f6c380abc96cf5e57d8a28c8fa509779",
+    "catalogDigest": "c33a9a5209d830996f02f5eaf24b563d7e36d97d301f0bcc0f92d9c56f2d4ae3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -16423,8 +16423,8 @@
         "failureClasses": ["coding-runtime-revert"],
         "proofIds": ["coding-runtime.revert.applied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:79",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:884"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:80",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:890"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -16518,6 +16518,7 @@
             "required": true,
             "values": [
               "already-staged",
+              "index-changed",
               "interrupt-failed",
               "nothing-staged",
               "nothing-to-undo",
@@ -16555,8 +16556,8 @@
         "failureClasses": ["coding-runtime-revert"],
         "proofIds": ["coding-runtime.revert.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:117",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:915"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:118",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRevert.ts:921"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -129169,7 +129170,7 @@
     {
       "op": "coding-runtime.revert.applied",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:82",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:83",
       "package": "keiko-server"
     },
     {
@@ -129181,7 +129182,7 @@
     {
       "op": "coding-runtime.revert.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:120",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRevert.ts:121",
       "package": "keiko-server"
     },
     {
