@@ -39079,6 +39079,12 @@
               "required": false
             },
             {
+              "name": "stageCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "state",
               "type": "string",
               "dataClass": "closed-enum",

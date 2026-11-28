@@ -1847,6 +1847,7 @@
     "keiko-server/coding-runtime/productionWorkspaceHeadReader",
     "keiko-server/coding-runtime/readOnlyChildEnvelope",
     "keiko-server/coding-runtime/readOnlyChildOrchestrator",
+    "keiko-server/coding-runtime/repositoryRootIdentity",
     "keiko-server/coding-runtime/researchApprovalIssuance",
     "keiko-server/coding-runtime/researchContentQuarantine",
     "keiko-server/coding-runtime/researchEgressPort",

@@ -17372,6 +17372,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "blocked",
           "budget-exhausted",
           "already-continued",
+          "target-unproven",
         ],
       },
       gap: {
@@ -33133,6 +33134,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 128,
+      },
+      stageCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "config-unsupported",
+          "filter-driver",
+          "attribute-filter",
+          "attribute-encoding",
+          "attribute-ident",
+          "attribute-line-ending",
+          "attribute-unreadable",
+          "content-conversion",
+        ],
       },
       pathCount: {
         type: "integer",
