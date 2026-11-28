@@ -5,7 +5,11 @@
 // parent listing; secrets and their directory names remain excluded.
 
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import { installationDenialCause, type InstallationDenialCause } from "./launch-directory.js";
+import {
+  installationDenialCause,
+  installationDenialCauseAsync,
+  type InstallationDenialCause,
+} from "./launch-directory.js";
 
 // Generic, non-leaking deny message. NEVER include the requested path or the
 // matched pattern: the deny list is treated as a server-side safety invariant
@@ -24,4 +28,15 @@ export function pathIsDenied(path: string): boolean {
 /** Why a path is refused, as a closed value that names no path, or undefined when it is not. */
 export function pathDenialCause(path: string): "deny-list" | InstallationDenialCause | undefined {
   return isDenied(path) ? "deny-list" : installationDenialCause(path);
+}
+
+/** `pathDenialCause` for an asynchronous caller: the canonical-name check never blocks the event loop. */
+export async function pathDenialCauseAsync(
+  path: string,
+): Promise<"deny-list" | InstallationDenialCause | undefined> {
+  return isDenied(path) ? "deny-list" : await installationDenialCauseAsync(path);
+}
+
+export async function pathIsDeniedAsync(path: string): Promise<boolean> {
+  return (await pathDenialCauseAsync(path)) !== undefined;
 }

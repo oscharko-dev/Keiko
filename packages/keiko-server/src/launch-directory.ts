@@ -4,6 +4,7 @@
 // `portable-management.ts`): the server must not depend on the CLI; each side's tests pin the
 // literal.
 import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
@@ -30,6 +31,17 @@ type SystemName =
 function resolveSystemName(path: string): SystemName {
   try {
     return { kind: "named", name: realpathSync.native(path) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "failed" };
+  }
+}
+
+// The same question asked without blocking the event loop: an unresponsive share holds a worker
+// thread, never the BFF's other requests.
+async function resolveSystemNameAsync(path: string): Promise<SystemName> {
+  try {
+    return { kind: "named", name: await realpath(path) };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return code === "ENOENT" || code === "ENOTDIR" ? { kind: "missing" } : { kind: "failed" };
@@ -177,5 +189,29 @@ export function installationDenialCause(
   launchDirectory: string = process.cwd(),
 ): InstallationDenialCause | undefined {
   const name = lazySystemName(path);
+  return programFolderDenial(path, env, launchDirectory, name) ?? payloadDenial(path, name);
+}
+
+/**
+ * `installationDenialCause` for a caller that is already asynchronous. The lexical checks answer
+ * first and need no filesystem; only a path they leave open is resolved, and that resolution is
+ * asynchronous, so a slow mount delays this request alone. The verdict is the synchronous one:
+ * links are followed, and a name the system cannot give is refused.
+ */
+export async function installationDenialCauseAsync(
+  path: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  launchDirectory: string = process.cwd(),
+): Promise<InstallationDenialCause | undefined> {
+  let nameNeeded = false;
+  const lexical = (): SystemName => {
+    nameNeeded = true;
+    return { kind: "missing" };
+  };
+  const first =
+    programFolderDenial(path, env, launchDirectory, lexical) ?? payloadDenial(path, lexical);
+  if (first !== undefined || !nameNeeded) return first;
+  const resolved = await resolveSystemNameAsync(path);
+  const name = (): SystemName => resolved;
   return programFolderDenial(path, env, launchDirectory, name) ?? payloadDenial(path, name);
 }

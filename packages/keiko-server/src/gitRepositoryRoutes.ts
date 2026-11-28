@@ -9,7 +9,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
-import { pathIsDenied } from "./files-deny.js";
+import { pathIsDeniedAsync } from "./files-deny.js";
 import { assertUiDbOutsideProject, UiStoreError, validateProjectPath } from "./store/index.js";
 import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
 import {
@@ -293,7 +293,7 @@ function containsControlCharacter(input: string): boolean {
 async function assertDestination(candidate: string): Promise<RouteResult | string> {
   if (!isAbsolute(candidate)) return invalid("Destination path must be absolute.");
   const normalized = normalize(candidate);
-  if (pathIsDenied(normalized)) {
+  if (await pathIsDeniedAsync(normalized)) {
     return forbidden("The destination path is excluded from Keiko's safe repository surface.");
   }
   try {
@@ -303,7 +303,7 @@ async function assertDestination(candidate: string): Promise<RouteResult | strin
     // Expected: git clone creates the final directory.
   }
   const parent = dirname(normalized);
-  if (pathIsDenied(parent)) {
+  if (await pathIsDeniedAsync(parent)) {
     return forbidden("The destination parent is excluded from Keiko's safe repository surface.");
   }
   try {

@@ -84,7 +84,7 @@ import {
   type CapsuleStampSource,
 } from "./local-knowledge-capsule-stamps.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
-import { pathIsDenied } from "./files-deny.js";
+import { pathIsDenied, pathIsDeniedAsync } from "./files-deny.js";
 import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
@@ -493,7 +493,7 @@ export async function handleCreateProject(
     const name = optionalString(body, "name");
     const explicitSelection = isExplicitProjectSelection(body);
     const normalizedPath = validateProjectPath(path, { mustExist: true });
-    if (pathIsDenied(normalizedPath)) {
+    if (await pathIsDeniedAsync(normalizedPath)) {
       return forbiddenResult(
         "DENIED",
         "The project path is excluded from Keiko's safe read surface.",
