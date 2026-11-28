@@ -21523,6 +21523,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: false,
       },
+      supervisorAttestationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      stepNodeAttestationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      stepCopyCleanupMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      stepCopyCleanupRetryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       testStatus: {
         type: "string",
         dataClass: "closed-enum",

@@ -55468,9 +55468,33 @@
               "required": true
             },
             {
+              "name": "stepCopyCleanupMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "stepCopyCleanupRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "stepCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "stepNodeAttestationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "supervisorAttestationMs",
+              "type": "integer",
+              "dataClass": "duration",
               "required": false
             },
             {
@@ -55827,9 +55851,33 @@
               "required": true
             },
             {
+              "name": "stepCopyCleanupMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "stepCopyCleanupRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "stepCount",
               "type": "integer",
               "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "stepNodeAttestationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
+              "name": "supervisorAttestationMs",
+              "type": "integer",
+              "dataClass": "duration",
               "required": false
             },
             {
