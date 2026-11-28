@@ -178,6 +178,21 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(git(["ls-files", "--", "other.txt"])).toBe("");
     expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
   });
+  // The governed spawn boundary bounds a command's stdin at 64 KiB, so a file above it travels by
+  // path, never on stdin and never in memory. Owner decision 2026-11-24: no size ends healthy work.
+  it("stages files above the stdin bound and above the old 8 MiB read bound through the governed lane", async () => {
+    const approved = await candidate();
+    writeFileSync(join(root, "mid.bin"), Buffer.alloc(200 * 1024, 0x6d));
+    writeFileSync(join(root, "huge.bin"), Buffer.alloc(9 * 1024 * 1024, 0x68));
+    const result = await adapter().stage({
+      pathspecs: ["mid.bin", "huge.bin"],
+      verified: approved.verified,
+    });
+    expect(result.outcome).toBe("succeeded");
+    for (const path of ["mid.bin", "huge.bin"])
+      expect(git(["rev-parse", `:${path}`])).toBe(git(["hash-object", "--no-filters", path]));
+    expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
+  });
   // Windows has no executable bit (and this host class cannot create the symlink), so the full
   // mode-preserving case runs unchanged on POSIX only; the binary-bytes half also runs below on
   // every host.
