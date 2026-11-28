@@ -7,6 +7,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withGitIndexTransaction } from "@oscharko-dev/keiko-workspace/internal/git-index";
 
+import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
+
+// Counts every Git process the turn index starts, through the production runner.
+const gitProcesses = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../gitProcessActivity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gitProcessActivity.js")>();
+  return {
+    ...actual,
+    observedGitRunner: (...args: Parameters<typeof actual.observedGitRunner>): GitProcessRunner => {
+      const run = actual.observedGitRunner(...args);
+      return async (gitArgs, options) => {
+        gitProcesses.count += 1;
+        return await run(gitArgs, options);
+      };
+    },
+  };
+});
+
 import {
   AT_HEAD,
   type GovernedIndexRecord,
@@ -187,6 +205,22 @@ describe("turn index restore", () => {
     });
 
     expect(git(root, "ls-files", "-s")).toBe(before);
+  });
+
+  // Every settled run asks for this count before it reaches `succeeded`, so a turn without
+  // governed staging must not pay a Git process for it (coding perf budget, PR #4573).
+  it("reads no index for a turn without governed staging", async () => {
+    const root = repository();
+    const record = await turn(root, () => {
+      writeFileSync(join(root, "a.txt"), "a changed by the person\n");
+      git(root, "add", "a.txt");
+    });
+    const before = gitProcesses.count;
+
+    await expect(countRestorableTurnIndexPaths(root, record, governedOf(undefined))).resolves.toBe(
+      0,
+    );
+    expect(gitProcesses.count).toBe(before);
   });
 
   it("offers no undo for a turn whose restore would refuse because a person restaged one of its paths", async () => {

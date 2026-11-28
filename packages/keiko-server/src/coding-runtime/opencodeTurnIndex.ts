@@ -418,13 +418,16 @@ export async function restoreTurnIndex(
  * How many index paths of the turn an undo could take back right now: the paths governed staging
  * changed whose live entry is still exactly the entry it wrote and differs from the turn start. A
  * turn that only staged or unstaged a file has no worktree change, so this count is what keeps its
- * undo offered. `0` whenever any image cannot be proven; a read that throws propagates.
+ * undo offered. `0` whenever any image cannot be proven; a read that throws propagates. A turn
+ * without governed staging counts nothing and reads no index: every settled run asks, and an index
+ * read is a Git process on its path to `succeeded`.
  */
 export async function countRestorableTurnIndexPaths(
   root: string,
   record: TurnIndexRecord | undefined,
   governed: GovernedIndexRecord,
 ): Promise<number> {
+  if (governed.paths.length === 0) return 0;
   const start = await record?.start;
   if (record === undefined || start === undefined) return 0;
   const live = await captureTurnIndex(root);
