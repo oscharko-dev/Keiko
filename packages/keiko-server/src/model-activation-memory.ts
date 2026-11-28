@@ -244,6 +244,11 @@ interface StoredFile {
   readonly entries: readonly StoredActivation[];
 }
 
+interface Binding {
+  readonly configurationDigest: string;
+  readonly apiKey: string;
+}
+
 type ReadOutcome =
   | { readonly kind: "none" }
   | {
@@ -349,7 +354,13 @@ class FileModelActivationMemory implements ModelActivationMemory {
       provider,
       activatedAt: entry.activatedAt,
     }));
-    for (const { entry, provider } of restored) this.remember(entry.modelDigest, provider);
+    this.plannedBindings = new Map(
+      restored.map(({ entry, provider }) => [
+        entry.modelDigest,
+        { configurationDigest: entry.configurationDigest, apiKey: provider.apiKey },
+      ]),
+    );
+    this.commitBindings();
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
     if (outcome.kind !== "none" && !this.write(entries, correlationId)) {
@@ -379,13 +390,15 @@ class FileModelActivationMemory implements ModelActivationMemory {
     removalReasons?: ReadonlyMap<string, ActivationRemovalReason>,
     additions: "allowed" | "withheld" = "allowed",
   ): void {
-    if (additions === "allowed") this.desired = activated;
     const { next, saved, overflow, bindings } = this.plan(activated, additions);
     this.plannedBindings = bindings;
+    this.desired = this.keptModels(activated, next);
     const removed = this.removalsByReason(next, reason, removalReasons);
     const removedCount = [...removed.values()].reduce((sum, count) => sum + count, 0);
     const stale = this.rewritePending;
     if (saved === 0 && removedCount === 0 && !stale) {
+      // Nothing to write, but a rebind to an identical stored value is still worth remembering.
+      this.commitBindings();
       this.unrecorded = false;
       return;
     }
@@ -424,42 +437,55 @@ class FileModelActivationMemory implements ModelActivationMemory {
     readonly next: Map<string, StoredActivation>;
     readonly saved: number;
     readonly overflow: number;
-    readonly bindings: Map<
-      string,
-      { readonly configurationDigest: string; readonly apiKey: string }
-    >;
+    readonly bindings: Map<string, Binding>;
   } {
     const next = new Map<string, StoredActivation>();
-    const bindings = new Map<
-      string,
-      { readonly configurationDigest: string; readonly apiKey: string }
-    >();
+    const bindings = new Map<string, Binding>();
     let saved = 0;
     let overflow = 0;
     for (const model of activated) {
       const key = modelDigest(this.options.installationId, model.provider.modelId);
-      if (next.size >= MAX_ENTRIES) {
-        overflow += 1;
-        continue;
-      }
-      const known = this.durable.get(key);
-      if (known !== undefined && this.unchanged(key, model.provider)) {
-        next.set(key, known);
-        continue;
-      }
-      if (known === undefined && additions === "withheld") continue;
-      const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
-      bindings.set(key, {
-        configurationDigest: entry.configurationDigest,
-        apiKey: model.provider.apiKey,
-      });
-      if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
-      else if (additions === "allowed") {
-        next.set(key, entry);
-        saved += 1;
+      if (next.size >= MAX_ENTRIES) overflow += 1;
+      else {
+        const planned = this.planModel(key, model, additions);
+        if (planned.entry !== undefined) next.set(key, planned.entry);
+        if (planned.binding !== undefined) bindings.set(key, planned.binding);
+        if (planned.saved) saved += 1;
       }
     }
     return { next, saved, overflow, bindings };
+  }
+
+  /** The entry one model needs: its stored one when still bound the same way, else a new one. */
+  private planModel(
+    key: string,
+    model: ActivatedModel,
+    additions: "allowed" | "withheld",
+  ): { entry?: StoredActivation; binding?: Binding; saved: boolean } {
+    const known = this.durable.get(key);
+    if (known !== undefined && this.unchanged(key, model.provider))
+      return { entry: known, saved: false };
+    if (known === undefined && additions === "withheld") return { saved: false };
+    const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
+    const binding = {
+      configurationDigest: entry.configurationDigest,
+      apiKey: model.provider.apiKey,
+    };
+    if (known !== undefined && sameBinding(known, entry))
+      return { entry: known, binding, saved: false };
+    // Withheld, a changed binding keeps the stored entry: the model is live, and nothing is added.
+    if (known !== undefined && additions === "withheld") return { entry: known, saved: false };
+    return { entry, binding, saved: true };
+  }
+
+  /** The activated models the record holds or now wants: all of them, less withheld additions. */
+  private keptModels(
+    activated: readonly ActivatedModel[],
+    next: ReadonlyMap<string, StoredActivation>,
+  ): readonly ActivatedModel[] {
+    return activated.filter((model) =>
+      next.has(modelDigest(this.options.installationId, model.provider.modelId)),
+    );
   }
 
   /** Trusts the planned bindings only for what the file now holds, and forgets the rest. */
@@ -467,13 +493,6 @@ class FileModelActivationMemory implements ModelActivationMemory {
     for (const [key, binding] of this.plannedBindings)
       if (this.durable.has(key)) this.bound.set(key, binding);
     for (const key of this.bound.keys()) if (!this.durable.has(key)) this.bound.delete(key);
-  }
-
-  private remember(key: string, provider: ModelProviderConfig, configuration?: string): void {
-    this.bound.set(key, {
-      configurationDigest: configuration ?? configurationDigest(provider),
-      apiKey: provider.apiKey,
-    });
   }
 
   private unchanged(key: string, provider: ModelProviderConfig): boolean {

@@ -336,6 +336,63 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect(restoredIds(memory(), provider(), second)).toEqual(["chat-b"]);
     });
 
+    it("retries a removal of a withheld sync through settle", () => {
+      const second = provider({ modelId: "chat-b" });
+      activate(memory(), provider(), second);
+      const running = memory();
+      running.restore([provider(), second], "corr-restore");
+      // A directory where the record belongs refuses the rewrite and the withdrawal alike.
+      const record = join(dir, MODEL_ACTIVATION_FILE);
+      rmSync(record);
+      mkdirSync(join(record, "blocker"), { recursive: true });
+      running.sync(
+        [{ provider: second, activatedAt: ACTIVATED_AT }],
+        "invalidated",
+        "corr-failed-change",
+        undefined,
+        "withheld",
+      );
+      expect(running.recorded()).toBe(false);
+      rmSync(record, { recursive: true });
+      // The settle replays what the failed change left, not the models it had removed.
+      expect(running.settle("invalidated", "corr-settle")).toBe(true);
+      expect(restoredIds(memory(), provider(), second)).toEqual(["chat-b"]);
+    });
+
+    it("keeps a live model whose binding changed inside a failed change", () => {
+      const running = memory();
+      activate(running, provider());
+      events.length = 0;
+      const rotated = provider({ apiKey: "sk-test-rotated-in-failed-change" });
+      running.sync(
+        [{ provider: rotated, activatedAt: ACTIVATED_AT }],
+        "invalidated",
+        "corr-failed-change",
+        undefined,
+        "withheld",
+      );
+      expect(changeLines().filter((line) => line.change === "discarded")).toEqual([]);
+      expect(running.recorded()).toBe(true);
+    });
+
+    it("keeps the bindings of restored models when the startup rewrite had to withdraw", () => {
+      const keyed = (modelId: string): ModelProviderConfig =>
+        provider({ modelId, apiKey: `sk-test-bound-${modelId}` });
+      const models = [keyed("chat-a"), keyed("chat-b")];
+      activate(memory(), ...models);
+      writer.failures = 1;
+      const running = memory();
+      expect(restoredIds(running, ...models)).toEqual(["chat-a", "chat-b"]);
+      events.length = 0;
+      running.sync(
+        models.map((entry) => ({ provider: entry, activatedAt: ACTIVATED_AT })),
+        "invalidated",
+        "corr-after",
+      );
+      expect(changeLines()).toEqual([]);
+      expect(restoredIds(memory(), ...models)).toEqual(["chat-a", "chat-b"]);
+    });
+
     it("keeps a changed binding outstanding after its write failed", () => {
       const running = memory();
       activate(running, provider());

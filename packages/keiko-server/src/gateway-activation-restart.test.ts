@@ -288,6 +288,31 @@ describe("activated models across a server restart", () => {
       expect(currentConversationReady(second, "chat-b")).toBe(true);
     });
 
+    it("surfaces the original error when persisting the removals of a failed change also fails", () => {
+      const first = start(threeModels);
+      const holder = holderOf(first);
+      let failing = false;
+      holder.rememberActivations?.(
+        {
+          restore: () => [],
+          sync: (): void => {
+            if (failing) throw new Error("the log sink is down");
+          },
+          recorded: () => true,
+          settle: () => true,
+        },
+        "corr-fake-memory",
+      );
+      activateModels(first, "chat-a");
+      failing = true;
+      expect(() => {
+        holder.settleObservations?.(() => {
+          holder.clearVerifiedCapability("chat-a");
+          throw new Error("the change failed midway");
+        });
+      }).toThrow("the change failed midway");
+    });
+
     it("never persists an activation that a change which threw had only half applied", async () => {
       const first = start(threeModels);
       activateModels(first, "chat-a", "chat-b");

@@ -1886,6 +1886,19 @@ function syncActivation(
   state.activation?.sync(liveActivations(state), reason, correlationId, removalReasons, additions);
 }
 
+/** Persists what a failed change removed; a failure of that write never masks the original error. */
+function persistRemovalsAfterFailure(
+  state: RuntimeGatewayState,
+  settling: SettlingChange,
+  original: unknown,
+): void {
+  try {
+    syncActivation(state, "invalidated", settling.correlationId, settling.removals, "withheld");
+  } catch (syncError) {
+    if (original instanceof Error && original.cause === undefined) original.cause = syncError;
+  }
+}
+
 function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T): T {
   if (state.settling !== undefined) return change();
   const settling: SettlingChange = {
@@ -1902,8 +1915,7 @@ function settleObservationChange<T>(state: RuntimeGatewayState, change: () => T)
     // A change that failed midway leaves a partial set. What it removed is persisted, so a restart
     // cannot restore a model whose proof was already invalidated; nothing it added is written.
     state.settling = undefined;
-    if (settling.dirty)
-      syncActivation(state, "invalidated", settling.correlationId, settling.removals, "withheld");
+    if (settling.dirty) persistRemovalsAfterFailure(state, settling, error);
     throw error;
   }
   state.settling = undefined;
