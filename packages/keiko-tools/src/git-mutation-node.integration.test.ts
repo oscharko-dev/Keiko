@@ -408,7 +408,15 @@ describe("node git mutation adapter — multi-step recovery through the real bou
 describe("node git mutation adapter — one promisor verdict per operation", () => {
   const PROMISOR_PROBE = String.raw`^remote\..*\.(promisor|partialclonefilter)$`;
 
-  function countingAdapter(options: { readonly readSession?: boolean } = {}): {
+  // The host's own git decides whether a negative verdict may be held (git 2.45 or later), so the
+  // pins below fix the version the adapter sees: the cached-verdict path and the re-probe path are
+  // each under test on every host, whatever git is installed.
+  const GUARD_ENFORCING_BANNER = "git version 2.50.0";
+  const GUARD_IGNORING_BANNER = "git version 2.43.0";
+
+  function countingAdapter(
+    options: { readonly readSession?: boolean; readonly versionBanner?: string } = {},
+  ): {
     readonly adapter: GitLocalMutationAdapter;
     readonly probes: () => number;
     readonly processes: () => number;
@@ -420,6 +428,14 @@ describe("node git mutation adapter — one promisor verdict per operation", () 
       // it is what makes a negative promisor verdict safe to hold for the whole operation.
       if (args[0] !== "version") processes += 1;
       if (args.includes(PROMISOR_PROBE)) probes += 1;
+      if (args[0] === "version") {
+        const banner = options.versionBanner ?? GUARD_ENFORCING_BANNER;
+        return nodeSpawnFn(
+          process.execPath,
+          ["-e", `console.log(${JSON.stringify(banner)})`],
+          spawnOptions,
+        );
+      }
       return nodeSpawnFn(command, args, spawnOptions);
     };
     return {
@@ -454,6 +470,27 @@ describe("node git mutation adapter — one promisor verdict per operation", () 
     expect(recovered.outcome).toBe("succeeded");
     expect(processes()).toBe(3);
     expect(probes()).toBe(1);
+  });
+
+  it("probes before each effect on a git that does not enforce the lazy-fetch guard", async () => {
+    const base = dirtyRepositoryTwoCommitsDeep();
+    const {
+      adapter: counted,
+      probes,
+      processes,
+    } = countingAdapter({
+      versionBanner: GUARD_IGNORING_BANNER,
+    });
+    const recovered = await counted.recover({
+      recoveryStrategyHint: "stash-and-reset",
+      targetRefHash: base,
+      pathspecs: [],
+    });
+    expect(recovered.outcome).toBe("succeeded");
+    // Stash and reset are two effects: each is preceded by its own probe, so the probes are the
+    // processes beyond the two steps.
+    expect(probes()).toBe(2);
+    expect(processes()).toBe(2 + probes());
   });
 
   it("probes again for the next operation of the same adapter", async () => {

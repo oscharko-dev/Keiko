@@ -101,9 +101,11 @@ function branchLockPath(heads: string, branch: string): string | undefined {
  * Holds Git's own `<ref>.lock` for each named local branch while `run` executes. Git refuses every
  * update of a branch whose lock exists, so a state read inside `run` stays true until the write that
  * follows it: a commit or branch created by another process meanwhile fails on the lock instead of
- * being overwritten. A branch whose parent directory does not exist yet (a nested new name) cannot
- * be raced through Git's own creation either, and is not locked. A lock that cannot be created fails
- * closed.
+ * being overwritten. A branch whose parent directory does not exist yet (a nested new name) is NOT
+ * locked: there is no directory to hold a lock in, and another process can create that directory
+ * and the ref between the caller's proof and its write. That window is a known residual gap, not a
+ * guarantee. The caller narrows it by proving the state again right before its write, but cannot
+ * close it. A lock that cannot be created fails closed.
  */
 export async function withGitBranchRefLocks<T>(
   workspaceRoot: string,
