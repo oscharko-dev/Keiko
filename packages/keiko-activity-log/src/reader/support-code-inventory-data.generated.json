@@ -3735,7 +3735,6 @@
     "AdvisoryPhaseSummary",
     "AgentRunBudgetExhaustedError",
     "AggregateError",
-    "AmbiguousProgramError",
     "AnswerGroundingRejectedError",
     "ApiError",
     "ApprovalAskBookkeeping",
