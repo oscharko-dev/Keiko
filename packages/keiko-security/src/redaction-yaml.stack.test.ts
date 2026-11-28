@@ -12,7 +12,14 @@ import {
 
 /** The child process runs the built output, so a stale build must fail loudly, not pass. */
 function assertDistIsCurrent(): void {
-  for (const name of ["redaction", "redaction-yaml", "redaction-source-map", "redaction-code"]) {
+  for (const name of [
+    "redaction",
+    "redaction-yaml",
+    "redaction-source-map",
+    "redaction-code",
+    "redaction-diff",
+    "redaction-spelling",
+  ]) {
     const built = new URL(`../dist/${name}.js`, import.meta.url);
     const source = new URL(`./${name}.ts`, import.meta.url);
     if (!existsSync(built) || statSync(built).mtimeMs < statSync(source).mtimeMs)
