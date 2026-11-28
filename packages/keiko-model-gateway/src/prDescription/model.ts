@@ -9,6 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import { isQualityIntelligenceJudgeEligible } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/bffWire";
 import { countContextTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { parseGeneratedJson } from "../generated-json.js";
 import { buildTrustedEvidencePromptSegments } from "../qualityIntelligence/promptSegmentation.js";
 import { sanitizePrDescriptionEvidence } from "./evidence.js";
 import type { GatewayCallRequest } from "../gateway.js";
@@ -121,23 +122,6 @@ export function prDescriptionRequestCost(request: GatewayCallRequest): {
   };
 }
 
-function unfencedCandidate(text: string): string {
-  const trimmed = text.trim();
-  const firstNewline = trimmed.indexOf("\n");
-  if (firstNewline === -1 || !trimmed.endsWith("\n```")) return trimmed;
-  const openingFence = trimmed.slice(0, firstNewline).trimEnd();
-  if (openingFence !== "```" && openingFence !== "```json") return trimmed;
-  return trimmed.slice(firstNewline + 1, -4);
-}
-
-function parseCandidate(text: string): unknown {
-  try {
-    return JSON.parse(unfencedCandidate(text)) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
 function candidateIsRedacted(candidate: PrDescriptionCandidate): boolean {
   return Object.values(candidate).every((statements) =>
     statements.every(({ text }) => redact(text) === text),
@@ -158,7 +142,10 @@ export function validatePrDescriptionResponse(
     return { ok: false, reason: "invalid-model-output" };
   // Parse the wire text even when the provider helpfully supplies structuredOutput: one bounded
   // input, one local validator, no alternative unbounded or trusted provider-object path.
-  const candidate = validatePrDescriptionCandidate(parseCandidate(response.content), evidenceIds);
+  const candidate = validatePrDescriptionCandidate(
+    parseGeneratedJson(response.content),
+    evidenceIds,
+  );
   if (candidate.ok && !candidateIsRedacted(candidate.value))
     return { ok: false, reason: "unsafe-model-output" };
   return candidate;

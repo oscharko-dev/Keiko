@@ -1664,12 +1664,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-model-gateway/src/prDescription/model.ts",
-      "owner": "parseCandidate",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-model-gateway/src/prDescription/render.ts",
       "owner": "validatedPrDescriptionLogoUrl",
       "kind": "unregistered-catch",
@@ -4252,12 +4246,6 @@
     {
       "path": "packages/keiko-server/src/gitDelivery/commitPolicySettings.ts",
       "owner": "resolveGovernedCommitMessagePolicy",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gitDelivery/commitRoutes.ts",
-      "owner": "parseCommitDraftJson",
       "kind": "unregistered-catch",
       "count": 1
     },

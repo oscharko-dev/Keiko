@@ -23,6 +23,7 @@
 import type { IncomingMessage } from "node:http";
 import {
   findConfiguredCapability,
+  parseGeneratedJson,
   selectConfiguredModel,
   type GatewayCallRequest,
   type NormalizedResponse,
@@ -168,6 +169,9 @@ const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
+const OPTIONAL_FLAG = { type: "boolean", dataClass: "closed-enum", required: false } as const;
+
 const COMMIT_DRAFT_MODEL_FIELDS = {
   outcome: {
     type: "string",
@@ -200,18 +204,18 @@ const COMMIT_DRAFT_MODEL_FIELDS = {
   // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
   // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
   // can be reconstructed from this line alone.
-  maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+  maxOutputTokens: OPTIONAL_COUNT,
   deadlineMs: { type: "integer", dataClass: "duration", required: false },
-  promptTokens: { type: "integer", dataClass: "count", required: false },
-  maxPromptTokens: { type: "integer", dataClass: "count", required: false },
-  diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
-  blankChangedLines: { type: "integer", dataClass: "count", required: false },
-  nonBlankChangedLines: { type: "integer", dataClass: "count", required: false },
-  mixedBlankChangeFiles: { type: "integer", dataClass: "count", required: false },
-  blankLineDraftRejected: { type: "boolean", dataClass: "closed-enum", required: false },
-  structuredOutputUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
-  generationAttempts: { type: "integer", dataClass: "count", required: false },
-  reused: { type: "boolean", dataClass: "closed-enum", required: false },
+  promptTokens: OPTIONAL_COUNT,
+  maxPromptTokens: OPTIONAL_COUNT,
+  diffCompacted: OPTIONAL_FLAG,
+  blankChangedLines: OPTIONAL_COUNT,
+  nonBlankChangedLines: OPTIONAL_COUNT,
+  mixedBlankChangeFiles: OPTIONAL_COUNT,
+  blankLineDraftRejected: OPTIONAL_FLAG,
+  structuredOutputUnavailable: OPTIONAL_FLAG,
+  generationAttempts: OPTIONAL_COUNT,
+  reused: OPTIONAL_FLAG,
   draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
   normalizationVersion: {
     type: "string",
@@ -225,22 +229,14 @@ const COMMIT_DRAFT_MODEL_FIELDS = {
     required: false,
     values: ["body-only", "terminal-trailers", "explicit-trailers"],
   },
-  normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
-  bodyBulletCount: { type: "integer", dataClass: "count", required: false },
-  trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
-  trailerCount: { type: "integer", dataClass: "count", required: false },
-  trailerContinuationCount: {
-    type: "integer",
-    dataClass: "count",
-    required: false,
-  },
-  trailerParagraphBreakCount: {
-    type: "integer",
-    dataClass: "count",
-    required: false,
-  },
-  referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
-  breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
+  normalizationChanged: OPTIONAL_FLAG,
+  bodyBulletCount: OPTIONAL_COUNT,
+  trailerLikeLineCount: OPTIONAL_COUNT,
+  trailerCount: OPTIONAL_COUNT,
+  trailerContinuationCount: OPTIONAL_COUNT,
+  trailerParagraphBreakCount: OPTIONAL_COUNT,
+  referenceTrailerCount: OPTIONAL_COUNT,
+  breakingTrailerCount: OPTIONAL_COUNT,
 } as const;
 
 const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
@@ -929,25 +925,8 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
   };
 }
 
-function unfencedJson(text: string): string {
-  const trimmed = text.trim();
-  const firstNewline = trimmed.indexOf("\n");
-  if (firstNewline === -1 || !trimmed.endsWith("\n```")) return trimmed;
-  const openingFence = trimmed.slice(0, firstNewline).trimEnd();
-  if (openingFence !== "```" && openingFence !== "```json") return trimmed;
-  return trimmed.slice(firstNewline + 1, -4);
-}
-
-function parseCommitDraftJson(text: string): unknown {
-  try {
-    return JSON.parse(unfencedJson(text)) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
 function draftCandidate(response: NormalizedResponse): unknown {
-  return response.structuredOutput ?? parseCommitDraftJson(response.content);
+  return response.structuredOutput ?? parseGeneratedJson(response.content);
 }
 
 function draftTextField(
