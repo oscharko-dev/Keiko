@@ -9583,6 +9583,36 @@ describe("verification truth at task settlement", () => {
     });
   });
 
+  describe("a different check that is red after the continuation (#4491 review)", () => {
+    it("names no unchanged-check detail when the original check turned green and another one failed", async () => {
+      const run = await runningTask();
+      let endContinuation: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+      const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+        endContinuation = resolve;
+      });
+      run.f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+      run.f.orchestrator.observeEditOutcome("run-1", {
+        kind: "applied",
+        changedPaths: ["src/a.js"],
+      });
+      await verification(run.f, "failed");
+      run.finish();
+      await vi.waitFor(() => {
+        expect(run.f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      });
+      // The continuation fixes the original check without another edit; a second check is red.
+      await verification(run.f, "passed");
+      await verification(run.f, "failed", undefined, "e".repeat(64));
+      endContinuation?.("succeeded");
+      await vi.waitFor(() => {
+        expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      const snapshot = run.f.orchestrator.getSnapshot("run-1");
+      expect(snapshot?.verificationGap).toBe("check-failed");
+      expect(snapshot?.verificationGapDetail).toBeUndefined();
+    });
+  });
+
   describe("the continuation a run's tool profile can follow", () => {
     async function continuedIntent(taskHasShellTool: boolean | undefined): Promise<string> {
       const { f, finish } = await runningTask(taskHasShellTool);

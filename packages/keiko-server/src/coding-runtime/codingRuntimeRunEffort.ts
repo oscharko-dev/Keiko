@@ -409,11 +409,20 @@ export class CodingRuntimeRunEffortLedger {
    * could not start, or when every check since the last edit passed.
    */
   failedCheck(runId: string): CodingVerificationFailureEvidence | undefined {
+    return this.failedCheckTarget(runId)?.failure;
+  }
+
+  /** The same failed check with the digest of the target it ran against: which check it was. */
+  failedCheckTarget(
+    runId: string,
+  ): { readonly target: string; readonly failure: CodingVerificationFailureEvidence } | undefined {
     const run = this.runs.get(runId);
     if (run === undefined) return undefined;
-    return [...run.verificationTargets.values()].find(
-      (state) => state.selected && !state.passed && state.failure !== undefined,
-    )?.failure;
+    for (const [target, state] of run.verificationTargets) {
+      if (state.selected && !state.passed && state.failure !== undefined)
+        return { target, failure: state.failure };
+    }
+    return undefined;
   }
 
   /** Whether the run applied edits and every one of them changed documentation alone. */

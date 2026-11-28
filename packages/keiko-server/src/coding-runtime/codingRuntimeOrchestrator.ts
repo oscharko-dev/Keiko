@@ -2270,7 +2270,10 @@ export class CodingRuntimeOrchestrator {
   private readonly deniedCommitProposals = new Map<string, string>();
   private readonly verificationContinuations = new Map<string, number>();
   // The run's code-edit revision when its verification continuation was dispatched (U-38).
-  private readonly continuationRevisions = new Map<string, number>();
+  private readonly continuationRevisions = new Map<
+    string,
+    { readonly revision: number; readonly target: string }
+  >();
   // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
   // settles.
   private readonly editRefusals = new CodingRuntimeEditRefusalStreaks();
@@ -3873,11 +3876,13 @@ export class CodingRuntimeOrchestrator {
   private verificationGapDetail(runId: string): {
     readonly gapDetail?: CodingWorkbenchVerificationGapDetail;
   } {
-    const dispatchedAt = this.continuationRevisions.get(runId);
+    const dispatched = this.continuationRevisions.get(runId);
+    // The same check, not just any red one: a different target that is red now (the first turned
+    // green and another failed) is a new failure, and the generic status names it.
     const unchanged =
-      dispatchedAt !== undefined &&
-      this.effort.failedCheck(runId) !== undefined &&
-      this.effort.verificationRevision(runId) === dispatchedAt;
+      dispatched !== undefined &&
+      this.effort.failedCheckTarget(runId)?.target === dispatched.target &&
+      this.effort.verificationRevision(runId) === dispatched.revision;
     return unchanged ? { gapDetail: "unchanged-after-continuation" } : {};
   }
 
@@ -3919,6 +3924,7 @@ export class CodingRuntimeOrchestrator {
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
     this.verificationContinuations.set(live.runId, attempt);
     const dispatchedAt = this.effort.verificationRevision(live.runId);
+    const dispatchedTarget = this.effort.failedCheckTarget(live.runId)?.target;
     const dispatched = await this.dispatchVerificationContinuation(live, attempt, failure);
     if (dispatched === undefined) return false;
     if (this.continuationSuperseded(live)) {
@@ -3926,7 +3932,11 @@ export class CodingRuntimeOrchestrator {
       return true;
     }
     // Only a continuation the model actually received counts as "asked" (U-38).
-    if (dispatchedAt !== undefined) this.continuationRevisions.set(live.runId, dispatchedAt);
+    if (dispatchedAt !== undefined && dispatchedTarget !== undefined)
+      this.continuationRevisions.set(live.runId, {
+        revision: dispatchedAt,
+        target: dispatchedTarget,
+      });
     recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "continued", {
       failure,
     });
