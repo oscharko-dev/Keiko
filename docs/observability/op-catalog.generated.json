@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "38ce455b6a8d9c9d468634c50b92f569a5405e8bcd33abcebc82a8530ef70eda",
+    "catalogDigest": "5d41d0ba055d4a31a241bc88ef3f38cb94a32be2fd0235623661c618c1e3943f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -33868,8 +33868,8 @@
         "failureClasses": ["git-raw-conversion-settlement"],
         "proofIds": ["git.raw-status.conversion-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:113",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:267"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:115",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:269"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33934,11 +33934,16 @@
             "dataClass": "count",
             "required": false
           },
+          "unavailableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "outcome": {
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["answered", "undecidable"]
+            "values": ["answered", "undecidable", "unavailable"]
           },
           "reason": {
             "type": "string",
@@ -33959,7 +33964,7 @@
         "proofIds": ["git.raw-status.conversion-settled.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:73",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:280"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:282"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33992,7 +33997,7 @@
         "proofIds": ["git.raw-status.denied-paths-excluded.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:57",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:201"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:203"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34272,8 +34277,8 @@
         "failureClasses": ["git-diff-search-bounded"],
         "proofIds": ["git.runtime-diff.search-bounded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:155",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:226"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:157",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:228"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -105538,6 +105543,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "unavailableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -129978,7 +129989,7 @@
     {
       "op": "git.raw-status.conversion-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:116",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:118",
       "package": "keiko-server"
     },
     {
@@ -130008,7 +130019,7 @@
     {
       "op": "git.runtime-diff.search-bounded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:158",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:160",
       "package": "keiko-server"
     },
     {
