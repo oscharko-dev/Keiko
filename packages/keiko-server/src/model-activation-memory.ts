@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -119,6 +119,14 @@ export interface ModelActivationMemory {
     reason: ActivationRemovalReason,
     correlationId: string,
   ) => void;
+  /**
+   * Whether the durable record equals the activated set the last `sync` was given. False after a
+   * write that failed: the old record may still hold a model a person took out of use, and the
+   * next `sync` (or `settle`) tries again.
+   */
+  readonly recorded: () => boolean;
+  /** Retries a record that could not be written; true when the durable record is now in line. */
+  readonly settle: (reason: ActivationRemovalReason, correlationId: string) => boolean;
 }
 
 export interface ModelActivationMemoryOptions {
@@ -270,7 +278,11 @@ export function createModelActivationMemory(
 }
 
 class FileModelActivationMemory implements ModelActivationMemory {
-  private current = new Map<string, StoredActivation>();
+  /** What the file holds now: advanced only by a write that succeeded (or by removing the file). */
+  private durable = new Map<string, StoredActivation>();
+  /** The activated set the last `sync` asked for, kept so `settle` can retry a failed write. */
+  private desired: readonly ActivatedModel[] = [];
+  private unrecorded = false;
   private readonly installation: string;
 
   public constructor(private readonly options: ModelActivationMemoryOptions) {
@@ -283,11 +295,22 @@ class FileModelActivationMemory implements ModelActivationMemory {
   ): readonly RestoredActivation[] {
     const outcome = this.read(correlationId);
     const { counts, restored } = this.classify(outcome, providers);
-    this.current = new Map(restored.map(({ entry }) => [entry.modelDigest, entry]));
+    const entries = new Map(restored.map(({ entry }) => [entry.modelDigest, entry]));
+    this.durable = entries;
+    this.desired = [];
     this.logChange("restored", undefined, restored.length, correlationId);
     for (const [reason, count] of counts) this.logChange("discarded", reason, count, correlationId);
-    if (outcome.kind !== "none") this.write(correlationId);
+    if (outcome.kind !== "none") this.write(entries, correlationId);
     return restored.map(({ entry, modelId }) => ({ modelId, activatedAt: entry.activatedAt }));
+  }
+
+  public recorded(): boolean {
+    return !this.unrecorded;
+  }
+
+  public settle(reason: ActivationRemovalReason, correlationId: string): boolean {
+    this.sync(this.desired, reason, correlationId);
+    return !this.unrecorded;
   }
 
   public sync(
@@ -295,11 +318,12 @@ class FileModelActivationMemory implements ModelActivationMemory {
     reason: ActivationRemovalReason,
     correlationId: string,
   ): void {
+    this.desired = activated;
     const next = new Map<string, StoredActivation>();
     let saved = 0;
     for (const model of activated) {
       const key = modelDigest(this.options.installationId, model.provider.modelId);
-      const known = this.current.get(key);
+      const known = this.durable.get(key);
       const entry = bindingOf(this.options.installationId, model.provider, model.activatedAt);
       if (known !== undefined && sameBinding(known, entry)) next.set(key, known);
       else {
@@ -307,13 +331,40 @@ class FileModelActivationMemory implements ModelActivationMemory {
         saved += 1;
       }
     }
-    const removed = [...this.current.keys()].filter((key) => !next.has(key)).length;
-    if (saved === 0 && removed === 0) return;
-    this.current = next;
-    if (this.write(correlationId)) {
+    const removed = [...this.durable.keys()].filter((key) => !next.has(key)).length;
+    if (saved === 0 && removed === 0) {
+      this.unrecorded = false;
+      return;
+    }
+    if (this.write(next, correlationId)) {
+      this.durable = next;
+      this.unrecorded = false;
       if (removed > 0) this.logChange("discarded", reason, removed, correlationId);
       if (saved > 0) this.logChange("saved", undefined, saved, correlationId);
+    } else if (removed > 0) this.withdrawRecord(reason, removed, correlationId);
+    else this.unrecorded = true;
+  }
+
+  /**
+   * A removal the file could not take must not come back at the next start. Removing the whole
+   * file makes the old record unusable (every activation then needs its re-activation, the safe
+   * side); when even that fails the record stays unrecorded and the next change retries.
+   */
+  private withdrawRecord(
+    reason: ActivationRemovalReason,
+    removed: number,
+    correlationId: string,
+  ): void {
+    try {
+      rmSync(this.options.path, { force: true });
+    } catch (error) {
+      reportActivationFailure(this.options, "gateway.activation.withdraw", error, correlationId);
+      this.unrecorded = true;
+      return;
     }
+    this.durable = new Map();
+    this.unrecorded = false;
+    this.logChange("discarded", reason, removed, correlationId);
   }
 
   private classify(
@@ -367,13 +418,13 @@ class FileModelActivationMemory implements ModelActivationMemory {
     }
   }
 
-  private write(correlationId: string): boolean {
+  private write(entries: ReadonlyMap<string, StoredActivation>, correlationId: string): boolean {
     try {
       savePrivateJson(this.options.path, {
         schemaVersion: SCHEMA_VERSION,
         installation: this.installation,
         productVersion: this.options.productVersion,
-        entries: [...this.current.values()],
+        entries: [...entries.values()],
       });
       return true;
     } catch (error) {

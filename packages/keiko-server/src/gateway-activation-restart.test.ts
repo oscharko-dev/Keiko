@@ -1,9 +1,10 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MODEL_ACTIVATION_FILE } from "./model-activation-memory.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import { handleGatewayDeactivation } from "./gateway-readiness.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -138,19 +139,55 @@ describe("activated models across a server restart", () => {
     expect(currentConversationReady(second, MODEL)).toBe(false);
   });
 
-  it("forgets an explicitly deactivated model", async () => {
-    const first = start();
-    activate(first);
+  function deactivation(
+    deps: UiHandlerDeps,
+    correlationId: string,
+  ): ReturnType<typeof handleGatewayDeactivation> {
     const ctx = {
-      correlationId: "corr-deactivate-restart",
+      correlationId,
       req: Readable.from([Buffer.from(JSON.stringify({ modelId: MODEL }))]) as IncomingMessage,
       res: {} as RouteContext["res"],
       params: {},
       url: new URL("http://127.0.0.1/api/gateway/readiness/deactivation"),
     } satisfies RouteContext;
-    expect(await handleGatewayDeactivation(ctx, first)).toMatchObject({
+    return handleGatewayDeactivation(ctx, deps);
+  }
+
+  it("forgets an explicitly deactivated model", async () => {
+    const first = start();
+    activate(first);
+    expect(await deactivation(first, "corr-deactivate-restart")).toMatchObject({
       status: 200,
       body: { outcome: "deactivated" },
+    });
+    const second = await restart(first);
+    expect(currentConversationReady(second, MODEL)).toBe(false);
+  });
+
+  it("refuses to report a deactivation its record could not take, and settles it on the repeat", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const first = start();
+    activate(first);
+    // A directory where the record belongs refuses both its rewrite and its removal.
+    const record = join(dir, MODEL_ACTIVATION_FILE);
+    rmSync(record);
+    mkdirSync(join(record, "blocker"), { recursive: true });
+    expect(await deactivation(first, "corr-record-failed")).toMatchObject({
+      status: 500,
+      body: { error: { code: "RECORD_FAILED" } },
+    });
+    // The process itself no longer uses the model.
+    expect(currentConversationReady(first, MODEL)).toBe(false);
+    const outcomes = sink.events
+      .filter((event) => event.op === "gateway.readiness.deactivation")
+      .map((event) => event.extra?.outcome);
+    expect(outcomes).toEqual(["record-failed"]);
+    rmSync(record, { recursive: true });
+    // The same deactivation again retries the record although the model is already inactive.
+    expect(await deactivation(first, "corr-record-retry")).toMatchObject({
+      status: 200,
+      body: { outcome: "not-activated" },
     });
     const second = await restart(first);
     expect(currentConversationReady(second, MODEL)).toBe(false);

@@ -735,6 +735,7 @@ const DEACTIVATION_OUTCOMES = [
   "check-running",
   "unknown-model",
   "bad-request",
+  "record-failed",
 ] as const;
 type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
 
@@ -4310,6 +4311,12 @@ export async function handleGatewayDeactivation(
     return error("NOT_FOUND", "The model is not a configured chat model.", 404);
   if (outcome === "check-running")
     return error("CONFLICT", "The model's readiness check is still running.", 409);
+  if (outcome === "record-failed")
+    return error(
+      "RECORD_FAILED",
+      "The model is deactivated, but Keiko could not update its record of activated models. Try again.",
+      500,
+    );
   return { status: 200, body: { modelId, outcome } };
 }
 
@@ -4324,13 +4331,18 @@ function deactivateConversationModel(
   if (!configuredChatModels(config).some((model) => model.id === modelId)) return "unknown-model";
   if (isConversationReadinessCheckRunning(deps, modelId) || isExplicitCheckRunning(deps, modelId))
     return "check-running";
-  if (!currentConversationReady(deps, modelId)) return "not-activated";
-  // The durable record of the activation goes with it (owner decision 2026-11-28).
-  holder.clearVerifiedCapability(modelId, holder.generation(), {
-    cause: "deactivated",
-    correlationId,
-  });
-  return "deactivated";
+  const activated = currentConversationReady(deps, modelId);
+  // The durable record of the activation goes with it (owner decision 2026-11-28). A removal the
+  // record could not take is never reported as done: it would come back at the next start. The
+  // repeat of a deactivation retries the record even though the model is already inactive.
+  if (activated)
+    holder.clearVerifiedCapability(modelId, holder.generation(), {
+      cause: "deactivated",
+      correlationId,
+    });
+  if (holder.settleActivationRecord?.("deactivated", correlationId) === false)
+    return "record-failed";
+  return activated ? "deactivated" : "not-activated";
 }
 
 function selectionCheckState(

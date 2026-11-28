@@ -739,6 +739,12 @@ export interface RuntimeGatewayConfig {
    */
   readonly rememberActivations?:
     ((memory: ModelActivationMemory, correlationId: string) => void) | undefined;
+  /**
+   * Retries a durable activation record that could not be written and says whether it is now in
+   * line. True when nothing is remembered or nothing is outstanding.
+   */
+  readonly settleActivationRecord?:
+    ((reason: ActivationRemovalReason, correlationId: string) => boolean) | undefined;
 }
 
 /** What a recorded observation carries beyond its fields: why chat failed, and the causing check. */
@@ -2081,6 +2087,7 @@ function runtimeObservationFacets(
   | "recordVerifiedCapability"
   | "clearVerifiedCapability"
   | "rememberActivations"
+  | "settleActivationRecord"
 > {
   return {
     verifiedCapability: (id): VerifiedModelCapabilityObservation | undefined =>
@@ -2101,6 +2108,9 @@ function runtimeObservationFacets(
     },
     rememberActivations(memory, correlationId): void {
       rememberRuntimeActivations(state, memory, correlationId);
+    },
+    settleActivationRecord(reason, correlationId): boolean {
+      return state.activation?.settle(reason, correlationId) ?? true;
     },
   };
 }

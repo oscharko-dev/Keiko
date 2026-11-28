@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   realpathSync,
   readFileSync,
@@ -9,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -18,6 +19,22 @@ import {
   activatedModelsOf,
   type ModelActivationMemory,
 } from "./model-activation-memory.js";
+
+// A write the disk refuses, injected at the private-JSON writer the memory saves through.
+const writer = vi.hoisted(() => ({ failures: 0 }));
+vi.mock("./private-json.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./private-json.js")>();
+  return {
+    ...actual,
+    savePrivateJson: (...args: Parameters<typeof actual.savePrivateJson>): void => {
+      if (writer.failures > 0) {
+        writer.failures -= 1;
+        throw new Error("disk refused the write");
+      }
+      actual.savePrivateJson(...args);
+    },
+  };
+});
 
 const SECRET = "sk-test-secret-value-0001";
 
@@ -217,6 +234,58 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
       expect.objectContaining({ reason: "invalidated", count: 1 }),
     );
     expect(restoredIds(memory(), provider())).toEqual([]);
+  });
+
+  describe("a write the disk refuses", () => {
+    afterEach(() => {
+      writer.failures = 0;
+    });
+
+    it("keeps a failed activation outstanding and writes it with the next sync", () => {
+      const running = memory();
+      writer.failures = 1;
+      activate(running, provider());
+      expect(running.recorded()).toBe(false);
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+      // The same set again is not "nothing to persist": the durable record still lacks it.
+      activate(running, provider());
+      expect(running.recorded()).toBe(true);
+      expect(restoredIds(memory(), provider())).toEqual(["chat-a"]);
+    });
+
+    it("never lets a deactivation whose write failed come back after a restart", () => {
+      activate(memory(), provider());
+      const running = memory();
+      running.restore([provider()], "corr-restore");
+      writer.failures = 1;
+      running.sync([], "deactivated", "corr-deactivate");
+      // The old record could not be rewritten, so it is withdrawn whole: unusable, never restored.
+      expect(existsSync(join(dir, MODEL_ACTIVATION_FILE))).toBe(false);
+      expect(running.recorded()).toBe(true);
+      expect(changeLines()).toContainEqual(
+        expect.objectContaining({ change: "discarded", reason: "deactivated", count: 1 }),
+      );
+      // The retry of the same inactive set neither fails nor resurrects the model.
+      running.sync([], "deactivated", "corr-retry");
+      expect(restoredIds(memory(), provider())).toEqual([]);
+    });
+
+    it("reports a removal that neither the write nor the withdrawal could record, then settles it", () => {
+      activate(memory(), provider());
+      const running = memory();
+      running.restore([provider()], "corr-restore");
+      // A directory where the record belongs refuses both the rewrite and the removal.
+      const record = join(dir, MODEL_ACTIVATION_FILE);
+      rmSync(record);
+      mkdirSync(join(record, "blocker"), { recursive: true });
+      running.sync([], "deactivated", "corr-deactivate");
+      expect(running.recorded()).toBe(false);
+      expect(running.settle("deactivated", "corr-retry-blocked")).toBe(false);
+      rmSync(record, { recursive: true });
+      expect(running.settle("deactivated", "corr-retry")).toBe(true);
+      expect(running.recorded()).toBe(true);
+      expect(restoredIds(memory(), provider())).toEqual([]);
+    });
   });
 
   it("writes nothing when the activated set did not change", () => {
