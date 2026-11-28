@@ -125,7 +125,7 @@ describe.each([false, true])(
         const previous = bodies[turn - 1];
         const next = bodies[turn];
         if (previous === undefined || next === undefined) throw new Error("missing body");
-        expect(next.messages.length).toBe(previous.messages.length + 2);
+        expect(next.messages).toHaveLength(previous.messages.length + 2);
         expect(JSON.stringify(next.tools)).toBe(JSON.stringify(previous.tools));
         previous.messages.forEach((message, index) => {
           expect(JSON.stringify(next.messages[index])).toBe(JSON.stringify(message));
