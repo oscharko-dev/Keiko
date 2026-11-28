@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ecb80f30d62da91f4cf0f978b4fbfa5782c6bd0b7c718feb8bb7249af90ae862"
+    "catalogDigest": "416fa1fc8d9e93493252195d26a9b1aa021297fe7be12f6a733a87e8232300b5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 742,
-    "proofCount": 768,
-    "resolvedProofCount": 768,
+    "operationCount": 743,
+    "proofCount": 769,
+    "resolvedProofCount": 769,
     "failureClassCount": 420,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -754,6 +754,7 @@
         "git.draft-remote.observed",
         "git.draft-target.resolved",
         "git.draft-template",
+        "git.index-transaction.cleanup-incomplete",
         "git.journey-observation",
         "git.journey-outcome.recorded",
         "git.journey-readiness.refreshed",
@@ -2722,6 +2723,9 @@
     ],
     "git.draft-template.emitted-line": [
       "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.test.ts"
+    ],
+    "git.index-transaction.cleanup-incomplete.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/indexCleanupLog.test.ts"
     ],
     "git.journey-observation.emitted-line": [
       "packages/keiko-server/src/gitDelivery/journeyObservationService.test.ts"
