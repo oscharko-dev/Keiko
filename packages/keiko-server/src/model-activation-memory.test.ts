@@ -45,7 +45,8 @@ vi.mock("node:crypto", async (importOriginal) => {
     scryptSync: (...args: Parameters<typeof actual.scryptSync>): Buffer => {
       kdf.calls += 1;
       if (!kdf.fake) return actual.scryptSync(...args);
-      const [password, salt] = args as [string, string];
+      const password = args[0] as string;
+      const salt = args[1] as string;
       return actual.createHash("sha256").update(password).update(salt).digest();
     },
   };
