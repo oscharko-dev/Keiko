@@ -420,6 +420,29 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.failedCheck("run-a")).toBeUndefined();
   });
 
+  it("marks a check that failed before the run's first code edit, and only that one", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.verification("run-a", false, "t", 0, { check: "test", failedCount: 1 });
+    ledger.edit("run-a", ["src/a.ts"]);
+    ledger.verification("run-a", false, "t", ledger.verificationRevision("run-a"), {
+      check: "test",
+      failedCount: 1,
+    });
+    expect(ledger.failedCheck("run-a")).toEqual({
+      check: "test",
+      failedCount: 1,
+      observedBeforeFirstEdit: true,
+    });
+    ledger.begin("run-b");
+    ledger.edit("run-b", ["src/a.ts"]);
+    ledger.verification("run-b", false, "t", ledger.verificationRevision("run-b"), {
+      check: "test",
+      failedCount: 1,
+    });
+    expect(ledger.failedCheck("run-b")).toEqual({ check: "test", failedCount: 1 });
+  });
+
   it("ignores a failed result that belongs to an earlier edit revision", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");

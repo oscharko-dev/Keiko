@@ -229,6 +229,8 @@ export function createCodingRuntimeRunEffortRegistry(
 export interface CodingVerificationFailureEvidence {
   readonly check: "test" | "targeted-test" | "typecheck" | "lint" | "build" | "check";
   readonly failedCount: number;
+  /** The check had already failed before the run's first code edit, so the run did not cause it. */
+  readonly observedBeforeFirstEdit?: boolean;
 }
 
 interface OrchestratorEffortRecord {
@@ -239,6 +241,8 @@ interface OrchestratorEffortRecord {
   inheritedVerificationDebt: boolean;
   editRevision: number;
   readonly verificationTargets: Map<string, VerificationTargetState>;
+  /** Targets whose check failed while the run had changed no code yet; survives later edits. */
+  readonly baselineFailedTargets: Set<string>;
   verificationBlocker: CodingVerificationBlockedReason | undefined;
   blockerRevision: number;
   operatorDecisionCount: number;
@@ -345,6 +349,7 @@ export class CodingRuntimeRunEffortLedger {
         run.verificationTargets.set(target, { passed: false, selected: true });
       return;
     }
+    noteBaselineFailure(run, target, passed, failure);
     run.verificationTargets.set(target, { passed, selected: true, ...failedWith(passed, failure) });
   }
 
@@ -405,9 +410,15 @@ export class CodingRuntimeRunEffortLedger {
   failedCheck(runId: string): CodingVerificationFailureEvidence | undefined {
     const run = this.runs.get(runId);
     if (run === undefined) return undefined;
-    return [...run.verificationTargets.values()].find(
-      (state) => state.selected && !state.passed && state.failure !== undefined,
-    )?.failure;
+    const [target, state] =
+      [...run.verificationTargets].find(
+        ([, candidate]) =>
+          candidate.selected && !candidate.passed && candidate.failure !== undefined,
+      ) ?? [];
+    if (target === undefined || state?.failure === undefined) return undefined;
+    return run.baselineFailedTargets.has(target)
+      ? { ...state.failure, observedBeforeFirstEdit: true }
+      : state.failure;
   }
 
   /** Whether the run applied edits and every one of them changed documentation alone. */
@@ -465,6 +476,17 @@ export class CodingRuntimeRunEffortLedger {
     }
     this.runs.delete(runId);
   }
+}
+
+// A check that failed before the run changed any code names a failure the run did not cause.
+function noteBaselineFailure(
+  run: OrchestratorEffortRecord,
+  target: string,
+  passed: boolean,
+  failure: CodingVerificationFailureEvidence | undefined,
+): void {
+  if (!passed && failure !== undefined && run.editRevision === 0)
+    run.baselineFailedTargets.add(target);
 }
 
 // The failed check's evidence rides the target only while the target is failing.
@@ -546,6 +568,7 @@ function newOrchestratorRecord(): OrchestratorEffortRecord {
     inheritedVerificationDebt: false,
     editRevision: 0,
     verificationTargets: new Map(),
+    baselineFailedTargets: new Set(),
     verificationBlocker: undefined,
     blockerRevision: 0,
     operatorDecisionCount: 0,

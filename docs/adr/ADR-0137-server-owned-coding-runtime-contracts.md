@@ -365,7 +365,16 @@ generic "verification is not complete" request at the end of a run. Three facts 
   shell check; a denied, cancelled or resource-exceeded step never ran to a verdict, is carried
   apart as the summary's `notRunCount`, and makes a summary with no other failure a check that
   could not start)
-  and asks to repair the cause and rerun that check, or to state exactly why it cannot. It never
+  and asks to repair the cause and rerun that check, or to state exactly why it cannot. The task is
+  scoped to the person's work (U-38): a check Keiko did not see pass at the run's baseline may have
+  been red before the run, and repairing an unrelated pre-existing failure is scope creep. The
+  continuation therefore tells the model to repair only a failure its own changes caused or the
+  person's task asks it to fix, and otherwise to leave every file alone and state once that the
+  failure is pre-existing. Keiko cannot decide this deterministically without running the check on
+  the unmodified tree (a second verification subsystem) or reading the task text, so the decision
+  stays with the model under that instruction; the ledger records the one fact it can observe, a
+  check that failed before the run's first code edit, and the `continued` line carries it as the
+  closed `failureOrigin` (`before-first-edit` or `unattributed`). It never
   runs when no check ran at all (`no-failed-check`), when a check could not start or was refused or
   blocked (`blocked`, any `CODING_VERIFICATION_BLOCKED_REASONS` member), when the run's tool-call or
   patch budget refused a delegation (`budget-exhausted`; the budget refusal tells the model to

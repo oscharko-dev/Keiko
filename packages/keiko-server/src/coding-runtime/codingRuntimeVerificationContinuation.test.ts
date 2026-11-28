@@ -114,6 +114,22 @@ describe("verification continuation emitted evidence", () => {
     ).toMatchObject({ state: "continued", check: "typecheck", failedCount: 4 });
   });
 
+  it.each([
+    [{ check: "test", failedCount: 1 }, "unattributed"],
+    [{ check: "test", failedCount: 1, observedBeforeFirstEdit: true }, "before-first-edit"],
+  ] as const)("records the failure origin of %j as %s on the continued line", (failure, origin) => {
+    const { lines, sink } = capture();
+    recordVerificationContinuation(sink, "run-qualified-1", 1, "continued", { failure });
+    const line = lines[0];
+    if (line === undefined) throw new TypeError("Missing continued evidence");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ failureOrigin: origin });
+  });
+
   it("retains the original typed transport code, frames and cause classes without message bodies", () => {
     const { lines, sink } = capture();
     const error = Object.assign(
@@ -153,6 +169,21 @@ describe("verificationContinuationIntent", () => {
     expect(intent).toContain("repair the cause");
     expect(intent).toContain("rerun the same check in your shell");
     expect(intent).toContain("state the exact cause once");
+  });
+
+  it("scopes the repair to the task and forbids repairing a pre-existing unrelated failure", () => {
+    const unattributed = verificationContinuationIntent({ check: "test", failedCount: 1 }, true);
+    expect(unattributed).toContain("may have existed before your first change");
+    expect(unattributed).toContain(
+      "whether your own changes caused the failure or the person's task",
+    );
+    expect(unattributed).toContain("do not change any file to repair it");
+    const baseline = verificationContinuationIntent(
+      { check: "test", failedCount: 1, observedBeforeFirstEdit: true },
+      true,
+    );
+    expect(baseline).toContain("already failing before your first change");
+    expect(baseline).toContain("do not change any file to repair it");
   });
 
   it("is generic about an unknown check and singular about one failed step", () => {

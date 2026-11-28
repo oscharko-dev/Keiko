@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a24839239dd5d659b79fc00ecaf287e688c89f3546e31f4dcbebee3fdbe58f15",
+    "catalogDigest": "449fd3cfc382fca45e38428a88770f862e295acdbfb9626659675067b2414045",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -18031,6 +18031,12 @@
             "dataClass": "count",
             "required": false
           },
+          "failureOrigin": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["before-first-edit", "unattributed"]
+          },
           "blockedReason": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -18055,9 +18061,9 @@
         "failureClasses": ["coding-runtime-verification"],
         "proofIds": ["coding-runtime.run.verification-continuation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:110",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:114",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:198"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:210"
         ]
       },
       {
@@ -86516,6 +86522,12 @@
                   "required": false
                 },
                 {
+                  "name": "failureOrigin",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "opaque-id",
@@ -129041,7 +129053,7 @@
     {
       "op": "coding-runtime.run.verification-continuation",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:113",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.ts:117",
       "package": "keiko-server"
     },
     {

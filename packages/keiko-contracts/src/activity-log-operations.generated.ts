@@ -17349,6 +17349,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      failureOrigin: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["before-first-edit", "unattributed"],
+      },
       blockedReason: {
         type: "string",
         dataClass: "closed-enum",
