@@ -345,7 +345,7 @@ async function locate(
   for (const { root, scope } of covering) {
     try {
       // Roots are tried in order and only the first readable one answers.
-      const file = await readConnectedFileBytes(deps, root, relative, maxBytes); // NOSONAR typescript:S9382 -- ordered fallback across connected roots
+      const file = await readConnectedFileBytes(deps, root, relative, maxBytes, correlationId); // NOSONAR typescript:S9382 -- ordered fallback across connected roots
       // The selection was matched lexically; a link inside it may lead outside it, so the place
       // the bytes really came from is matched again.
       if (scopeCovers(scope, file.realRelativePath)) return { ok: true, file };

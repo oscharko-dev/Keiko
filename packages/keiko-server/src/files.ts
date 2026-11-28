@@ -2902,6 +2902,7 @@ export async function readConnectedFileBytes(
   rootInput: string,
   pathInput: string,
   maxBytes: number,
+  correlationId: string,
 ): Promise<{
   readonly bytes: Buffer;
   readonly name: string;
@@ -2910,7 +2911,8 @@ export async function readConnectedFileBytes(
   if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-  const target = await resolveInsideRoot(deps.store, rootInput, pathInput, deps.redactor);
+  const root = await resolveRoot(deps.store, rootInput, deps.redactor, correlationId);
+  const target = await resolveInsideRoot(deps.store, rootInput, pathInput, deps.redactor, root);
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }
