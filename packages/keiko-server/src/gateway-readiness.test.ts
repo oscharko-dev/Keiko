@@ -1068,7 +1068,11 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "json_schema", status: "skipped" }),
       expect.objectContaining({ name: "tool_calling", status: "skipped" }),
     ]);
-    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0);
+    // The failure that invalidated the observation also removes the durable activation record.
+    expect(clearVerifiedCapability).toHaveBeenCalledWith("test-chat-model", 0, {
+      cause: "invalidated",
+      correlationId: expect.any(String) as string,
+    });
     deps.store.close();
   });
 

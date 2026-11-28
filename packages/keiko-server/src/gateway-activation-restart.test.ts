@@ -6,6 +6,13 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import { handleGatewayDeactivation } from "./gateway-readiness.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import type { RouteContext } from "./routes.js";
 
 // Owner decision 2026-11-28: an activated model is remembered across a restart. A restart is two
@@ -28,6 +35,7 @@ describe("activated models across a server restart", () => {
   afterEach(async () => {
     for (const deps of compositions.splice(0)) await deps.dispose?.();
     vi.unstubAllGlobals();
+    resetServerLogger();
     fetchDouble.mockClear();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -75,6 +83,25 @@ describe("activated models across a server restart", () => {
       conversationReady: true,
     });
     expect(fetchDouble).not.toHaveBeenCalled();
+  });
+
+  it("records the restore as a registered, body-free activity line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const first = start();
+    activate(first);
+    const second = await restart(first);
+    expect(currentConversationReady(second, MODEL)).toBe(true);
+    const lines = sink.events.filter((event) => event.op === "gateway.activation.persistence");
+    const restored = lines.find(
+      (line) => line.extra?.change === "restored" && line.extra.count === 1,
+    );
+    if (restored === undefined) throw new TypeError("No restore line was recorded");
+    expect(lines.some((line) => line.extra?.change === "saved")).toBe(true);
+    expectActivityLogProof(
+      "gateway.activation.persistence.line",
+      formatActivityLogProofLine(restored),
+    );
   });
 
   it("stays activated through repeated restarts", async () => {

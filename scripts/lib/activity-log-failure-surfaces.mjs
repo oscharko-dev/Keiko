@@ -150,6 +150,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "files-search-activity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-instance-cache", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
+  { owner: "keiko-server", emitterPrefix: "model-activation-memory", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "conversation-readiness-log", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "chat-context-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-draft-log", surface: "bff" },

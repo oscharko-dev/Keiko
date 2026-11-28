@@ -2020,6 +2020,20 @@ function createRuntimeGatewayConfig(
       if (generation === undefined || generation === state.generation)
         state.verification = verification;
     },
+    ...runtimeObservationFacets(state),
+  };
+}
+
+function runtimeObservationFacets(
+  state: RuntimeGatewayState,
+): Pick<
+  RuntimeGatewayConfig,
+  | "verifiedCapability"
+  | "recordVerifiedCapability"
+  | "clearVerifiedCapability"
+  | "rememberActivations"
+> {
+  return {
     verifiedCapability: (id): VerifiedModelCapabilityObservation | undefined =>
       state.observations.get(id),
     recordVerifiedCapability: gatewayCapabilityRecorder(
@@ -7192,6 +7206,18 @@ function buildInitialGatewayState(
   };
 }
 
+/** Everything a start restores from the state directory before the handlers are assembled. */
+function restoreAtStartup(
+  options: BuildHandlerDepsOptions,
+  bundle: PersistenceBundle,
+  runtimeConfig: RuntimeGatewayConfig,
+  resolvedUiDbPath: string,
+  correlationId: string,
+): void {
+  reconcileNodeStoreAtStartup(options, bundle, correlationId);
+  restoreRememberedActivations(options, runtimeConfig, bundle, resolvedUiDbPath, correlationId);
+}
+
 /**
  * Gives back the model activations of an earlier start whose binding still holds (owner decision
  * 2026-11-28), with no request to any model. Without an installation identity nothing is
@@ -7323,14 +7349,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
     projections.contentRedactString,
   );
-  reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
-  restoreRememberedActivations(
-    options,
-    runtimeConfig,
-    bundle,
-    resolvedUiDbPath,
-    bootstrapCorrelationId,
-  );
+  restoreAtStartup(options, bundle, runtimeConfig, resolvedUiDbPath, bootstrapCorrelationId);
   return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,

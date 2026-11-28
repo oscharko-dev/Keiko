@@ -5979,7 +5979,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
       state: [
-        "gateway.conversation.admission",
+        "gateway.activation.persistence",
+      "gateway.conversation.admission",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
@@ -5992,6 +5993,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       loss: [],
     },
     requiredCausalOperations: [
+      "gateway.activation.persistence",
       "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",
@@ -6006,6 +6008,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "gateway.activation.persistence",
       "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",
@@ -6020,6 +6023,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "gateway.activation.persistence",
       "gateway.conversation.admission",
       "gateway.readiness.automatic.completed",
       "gateway.readiness.automatic.joined",

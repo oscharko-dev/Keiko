@@ -65,7 +65,10 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
     );
   }
 
-  function restoredIds(target: ModelActivationMemory, ...providers: ModelProviderConfig[]) {
+  function restoredIds(
+    target: ModelActivationMemory,
+    ...providers: ModelProviderConfig[]
+  ): readonly string[] {
     return target.restore(providers, "corr-restore").map((entry) => entry.modelId);
   }
 
@@ -78,7 +81,7 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
   it("restores an activation after a restart when the whole binding still matches", () => {
     activate(memory(), provider());
     expect(restoredIds(memory(), provider())).toEqual(["chat-a"]);
-    const restored = changeLines().find((line) => line["change"] === "restored");
+    const restored = changeLines().find((line) => line.change === "restored");
     expect(restored).toMatchObject({ count: 1, correlationId: "corr-restore" });
   });
 
@@ -200,7 +203,15 @@ describe("model activation memory (owner decision 2026-11-28)", () => {
 });
 
 describe("activatedModelsOf", () => {
-  const observation = (ready: boolean | undefined, generation = 3) => ({
+  const observation = (
+    ready: boolean | undefined,
+    generation = 3,
+  ): {
+    modelId: string;
+    generation: number;
+    checkedAt: string;
+    fields: { conversationReady?: boolean };
+  } => ({
     modelId: "chat-a",
     generation,
     checkedAt: ACTIVATED_AT,

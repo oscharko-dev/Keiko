@@ -182,13 +182,12 @@ function parseEntry(value: unknown): StoredActivation | undefined {
   const { modelId, activatedAt } = record;
   if (typeof modelId !== "string" || modelId.length === 0 || modelId.length > 256) return undefined;
   if (typeof activatedAt !== "string" || Number.isNaN(Date.parse(activatedAt))) return undefined;
-  if (!isDigest(record["configurationDigest"]) || !isDigest(record["credentialDigest"]))
-    return undefined;
+  if (!isDigest(record.configurationDigest) || !isDigest(record.credentialDigest)) return undefined;
   return {
     modelId,
     activatedAt,
-    configurationDigest: record["configurationDigest"],
-    credentialDigest: record["credentialDigest"],
+    configurationDigest: record.configurationDigest,
+    credentialDigest: record.credentialDigest,
   };
 }
 
@@ -212,7 +211,7 @@ function parseFile(raw: Buffer, installation: string): StoredFileOutcome | undef
   }
   if (typeof parsed !== "object" || parsed === null) return undefined;
   const record = parsed as Record<string, unknown>;
-  if (record["schemaVersion"] !== SCHEMA_VERSION || record["installation"] !== installation)
+  if (record.schemaVersion !== SCHEMA_VERSION || record.installation !== installation)
     return undefined;
   const { productVersion, entries } = record;
   if (typeof productVersion !== "string" || !Array.isArray(entries)) return undefined;
