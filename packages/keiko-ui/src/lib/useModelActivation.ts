@@ -34,14 +34,23 @@ export interface ModelActivation {
 
 const IDLE: ModelActivationState = { status: "idle" };
 
+// The server lets the interactive check wait for the gateway's initial silence floor (900 s, the
+// `GATEWAY_SILENCE_FLOOR_MS` of the Model Gateway, which the UI cannot import) before it records a
+// verdict. The request carries the same deadline plus a margin for the server's own answer, so a
+// POST that never settles cannot hold the button on "Checking" for good.
+export const MODEL_ACTIVATION_DEADLINE_MS = 960_000;
+
 export function useModelActivation(surface: GatewayReadinessSurface): ModelActivation {
   const [state, setState] = useState<ModelActivationState>(IDLE);
   const running = useRef(false);
   const mounted = useRef(true);
+  const request = useRef<AbortController | null>(null);
   useEffect(() => {
     mounted.current = true;
     return (): void => {
       mounted.current = false;
+      // Closing the window ends the request, so the server stops a check nobody waits for.
+      request.current?.abort();
     };
   }, []);
   const activate = useCallback(
@@ -49,9 +58,13 @@ export function useModelActivation(surface: GatewayReadinessSurface): ModelActiv
       if (running.current) return;
       running.current = true;
       setState({ status: "running", modelId });
-      void runActivation(modelId, surface).then((failure) => {
+      const controller = new AbortController();
+      request.current = controller;
+      void runActivation(modelId, surface, controller).then((failure) => {
         running.current = false;
-        // The server recorded the verdict either way: the catalog and the Workbench re-read it.
+        request.current = null;
+        // The server owns the activation state and recorded a verdict even for an unclear answer
+        // (a deadline, a closed request): the catalog and the Workbench re-read that state now.
         notifyGatewayModelReadinessUpdated();
         if (!mounted.current) return;
         setState(failure === undefined ? IDLE : { status: "failed", modelId, failure });
@@ -65,9 +78,15 @@ export function useModelActivation(surface: GatewayReadinessSurface): ModelActiv
 async function runActivation(
   modelId: string,
   surface: GatewayReadinessSurface,
+  controller: AbortController,
 ): Promise<ModelActivationFailure | undefined> {
+  const deadline = setTimeout((): void => {
+    controller.abort(
+      new DOMException("The model activation did not answer in time.", "TimeoutError"),
+    );
+  }, MODEL_ACTIVATION_DEADLINE_MS);
   try {
-    const verdict = await activateChatModelFromSurface(modelId, surface);
+    const verdict = await activateChatModelFromSurface(modelId, surface, controller.signal);
     // An inconclusive probe is not a failure: back to idle, so the catalog decides and Activate stays.
     return verdict === "failed" ? "check-failed" : undefined;
   } catch (error) {
@@ -78,5 +97,7 @@ async function runActivation(
       errorEvidence: clientErrorEvidence(error),
     });
     return "request-failed";
+  } finally {
+    clearTimeout(deadline);
   }
 }

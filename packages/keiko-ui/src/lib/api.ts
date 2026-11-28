@@ -889,6 +889,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
 export async function runGatewayReadiness(
   modelId?: string,
   options?: GatewayReadinessOptions,
+  signal?: AbortSignal,
 ): Promise<GatewayReadinessReport> {
   return fetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
     method: "POST",
@@ -896,6 +897,7 @@ export async function runGatewayReadiness(
       ...(modelId === undefined ? {} : { modelId }),
       ...(options === undefined ? {} : { options }),
     }),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -910,8 +912,9 @@ export async function runGatewayReadiness(
 export async function activateChatModelFromSurface(
   modelId: string,
   surface: GatewayReadinessSurface,
+  signal?: AbortSignal,
 ): Promise<"passed" | "failed" | "inconclusive"> {
-  const report = await runGatewayReadiness(modelId, { surface });
+  const report = await runGatewayReadiness(modelId, { surface }, signal);
   const chat = report.probes.find((probe) => probe.name === "chat");
   if (chat === undefined || isInconclusiveReadinessProbe(chat)) return "inconclusive";
   return chat.status === "passed" || chat.status === "failed" ? chat.status : "inconclusive";
