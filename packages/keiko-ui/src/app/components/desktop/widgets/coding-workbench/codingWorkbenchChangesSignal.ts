@@ -49,7 +49,7 @@ export function succeededBranchMoveKey(
       if (tool.tool === BRANCH_MOVE_TOOL && tool.state === "succeeded") ids.push(tool.callId);
     }
   }
-  return ids.sort().join("\u001F");
+  return ids.toSorted((a, b) => a.localeCompare(b)).join("\u001F");
 }
 
 /** Tool calls that finished and may have changed the worktree, counted over the live feed. */
