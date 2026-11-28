@@ -369,11 +369,11 @@ function buildStageProposal(
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
   requested: readonly string[],
   paths: readonly string[],
-  worktreeDigest: string,
-  review: StageSelectionReview,
+  basis: { readonly worktreeDigest: string; readonly review: StageSelectionReview },
   nowMs: number,
   proposalId: string,
 ): RuntimeGitProposal {
+  const { worktreeDigest, review } = basis;
   const command: GitStageCommand = {
     kind: "stage",
     pathspecs: [...paths],
@@ -1005,7 +1005,7 @@ export class RuntimeGitService {
       }),
     );
     if (basis === undefined) return refuse("blocked", "unsupported-transformation");
-    const { worktreeDigest, review } = basis;
+    const { worktreeDigest } = basis;
     if ((await this.candidateDigest(context, execution, paths, false)) !== worktreeDigest)
       return refuse("drift", "candidate-drift");
     const proposal = buildStageProposal(
@@ -1013,8 +1013,7 @@ export class RuntimeGitService {
       facts,
       requested,
       paths,
-      worktreeDigest,
-      review,
+      basis,
       this.now(),
       proposalId,
     );
