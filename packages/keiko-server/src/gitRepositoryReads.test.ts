@@ -1607,7 +1607,7 @@ describe("GET /api/git/history — changed-file count without diffing contents",
 
     const history = await readHistory(root);
 
-    expect(history.entries.length).toBe(expected.size);
+    expect(history.entries).toHaveLength(expected.size);
     expect(history.entries.length).toBeGreaterThanOrEqual(8);
     const actual = new Map(history.entries.map((entry) => [entry.sha, entry.changedFileCount]));
     expect(actual).toEqual(expected);
