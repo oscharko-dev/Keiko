@@ -24,7 +24,10 @@ export function CodingWorkbenchModelActivation({
   const t = useCodingWorkbenchTranslate();
   if (activation.state.status === "running") {
     return (
-      <output data-testid="coding-workbench-model-activation-checking">
+      <output
+        className={windowStyles.cmpStreamNotice}
+        data-testid="coding-workbench-model-activation-checking"
+      >
         {t("codingWorkbench.source.unavailableReason.model-verification-pending")}
       </output>
     );
@@ -32,7 +35,7 @@ export function CodingWorkbenchModelActivation({
   if (readiness === null) return null;
   if (readiness.kind === "not-activated") {
     return (
-      <div data-testid="coding-workbench-model-activation">
+      <div className={windowStyles.modelActivation} data-testid="coding-workbench-model-activation">
         <button
           className={`${windowStyles.button} ${windowStyles.buttonPrimary}`}
           type="button"
@@ -44,7 +47,10 @@ export function CodingWorkbenchModelActivation({
     );
   }
   return (
-    <div data-testid="coding-workbench-model-activation-failed">
+    <div
+      className={windowStyles.modelActivation}
+      data-testid="coding-workbench-model-activation-failed"
+    >
       <button className={windowStyles.button} type="button" onClick={onOpenSettings}>
         {t("codingWorkbench.modelActivation.settings")}
       </button>

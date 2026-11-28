@@ -6585,6 +6585,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
       expect(screen.getByTestId("coding-workbench-model-activation-checking")).toHaveTextContent(
         /still checking this model/u,
       );
+      // U-29: the checking notice is a styled body notice, not bare text at the window edge.
+      expect(screen.getByTestId("coding-workbench-model-activation-checking").className).toMatch(
+        /cmpStreamNotice/u,
+      );
       expect(screen.queryByRole("button", { name: "Activate model-a" })).not.toBeInTheDocument();
       expect(screen.queryByText(/is not activated yet in this session/u)).not.toBeInTheDocument();
       expect(await axe(document.body)).toHaveNoViolations();

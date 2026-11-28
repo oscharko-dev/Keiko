@@ -591,6 +591,14 @@
 }
 
 /* A polite status (a stream the browser is reconnecting): present, but not an alarm. */
+/* U-29: the in-place model activation sits in the body flow under the alert, on the same inline
+   inset, instead of flush against the window edge. */
+.modelActivation {
+  display: flex;
+  min-width: 0;
+  margin: 0 var(--space-6) var(--space-3);
+}
+
 .cmpStreamNotice {
   display: flex;
   min-width: 0;

@@ -46,6 +46,13 @@ describe("Coding Workbench body notice flow", () => {
     expect(columns).toContain("min-height: 0;");
     expect(`${body}${notices}${columns}`).not.toMatch(/position:\s*absolute|z-index/u);
   });
+
+  it("insets the in-place model activation like the alert above it", () => {
+    const activation = cssBlock(".modelActivation");
+
+    expect(activation).toContain("margin: 0 var(--space-6) var(--space-3);");
+    expect(cssBlock(".alert")).toContain("margin: var(--space-3) var(--space-6);");
+  });
 });
 
 describe("Coding Workbench composer model chip styles", () => {
