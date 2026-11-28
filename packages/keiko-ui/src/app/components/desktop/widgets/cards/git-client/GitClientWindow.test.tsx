@@ -934,6 +934,45 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByLabelText("Summary")).toHaveValue("feat: keep me");
   });
 
+  // PERF-5 (#4491): one outside change is one read cycle. The probe's fresh status is adopted by
+  // the refresh it triggers instead of being read a second time, and the summary and branch reads
+  // run once.
+  it("adopts the probe's status instead of reading it again when an outside change is found", async (): Promise<void> => {
+    let current = makeStatusWithChanges();
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => current);
+    const getSummary = vi.fn(async () => makeSummary());
+    const listBranches = vi.fn(async () => makeBranchList());
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={makeClient({ getStatus, getSummary, listBranches })}
+      />,
+    );
+    await screen.findByRole("button", { name: /^src\/index\.ts, / });
+    const before = {
+      status: getStatus.mock.calls.length,
+      summary: getSummary.mock.calls.length,
+      branches: listBranches.mock.calls.length,
+    };
+
+    current = makeStatus({
+      clean: false,
+      unstagedCount: 1,
+      changes: [
+        ...makeStatusWithChanges().changes,
+        change("scripts/gen.js", { worktreeStatus: "M", unstaged: true }),
+      ],
+    });
+    act((): void => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await screen.findByRole("button", { name: /^scripts\/gen\.js, / });
+    await waitFor((): void => expect(getSummary).toHaveBeenCalledTimes(before.summary + 1));
+
+    expect(getStatus).toHaveBeenCalledTimes(before.status + 1);
+    expect(listBranches).toHaveBeenCalledTimes(before.branches + 1);
+  });
+
   it("keeps an open branch menu open across an outside-change refresh", async (): Promise<void> => {
     const user = userEvent.setup();
     let current = makeStatus();

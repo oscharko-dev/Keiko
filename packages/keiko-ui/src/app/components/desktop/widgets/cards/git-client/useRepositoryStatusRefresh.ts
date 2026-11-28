@@ -10,8 +10,14 @@
 // is visible a backed-off probe reads the status and re-reads the window only when it differs, so
 // the commit evidence and diff are not invalidated by an unchanged repository. A hidden document is
 // never polled, probes never overlap, and a status read already in flight defers the tick.
+//
+// PERF-5 (#4491): every trigger above funnels into ONE coalescer. A trigger that arrives while a
+// read cycle is still running, or right after the previous refresh was dispatched, marks a single
+// trailing refresh instead of starting another cycle, so one restore, focus or invalidation costs
+// one refresh however many listeners fire for it, and a feedback loop cannot run faster than one
+// cycle per coalescing window.
 
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
@@ -29,12 +35,17 @@ export const AMBIENT_MAX_INTERVAL_MS = 60_000;
 export const AMBIENT_FOCUS_DEBOUNCE_MS = 250;
 // A check asked for by focus that finds a read or mutation running is retried this soon.
 export const AMBIENT_BUSY_RETRY_MS = 500;
+// Triggers closer together than this share one refresh; a trailing one covers the later trigger.
+export const REFRESH_COALESCE_MS = 300;
 
 export interface AmbientRefresh {
   // Reads the status and reports whether it differs from what the window shows.
   readonly probe: () => Promise<boolean>;
   // True while a status read is already running; the tick is skipped, never queued.
   readonly isBusy: () => boolean;
+  // Drops the status the probe kept for its own refresh: a refresh that another trigger shares
+  // must read again, because that trigger may follow a change the probe's read predates.
+  readonly discardProbed?: () => void;
   // True while the window is not rendered (minimized, or under a hidden ancestor) although the
   // document itself is visible; nothing is probed then.
   readonly isPaused?: () => boolean;
@@ -57,6 +68,67 @@ const REPOSITORY_ROOT_EVENTS: readonly (readonly [string, RootsOfEvent])[] = [
   [WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots],
 ];
 
+// One refresh per burst of triggers. The first trigger of a quiet window refreshes at once; any
+// trigger during the coalescing window (which covers a read still in flight) queues exactly one
+// trailing refresh when the window has elapsed. A refresh supersedes a read in flight, so a hung
+// read can never hold a later refresh back.
+class RefreshCoalescer {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private lastDispatchAt = Number.NEGATIVE_INFINITY;
+  private coalesced = 0;
+  private probeOnly = true;
+
+  constructor(
+    private readonly refreshRef: RefObject<() => void>,
+    private readonly ambientRef: RefObject<AmbientRefresh | undefined>,
+  ) {}
+
+  trigger(fromProbe = false): void {
+    if (!fromProbe) this.probeOnly = false;
+    if (this.timer !== undefined) {
+      this.coalesced += 1;
+      return;
+    }
+    const wait = this.waitMs();
+    if (wait === 0) this.dispatch();
+    else {
+      this.coalesced += 1;
+      this.arm(wait);
+    }
+  }
+
+  cancel(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.coalesced = 0;
+    this.probeOnly = true;
+  }
+
+  private waitMs(): number {
+    return Math.max(0, this.lastDispatchAt + REFRESH_COALESCE_MS - Date.now());
+  }
+
+  private arm(wait: number): void {
+    this.timer = setTimeout((): void => {
+      this.timer = undefined;
+      const remaining = this.waitMs();
+      if (remaining === 0) this.dispatch();
+      else this.arm(remaining);
+    }, wait);
+  }
+
+  private dispatch(): void {
+    if (this.coalesced > 0) {
+      reportClientDiagnostic("git-client: status refresh triggers coalesced", { kind: "other" });
+    }
+    this.coalesced = 0;
+    if (!this.probeOnly) this.ambientRef.current?.discardProbed?.();
+    this.probeOnly = true;
+    this.lastDispatchAt = Date.now();
+    this.refreshRef.current();
+  }
+}
+
 export function useRepositoryStatusRefresh(
   selectedPath: string | null,
   repositoryRoot: string | null | undefined,
@@ -69,6 +141,10 @@ export function useRepositoryStatusRefresh(
     ambientRef.current = ambient;
     refreshRef.current = refresh;
   }, [ambient, refresh]);
+  const [coalescer] = useState(
+    (): RefreshCoalescer => new RefreshCoalescer(refreshRef, ambientRef),
+  );
+  useEffect((): (() => void) => (): void => coalescer.cancel(), [coalescer, selectedPath]);
 
   useEffect((): (() => void) => {
     const canonicalRoot = repositoryRoot ?? null;
@@ -80,7 +156,7 @@ export function useRepositoryStatusRefresh(
     const listeners = REPOSITORY_ROOT_EVENTS.map(
       ([name, rootsOf]): readonly [string, (event: Event) => void] => {
         const listener = (event: Event): void => {
-          if (namesThisRepository(rootsOf(event))) refresh();
+          if (namesThisRepository(rootsOf(event))) coalescer.trigger();
         };
         window.addEventListener(name, listener);
         return [name, listener] as const;
@@ -89,12 +165,12 @@ export function useRepositoryStatusRefresh(
     return (): void => {
       for (const [name, listener] of listeners) window.removeEventListener(name, listener);
     };
-  }, [refresh, repositoryRoot, selectedPath]);
+  }, [coalescer, repositoryRoot, selectedPath]);
 
   useEffect((): (() => void) | undefined => {
     if (selectedPath === null) return undefined;
-    return watchRepositoryFromOutside(refreshRef, ambientRef);
-  }, [selectedPath]);
+    return watchRepositoryFromOutside(coalescer, ambientRef);
+  }, [coalescer, selectedPath]);
 }
 
 function documentVisible(): boolean {
@@ -121,7 +197,7 @@ class ProbeLoop {
   private disposed = false;
 
   constructor(
-    private readonly refreshRef: RefObject<() => void>,
+    private readonly coalescer: RefreshCoalescer,
     private readonly ambientRef: RefObject<AmbientRefresh | undefined>,
   ) {}
 
@@ -165,7 +241,7 @@ class ProbeLoop {
       return;
     }
     this.delay = AMBIENT_BASE_INTERVAL_MS;
-    this.refreshRef.current();
+    this.coalescer.trigger(true);
   }
 
   private fail(error: unknown): void {
@@ -205,10 +281,10 @@ class ProbeLoop {
 
 // Focus and visibility re-reads (debounced) plus the probe loop. Returns its teardown.
 function watchRepositoryFromOutside(
-  refreshRef: RefObject<() => void>,
+  coalescer: RefreshCoalescer,
   ambientRef: RefObject<AmbientRefresh | undefined>,
 ): () => void {
-  const loop = new ProbeLoop(refreshRef, ambientRef);
+  const loop = new ProbeLoop(coalescer, ambientRef);
   let debounce: ReturnType<typeof setTimeout> | undefined;
   const checkSoon = (): void => {
     if (debounce !== undefined) clearTimeout(debounce);
@@ -216,7 +292,7 @@ function watchRepositoryFromOutside(
       debounce = undefined;
       if (!documentVisible()) return;
       // Without a probe the window can only re-read.
-      if (ambientRef.current === undefined) refreshRef.current();
+      if (ambientRef.current === undefined) coalescer.trigger();
       else loop.requestCheck();
     }, AMBIENT_FOCUS_DEBOUNCE_MS);
   };

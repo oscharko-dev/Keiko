@@ -16,9 +16,13 @@ import {
   AMBIENT_BUSY_RETRY_MS,
   AMBIENT_FOCUS_DEBOUNCE_MS,
   AMBIENT_MAX_INTERVAL_MS,
+  REFRESH_COALESCE_MS,
   statusFingerprintDiffers,
   useRepositoryStatusRefresh,
 } from "./useRepositoryStatusRefresh";
+
+import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
+import { notifyWorkspaceFileMutated } from "../workspace-file-events";
 
 function setVisibility(state: "visible" | "hidden"): void {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
@@ -350,5 +354,126 @@ describe("statusFingerprintDiffers", () => {
 
   it("is false when there is no settled status to compare with", (): void => {
     expect(statusFingerprintDiffers(null, base)).toBe(false);
+  });
+});
+
+// PERF-5 (#4491): one trigger is one refresh. Every listener funnels into one coalescer, so a burst
+// (a restore that fires several signals, an event echoed by other windows) costs one leading and at
+// most one trailing refresh, and a feedback loop cannot outrun the coalescing window.
+describe("useRepositoryStatusRefresh coalescing (PERF-5)", () => {
+  const ROOT = "/repos/alpha";
+  const OTHER_ROOT = "/repos/beta";
+
+  beforeEach((): void => {
+    vi.useFakeTimers();
+    setVisibility("visible");
+  });
+  afterEach((): void => {
+    vi.useRealTimers();
+  });
+
+  function mountWith(
+    refresh: () => void,
+    ambient?: Parameters<typeof useRepositoryStatusRefresh>[3],
+  ): () => void {
+    const { unmount } = renderHook((): void =>
+      useRepositoryStatusRefresh(ROOT, undefined, refresh, ambient),
+    );
+    return unmount;
+  }
+
+  function invalidate(root: string): void {
+    notifyGitRepositoryStateInvalidated(root);
+  }
+
+  it("runs one leading and one trailing refresh for a burst of triggers", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    mountWith(refresh);
+    act((): void => {
+      invalidate(ROOT);
+      notifyWorkspaceFileMutated(ROOT, { provenance: "agent" });
+      invalidate(ROOT);
+      invalidate(ROOT);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await advance(REFRESH_COALESCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await advance(AMBIENT_FOCUS_DEBOUNCE_MS * 4);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not refresh for an event naming another repository", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    mountWith(refresh);
+    act((): void => {
+      invalidate(OTHER_ROOT);
+      notifyWorkspaceFileMutated(OTHER_ROOT, { provenance: "agent", repositoryRoot: OTHER_ROOT });
+    });
+    await advance(REFRESH_COALESCE_MS * 4);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("queues one trailing refresh for triggers that arrive while the previous cycle still runs", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    mountWith(refresh);
+    act((): void => invalidate(ROOT));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await advance(REFRESH_COALESCE_MS / 3);
+    act((): void => {
+      invalidate(ROOT);
+      invalidate(ROOT);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await advance(REFRESH_COALESCE_MS);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await advance(REFRESH_COALESCE_MS * 4);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a refresh that echoes its own invalidation to one cycle per coalescing window", async (): Promise<void> => {
+    const LOOP_PERIOD_MS = 45;
+    const WINDOW_MS = 3_000;
+    const refresh = vi.fn<() => void>((): void => {
+      setTimeout((): void => invalidate(ROOT), LOOP_PERIOD_MS);
+    });
+    mountWith(refresh);
+    act((): void => invalidate(ROOT));
+    await advance(WINDOW_MS);
+    // Uncoalesced the loop would refresh WINDOW_MS / LOOP_PERIOD_MS (about 66) times.
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(
+      Math.ceil(WINDOW_MS / REFRESH_COALESCE_MS) + 1,
+    );
+    expect(refresh.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("lets a refresh adopt the probe's status only when the probe was its sole trigger", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    const discardProbed = vi.fn<() => void>();
+    const state = { changed: true };
+    mountWith(refresh, {
+      probe: async (): Promise<boolean> => state.changed,
+      isBusy: (): boolean => false,
+      discardProbed,
+    });
+    await advance(AMBIENT_BASE_INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(discardProbed).not.toHaveBeenCalled();
+    await advance(REFRESH_COALESCE_MS);
+    act((): void => invalidate(ROOT));
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(discardProbed).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a queued trailing refresh on unmount", async (): Promise<void> => {
+    const refresh = vi.fn<() => void>();
+    const unmount = mountWith(refresh);
+    act((): void => {
+      invalidate(ROOT);
+      invalidate(ROOT);
+    });
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(REFRESH_COALESCE_MS * 2);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

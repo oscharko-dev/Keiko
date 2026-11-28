@@ -1036,6 +1036,9 @@ interface GitReadInput<T> {
   readonly redemptions: number;
   readonly statusRevision: number;
   readonly onLoaded?: ((response: T) => void) | undefined;
+  // PERF-5: a response this load may adopt instead of reading again (the ambient probe's fresh
+  // status). Never used for a manual Retry, which always reads.
+  readonly takePrefetched?: ((path: string) => T | null) | undefined;
 }
 
 const IDLE_READ: GitReadState<never> = {
@@ -1193,8 +1196,18 @@ function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): vo
   }
 }
 
+// A probed status waits at most this long for the refresh it triggered; a later one reads again.
+const PROBED_STATUS_TTL_MS = 2_000;
+
+interface ProbedStatus {
+  readonly path: string;
+  readonly response: GitRepositoryStatusResponse;
+  readonly at: number;
+}
+
 function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
   const { client, selectedPath, spec, optionalT, redemptions, statusRevision, onLoaded } = input;
+  const { takePrefetched } = input;
   const [state, setState] = useState<GitReadState<T>>(IDLE_READ);
   const sequenceRef = useRef(0);
   const retryAttemptsRef = useRef(new Map<number, string>());
@@ -1220,12 +1233,17 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
         setState,
         onLoaded,
       };
-      void spec.fetch(client, selectedPath, retryCorrelationId).then(
+      const prefetched = manualRetry ? null : (takePrefetched?.(selectedPath) ?? null);
+      const read =
+        prefetched === null
+          ? spec.fetch(client, selectedPath, retryCorrelationId)
+          : Promise.resolve(prefetched);
+      void read.then(
         (response) => settleGitReadResponse(args, response),
         (error: unknown) => settleGitReadFailure(args, error),
       );
     },
-    [client, onLoaded, optionalT, selectedPath, spec],
+    [client, onLoaded, optionalT, selectedPath, spec, takePrefetched],
   );
   useEffect(() => {
     load(false);
@@ -1470,7 +1488,22 @@ export function GitClientWindow({
     setSelectedChangePath(selectedChangeResolver(response.changes, setDiffScope));
   }, []);
   const readInput = { client, selectedPath, optionalT, redemptions, statusRevision };
-  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: onStatusLoaded });
+  // PERF-5: the ambient probe already holds a fresh status when it finds a difference; the refresh
+  // it triggers adopts that response instead of reading the same status a second time.
+  const probedStatusRef = useRef<ProbedStatus | null>(null);
+  const takeProbedStatus = useCallback((path: string): GitRepositoryStatusResponse | null => {
+    const probed = probedStatusRef.current;
+    probedStatusRef.current = null;
+    return probed !== null && probed.path === path && Date.now() - probed.at <= PROBED_STATUS_TTL_MS
+      ? probed.response
+      : null;
+  }, []);
+  const statusRead = useGitRead({
+    ...readInput,
+    spec: STATUS_READ,
+    onLoaded: onStatusLoaded,
+    takePrefetched: takeProbedStatus,
+  });
   // #3651: a failed branch read must not be silently mapped to "no branches" — that disabled both
   // switching and New branch with no explanation and no retry.
   const branchesRead = useGitRead({ ...readInput, spec: BRANCHES_READ });
@@ -1764,6 +1797,9 @@ export function GitClientWindow({
     (): AmbientRefresh => ({
       // No probe or focus check runs while a read or a mutation is in flight.
       isBusy: (): boolean => windowBusyRef.current,
+      discardProbed: (): void => {
+        probedStatusRef.current = null;
+      },
       // A minimized window stays mounted under a hidden ancestor while the document is visible.
       isPaused: (): boolean => workspaceRef.current?.checkVisibility?.() === false,
       watchRendered: (onRendered: () => void): (() => void) => {
@@ -1782,7 +1818,12 @@ export function GitClientWindow({
         if (selectedPath === null) return false;
         const fresh = await client.getStatus(selectedPath);
         // Read what is shown only now: a refresh or mutation may have settled during the request.
-        return !windowBusyRef.current && statusFingerprintDiffers(shownStatusRef.current, fresh);
+        const changed =
+          !windowBusyRef.current && statusFingerprintDiffers(shownStatusRef.current, fresh);
+        if (changed) {
+          probedStatusRef.current = { path: selectedPath, response: fresh, at: Date.now() };
+        }
+        return changed;
       },
     }),
     [client, selectedPath],
