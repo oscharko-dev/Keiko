@@ -550,7 +550,7 @@ function resolveRuntime(
       ? { portable: found.discovery.runtime }
       : { unavailableReason: found.discovery.unavailableReason };
   }
-  if (found !== undefined) {
+  if (found !== undefined && found.lane !== "packaged-refused") {
     // The trusted dev launcher's checkout selection (refusal included) outranks an optional npm
     // dependency left from a released installation; a normal npm install keeps its own outcome.
     recordDevLaneDiscovery(

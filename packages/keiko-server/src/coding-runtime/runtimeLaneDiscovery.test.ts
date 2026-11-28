@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface LaneState {
   packaged: unknown;
+  layoutPresent: boolean;
   dev: unknown;
   npm: unknown;
   supervisor: unknown;
@@ -10,6 +11,7 @@ interface LaneState {
 
 const lanes = vi.hoisted((): LaneState => ({
   packaged: undefined,
+  layoutPresent: false,
   dev: { outcome: "inactive" },
   npm: { outcome: "inactive" },
   supervisor: { outcome: "inactive" },
@@ -21,6 +23,7 @@ vi.mock("./productionPortableCodingRuntime.js", () => ({
     lanes.calls.push("packaged");
     return lanes.packaged;
   },
+  portableInstallLayoutPresent: (): boolean => lanes.layoutPresent,
 }));
 vi.mock("./devLanePortableCodingRuntime.js", () => ({
   discoverDevLaneOpenCode: (): unknown => {
@@ -47,6 +50,7 @@ const RUNTIME = { target: "windows-x64" };
 
 beforeEach(() => {
   lanes.packaged = undefined;
+  lanes.layoutPresent = false;
   lanes.dev = { outcome: "inactive" };
   lanes.npm = { outcome: "inactive" };
   lanes.supervisor = { outcome: "inactive" };
@@ -73,6 +77,14 @@ describe("discoverRuntimeLane (#4491)", () => {
     lanes.packaged = { unavailableReason: "volume" };
     lanes.npm = { outcome: "activated", runtime: RUNTIME };
     expect(discoverRuntimeLane({ env: {} })?.lane).toBe("packaged");
+    expect(discoverActivatedRuntime({ env: {} })).toBeUndefined();
+  });
+
+  it("keeps a packaged install whose runtime failed verification refused, never an npm runtime", () => {
+    lanes.layoutPresent = true;
+    lanes.npm = { outcome: "activated", runtime: RUNTIME };
+    expect(discoverRuntimeLane({ env: {} })?.lane).toBe("packaged-refused");
+    expect(lanes.calls).toEqual(["packaged"]);
     expect(discoverActivatedRuntime({ env: {} })).toBeUndefined();
   });
 
@@ -106,6 +118,13 @@ describe("discoverSupervisorRuntime (#4491)", () => {
       kind: "activated-runtime",
       runtime: RUNTIME,
     });
+  });
+
+  it("answers nothing for a packaged install that failed verification, whatever sits beside it", () => {
+    lanes.layoutPresent = true;
+    lanes.supervisor = { outcome: "found", supervisorPath: "S", sha256: "h", sizeBytes: 3 };
+    expect(discoverSupervisorRuntime({ env: {} })).toBeUndefined();
+    expect(lanes.calls).toEqual(["packaged"]);
   });
 
   it("stops at a refused lane and answers nothing for a refused npm layout", () => {

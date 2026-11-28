@@ -13,6 +13,7 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import {
   discoverPortableOpenCode,
+  portableInstallLayoutPresent,
   type PortableOpenCodeDiscovery,
   type PortableOpenCodeDiscoveryInput,
 } from "./productionPortableCodingRuntime.js";
@@ -22,6 +23,9 @@ type PresentLane = Exclude<DevLaneOpenCodeDiscovery, { readonly outcome: "inacti
 
 export type RuntimeLaneDiscovery =
   | { readonly lane: "packaged"; readonly discovery: NonNullable<PortableOpenCodeDiscovery> }
+  // A desktop package whose runtime did not verify: present, refused, and never a reason to look
+  // at the dev checkout or the npm runtime package (ADR-0043 D21).
+  | { readonly lane: "packaged-refused" }
   | { readonly lane: "dev-checkout" | "npm-runtime-package"; readonly discovery: PresentLane };
 
 function present(
@@ -41,6 +45,7 @@ export function discoverRuntimeLane(
 ): RuntimeLaneDiscovery | undefined {
   const packaged = discoverPortableOpenCode(host);
   if (packaged !== undefined) return { lane: "packaged", discovery: packaged };
+  if (portableInstallLayoutPresent(host)) return { lane: "packaged-refused" };
   return (
     present("dev-checkout", discoverDevLaneOpenCode(host)) ??
     present("npm-runtime-package", discoverNpmLaneOpenCode(host))
@@ -52,7 +57,7 @@ export function discoverActivatedRuntime(
   host: PortableOpenCodeDiscoveryInput & DevLaneOpenCodeDiscoveryInput,
 ): ResolvedPortableOpenCodeRuntime | undefined {
   const found = discoverRuntimeLane(host);
-  if (found === undefined) return undefined;
+  if (found === undefined || found.lane === "packaged-refused") return undefined;
   if (found.lane === "packaged") {
     return "runtime" in found.discovery ? found.discovery.runtime : undefined;
   }
@@ -84,6 +89,9 @@ export function discoverSupervisorRuntime(
       ? { kind: "activated-runtime", runtime: packaged.runtime }
       : undefined;
   }
+  // A present desktop package whose runtime failed verification is refused, not absent: it never
+  // yields to a dev checkout or an npm supervisor left from another installation.
+  if (portableInstallLayoutPresent(host)) return undefined;
   const dev = discoverDevLaneOpenCode(host);
   if (dev.outcome !== "inactive") {
     return dev.outcome === "activated"
