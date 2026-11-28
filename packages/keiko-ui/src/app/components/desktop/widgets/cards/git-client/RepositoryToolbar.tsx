@@ -140,6 +140,10 @@ function ToolbarCell({
         ...TOOLBAR_CELL_STYLE,
         // The comfortable width, but never wider than the toolbar itself (U-35).
         minWidth: `min(${String(minWidth)}px, 100%)`,
+        // A narrow window wraps the cell onto its own row and ellipsizes its text instead of
+        // painting over the neighbour. It must not clip: the branch menu opens inside the cell.
+        maxWidth: "100%",
+        boxSizing: "border-box",
         cursor: "default",
         ...(last === true ? { borderRight: "none" } : null),
       }}

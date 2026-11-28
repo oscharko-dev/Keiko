@@ -27,12 +27,17 @@ import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoots } from "../wor
 export const AMBIENT_BASE_INTERVAL_MS = 10_000;
 export const AMBIENT_MAX_INTERVAL_MS = 60_000;
 export const AMBIENT_FOCUS_DEBOUNCE_MS = 250;
+// A check asked for by focus that finds a read or mutation running is retried this soon.
+export const AMBIENT_BUSY_RETRY_MS = 500;
 
 export interface AmbientRefresh {
   // Reads the status and reports whether it differs from what the window shows.
   readonly probe: () => Promise<boolean>;
   // True while a status read is already running; the tick is skipped, never queued.
   readonly isBusy: () => boolean;
+  // True while the window is not rendered (minimized, or under a hidden ancestor) although the
+  // document itself is visible; nothing is probed then.
+  readonly isPaused?: () => boolean;
 }
 
 export function statusFingerprintDiffers(
@@ -102,10 +107,13 @@ function reportProbeFailure(error: unknown): void {
 }
 
 // The visible-only, non-overlapping, backed-off probe: it re-reads only when the status differs.
+// Focus and visibility use the same comparison, so an unchanged repository never invalidates the
+// commit evidence or the diff.
 class ProbeLoop {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delay = AMBIENT_BASE_INTERVAL_MS;
   private inFlight = false;
+  private pending = false;
   private failureReported = false;
   private disposed = false;
 
@@ -121,12 +129,17 @@ class ProbeLoop {
 
   schedule(): void {
     this.stop();
-    if (!this.disposed && documentVisible()) this.timer = setTimeout(() => this.tick(), this.delay);
+    if (this.disposed || !documentVisible()) return;
+    this.timer = setTimeout(() => this.tick(), this.pending ? AMBIENT_BUSY_RETRY_MS : this.delay);
   }
 
-  restart(): void {
+  // Focus or visibility: restart the backoff and check now; a check that finds the window busy is
+  // retried until the read or mutation has settled.
+  requestCheck(): void {
     this.delay = AMBIENT_BASE_INTERVAL_MS;
-    this.schedule();
+    this.pending = true;
+    this.stop();
+    this.tick();
   }
 
   dispose(): void {
@@ -159,10 +172,17 @@ class ProbeLoop {
   private tick(): void {
     this.timer = undefined;
     const ambient = this.ambientRef.current;
-    if (this.disposed || ambient === undefined || this.inFlight || ambient.isBusy()) {
+    if (this.disposed || ambient === undefined) return;
+    if (ambient.isPaused?.() === true) {
+      this.pending = false;
       this.schedule();
       return;
     }
+    if (this.inFlight || ambient.isBusy()) {
+      this.schedule();
+      return;
+    }
+    this.pending = false;
     this.inFlight = true;
     ambient
       .probe()
@@ -184,29 +204,27 @@ function watchRepositoryFromOutside(
 ): () => void {
   const loop = new ProbeLoop(refreshRef, ambientRef);
   let debounce: ReturnType<typeof setTimeout> | undefined;
-  const refreshSoon = (): void => {
+  const checkSoon = (): void => {
     if (debounce !== undefined) clearTimeout(debounce);
     debounce = setTimeout((): void => {
       debounce = undefined;
-      if (!documentVisible() || ambientRef.current?.isBusy() === true) return;
-      refreshRef.current();
+      if (!documentVisible()) return;
+      // Without a probe the window can only re-read.
+      if (ambientRef.current === undefined) refreshRef.current();
+      else loop.requestCheck();
     }, AMBIENT_FOCUS_DEBOUNCE_MS);
   };
   const onVisibility = (): void => {
-    if (!documentVisible()) {
-      loop.stop();
-      return;
-    }
-    refreshSoon();
-    loop.restart();
+    if (documentVisible()) checkSoon();
+    else loop.stop();
   };
-  window.addEventListener("focus", refreshSoon);
+  window.addEventListener("focus", checkSoon);
   document.addEventListener("visibilitychange", onVisibility);
   loop.schedule();
   return (): void => {
     loop.dispose();
     if (debounce !== undefined) clearTimeout(debounce);
-    window.removeEventListener("focus", refreshSoon);
+    window.removeEventListener("focus", checkSoon);
     document.removeEventListener("visibilitychange", onVisibility);
   };
 }

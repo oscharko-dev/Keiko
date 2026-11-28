@@ -54,13 +54,7 @@ export const TOOLBAR_CELL_STYLE: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
-  // U-35: a cell never outgrows the toolbar, so at a narrow window the repository path ellipsizes
-  // and the sync status wraps inside its own cell instead of painting over its neighbour. It must
-  // not clip (overflow) — the branch menu opens inside the cell.
-  minWidth: 0,
-  maxWidth: "100%",
-  boxSizing: "border-box",
-  padding: "8px 14px",
+  padding: "0 14px",
   border: 0,
   background: "transparent",
   cursor: "pointer",

@@ -934,6 +934,43 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByLabelText("Summary")).toHaveValue("feat: keep me");
   });
 
+  it("keeps an open branch menu open across an outside-change refresh", async (): Promise<void> => {
+    const user = userEvent.setup();
+    let current = makeStatus();
+    const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => current);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+    await user.click(await screen.findByRole("button", { name: "Branch: main" }));
+    expect(screen.getByRole("menuitemradio", { name: /feat\/x/ })).toBeInTheDocument();
+    const reads = getStatus.mock.calls.length;
+    current = makeStatusWithChanges();
+    act((): void => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor((): void => expect(getStatus.mock.calls.length).toBeGreaterThan(reads));
+    await screen.findByRole("button", { name: /^src\/index\.ts, / });
+    expect(screen.getByRole("menuitemradio", { name: /feat\/x/ })).toBeInTheDocument();
+  });
+
+  it("asks whether the window is rendered before it probes, so a minimized window is not polled", async (): Promise<void> => {
+    const checkVisibility = vi.fn((): boolean => false);
+    Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
+      configurable: true,
+      value: checkVisibility,
+    });
+    try {
+      const getStatus = vi.fn(async (): Promise<GitRepositoryStatusResponse> => makeStatus());
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+      await screen.findByRole("button", { name: "Branch: main" });
+      const reads = getStatus.mock.calls.length;
+      act((): void => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // The debounced check runs and finds the window not rendered; positive control: it asked.
+      await waitFor((): void => expect(checkVisibility).toHaveBeenCalled());
+      expect(getStatus.mock.calls).toHaveLength(reads);
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "checkVisibility");
+    }
+  });
+
   it("does not read a status on focus while no repository is connected", (): void => {
     const client = makeClient({
       listRepositories: vi.fn(

@@ -1748,17 +1748,30 @@ export function GitClientWindow({
   // U-35: what the window shows and whether it is reading, as the ambient probe needs them
   // without re-subscribing on every settled read.
   const shownStatusRef = useRef<GitRepositoryStatusResponse | null>(null);
-  const statusReadingRef = useRef(false);
+  const windowBusyRef = useRef(false);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const windowBusy =
+    statusRead.loading ||
+    staging.flow.busy ||
+    commit.flow.busy ||
+    branchActions.flow.busy ||
+    syncBusy;
   useLayoutEffect((): void => {
     shownStatusRef.current = statusRead.projectKey === selectedPath ? statusRead.response : null;
-    statusReadingRef.current = statusRead.loading;
-  }, [selectedPath, statusRead.loading, statusRead.projectKey, statusRead.response]);
+    windowBusyRef.current = windowBusy;
+  }, [selectedPath, statusRead.projectKey, statusRead.response, windowBusy]);
   const ambientRefresh = useMemo(
     (): AmbientRefresh => ({
-      isBusy: (): boolean => statusReadingRef.current,
-      probe: async (): Promise<boolean> =>
-        selectedPath !== null &&
-        statusFingerprintDiffers(shownStatusRef.current, await client.getStatus(selectedPath)),
+      // No probe or focus check runs while a read or a mutation is in flight.
+      isBusy: (): boolean => windowBusyRef.current,
+      // A minimized window stays mounted under a hidden ancestor while the document is visible.
+      isPaused: (): boolean => workspaceRef.current?.checkVisibility?.() === false,
+      probe: async (): Promise<boolean> => {
+        if (selectedPath === null) return false;
+        const fresh = await client.getStatus(selectedPath);
+        // Read what is shown only now: a refresh or mutation may have settled during the request.
+        return !windowBusyRef.current && statusFingerprintDiffers(shownStatusRef.current, fresh);
+      },
     }),
     [client, selectedPath],
   );
@@ -2383,7 +2396,7 @@ export function GitClientWindow({
 
   const visibleSummaryError = readErrorForDisplay(summaryRead.error, activeStatus);
   return (
-    <div style={WORKSPACE_STYLE} aria-label="Git">
+    <div ref={workspaceRef} style={WORKSPACE_STYLE} aria-label="Git">
       <h2 className="rv-sr-only">Git</h2>
       <p
         role="status"
