@@ -3396,7 +3396,7 @@ describe("private OpenCode run control", () => {
     try {
       expect(closing).toHaveBeenCalledOnce();
       const handshake = records.filter((record) =>
-        record.source?.startsWith("opencode-runtime-composition.handshake"),
+        record.source.startsWith("opencode-runtime-composition.handshake"),
       );
       expect(handshake).toHaveLength(1);
       expect(JSON.stringify(records)).not.toContain("SENTINEL_CLOSE_BODY");

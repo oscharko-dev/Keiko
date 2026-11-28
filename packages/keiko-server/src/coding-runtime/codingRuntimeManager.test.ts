@@ -6288,6 +6288,23 @@ describe("immutable draft delivery manager approvals", () => {
     },
   );
 
+  // A queue bound ends a proposal's wait but is never recorded as a person's "no".
+  function expectQueueFullRefusalIsNoDecline(
+    manager: Pick<CodingRuntimeManager, "declineApproval">,
+    bridge: ReturnType<typeof createCodingToolApprovalBridge>,
+    proposalId: string,
+  ): void {
+    const refused = manager.declineApproval?.({
+      runId: "run-1",
+      requestId: proposalId,
+      actionKind: "push",
+      cause: "queue-full",
+    });
+    expect(refused).toBe(true);
+    expect(bridge.proposalRefused?.("run-1", proposalId)).toBe(true);
+    expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
+  }
+
   // PR #3625 (ADR-0124 D6): the operator's "no" to a push proposal reaches the proposal's own
   // server-side wait through the bridge, and only for the active run's own delivery proposals.
   it("records a denied push proposal's decline for its waiting call", async () => {
@@ -6327,17 +6344,7 @@ describe("immutable draft delivery manager approvals", () => {
       ).toBe(false);
       expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
 
-      // A queue bound ends the wait but is never a person's "no".
-      expect(
-        manager.declineApproval?.({
-          runId: "run-1",
-          requestId: proposalId,
-          actionKind: "push",
-          cause: "queue-full",
-        }),
-      ).toBe(true);
-      expect(bridge.proposalRefused?.("run-1", proposalId)).toBe(true);
-      expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
+      expectQueueFullRefusalIsNoDecline(manager, bridge, proposalId);
 
       expect(
         manager.declineApproval?.({ runId: "run-1", requestId: proposalId, actionKind: "push" }),
