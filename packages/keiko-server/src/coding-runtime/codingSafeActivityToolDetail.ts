@@ -119,11 +119,16 @@ function contentText(state: Readonly<Record<string, unknown>>): string | undefin
     .join("");
 }
 
+// A finished call's result is its `content`. A running shell has no content yet: the runtime streams
+// what the command printed so far into `metadata.output`, and keeps it when a Stop or an error ends
+// the call, so the same text is the row's output until (and unless) a content result replaces it.
 function toolOutput(
   state: Readonly<Record<string, unknown>>,
 ): CodingSafeActivityToolOutput | undefined {
   const text = contentText(state);
-  return text === undefined ? undefined : toolOutputPreview(text);
+  const streamed = record(state.metadata)?.output;
+  const shown = text === undefined || text.trim() === "" ? streamed : text;
+  return typeof shown === "string" ? toolOutputPreview(shown) : undefined;
 }
 
 // The runtime ends a result it shortened with `[showing lines 1-N of M; full output saved to

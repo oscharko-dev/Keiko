@@ -3199,6 +3199,27 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     );
   });
 
+  it("shows what a running command has printed so far and keeps it when the call errors", () => {
+    for (const status of ["running", "error"] as const) {
+      const signals = toolSignals(
+        shellHistory({
+          status,
+          input: { command: "npm run serve" },
+          metadata: { output: "ready\ntick 1" },
+          ...(status === "error" ? { error: { type: "tool.execution", message: "aborted" } } : {}),
+        }),
+      ) as readonly { presentation?: { output?: unknown } }[];
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.presentation?.output).toEqual({
+        head: "ready\ntick 1",
+        tail: "",
+        lineCount: 2,
+        hiddenLineCount: 0,
+        truncated: false,
+      });
+    }
+  });
+
   it("projects a command that exited zero as succeeded with its exit status", () => {
     expect(toolSignals(shellHistory(completed(0)))).toEqual([
       expect.objectContaining({ state: "succeeded", exitCode: 0 }),

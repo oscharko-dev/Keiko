@@ -389,3 +389,42 @@ describe("a result the runtime shortened for the model", () => {
     }
   });
 });
+
+describe("the output a shell streams while it runs and keeps when it is stopped", () => {
+  const streamed = `${TOKEN}\nserve ready\ntick 1\ntick 2`;
+
+  it.each(["running", "failed", "cancelled"] as const)(
+    "shows the streamed output of a %s call with the credential floor applied",
+    (displayState) => {
+      const status = displayState === "running" ? "running" : "error";
+      const state = { status, input: { command: "npm run serve" }, metadata: { output: streamed } };
+      const detail = openCodeToolDetail("shell", shellPart(state), state, displayState);
+      expect(detail.output?.lineCount).toBe(4);
+      expect(detail.output?.head).toContain("serve ready\ntick 1\ntick 2");
+      expect(JSON.stringify(detail)).not.toContain(TOKEN);
+    },
+  );
+
+  it("prefers the finished result over the streamed copy and ignores a non-text value", () => {
+    const done = {
+      status: "completed",
+      input: { command: "ls" },
+      content: [{ type: "text", text: "final" }],
+      metadata: { exit: 0, output: "streamed" },
+    };
+    expect(openCodeToolDetail("shell", shellPart(done), done, "succeeded").output?.head).toBe(
+      "final",
+    );
+    const odd = { status: "running", input: { command: "ls" }, metadata: { output: 7 } };
+    expect(openCodeToolDetail("shell", shellPart(odd), odd, "running")).not.toHaveProperty(
+      "output",
+    );
+  });
+
+  it("shows no streamed output for a tool that is not a shell", () => {
+    const state = { status: "running", input: {}, metadata: { output: "file text" } };
+    expect(openCodeToolDetail("read", shellPart(state), state, "running")).not.toHaveProperty(
+      "output",
+    );
+  });
+});
