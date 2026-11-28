@@ -207,6 +207,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  boundActionId,
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
   type OpenCodeV2ApprovalOutcome,
@@ -5214,6 +5215,17 @@ function branchAskName(value: Readonly<Record<string, unknown>>): string | undef
     : undefined;
 }
 
+function boundBranchAskActionId(
+  run: PreparedRun,
+  value: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const { actionId } = value;
+  if (run.sessionId === undefined) return undefined;
+  return boundActionId(actionId, run.sessionId, v2Record(value.properties)?.id)
+    ? actionId
+    : undefined;
+}
+
 function recordBranchAskPrecheckFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -5255,9 +5267,11 @@ function branchAskRefusal(
   // The refusal reaches the model as the call's own result, so the native tool ends as completed;
   // without Keiko's verdict the row read "Succeeded" for a branch that was never created (U-43).
   // The closed Git outcome names why, exactly as for a step refused after an approval.
+  // The id settles a row only when it is bound to this run's session and to the ask, the check the
+  // approval path applies: a foreign id settles nothing and the 409 answer is unchanged.
   settleSafeTool(
     deps.settleTool,
-    typeof value.actionId === "string" ? value.actionId : undefined,
+    boundBranchAskActionId(run, value),
     "succeeded",
     codingToolGitPresentation(refusal),
   );

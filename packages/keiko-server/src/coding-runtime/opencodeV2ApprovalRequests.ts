@@ -110,7 +110,7 @@ function exactKeys(value: Readonly<Record<string, unknown>>, keys: readonly stri
 
 // The plugin derives the ask id from the same `sessionID:id` seed it sends as `actionId`, so an
 // actionId that does not hash to the ask id, or names another session, fails closed.
-function boundActionId(value: unknown, sessionId: string, askId: unknown): value is string {
+export function boundActionId(value: unknown, sessionId: string, askId: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith(`${sessionId}:`)) return false;
   if (!CODING_WORKBENCH_TOOL_CALL_ID_PATTERN.test(value.slice(sessionId.length + 1))) return false;
   const digest = createHash("sha256").update(value, "utf8").digest("hex");

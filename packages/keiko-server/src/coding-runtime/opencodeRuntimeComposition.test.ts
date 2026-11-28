@@ -12668,8 +12668,22 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
 
   // U-43: the refused call's row must carry Keiko's verdict (the closed Git outcome), never the
   // native tool's own "completed" alone, which read as a green check for a branch never created.
+  // The ask as the generated plugin sends it: the id is bound to the session and the ask id.
+  const boundAskBody = (actionId: string): string =>
+    JSON.stringify({
+      action: "permission-request",
+      runId: FIXTURE_RUN_ID,
+      actionId,
+      properties: {
+        id: `per_${createHash("sha256").update(actionId, "utf8").digest("hex").slice(0, 32)}`,
+        sessionID: "ses_tool",
+        metadata: { actionKind: "git-branch", branchName: "feat/u27-branch-check" },
+      },
+    });
+
   async function settledBranchAsk(
     refusal: CodingToolResult | undefined,
+    body: string = boundAskBody("ses_tool:call_branch"),
   ): Promise<{ readonly status: number; readonly settlements: readonly unknown[] }> {
     const settlements: unknown[] = [];
     const fixture = await startBridgeFixture(
@@ -12695,7 +12709,7 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
       const response = await fixture.runtime.toolBridge.handle({
         method: "POST",
         headers: new Headers(authorized),
-        body: askBody,
+        body,
       });
       return { status: response.status, settlements };
     } finally {
@@ -12720,6 +12734,24 @@ describe("a governed task-branch ask Keiko is certain to refuse (U-32)", () => {
       });
     },
   );
+
+  // U-43 audit: the action id comes from the request body, so it settles a row only when it is bound
+  // to the run's session and to the ask, as on the approval path. The answer stays the 409 refusal.
+  it.each([
+    ["another session", boundAskBody("ses_other:call_branch")],
+    [
+      "an ask id it does not hash to",
+      boundAskBody("ses_tool:call_branch").replace('"per_', '"per_0'),
+    ],
+    ["no ask id", askBody],
+  ])("settles nothing for an action id of %s, and keeps the 409", async (_name, body) => {
+    const answered = await settledBranchAsk(
+      blockedBranchToolResult("protected-name", "feat/u27-branch-check"),
+      body,
+    );
+    expect(answered.status).toBe(409);
+    expect(answered.settlements).toEqual([]);
+  });
 
   it("settles nothing for a branch ask no refusal covers", async () => {
     expect((await settledBranchAsk(undefined)).settlements).toEqual([]);

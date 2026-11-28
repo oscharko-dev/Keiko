@@ -1094,6 +1094,21 @@ function useCheckoutFreshness(input: {
 }
 
 /**
+ * The branch the server's binding holds for the shown repository, or null when none is bound there.
+ * A refusal compares the checkout with this, never with the displayed chip: a pending base-branch
+ * pick the person made is a selection, not a branch the checkout was read on (U-39).
+ */
+export function boundCheckoutBranch(
+  activeWorkspace: Pick<WorkbenchWorkspaceApi, "activeInstance">,
+  repositoryRoot: string | null,
+): string | null {
+  const instance = activeWorkspace.activeInstance;
+  return instance !== null && instance.repositoryRoot === repositoryRoot
+    ? instance.taskBranch
+    : null;
+}
+
+/**
  * The branch the checkout now stands on when it differs from the one the window showed at a refused
  * start, so the alert names the branch change instead of another repository. Nothing while the
  * branch inventory is still being read again.
@@ -1302,12 +1317,7 @@ export function CodingWorkbenchWindow({
     refreshCheckout,
     mutation: state.mutation,
     retry: locationState.retry,
-    shownBranch: displayedExecutionBranch(
-      activeWorkspace,
-      repositoryRoot,
-      selectedBranch,
-      "composer",
-    ),
+    shownBranch: boundCheckoutBranch(activeWorkspace, repositoryRoot),
     taskPending: history.pending,
   });
   const { alert, modelReadiness, modelActivation } = useWorkbenchModelNotice({

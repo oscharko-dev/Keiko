@@ -54,6 +54,7 @@ import type {
 } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import {
+  boundCheckoutBranch,
   CodingWorkbenchWindow,
   newTaskReferenceRoot,
   sessionGrowthKey,
@@ -7367,6 +7368,24 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
     expect(liveActions.adoptModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
+  });
+});
+
+// U-39 audit: a refused start compares the checkout with the branch the binding holds, never with a
+// base branch the person picked in the chip and has not started on yet.
+describe("boundCheckoutBranch", () => {
+  it("names the bound task branch for the shown repository, not a pending pick", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/alpha", "/repos/alpha", {
+      taskBranch: "chore/mark-reviewed",
+    });
+    expect(boundCheckoutBranch(workspace, "/repos/alpha")).toBe("chore/mark-reviewed");
+  });
+
+  it("names nothing for another repository or without a binding", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/alpha", "/repos/alpha");
+    expect(boundCheckoutBranch(workspace, "/repos/beta")).toBeNull();
+    expect(boundCheckoutBranch({ activeInstance: null }, "/repos/alpha")).toBeNull();
+    expect(boundCheckoutBranch(workspace, null)).toBeNull();
   });
 });
 
