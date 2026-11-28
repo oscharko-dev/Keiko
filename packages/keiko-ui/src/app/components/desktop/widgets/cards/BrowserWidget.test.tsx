@@ -20,6 +20,11 @@ import {
   resetBrowserStreamCapacityForTests,
   sharedStreamConnectionBudget,
 } from "../../../../../lib/browser-stream-capacity";
+import { createOriginLocksFixture } from "../../../../../test-utils/origin-locks-fixture";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "../../../../../lib/client-diagnostics";
 import { BrowserWidget } from "./BrowserWidget";
 
 vi.mock("../../../../../lib/browser-api", () => ({
@@ -450,5 +455,65 @@ describe("BrowserWidget", () => {
     // React did not reassign the attribute.
     expect(imgAfter).toBe(img);
     expect(imgAfter.getAttribute("src")).toBe(srcBefore);
+  });
+});
+
+// #4491: the Browser event stream is a background stream. The server keeps no replay for it and has
+// no state read, so a yield must be visible: the widget says events from the gap are not shown.
+describe("BrowserWidget event stream yielding to an essential stream", () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, "locks");
+    resetBrowserStreamCapacityForTests();
+    resetClientDiagnosticWriter();
+    vi.useRealTimers();
+  });
+
+  it("says events from the gap are not shown after the stream reopened, until the next event", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+    resetBrowserStreamCapacityForTests();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    render(<BrowserWidget />);
+    fireEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const first = FakeEventSource.last;
+    expect(first).not.toBeNull();
+    const essential = Array.from({ length: 4 }, () => admitDirectBrowserStream(() => undefined));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(first?.closed).toBe(true);
+    expect(screen.queryByText(/Events from that gap are not shown/u)).toBeNull();
+    essential.forEach((admission) => admission.release());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(FakeEventSource.last).not.toBe(first);
+    expect(screen.getByText(/Events from that gap are not shown/u)).toBeInTheDocument();
+    const messages = writer.mock.calls.map(([message]) => String(message));
+    expect(messages.filter((message) => message.includes("yielded origin capacity"))).toHaveLength(
+      1,
+    );
+    expect(
+      messages.filter((message) => message.includes("browser event stream reopened")),
+    ).toHaveLength(1);
+    act(() => {
+      FakeEventSource.last?.dispatch(
+        "browser:navigated",
+        JSON.stringify({
+          kind: "navigated",
+          sessionId: "session-1",
+          payload: { originOnly: "http://localhost:3000" },
+        }),
+      );
+    });
+    expect(screen.queryByText(/Events from that gap are not shown/u)).toBeNull();
   });
 });

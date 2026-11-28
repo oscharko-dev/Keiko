@@ -3225,6 +3225,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "browserWidget.common.yes": "yes",
   "browserWidget.common.no": "no",
   "browserWidget.status.screenshotReady": "Screenshot ready (dry-run) — press Apply to persist.",
+  "browserWidget.status.eventsGap":
+    "Live events were paused briefly while another stream needed the connection. Events from that gap are not shown.",
   "browserWidget.status.persistedAs": "Persisted as {path}.",
   "browserWidget.status.persistedAsPrefix": "Persisted as",
   "browserWidget.status.currentOrigin": "Current origin: {origin}",

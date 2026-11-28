@@ -3402,6 +3402,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserWidget.common.no": "nein",
   "browserWidget.status.screenshotReady":
     "Screenshot bereit (Probelauf) — mit Anwenden dauerhaft speichern.",
+  "browserWidget.status.eventsGap":
+    "Live-Ereignisse waren kurz pausiert, weil ein anderer Datenstrom die Verbindung brauchte. Ereignisse aus dieser Lücke werden nicht angezeigt.",
   "browserWidget.status.persistedAs": "Gespeichert als {path}.",
   "browserWidget.status.persistedAsPrefix": "Gespeichert als",
   "browserWidget.status.currentOrigin": "Aktueller Ursprung: {origin}",

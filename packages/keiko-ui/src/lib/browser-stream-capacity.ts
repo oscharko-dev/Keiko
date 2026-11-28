@@ -37,7 +37,11 @@ export function reserveInteractiveBrowserStreamCapacity(): () => void {
 
 // A browser allows six HTTP/1.1 connections per origin. Persistent streams may hold four of them;
 // the other two stay free so a finite read (a run status read, readiness, a snapshot) never queues
-// behind streams until its own deadline expires (U-37). The ceiling is enforced at admission by an
+// behind streams until its own deadline expires (U-37). The reservation covers the EventSource and
+// fetch-event streams admitted here. A chat turn streams over its own fetch (`sendDesktopChatStream`)
+// outside this pool, and every open chat window may run one, so the two reserved connections are
+// shared with concurrent chat turns: with more than two turns running at once a finite read can
+// still queue until a turn ends. The ceiling is enforced at admission by an
 // origin-wide Web Locks pool shared by every document of the origin: the shared event-source pool
 // and every direct stream take a lease before they open a connection.
 export const PERSISTENT_STREAM_CONNECTION_CEILING = 4;
@@ -539,8 +543,8 @@ async function deferToEssentialWaiter(
     releaseLease(lease, "expired");
     return true;
   } catch {
-    // The contention query is best effort here: a failed one only skips the early hand-over, and the
-    // periodic check reports its own failure once.
+    // A failed contention query only skips the early hand-over; it is reported once per lease.
+    reportWaiterQueryFailureOnce(lease);
     return lease.ended;
   }
 }

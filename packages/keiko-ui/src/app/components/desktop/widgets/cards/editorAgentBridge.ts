@@ -28,6 +28,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { postEditorAgentActionResult } from "../../../../../lib/api";
+import { reportClientDiagnostic } from "../../../../../lib/client-diagnostics";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
   admitDirectBrowserStream,
@@ -448,6 +449,8 @@ interface EditorAgentBridgeState {
 interface EditorAgentSessionHandlers {
   readonly onAction: (action: EditorAgentAction) => void;
   readonly onResult: (result: EditorAgentActionResult) => void;
+  /** The stream reopened after it gave its connection up: read what it could not deliver. */
+  readonly onResync: () => void;
 }
 
 const EMPTY_EDITOR_AGENT_BRIDGE_STATE: EditorAgentBridgeState = {
@@ -665,7 +668,48 @@ function eventSessionId(event: EditorAgentEvent): string | undefined {
   }
 }
 
+// The server keeps no replay for this stream, so a stream that yields its connection must not do so
+// while an action it delivered still awaits its result frame, and it re-reads its state on reopening.
+const EDITOR_AGENT_YIELD_GRACE_MS = 20_000;
+const editorAgentDispatchedAt = new Map<string, number>();
+// A yield closed the stream; the next open resynchronizes the subscribers once.
+let editorAgentStreamYielded = false;
+
+function trackEditorAgentActionLifecycle(event: EditorAgentEvent): void {
+  if (event.type === "action") {
+    if (editorAgentDispatchedAt.size >= MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS) {
+      const oldest = editorAgentDispatchedAt.keys().next();
+      if (oldest.done !== true) editorAgentDispatchedAt.delete(oldest.value);
+    }
+    editorAgentDispatchedAt.set(event.action.actionId, Date.now());
+  } else if (event.type === "result" && event.result.status !== "queued") {
+    editorAgentDispatchedAt.delete(event.result.actionId);
+  }
+}
+
+function editorAgentCanYield(): boolean {
+  const now = Date.now();
+  for (const [actionId, at] of editorAgentDispatchedAt) {
+    if (now - at >= EDITOR_AGENT_YIELD_GRACE_MS) editorAgentDispatchedAt.delete(actionId);
+  }
+  return editorAgentDispatchedAt.size === 0;
+}
+
+function resyncEditorAgentSubscribers(): void {
+  let subscribers = 0;
+  for (const handlers of editorAgentSubscribersBySession.values()) {
+    for (const handler of handlers) {
+      handler.onResync();
+      subscribers += 1;
+    }
+  }
+  reportClientDiagnostic(
+    `[keiko] editor agent stream resynchronized after yielding its connection (subscribers=${String(subscribers)})`, // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+  );
+}
+
 function dispatchEditorAgentEvent(event: EditorAgentEvent): void {
+  trackEditorAgentActionLifecycle(event);
   const sessionId = eventSessionId(event);
   if (sessionId === undefined) return;
   const subscribers = editorAgentSubscribersBySession.get(sessionId);
@@ -707,9 +751,16 @@ function detachEditorAgentEventSource(): void {
   editorAgentResultListener = null;
 }
 
+// The slot went to a more urgent stream: close the connection and remember to resynchronize.
+function yieldEditorAgentEventSource(): void {
+  detachEditorAgentEventSource();
+  editorAgentStreamYielded = true;
+}
+
 function closeEditorAgentEventSource(): void {
   // A stream still waiting for an origin-wide slot is cancelled with its admission.
   detachEditorAgentEventSource();
+  editorAgentStreamYielded = false;
   editorAgentAdmission?.release();
   editorAgentAdmission = null;
   editorAgentConnectedSessionKey = null;
@@ -742,7 +793,8 @@ function reconcileEditorAgentEventSource(): void {
   // stream: it yields its slot to an essential one and asks for it again until it is granted.
   editorAgentAdmission = admitDirectBrowserStream(() => openEditorAgentEventSource(url), {
     priority: "background",
-    onYield: detachEditorAgentEventSource,
+    onYield: yieldEditorAgentEventSource,
+    canYield: editorAgentCanYield,
   });
 }
 
@@ -762,6 +814,10 @@ function openEditorAgentEventSource(url: string): void {
   source.addEventListener("editor-agent:action", editorAgentActionListener);
   source.addEventListener("editor-agent:result", editorAgentResultListener);
   editorAgentEventSource = source;
+  if (editorAgentStreamYielded) {
+    editorAgentStreamYielded = false;
+    resyncEditorAgentSubscribers();
+  }
 }
 
 /**
@@ -820,6 +876,8 @@ export function _resetEditorAgentBridgeStateForTests(): void {
   editorAgentCapabilityGeneration = 0;
   editorAgentRestartScheduled = false;
   editorAgentBridgeStreamId = null;
+  editorAgentStreamYielded = false;
+  editorAgentDispatchedAt.clear();
 }
 
 /**
@@ -909,6 +967,12 @@ export function useEditorAgentBridge(
         const { conflict } = result;
         if (conflict === undefined) return;
         onConflictRef.current({ code: conflict.code, message: conflict.message });
+      },
+      onResync: (): void => {
+        // The same snapshot registration the first connection made, then the audit read that shows
+        // any action result the closed stream could not deliver.
+        void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
+        onAgentActivityRef.current?.();
       },
     };
     const unsubscribe = subscribeEditorAgentSession(agentSessionId, handlers);
