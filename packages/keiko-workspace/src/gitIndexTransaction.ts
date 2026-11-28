@@ -64,20 +64,23 @@ export async function withGitIndexTransaction<T>(
       if (!check() || (await resolveGitdir(fs, workspaceRoot))?.path !== base.path)
         throw new Error("git-index-metadata-drift");
       if (!accept(result)) throw new Error("git-index-authority-denied");
-      assertIndexFile(temporaryIndexPath);
-      // An index that was absent under Git's own lock is still absent: nothing wrote it meanwhile.
-      if (
-        !indexExisted &&
-        lstatSync(join(base.path, "index"), { throwIfNoEntry: false }) !== undefined
-      )
-        throw new Error("git-index-metadata-drift");
-      renameSync(temporaryIndexPath, join(base.path, "index"));
+      promoteIndex(base.path, temporaryIndexPath, indexExisted);
     }
     return result;
   } finally {
     cleanupIndexTransaction(base.path, directory, lock, descriptor, temporaryIndexPath, temporary);
   }
 }
+// The private copy replaces the live index. An index that was absent under Git's own lock is still
+// absent: nothing wrote it meanwhile.
+function promoteIndex(gitdir: string, temporaryIndexPath: string, indexExisted: boolean): void {
+  assertIndexFile(temporaryIndexPath);
+  const index = join(gitdir, "index");
+  if (!indexExisted && lstatSync(index, { throwIfNoEntry: false }) !== undefined)
+    throw new Error("git-index-metadata-drift");
+  renameSync(temporaryIndexPath, index);
+}
+
 const GIT_REF_LOCK_UNAVAILABLE = "git-ref-lock-unavailable";
 
 // The directory that holds `refs/heads`: the repository's own gitdir, or the common directory a
