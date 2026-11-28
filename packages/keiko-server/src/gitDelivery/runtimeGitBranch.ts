@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-tools";
 import {
   isGitZeroObjectId,
-  readGitRevision,
+  readGitLocalBranchTip,
   readGitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
@@ -156,6 +156,9 @@ function mutate(
       ...input.execution,
       signal: input.context.signal,
       snapshotReader: guardedSnapshotReader(input),
+      ...(input.context.readSession === undefined
+        ? {}
+        : { readSession: input.context.readSession }),
     },
     input.context.correlationId,
   );
@@ -203,10 +206,14 @@ type Existing = "absent" | "at-head" | "elsewhere";
 // an earlier, interrupted step and is only switched to; one anywhere else is somebody's work and
 // is refused. The current branch counts as existing, so the base branch can never be "created".
 async function existingBranch(input: RuntimeGitBranchInput): Promise<Existing> {
-  const snapshot = await readGuardedSnapshot(input);
-  if (input.branchName === snapshot.currentBranchName) return "elsewhere";
-  if (!snapshot.existingLocalBranchNames.includes(input.branchName)) return "absent";
-  const tip = await readGitRevision(governedDeps(input), `refs/heads/${input.branchName}`);
+  if (!input.context.stillAuthorized()) throw new Error("git-branch-authority-unavailable");
+  // The run's own branch is the current branch: the facts read that fronts this step verified it
+  // against Git's own answer. The kernel judges each effect against a fresh snapshot of its own.
+  if (input.branchName === input.context.headRef) return "elsewhere";
+  // One `rev-parse --verify` answers "is there such a branch, and where": a full worktree snapshot
+  // (about six processes, `status` among them) was read for it, and Windows pays for every process.
+  const tip = await readGitLocalBranchTip(governedDeps(input), input.branchName);
+  if (tip === undefined) return "absent";
   return tip === input.headSha ? "at-head" : "elsewhere";
 }
 

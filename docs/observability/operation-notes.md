@@ -933,6 +933,16 @@ operation (a read session), not once per read. `git.runtime-action` names a read
 run as `deadline-exceeded` (the tool's own budget), `signal-aborted` (a Stop while authority held) or
 `authority-revoked` (authority lapsed); the model-facing refusal stays `authority-revoked`.
 
+Every runtime Git action, and every governed Git mutation, runs in one read session of its own, so a
+tool call costs the processes it needs and nothing else (Windows pays 70 to 130 ms for each).
+`git.runtime-action` carries `gitSpawnCount` and `durationMs` for a call that started a Git process,
+`git.verified-commit` carries `gitSpawnCount` on its `result` line, and `git.delivery.mutation.completed`
+carries both: the processes the action's scope started (its snapshot read, its preflight and every
+governed step) and its wall time. A proposal reads the repository once and its redemption reads it
+again before anything is written; a task branch asks Git for `refs/heads/<name>` with one
+`rev-parse --verify`; the commit signing decision reads the branch the preflight verified and one
+`git remote`. The session ends with the call, so a promisor verdict never authorizes a later one.
+
 ## Coding Workbench request deadlines, Editor and window binding
 
 `client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime

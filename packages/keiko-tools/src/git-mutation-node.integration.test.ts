@@ -35,7 +35,11 @@ import type {
   GitLocalMutationAdapter,
   GitVerifiedCommitPrecondition,
 } from "./git-mutation-adapter.js";
-import { readGitIndexTreeDigest } from "./git-worktree-snapshot-node.js";
+import {
+  readGitBlobTextsWithin,
+  readGitBlobTextWithin,
+  readGitIndexTreeDigest,
+} from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { createInMemoryGitMutationJournal, runGitMutation } from "./git-mutation-orchestrator.js";
 
@@ -477,6 +481,76 @@ describe("node git mutation adapter — one promisor verdict per operation", () 
     });
     await scoped.switchBranch({ branchName: "main" });
     expect(probes()).toBe(1);
+  });
+});
+
+describe("many blob texts in a few processes", () => {
+  function blob(bytes: Uint8Array): string {
+    return execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: root,
+      input: bytes,
+      encoding: "utf8",
+    }).trim();
+  }
+
+  it("reads exactly what one blob read answers, whatever the bytes are", async () => {
+    const ids = [
+      blob(new TextEncoder().encode("plain\nlines\n")),
+      blob(new TextEncoder().encode("ünïcödé ✓ 😀\n")),
+      blob(Uint8Array.from([0x61, 0xff, 0xfe, 0x62, 0x0a])),
+      blob(Uint8Array.from([0x61, 0x00, 0x62])),
+      blob(new Uint8Array(0)),
+      blob(new TextEncoder().encode("x".repeat(5000))),
+    ];
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, options) => {
+      processes += 1;
+      return nodeSpawnFn(command, args, options);
+    };
+    const deps = {
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      spawn,
+      readSession: createGitReadSession(),
+    };
+    const many = await readGitBlobTextsWithin(deps, ids, 4096);
+    const batched = processes;
+    for (const id of ids)
+      expect(many.get(id), id).toEqual(await readGitBlobTextWithin(deps, id, 4096));
+    expect(many.get(ids[5] ?? "")).toBeUndefined();
+    // The promisor probe, the sizes, the batches halved around the one byte sequence a UTF-8
+    // decoder cannot carry through, and that blob by itself.
+    expect(batched).toBeLessThanOrEqual(10);
+  });
+
+  it("starts the same number of processes for three blobs as for three hundred", async () => {
+    const few = Array.from({ length: 3 }, (_, at) =>
+      blob(new TextEncoder().encode(`few ${String(at)}\n`)),
+    );
+    const many = Array.from({ length: 300 }, (_, at) =>
+      blob(new TextEncoder().encode(`many ${String(at)}\n`)),
+    );
+    let processes = 0;
+    const spawn: SpawnFn = (command, args, options) => {
+      processes += 1;
+      return nodeSpawnFn(command, args, options);
+    };
+    const deps = { workspace: info, processEnv: { PATH: process.env.PATH ?? "" }, spawn };
+    await readGitBlobTextsWithin(deps, few, 4096);
+    const forFew = processes;
+    processes = 0;
+    await readGitBlobTextsWithin(deps, many, 4096);
+    expect(processes).toBe(forFew);
+  });
+
+  it("refuses a blob that does not exist as an unreadable read", async () => {
+    await expect(
+      readGitBlobTextsWithin(
+        { workspace: info, processEnv: { PATH: process.env.PATH ?? "" } },
+        ["a".repeat(40)],
+        4096,
+      ),
+    ).rejects.toMatchObject({ reason: "exit-nonzero" });
   });
 });
 

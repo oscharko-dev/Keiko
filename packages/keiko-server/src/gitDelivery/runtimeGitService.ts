@@ -17,6 +17,7 @@ import { CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS } from "@oscharko-dev/keiko-
 import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
+  createGitReadSession,
   readGitRevision,
   readGitStageCandidate,
   readGitStageSupport,
@@ -28,6 +29,7 @@ import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-too
 import {
   readVerifiedCommitFacts,
   readVerifiedCommitRead,
+  type VerifiedCommitRead,
   verifiedBaseObjectId,
   verifiedHeadObjectId,
 } from "./verifiedCommitFacts.js";
@@ -190,6 +192,10 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     pathCount: { type: "integer", dataClass: "count", required: false },
     requestedCount: { type: "integer", dataClass: "count", required: false },
     fileCount: { type: "integer", dataClass: "count", required: false },
+    // What the action cost (W-4, #4491): the Git processes its scope started and its wall time. The
+    // Windows lab paid 70 to 130 ms for each, so these two numbers show where a slow tool call went.
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
     countsUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
     readFailure: {
       type: "string",
@@ -271,6 +277,8 @@ interface RuntimeGitActivityFields {
   readonly pathCount?: number;
   readonly requestedCount?: number;
   readonly fileCount?: number;
+  readonly gitSpawnCount?: number;
+  readonly durationMs?: number;
   readonly countsUnavailable?: boolean;
   readonly readFailure?: GitReadFailureReason;
   readonly truncated?: boolean;
@@ -422,7 +430,8 @@ function assembleProposal(
   return {
     proposalId,
     runId: context.runId,
-    context,
+    // The proposal outlives the call that made it; the call's Git read scope must not.
+    context: { ...context, readSession: undefined },
     command,
     binding,
     expiresAtMs: nowMs + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
@@ -574,6 +583,7 @@ function logBranchAskUnreadable(
 export class RuntimeGitService {
   private generation = 0;
   private branchStep: Promise<void> = Promise.resolve();
+  private readonly startedAtMs = new WeakMap<object, number>();
   private readonly proposals = new Map<string, RuntimeGitProposal>();
   private leases = new WeakMap<
     object,
@@ -743,12 +753,17 @@ export class RuntimeGitService {
     const signals = [context.signal, signal].filter(
       (value): value is AbortSignal => value !== undefined,
     );
-    return {
+    const scoped = {
       ...context,
       signal: AbortSignal.any(signals),
-      stillAuthorized: () =>
+      stillAuthorized: (): boolean =>
         generation === this.generation && context.stillAuthorized() && guard.check(),
+      // One Git read scope per call: its processes are counted and its reads share one promisor
+      // verdict, and the next call (a redemption included) starts a new one.
+      readSession: createGitReadSession(),
     };
+    this.startedAtMs.set(scoped, this.now());
+    return scoped;
   }
   // Checked in the order the old silent `undefined` was decided, so the first true condition is the
   // one named: a closed signal before a missing run, a missing run before its guard, the guard
@@ -776,7 +791,8 @@ export class RuntimeGitService {
       return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
     // One scan serves the facts and the status answer: a second raw read per status action
     // doubled its Git process count (#4491, W-4).
-    const { facts, raw } = await readVerifiedCommitRead(context, execution);
+    const read = await readVerifiedCommitRead(context, execution);
+    const { facts, raw } = read;
     if (request.operation === "status") return runtimeGitStatusOfRaw(raw);
     if (request.operation === "branch")
       // An unborn head passes its all-zero object id: the branch step re-points HEAD instead of
@@ -794,9 +810,11 @@ export class RuntimeGitService {
           request.paths,
         ),
       };
+    // The proposal is built on the facts and the raw change list this one read made; redeeming it
+    // reads the repository again (`indexCurrent`) before anything is written.
     return request.operation === "stage"
-      ? this.propose(context, request.paths)
-      : this.proposeUnstage(context, request.paths);
+      ? this.propose(context, request.paths, read)
+      : this.proposeUnstage(context, request.paths, read);
   }
   // #3902 AC2: one fetch, or one fast-forward pull of the current branch from its upstream, through
   // the Git sync owner's own executor: the fixed argv, hardened runner, bounds and closed outcomes of
@@ -956,6 +974,7 @@ export class RuntimeGitService {
   private async propose(
     context: VerifiedCommitRunContext,
     requested: readonly string[],
+    read: VerifiedCommitRead,
   ): Promise<IndexProposalResult> {
     this.pruneExpired();
     const proposalId = mintProposalId("stage");
@@ -967,8 +986,8 @@ export class RuntimeGitService {
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("blocked", "proposal-limit");
     if (!context.buffersClean()) return refuse("blocked", "buffers-dirty");
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitStageSelection(context, execution, requested);
+    const { facts, raw } = read;
+    const selection = await admitStageSelection(context, execution, requested, raw);
     if (selection === undefined) return refuse("blocked", "selection-unreviewed");
     // The request may name directories; everything below binds the concrete files they expanded to.
     const paths = selection.map((entry) => entry.path);
@@ -1037,6 +1056,7 @@ export class RuntimeGitService {
   private async proposeUnstage(
     context: VerifiedCommitRunContext,
     requested: readonly string[],
+    read: VerifiedCommitRead,
   ): Promise<CodingRuntimeGitUnstage> {
     this.pruneExpired();
     const proposalId = mintProposalId("unstage");
@@ -1050,8 +1070,8 @@ export class RuntimeGitService {
     });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("proposal-limit");
     const execution = this.options.execution ?? {};
-    const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitUnstageSelection(context, execution, requested);
+    const { facts, raw } = read;
+    const selection = await admitUnstageSelection(context, execution, requested, raw);
     if (selection === undefined) return refuse("selection-unreviewed");
     const paths = selection.map((entry) => entry.path);
     pathCount = paths.length;
@@ -1191,6 +1211,7 @@ export class RuntimeGitService {
         ...this.options.execution,
         signal: context.signal,
         beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
+        ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
         snapshotReader: () =>
           readGitRawWorktreeSnapshotAtHead(
             runtimeGitReadDeps(context, this.options.execution ?? {}),
@@ -1220,6 +1241,18 @@ export class RuntimeGitService {
       pathCount: proposal.command.pathspecs.length,
     };
   }
+  // What the call has cost so far: the Git processes its scope started and the time since it began.
+  private cost(
+    context: VerifiedCommitRunContext | undefined,
+  ): Pick<RuntimeGitActivityFields, "gitSpawnCount" | "durationMs"> {
+    // A call that started no process (a refusal before its first read) has nothing to report.
+    if (context?.readSession === undefined || context.readSession.spawnCount === 0) return {};
+    const startedAtMs = this.startedAtMs.get(context);
+    return {
+      gitSpawnCount: context.readSession.spawnCount,
+      ...(startedAtMs === undefined ? {} : { durationMs: Math.max(0, this.now() - startedAtMs) }),
+    };
+  }
   // A refusal is not a failure: it is written at warn level so an unanswered Git call stands out in
   // the timeline, but carries no errorKind. A thrown failure keeps the structured error shape. With
   // no live run to borrow a correlation id from, the line rides on the one sanctioned unknown id.
@@ -1233,6 +1266,7 @@ export class RuntimeGitService {
       activityLogEvent(RUNTIME_GIT_OPERATION, runtimeGitLogOptions(context, extra, outcome), {
         phase,
         ...(context === undefined ? {} : { runId: context.runId }),
+        ...this.cost(context),
         ...extra,
       }),
     );

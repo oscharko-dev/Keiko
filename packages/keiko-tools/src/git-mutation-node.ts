@@ -65,6 +65,7 @@ import {
   readGitHeadState,
   readGitBaseState,
   readGitWorktreeSnapshot,
+  createGitReadSession,
   type NodeGitWorktreeReaderDeps,
   type GitReadSession,
   type GitStagedObjectIdPort,
@@ -954,18 +955,25 @@ export function createGitStagedObjectIdPort(
   };
 }
 
+/**
+ * The adapter's operations each run in a Git read session of their own unless the caller scopes one
+ * (`deps.readSession`, a caller that owns one logical operation): the promisor probe that guards
+ * every governed Git process runs once per operation instead of once per process, and the session
+ * ends with the operation, so an earlier verdict never authorizes a later, riskier one (#4491).
+ */
 export function createNodeGitMutationAdapter(
   deps: NodeGitMutationAdapterDeps,
 ): GitLocalMutationAdapter {
-  const ctx = buildRunContext(deps);
+  const scoped = (): RunContext =>
+    buildRunContext({ ...deps, readSession: deps.readSession ?? createGitReadSession() });
   return {
-    createBranch: (req) => execBranchCreate(ctx, req),
-    switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
-    stage: (req) => execStage(ctx, req),
-    unstage: (req) => execUnstage(ctx, req),
-    commit: (req) => execCommit(ctx, req),
-    abort: (req) => execPlan(ctx, () => buildAbortArgv(req)),
-    recover: (req) => execPlan(ctx, () => buildRecoveryArgv(req)),
+    createBranch: (req) => execBranchCreate(scoped(), req),
+    switchBranch: (req) => execPlan(scoped(), () => buildBranchSwitchArgv(req)),
+    stage: (req) => execStage(scoped(), req),
+    unstage: (req) => execUnstage(scoped(), req),
+    commit: (req) => execCommit(scoped(), req),
+    abort: (req) => execPlan(scoped(), () => buildAbortArgv(req)),
+    recover: (req) => execPlan(scoped(), () => buildRecoveryArgv(req)),
   };
 }
 
@@ -984,9 +992,11 @@ export {
   readGitUntrackedPaths,
   readGitBlobText,
   readGitBlobTextWithin,
+  readGitBlobTextsWithin,
   type GitReadFailureReason,
   readGitCommitIdentity,
   readGitRevision,
+  readGitLocalBranchTip,
   readGitHeadState,
   readGitBaseState,
   readGitTreeDigest,

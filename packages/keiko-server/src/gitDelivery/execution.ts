@@ -39,8 +39,11 @@ import {
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import {
+  createGitReadSession,
   createNodeGitMutationAdapter,
   type GitCommitSigningReadFailureReport,
+  type GitReadSession,
+  readGitRemoteAliases,
   readGitStagedDiff,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
@@ -195,6 +198,9 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["succeeded", "approval-required", "blocked", "failed", "recovery-required"],
     },
+    // What the action cost: the Git processes its scope started and its wall time (W-4, #4491).
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
     phaseReached: {
       type: "string",
       dataClass: "closed-enum",
@@ -410,6 +416,11 @@ export interface GitDeliveryExecutionSeams {
   // Test seam for VERIFIED_HEAD_RESTAMP_DEADLINE_MS, so the non-settling-port regression can prove
   // the bound in milliseconds instead of ten real seconds.
   readonly verifiedHeadRestampDeadlineMs?: number | undefined;
+  // The scope of the ONE logical operation these seams serve: its Git processes are counted in it
+  // and it holds the repository's promisor verdict for the operation's duration (a status action, a
+  // commit execution). Absent: each governed mutation opens a scope of its own. It never outlives
+  // the operation that opened it, so an earlier verdict cannot authorize a later, riskier one.
+  readonly readSession?: GitReadSession | undefined;
 }
 
 // projectId IS the workspace root path (mirrors the terminal execution manager). Resolving it through
@@ -832,6 +843,7 @@ export function readWorktreeSnapshotFor(
     processEnv: process.env,
     now,
     onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+    ...(seams.readSession === undefined ? {} : { readSession: seams.readSession }),
   });
 }
 
@@ -887,8 +899,8 @@ export function readStagedConflictMarkerFileCountFor(
   });
 }
 
-export function preferredRemoteAlias(snapshot: GitWorktreeSnapshot): string | undefined {
-  return snapshot.remoteAliases.includes("origin") ? "origin" : snapshot.remoteAliases[0];
+function preferredRemoteAlias(remoteAliases: readonly string[]): string | undefined {
+  return remoteAliases.includes("origin") ? "origin" : remoteAliases[0];
 }
 
 /**
@@ -901,8 +913,23 @@ export async function readSignatureRequirement(
   seams: GitDeliveryExecutionSeams,
   correlationId: string | undefined,
 ): Promise<GitDeliverySignatureRequirement> {
-  const branchName = snapshot.currentBranchName;
-  const remoteAlias = preferredRemoteAlias(snapshot);
+  return signatureRequirementAt(
+    workspace,
+    snapshot.currentBranchName,
+    snapshot.remoteAliases,
+    seams,
+    correlationId,
+  );
+}
+
+async function signatureRequirementAt(
+  workspace: WorkspaceInfo,
+  branchName: string | undefined,
+  remoteAliases: readonly string[],
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): Promise<GitDeliverySignatureRequirement> {
+  const remoteAlias = preferredRemoteAlias(remoteAliases);
   if (branchName === undefined || remoteAlias === undefined) return "unavailable";
   const reader =
     seams.branchProtectionReader ??
@@ -912,14 +939,38 @@ export async function readSignatureRequirement(
   return signatureRequirementOf(await reader(workspace, remoteAlias, branchName));
 }
 
+/**
+ * The same verdict for a commit that is already past its preflight: the branch is the one the
+ * preflight snapshot verified, and the remote list is the only thing read here (one `git remote`),
+ * where a full worktree snapshot (about fifteen processes) was read to learn the same two facts.
+ */
+async function signatureRequirementOfVerifiedBranch(
+  workspace: WorkspaceInfo,
+  branchName: string | undefined,
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): Promise<GitDeliverySignatureRequirement> {
+  if (branchName === undefined) return "unavailable";
+  const aliases = await readGitRemoteAliases({
+    workspace,
+    processEnv: process.env,
+    signal: seams.signal,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+    ...(seams.readSession === undefined ? {} : { readSession: seams.readSession }),
+  });
+  return signatureRequirementAt(workspace, branchName, aliases, seams, correlationId);
+}
+
 function adapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
   correlationId?: string,
+  verifiedBranchName?: string,
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({
+    ...(seams.readSession === undefined ? {} : { readSession: seams.readSession }),
     beforeCommitRefUpdate: seams.beforeCommitRefUpdate,
     beforeIndexUpdate: seams.beforeIndexUpdate,
     signal: seams.signal,
@@ -930,9 +981,9 @@ function adapterFor(
     // request): a branch that requires signatures makes the commit sign even without
     // `commit.gpgsign` (ADR-0006).
     signingRequiredByBranchProtection: async (): Promise<boolean> =>
-      (await readSignatureRequirement(
+      (await signatureRequirementOfVerifiedBranch(
         workspace,
-        await readWorktreeSnapshotFor(workspace, seams, now, correlationId),
+        verifiedBranchName,
         seams,
         correlationId,
       )) === "required",
@@ -1031,6 +1082,14 @@ interface GitDeliveryLifecycleRecordInput {
   readonly authorityDenied: boolean;
   /** The provider adapter's closed failure words and counts (#3390), logged with the mutation. */
   readonly failureDetail?: GitDeliveryFailureDetail | undefined;
+  /** How long the action ran and how many Git processes its scope started (body-free numbers). */
+  readonly timing?: GitDeliveryMutationTiming | undefined;
+}
+
+/** The two numbers that show what a governed mutation cost: its duration and its Git processes. */
+export interface GitDeliveryMutationTiming {
+  readonly gitSpawnCount?: number;
+  readonly durationMs?: number;
 }
 
 /** What an adapter may say about a failed provider call, body-free: closed words and counts. */
@@ -1046,7 +1105,13 @@ export function recordGitDeliveryLifecycle(
     ? authorityDeniedGitDeliveryLifecycle(input.result)
     : input.result;
   persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
-  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId, input.failureDetail);
+  logGitDeliveryMutation(
+    input.activityLog,
+    lifecycle,
+    input.correlationId,
+    input.failureDetail,
+    input.timing,
+  );
   // Every finished governed action (local mutation, merge, PR, push) may have changed what the
   // repository summary reports, so no summary cached before it may be replayed (#3644).
   invalidateGitSummaryCache(input.deps);
@@ -1113,7 +1178,75 @@ async function snapshotOrReportFailure(
  * immediately before every mutation command (#3347 owner P1): both are spawn boundaries, and the
  * awaits between them are exactly where an archive or identity replacement lands.
  */
-export async function executeGovernedMutation(
+export function executeGovernedMutation(
+  command: GitMutationCommand,
+  approval: GitDeliveryApprovalRequirement,
+  workspace: WorkspaceInfo,
+  deps: GitDeliveryMutationDeps,
+  seams: GitDeliveryExecutionSeams,
+  correlationId: string | undefined,
+): Promise<GitMutationLifecycleResult> {
+  // One scope for the whole operation: its snapshot read, its preflight and every governed process
+  // count in it and share one promisor verdict, which ends with this call (#4491).
+  const scoped =
+    seams.readSession === undefined ? { ...seams, readSession: createGitReadSession() } : seams;
+  return executeScopedMutation(command, approval, workspace, deps, scoped, correlationId);
+}
+
+// What a mutation cost, once it started a Git process; one that spawned nothing reports nothing.
+function mutationTiming(
+  session: GitReadSession | undefined,
+  startedAtMs: number,
+  endedAtMs: number,
+): GitDeliveryMutationTiming {
+  return session === undefined || session.spawnCount === 0
+    ? {}
+    : { gitSpawnCount: session.spawnCount, durationMs: Math.max(0, endedAtMs - startedAtMs) };
+}
+
+// The admitted root's authority proof and the refusal record of this mutation; a root that no longer
+// proves is refused before any process starts.
+type AdmittedMutationRoot = ReturnType<typeof admitMutationRoot>;
+
+// The adapter a governed mutation dispatches through: the preflight snapshot's branch is the one the
+// commit signing decision is made for, and every dispatch re-proves the admitted root.
+function guardedAdapterFor(
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  now: () => number,
+  correlationId: string | undefined,
+  snapshot: GitWorktreeSnapshot,
+  root: AdmittedMutationRoot,
+): GitLocalMutationAdapter {
+  return authorityGuardedMutationAdapter(
+    adapterFor(workspace, seams, now, correlationId, snapshot.currentBranchName),
+    root.stillAuthorized,
+    root.refusal,
+  );
+}
+
+function admitMutationRoot(
+  command: GitMutationCommand,
+  deps: GitDeliveryMutationDeps,
+  workspace: WorkspaceInfo,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): {
+  readonly logging: WorkspaceRootAccessDenialLogging;
+  readonly stillAuthorized: () => boolean;
+  readonly refusal: ReturnType<typeof mutationDispatchRefusal>;
+} {
+  const logging: WorkspaceRootAccessDenialLogging = { activityLog, correlationId };
+  const stillAuthorized = managedRootStillAuthorized(deps, workspace, logging);
+  const refusal = mutationDispatchRefusal(activityLog, command.kind, correlationId);
+  if (!stillAuthorized()) {
+    refusal.deny();
+    throw new GitDeliveryRootAuthorityRevokedError();
+  }
+  return { logging, stillAuthorized, refusal };
+}
+
+async function executeScopedMutation(
   command: GitMutationCommand,
   approval: GitDeliveryApprovalRequirement,
   workspace: WorkspaceInfo,
@@ -1122,14 +1255,9 @@ export async function executeGovernedMutation(
   correlationId: string | undefined,
 ): Promise<GitMutationLifecycleResult> {
   const now = seams.now ?? Date.now;
+  const startedAtMs = now();
   const activityLog = seams.activityLog ?? processServerLogSink();
-  const logging: WorkspaceRootAccessDenialLogging = { activityLog, correlationId };
-  const stillAuthorized = managedRootStillAuthorized(deps, workspace, logging);
-  const refusal = mutationDispatchRefusal(activityLog, command.kind, correlationId);
-  if (!stillAuthorized()) {
-    refusal.deny();
-    throw new GitDeliveryRootAuthorityRevokedError();
-  }
+  const root = admitMutationRoot(command, deps, workspace, activityLog, correlationId);
   const snapshot = await snapshotOrReportFailure(
     workspace,
     seams,
@@ -1141,11 +1269,7 @@ export async function executeGovernedMutation(
   const result = await runGovernedMutationKernel({
     command,
     approval,
-    adapter: authorityGuardedMutationAdapter(
-      adapterFor(workspace, seams, now, correlationId),
-      stillAuthorized,
-      refusal,
-    ),
+    adapter: guardedAdapterFor(workspace, seams, now, correlationId, snapshot, root),
     snapshot,
     seams,
     now,
@@ -1158,9 +1282,10 @@ export async function executeGovernedMutation(
     now,
     activityLog,
     correlationId,
-    authorityDenied: refusal.denied(),
+    authorityDenied: root.refusal.denied(),
+    timing: mutationTiming(seams.readSession, startedAtMs, now()),
   });
-  await restampManagedTaskWorkspaceHead(deps, workspace, command, lifecycle, seams, logging);
+  await restampManagedTaskWorkspaceHead(deps, workspace, command, lifecycle, seams, root.logging);
   return lifecycle;
 }
 
@@ -1318,6 +1443,7 @@ export function logGitDeliveryMutation(
   result: GitMutationLifecycleResult,
   correlationId: string | undefined,
   failureDetail: GitDeliveryFailureDetail = {},
+  timing: GitDeliveryMutationTiming = {},
 ): void {
   const { outcome, envelope, phaseReached, preflight } = result;
   const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
@@ -1352,6 +1478,7 @@ export function logGitDeliveryMutation(
         ...(executionErrorCode === undefined ? {} : { executionErrorCode }),
         ...(signing === undefined ? {} : { signing }),
         ...(signingReadFailure === undefined ? {} : { signingReadFailure }),
+        ...timing,
         ...executionFailureDetail(outcome, failureDetail),
       },
     ),

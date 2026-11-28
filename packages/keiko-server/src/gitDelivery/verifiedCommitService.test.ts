@@ -1525,14 +1525,16 @@ describe("verified Code-task commit service", () => {
     // actions started 12, 43, 58, 42, 26, 70, 83 and 34.
     const spawnBudget = {
       status: 12,
-      stagePropose: 18,
+      stagePropose: 17,
       stageExecute: 41,
-      unstagePropose: 19,
+      unstagePropose: 17,
       commitPrepare: 25,
       commitExecute: 52,
       commitExecuteSigningUnset: 55,
       branch: 25,
       branchExists: 13,
+      // What thirty paths may start beyond what two paths start (batches, never one per path).
+      perPathGrowth: 2,
     };
     let shimDir: string;
     let spawnLog: string;
@@ -1635,6 +1637,39 @@ describe("verified Code-task commit service", () => {
       );
       expect(value).toMatchObject({ kind: "unstage", status: "ready" });
       expect(spawned, started).toBeLessThanOrEqual(spawnBudget.unstagePropose);
+    });
+
+    // PERF-GIT-1 (macOS lab): a stage proposal of 302 files took fifteen seconds because the review
+    // and the admission started processes for every path. The count must not grow with the paths.
+    it("starts no more processes for thirty modified files than for two", async () => {
+      const names = Array.from({ length: 32 }, (_, at) => `bulk/f${String(at)}.js`);
+      mkdirSync(join(root, "bulk"));
+      for (const name of names) writeFileSync(join(root, name), `export const a = 1;\n`);
+      git(["add", "--", "bulk"]);
+      git(["commit", "-qm", "bulk", "--no-gpg-sign"]);
+      for (const [at, name] of names.entries())
+        writeFileSync(join(root, name), `export const a = 1;\nexport const b = ${String(at)};\n`);
+      const runtime = runtimeService("supervised-coding");
+      const stage = async (
+        paths: readonly string[],
+      ): Promise<{ readonly propose: number; readonly execute: number }> => {
+        const proposed = await counted(() =>
+          runtime.execute(request("stage", "propose", { paths }), guard),
+        );
+        if (proposed.value.kind !== "stage") throw new Error("stage proposal unavailable");
+        expect(proposed.value).toMatchObject({ status: "ready", pathCount: paths.length });
+        const { proposalId } = proposed.value;
+        const redeemed = await counted(() =>
+          runtime.execute(request("stage", "execute", { proposalId }), guard),
+        );
+        expect(redeemed.value).toMatchObject({ status: "succeeded" });
+        return { propose: proposed.spawned, execute: redeemed.spawned };
+      };
+      const two = await stage(names.slice(0, 2));
+      const thirty = await stage(names.slice(2));
+      expect(git(["diff", "--name-only"])).toBe("");
+      expect(thirty.propose - two.propose).toBeLessThanOrEqual(spawnBudget.perPathGrowth);
+      expect(thirty.execute - two.execute).toBeLessThanOrEqual(spawnBudget.perPathGrowth);
     });
 
     it("still refuses a redemption whose staged tree moved after the proposal", async () => {

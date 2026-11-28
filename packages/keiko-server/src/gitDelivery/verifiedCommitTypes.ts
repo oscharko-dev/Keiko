@@ -11,7 +11,7 @@ import type {
 import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execution.js";
 import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import type { GitCommitCommand } from "@oscharko-dev/keiko-tools";
-import type { GitHeadState } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { GitHeadState, GitReadSession } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
@@ -32,6 +32,13 @@ export interface VerifiedCommitRunContext {
   readonly signal?: AbortSignal;
   readonly buffersClean: () => boolean;
   readonly stillAuthorized: () => boolean;
+  /**
+   * The scope of the ONE logical operation this context serves (a runtime Git action, a commit
+   * execution): the operation's Git processes are counted in it and its reads share one promisor
+   * verdict. A service opens a fresh one per operation and never lets a stored context carry the
+   * previous operation's, so an earlier verdict cannot authorize a later, riskier one.
+   */
+  readonly readSession?: GitReadSession | undefined;
 }
 
 export interface VerifiedCommitFacts {

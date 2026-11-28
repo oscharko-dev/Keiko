@@ -36036,6 +36036,12 @@
               "required": false
             },
             {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "executionErrorCode",
               "type": "string",
               "dataClass": "closed-enum",
@@ -36051,6 +36057,12 @@
               "name": "failureClass",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "gitSpawnCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -36130,6 +36142,7 @@
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "loss-state",
             "opaque-id"
           ],
@@ -38891,6 +38904,12 @@
               "required": false
             },
             {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": false
+            },
+            {
               "name": "errorClass",
               "type": "string",
               "dataClass": "error-kind",
@@ -38912,6 +38931,12 @@
               "name": "frames",
               "type": "string-array",
               "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "gitSpawnCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -38985,6 +39010,7 @@
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id",
@@ -39650,6 +39676,12 @@
               "name": "frames",
               "type": "string-array",
               "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "gitSpawnCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

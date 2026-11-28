@@ -30079,6 +30079,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["succeeded", "approval-required", "blocked", "failed", "recovery-required"],
       },
+      gitSpawnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       phaseReached: {
         type: "string",
         dataClass: "closed-enum",
@@ -33013,6 +33023,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      gitSpawnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       countsUnavailable: {
         type: "boolean",
         dataClass: "closed-enum",
@@ -33700,6 +33720,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       proofAgeMs: {
         type: "integer",
         dataClass: "duration",
+        required: false,
+      },
+      gitSpawnCount: {
+        type: "integer",
+        dataClass: "count",
         required: false,
       },
       passed: {

@@ -30,6 +30,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
+import {
+  createGitReadSession,
+  type GitReadSession,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
@@ -172,6 +176,8 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     verificationGeneration: { type: "integer", dataClass: "count", required: false },
     currentGeneration: { type: "integer", dataClass: "count", required: false },
     proofAgeMs: { type: "integer", dataClass: "duration", required: false },
+    // The Git processes the operation's scope had started when the line was written (W-4, #4491).
+    gitSpawnCount: { type: "integer", dataClass: "count", required: false },
     passed: { type: "boolean", dataClass: "closed-enum", required: false },
     verificationEvidenceId: {
       type: "string",
@@ -287,6 +293,7 @@ interface VerifiedCommitActivityFields {
   readonly verificationGeneration?: number;
   readonly currentGeneration?: number;
   readonly proofAgeMs?: number;
+  readonly gitSpawnCount?: number;
   readonly reason?: VerifiedCommitReason;
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
@@ -606,18 +613,29 @@ function messagePolicyActivity(
   };
 }
 
+// The Git processes a commit call had started, once it started any (a refusal before its first read
+// reports nothing).
+function commitCost(session: GitReadSession | undefined): { readonly gitSpawnCount?: number } {
+  return session === undefined || session.spawnCount === 0
+    ? {}
+    : { gitSpawnCount: session.spawnCount };
+}
+
+// The proposal an execution runs, in a Git read scope of its own: the proposal outlives the call that
+// made it, so the scope that call held (and the promisor verdict in it) never reaches an execution.
 function guardedProposal(
   proposal: VerifiedCommitProposal,
   guard: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined } | undefined,
 ): VerifiedCommitProposal {
-  if (guard === undefined) return proposal;
+  const scoped = { ...proposal.context, readSession: createGitReadSession() };
+  if (guard === undefined) return { ...proposal, context: scoped };
   const signals = [proposal.context.signal, guard.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   return {
     ...proposal,
     context: {
-      ...proposal.context,
+      ...scoped,
       signal: AbortSignal.any(signals),
       stillAuthorized: () => proposal.context.stillAuthorized() && guard.check(),
     },
@@ -695,6 +713,9 @@ class VerifiedCommitController implements VerifiedCommitService {
       ? {
           ...context,
           stillAuthorized: () => this.generation === generation && context.stillAuthorized(),
+          // One Git read scope per call (a verification step, a proposal): its processes are counted
+          // and its reads share one promisor verdict. It ends with the call.
+          readSession: createGitReadSession(),
         }
       : undefined;
   }
@@ -963,7 +984,8 @@ class VerifiedCommitController implements VerifiedCommitService {
     const proposal: VerifiedCommitProposal = {
       binding,
       review,
-      context,
+      // The proposal outlives this call; the call's Git read scope must not.
+      context: { ...context, readSession: undefined },
       expiresAtMs: this.now() + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
       ...(verificationFailed ? { verificationFailed: true as const } : {}),
       command: commitCommand(context, facts, message),
@@ -1256,6 +1278,7 @@ class VerifiedCommitController implements VerifiedCommitService {
         {
           ...this.options.execution,
           signal: context.signal,
+          ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
           beforeCommitRefUpdate: () => this.contextIsCurrent(context),
           snapshotReader: () =>
             readGitRawWorktreeSnapshotAtHead(
@@ -1411,7 +1434,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   private log(
-    context: Pick<VerifiedCommitRunContext, "runId" | "correlationId">,
+    context: Pick<VerifiedCommitRunContext, "runId" | "correlationId" | "readSession">,
     phase: VerifiedCommitActivityPhase,
     extra: VerifiedCommitActivityFields,
     failed = false,
@@ -1428,7 +1451,13 @@ class VerifiedCommitController implements VerifiedCommitService {
               }
             : {}),
         },
-        { phase, runId: context.runId, ...extra },
+        {
+          phase,
+          runId: context.runId,
+          // What the commit call cost, on the line that settles it.
+          ...(phase === "result" ? commitCost(context.readSession) : {}),
+          ...extra,
+        },
       ),
     );
   }

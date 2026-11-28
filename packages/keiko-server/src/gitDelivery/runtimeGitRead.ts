@@ -37,7 +37,7 @@ import {
   type NodeGitWorktreeReaderDeps,
   readGitIndexEntries,
   readGitTreeEntries,
-  readGitBlobTextWithin,
+  readGitBlobTextsWithin,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
 import {
@@ -371,6 +371,7 @@ export function runtimeGitReadDeps(
     workspace: context.workspace,
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(execution, context.correlationId),
+    ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
   };
   return withStagedConversion(base, execution, context.correlationId);
 }
@@ -480,29 +481,58 @@ function binaryStatus(sides: DiffSides): GitEditorDiffFile["status"] {
 }
 
 // The entry HEAD's tree holds for a path; an unborn HEAD has the empty tree, so no entry.
-async function headTreeEntry(
-  deps: ReturnType<typeof runtimeGitReadDeps>,
-  path: string,
-): Promise<Awaited<ReturnType<typeof readGitIndexEntries>>[number] | undefined> {
-  const head = await readGitHeadState(deps);
-  if (head.kind === "unborn") return undefined;
-  return (await readGitTreeEntries(deps, head.sha)).find((entry) => entry.path === path);
+type SideEntry = Awaited<ReturnType<typeof readGitIndexEntries>>[number];
+
+/**
+ * What the sides of a whole selection are read from, gathered once: the index, HEAD's tree and the
+ * text of every blob the selection names. Reading them per path started three or four Git processes
+ * for each path, so a stage proposal of 300 files took fifteen seconds (PERF-GIT-1).
+ */
+interface SideSources {
+  readonly index: ReadonlyMap<string, SideEntry>;
+  readonly head: ReadonlyMap<string, SideEntry>;
+  readonly blobs: ReadonlyMap<string, string | undefined>;
+}
+
+async function readSideSources(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  paths: readonly string[],
+  scope: GitEditorDiffScope,
+): Promise<SideSources> {
+  const deps = runtimeGitReadDeps(context, execution);
+  const index = new Map((await readGitIndexEntries(deps)).map((entry) => [entry.path, entry]));
+  const headState = scope === "staged" ? await readGitHeadState(deps) : undefined;
+  const head = new Map(
+    headState === undefined || headState.kind === "unborn"
+      ? []
+      : (await readGitTreeEntries(deps, headState.sha)).map((entry) => [entry.path, entry]),
+  );
+  const wanted = paths.flatMap((path) => [
+    index.get(path)?.objectId,
+    ...(scope === "staged" ? [head.get(path)?.objectId] : []),
+  ]);
+  const blobs = await readGitBlobTextsWithin(
+    deps,
+    wanted.filter((id): id is string => id !== undefined),
+    RUNTIME_GIT_SIDE_MAX_BYTES,
+  );
+  return { index, head, blobs };
 }
 
 async function readSides(
   context: VerifiedCommitRunContext,
-  execution: GitDeliveryExecutionSeams,
+  sources: SideSources,
   path: string,
   scope: GitEditorDiffScope,
   conversions: WorkingConversions,
 ): Promise<DiffSides> {
-  const deps = runtimeGitReadDeps(context, execution);
-  const index = (await readGitIndexEntries(deps)).find((entry) => entry.path === path);
-  const base = scope === "staged" ? await headTreeEntry(deps, path) : index;
-  const before = await objectSide(deps, base);
+  const index = sources.index.get(path);
+  const base = scope === "staged" ? sources.head.get(path) : index;
+  const before = objectSide(sources.blobs, base);
   const after =
     scope === "staged"
-      ? await objectSide(deps, index)
+      ? objectSide(sources.blobs, index)
       : await workingSide(context, path, index?.objectId.length ?? 40, conversions);
   return {
     path,
@@ -527,10 +557,10 @@ interface FileSide {
   readonly tooLarge: boolean;
   readonly conversionUnknown: boolean;
 }
-async function objectSide(
-  deps: ReturnType<typeof runtimeGitReadDeps>,
+function objectSide(
+  blobs: ReadonlyMap<string, string | undefined>,
   entry: { readonly objectId: string; readonly mode: string } | undefined,
-): Promise<FileSide> {
+): FileSide {
   if (entry === undefined)
     return {
       text: "",
@@ -541,7 +571,7 @@ async function objectSide(
       objectId: "",
       mode: "0",
     };
-  const text = await readGitBlobTextWithin(deps, entry.objectId, RUNTIME_GIT_SIDE_MAX_BYTES);
+  const text = blobs.get(entry.objectId);
   if (text === undefined)
     return {
       text: "",
@@ -819,10 +849,11 @@ async function readSelectedDiffFiles(
     scope === "staged"
       ? NO_WORKING_CONVERSIONS
       : await settleWorkingConversions(context, execution, paths);
+  const sources = await readSideSources(context, execution, paths, scope);
   for (const path of paths) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const file = diffFile(await readSides(context, execution, path, scope, conversions), scope, {
+    const file = diffFile(await readSides(context, sources, path, scope, conversions), scope, {
       seams: execution,
       correlationId: context.correlationId,
     });
@@ -869,11 +900,18 @@ export function admitStageSelection(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
+  read?: RawChangesRead,
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  return admitSelection(context, execution, paths, {
-    pending: (change) => change.unstaged || change.untracked,
-    expandable: (change) => change.unstaged || change.untracked,
-  });
+  return admitSelection(
+    context,
+    execution,
+    paths,
+    {
+      pending: (change) => change.unstaged || change.untracked,
+      expandable: (change) => change.unstaged || change.untracked,
+    },
+    read,
+  );
 }
 
 /**
@@ -886,11 +924,18 @@ export function admitUnstageSelection(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
+  read?: RawChangesRead,
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  return admitSelection(context, execution, paths, {
-    pending: (change) => (change.staged ? true : undefined),
-    expandable: (change) => change.staged,
-  });
+  return admitSelection(
+    context,
+    execution,
+    paths,
+    {
+      pending: (change) => (change.staged ? true : undefined),
+      expandable: (change) => change.staged,
+    },
+    read,
+  );
 }
 
 interface SelectionRules {
@@ -916,18 +961,26 @@ function directoryChanges(
   );
 }
 
+/** The raw change list one read of the repository produced (`readGitRawChangesAtHead`). */
+export type RawChangesRead = Awaited<ReturnType<typeof readGitRawChangesAtHead>>;
+
 // Every path must be one Git's change list names without a conflict, and `pending` must admit it
 // (its result is the path's `pending` flag), or a directory with at least one change to select;
 // otherwise the whole selection is refused. A directory is never expanded from a truncated scan,
-// which could silently leave files out, and the expansion is bounded only to protect memory.
+// which could silently leave files out, and the expansion is bounded only to protect memory. A
+// caller that has just made the raw read the selection is judged against passes it (`read`, whose
+// denied paths that read already logged), so one proposal reads the repository once; its redemption
+// still re-verifies everything against a read of its own.
 async function admitSelection(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
   rules: SelectionRules,
+  read: RawChangesRead | undefined,
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution));
-  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
+  const raw = read ?? (await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution)));
+  if (read === undefined)
+    logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const changes = new Map(raw.changes.map((change) => [change.path, change]));
   const admitted = new Map<string, StageSelectionChange>();
   for (const path of paths) {
@@ -978,18 +1031,16 @@ export async function reviewStageSelection(
   let deletedLines = 0;
   let countsUnavailable = false;
   const pending = selection.filter((entry) => entry.pending);
+  const pendingPaths = pending.map((entry) => entry.path);
   const conversions =
     scope === "staged"
       ? NO_WORKING_CONVERSIONS
-      : await settleWorkingConversions(
-          context,
-          execution,
-          pending.map((entry) => entry.path),
-        );
+      : await settleWorkingConversions(context, execution, pendingPaths);
+  const sources = await readSideSources(context, execution, pendingPaths, scope);
   for (const change of pending) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const sides = await readSides(context, execution, change.path, scope, conversions); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
+    const sides = await readSides(context, sources, change.path, scope, conversions); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
     const counts = sideCounts(sides, execution, context.correlationId);
     if (counts === "unavailable") countsUnavailable = true;
     else if (counts !== undefined) {

@@ -67,6 +67,12 @@ export function verifiedCommitMessageDigest(message: string): string {
 
 export type VerifiedRawRead = Awaited<ReturnType<typeof readGitRawChangesAtHead>>;
 
+/** The facts together with the raw read they were derived from. */
+export interface VerifiedCommitRead {
+  readonly facts: VerifiedCommitFacts;
+  readonly raw: VerifiedRawRead;
+}
+
 export async function readVerifiedCommitFacts(
   context: VerifiedCommitRunContext,
   seams: GitDeliveryExecutionSeams,
@@ -82,7 +88,7 @@ export async function readVerifiedCommitFacts(
 export async function readVerifiedCommitRead(
   context: VerifiedCommitRunContext,
   seams: GitDeliveryExecutionSeams,
-): Promise<{ readonly facts: VerifiedCommitFacts; readonly raw: VerifiedRawRead }> {
+): Promise<VerifiedCommitRead> {
   if (!context.stillAuthorized() || context.signal?.aborted === true)
     throw new Error("verified-commit-authority-unavailable");
   const readBase = {
@@ -90,6 +96,7 @@ export async function readVerifiedCommitRead(
     processEnv: seams.processEnv,
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
+    ...(context.readSession === undefined ? {} : { readSession: context.readSession }),
   };
   const deps = withStagedConversion(readBase, seams, context.correlationId);
   // ONE raw read supplies the facts AND an unclean candidate's blocking paths, so the paths can never

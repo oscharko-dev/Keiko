@@ -575,8 +575,12 @@ export async function ensureGitLazyFetchGuardSupported(
   if (!guard.supported) throw new GitLazyFetchGuardUnsupportedError(guard.gitVersion);
 }
 
-async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<string> {
-  const result = await runReadResult(ctx, argv);
+async function runRead(
+  ctx: ReadContext,
+  argv: readonly string[],
+  stdin?: Uint8Array,
+): Promise<string> {
+  const result = await runReadResult(ctx, argv, [0], stdin);
   if (ctx.rejectRedactedMetadata === true && result.stdout.includes("[REDACTED]"))
     throw new GitWorktreeReadError("git metadata was redacted");
   return result.stdout;
@@ -586,6 +590,7 @@ async function runReadResult(
   ctx: ReadContext,
   argv: readonly string[],
   acceptedExitCodes: readonly number[] = [0],
+  stdin?: Uint8Array,
 ): Promise<CommandResult> {
   if (!ctx.signal.aborted) {
     const guard = await detectGitLazyFetchGuardSupport(ctx);
@@ -611,6 +616,7 @@ async function runReadResult(
         cwd: undefined,
         timeoutMs: ctx.timeoutMs,
         signal: ctx.signal,
+        stdin,
       },
       runDeps,
     );
@@ -892,6 +898,164 @@ export async function readGitBlobTextWithin(
   );
 }
 
+// The most blob bytes one `cat-file --batch` run carries; more travel in further runs.
+const BLOB_BATCH_MAX_BYTES = 16 * 1024 * 1024;
+const BLOB_BATCH_MAX_OBJECTS = 400;
+const BLOB_BATCH_HEADER = /^([a-f0-9]{40}|[a-f0-9]{64}) blob (\d+)$/u;
+
+interface BlobSize {
+  readonly sha: string;
+  readonly size: number;
+}
+
+function utf8BytesOfCodePoint(codePoint: number): number {
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  return codePoint < 0x10000 ? 3 : 4;
+}
+
+// The text that starts at `from` and is exactly `size` UTF-8 bytes long, and where it ends; `undefined`
+// when the decoded answer does not add up to the announced size.
+function blobTextAt(
+  stdout: string,
+  from: number,
+  size: number,
+): { readonly text: string; readonly end: number } | undefined {
+  let end = from;
+  let bytes = 0;
+  while (bytes < size && end < stdout.length) {
+    const codePoint = stdout.codePointAt(end) ?? 0;
+    bytes += utf8BytesOfCodePoint(codePoint);
+    end += codePoint > 0xffff ? 2 : 1;
+  }
+  return bytes === size && stdout[end] === "\n"
+    ? { text: stdout.slice(from, end), end }
+    : undefined;
+}
+
+// The blob texts of one `cat-file --batch` answer, or `undefined` when the answer does not read back
+// exactly as the sizes announced (a byte sequence that is not UTF-8, or a scrubbed secret, changes the
+// decoded length): the caller then reads the blobs one by one.
+function parseBlobBatch(
+  stdout: string,
+  batch: readonly BlobSize[],
+): ReadonlyMap<string, string> | undefined {
+  const texts = new Map<string, string>();
+  let at = 0;
+  for (const { sha, size } of batch) {
+    const lineEnd = stdout.indexOf("\n", at);
+    const header = lineEnd < 0 ? null : BLOB_BATCH_HEADER.exec(stdout.slice(at, lineEnd));
+    if (header?.[1] !== sha || Number(header[2]) !== size) return undefined;
+    const body = blobTextAt(stdout, lineEnd + 1, size);
+    if (body === undefined) return undefined;
+    texts.set(sha, body.text);
+    at = body.end + 1;
+  }
+  return at === stdout.length ? texts : undefined;
+}
+
+async function readBlobBatch(
+  deps: NodeGitWorktreeReaderDeps,
+  batch: readonly BlobSize[],
+): Promise<ReadonlyMap<string, string> | undefined> {
+  const total = batch.reduce((sum, blob) => sum + blob.size + 160, 1024);
+  const result = await runReadResult(
+    buildReadContext({ ...deps, policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: total } }),
+    ["cat-file", "--batch"],
+    [0],
+    new TextEncoder().encode(`${batch.map((blob) => blob.sha).join("\n")}\n`),
+  );
+  return parseBlobBatch(result.stdout, batch);
+}
+
+// The size of every blob, from one `cat-file --batch-check`; a missing or non-blob object is unreadable.
+async function readBlobSizes(
+  deps: NodeGitWorktreeReaderDeps,
+  shas: readonly string[],
+): Promise<readonly BlobSize[]> {
+  const checked = await runRead(
+    machineReadContext(deps),
+    ["cat-file", "--batch-check"],
+    new TextEncoder().encode(`${shas.join("\n")}\n`),
+  );
+  const sizes = new Map<string, number>();
+  for (const line of parseLines(checked)) {
+    const [sha, type, size] = line.split(" ");
+    if (sha !== undefined && type === "blob" && /^\d+$/u.test(size ?? ""))
+      sizes.set(sha, Number(size));
+  }
+  return shas.map((sha) => {
+    const size = sizes.get(sha);
+    if (size === undefined)
+      throw new GitWorktreeReadError("git blob size is unreadable", "exit-nonzero");
+    return { sha, size };
+  });
+}
+
+// The blobs in runs bounded in bytes and in objects.
+function blobRuns(blobs: readonly BlobSize[]): readonly (readonly BlobSize[])[] {
+  const runs: BlobSize[][] = [];
+  let bytes = 0;
+  for (const blob of blobs) {
+    const last = runs.at(-1);
+    if (
+      last === undefined ||
+      last.length >= BLOB_BATCH_MAX_OBJECTS ||
+      bytes + blob.size > BLOB_BATCH_MAX_BYTES
+    ) {
+      runs.push([blob]);
+      bytes = blob.size;
+    } else {
+      last.push(blob);
+      bytes += blob.size;
+    }
+  }
+  return runs;
+}
+
+// One run's texts. A run whose answer does not read back is halved until the blob that cannot be
+// carried through the decoder (a binary file) stands alone and is read by itself, so a few binary
+// files among hundreds cost a few more processes and not one per blob.
+async function readRunTexts(
+  deps: NodeGitWorktreeReaderDeps,
+  run: readonly BlobSize[],
+  maxBytes: number,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const answered = await readBlobBatch(deps, run);
+  if (answered !== undefined) return answered;
+  const [only] = run;
+  if (only !== undefined && run.length === 1)
+    return new Map([[only.sha, await readGitBlobTextWithin(deps, only.sha, maxBytes)]]);
+  const middle = Math.ceil(run.length / 2);
+  return new Map([
+    ...(await readRunTexts(deps, run.slice(0, middle), maxBytes)),
+    ...(await readRunTexts(deps, run.slice(middle), maxBytes)), // NOSONAR typescript:S9382 -- the halves are read one after the other
+  ]);
+}
+
+/**
+ * The texts of many blobs for the price of a few processes: one `cat-file --batch-check` for every
+ * size, then `cat-file --batch` runs bounded in bytes and objects, where `readGitBlobTextWithin` costs
+ * two processes per blob. A blob above `maxBytes` answers `undefined`, as there; an answer that does
+ * not read back exactly as announced is read blob by blob instead, so the texts are never guessed.
+ */
+export async function readGitBlobTextsWithin(
+  deps: NodeGitWorktreeReaderDeps,
+  shas: readonly string[],
+  maxBytes: number,
+): Promise<ReadonlyMap<string, string | undefined>> {
+  const unique = [...new Set(shas)];
+  for (const sha of unique)
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(sha)) throw new TypeError("git-blob-sha-invalid");
+  const texts = new Map<string, string | undefined>();
+  if (unique.length === 0) return texts;
+  const sizes = await readBlobSizes(deps, unique);
+  for (const blob of sizes) if (blob.size > maxBytes) texts.set(blob.sha, undefined);
+  for (const run of blobRuns(sizes.filter((blob) => blob.size <= maxBytes)))
+    for (const [sha, text] of await readRunTexts(deps, run, maxBytes)) texts.set(sha, text); // NOSONAR typescript:S9382 -- runs are bounded, one after the other
+  return texts;
+}
+
 export async function readGitRemoteAliases(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<readonly string[]> {
@@ -915,6 +1079,29 @@ export async function readGitRevision(
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value)) {
     throw new GitWorktreeReadError("git revision did not resolve uniquely");
   }
+  return value;
+}
+
+/**
+ * The object id the local branch `refs/heads/<branch>` names, or `undefined` when no such branch
+ * exists: one `rev-parse --verify --quiet` (exit 1 with no output is the absent branch), where a
+ * full worktree snapshot answered the same question with about six processes including `status`.
+ * The ref is spelled out in full, so a tag or remote branch of the same name can never answer.
+ */
+export async function readGitLocalBranchTip(
+  deps: NodeGitWorktreeReaderDeps,
+  branch: string,
+): Promise<string | undefined> {
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git branch name is unsafe");
+  const result = await runReadResult(
+    machineReadContext(deps),
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/heads/${branch}`],
+    [0, 1],
+  );
+  const value = result.stdout.trim();
+  if (result.exitCode === 1 && value === "") return undefined;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value))
+    throw new GitWorktreeReadError("git branch did not resolve uniquely");
   return value;
 }
 

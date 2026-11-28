@@ -19,6 +19,7 @@ import {
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import { gitHeadObjectIdLength } from "./git-head-state.js";
+import { gitBlobObjectId } from "./git-index-identity.js";
 import type { GitMutationArgvPlan, GitStageExecRequest } from "./git-mutation-adapter.js";
 
 export interface GitStageEffectContext {
@@ -599,14 +600,14 @@ async function indexEntries(
   const stages = await fileStages(ctx, files, lineEndings);
   if (stages === undefined) return undefined;
   const lines: string[] = [];
+  const written = await writeUnconvertedObjects(ctx, files, stages, hashLength);
   for (const file of files) {
     const stage = stages.get(file.path);
     const sha =
       file.mode === "0"
         ? "0".repeat(hashLength)
-        : stage === undefined
-          ? undefined
-          : await stagedContentObjectId(ctx, file, stage, true); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
+        : (written.get(file.path) ??
+          (stage === undefined ? undefined : await stagedContentObjectId(ctx, file, stage, true))); // NOSONAR typescript:S9382 -- one Git object write at a time, stopping at the first refused file
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
@@ -630,6 +631,52 @@ function indexInfoParts(lines: readonly string[]): readonly Uint8Array[] {
   }
   return parts.map((part) => utf8.encode(part.join("")));
 }
+// A regular file Git stores byte for byte: no conversion applies and its bytes are in memory.
+function storedAsIs(file: GitStageContent, stage: FileStage | undefined): file is GitStageFile {
+  return (
+    !isGitStageLargeFile(file) &&
+    file.mode !== "0" &&
+    file.mode !== "120000" &&
+    stage?.plan.kind === "none"
+  );
+}
+/**
+ * Writes the objects of the files Git stores unchanged with ONE `hash-object -w --stdin-paths` run
+ * per batch, where each file used to cost a process of its own (Windows pays 70 to 130 ms for every
+ * one). The verified bytes stay the authority: Git reads the files by path, and an object is accepted
+ * only when its id is the id of the verified bytes, so a file changed since it was verified is never
+ * staged. A batch that fails or disagrees answers nothing and its files are written one by one.
+ */
+async function writeUnconvertedObjects(
+  ctx: GitStageEffectContext,
+  files: readonly GitStageContent[],
+  stages: ReadonlyMap<string, FileStage>,
+  hashLength: number,
+): Promise<ReadonlyMap<string, string>> {
+  const eligible = files.filter(
+    (file): file is GitStageFile =>
+      storedAsIs(file, stages.get(file.path)) && stdinPathSafe(file.path),
+  );
+  const written = new Map<string, string>();
+  const byPath = new Map(eligible.map((file) => [file.path, file]));
+  for (const paths of boundedChunks([...byPath.keys()], () => 0, HASH_BATCH_PATHS)) {
+    const batch = paths.flatMap((path) => byPath.get(path) ?? []);
+    const result = await ctx.run(
+      ["hash-object", "--no-filters", "-w", "--stdin-paths"],
+      utf8.encode(`${batch.map((file) => file.path).join("\n")}\n`),
+    ); // NOSONAR typescript:S9382 -- batches run one after the other
+    const ids = result.stdout.split("\n").filter((line) => line !== "");
+    const expected = batch.map((file) => gitBlobObjectId(file.bytes, hashLength));
+    if (
+      result.exitCode === 0 &&
+      !result.truncated &&
+      ids.length === batch.length &&
+      ids.every((id, at) => id === expected[at])
+    )
+      batch.forEach((file, at) => written.set(file.path, expected[at] ?? ""));
+  }
+  return written;
+}
 /** Whether every named file can be staged under `lineEndings` (the proposal's admission check). */
 export async function gitStageFilesSupported(
   ctx: GitStageEffectContext,
@@ -643,6 +690,8 @@ export async function gitStageFilesSupported(
     const stage = stages.get(file.path);
     if (file.mode === "0") continue;
     if (stage === undefined) return false;
+    // A file Git stores unchanged hashes to its own bytes; no process is needed to know that.
+    if (storedAsIs(file, stage)) continue;
     const sha = await stagedContentObjectId(ctx, file, stage, false); // NOSONAR typescript:S9382 -- one Git hash at a time, stopping at the first refused file
     if (sha === undefined) return false;
   }

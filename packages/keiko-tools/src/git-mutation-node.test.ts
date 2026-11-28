@@ -237,11 +237,12 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   // whose env this helper exists to inspect.
   const commitEnv = rec.calls()[2]?.options.env ?? {};
   rec.child.emit("close", 0, null);
-  // The commit's success triggers a follow-up readGitRevision("HEAD"), which re-probes the guard
-  // for itself (promisor status is deliberately never cached — see git-worktree-snapshot-node.ts)
-  // before the real rev-parse: wait for that probe's OWN spawn to register before answering it.
+  // The commit's success triggers a follow-up readGitRevision("HEAD"). It runs in the commit's own
+  // read session, so the probe the commit already took covers it (the verdict is held for ONE
+  // operation and never across operations — see git-worktree-snapshot-node.ts): the fourth spawn is
+  // the rev-parse itself.
   await expect.poll(() => rec.calls()).toHaveLength(4);
-  await continuePastLazyFetchGuardProbe(rec);
+  expect(rec.calls()[3]?.args).toContain("rev-parse");
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);
   await pending;
