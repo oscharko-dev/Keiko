@@ -632,6 +632,13 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly requestedMode: CodingWorkbenchMode;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
+  /**
+   * `true` only while a live run holds a minted Authority Envelope and `effectiveMode` is that
+   * run's own posture rather than the clamp of `requestedMode`. A reloaded window that selects a
+   * lower mode than its live run must be told the truth (the run still holds the wider authority),
+   * so only an anchored answer may exceed `requestedMode`; it never exceeds `deploymentCeiling`.
+   */
+  readonly liveRunAnchored?: true | undefined;
   readonly runtimeAvailable: boolean;
   /** Present exactly when `runtimeAvailable` is false; names the first failed prerequisite. */
   readonly runtimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
@@ -2150,6 +2157,7 @@ const CODING_WORKBENCH_RUNTIME_READINESS_KEYS = [
   "requestedMode",
   "deploymentCeiling",
   "effectiveMode",
+  "liveRunAnchored",
   "runtimeAvailable",
   "runtimeUnavailableReason",
   "runtimeEvidenceClass",
@@ -2183,22 +2191,33 @@ export function validateCodingWorkbenchRuntimeReadiness(
   );
   validateRuntimeVersion(value, errors);
   validateExecutionLocations(value.executionLocations, errors);
-  // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
-  // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
-  // clamp is the fail-closed contract boundary.
-  if (
-    isOneOf(value.requestedMode, CODING_WORKBENCH_MODES) &&
-    isOneOf(value.deploymentCeiling, CODING_WORKBENCH_MODES) &&
-    isOneOf(value.effectiveMode, CODING_WORKBENCH_MODES) &&
-    isCodingWorkbenchModeWidening(
-      resolveEffectiveCodingWorkbenchMode(value.requestedMode, value.deploymentCeiling),
-      value.effectiveMode,
-    )
-  ) {
-    errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
-  }
+  validateReadinessEffectiveMode(value, errors);
   if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
   return result(value, errors);
+}
+
+// The confirmed mode never exceeds the deployment ceiling, and never widens past the request unless
+// the server says the answer is anchored to the live run's own minted envelope (#2386, 0.3.0 audit):
+// a window reloaded with a lower selection than its live run is told what the run actually holds.
+function validateReadinessEffectiveMode(value: Record<string, unknown>, errors: string[]): void {
+  if (value.liveRunAnchored !== undefined && value.liveRunAnchored !== true) {
+    errors.push("liveRunAnchored is invalid");
+  }
+  const { requestedMode, deploymentCeiling, effectiveMode } = value;
+  if (
+    !isOneOf(requestedMode, CODING_WORKBENCH_MODES) ||
+    !isOneOf(deploymentCeiling, CODING_WORKBENCH_MODES) ||
+    !isOneOf(effectiveMode, CODING_WORKBENCH_MODES)
+  ) {
+    return;
+  }
+  const bound =
+    value.liveRunAnchored === true
+      ? deploymentCeiling
+      : resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
+  if (isCodingWorkbenchModeWidening(bound, effectiveMode)) {
+    errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
+  }
 }
 
 /** A nonempty list of distinct known work locations, when present. */

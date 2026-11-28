@@ -556,6 +556,35 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // U-37: a window reloaded with "Ask for approval" selected while its live run holds Full access is
+  // told what the run holds. Only an answer the server marks as anchored to the live run may exceed
+  // the request, and no answer may exceed the deployment ceiling.
+  it("accepts an effective mode wider than the request only when anchored to the live run", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "governed-assist",
+      deploymentCeiling: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
+    };
+    expect(validateCodingWorkbenchRuntimeReadiness(readiness)).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, liveRunAnchored: true }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, liveRunAnchored: false }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({
+        ...readiness,
+        deploymentCeiling: "supervised-coding",
+        liveRunAnchored: true,
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   // #4068: the work locations a runtime can confine are a closed, nonempty set without repeats.
   it("validates the offered work locations as a closed nonempty set", () => {
     const readiness = {

@@ -10,6 +10,7 @@ import {
   useCodingWorkbenchRuntimeRefreshEffects,
   POST_RUN_DESCRIPTION_POLL_MAX_MS,
   POST_RUN_DESCRIPTION_POLL_MS,
+  RUNTIME_READINESS_RETRY_DELAYS_MS,
   awaitingPostRunDescription,
 } from "./coding-workbench-runtime-effects";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -217,6 +218,49 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
 });
 
 describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  // U-37: a failed readiness read stayed on screen for good because nothing re-read it, although
+  // every later read of the same server succeeded.
+  it("re-reads a failed runtime readiness with backoff, ends at success and gives up after the last delay", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRuntime = vi.fn(async () => undefined);
+      const failed = (status: "error" | "loading" | "ready"): CodingWorkbenchRuntimeState => ({
+        ...createInitialCodingWorkbenchRuntimeState(),
+        runtime: { status, value: null, error: null },
+      });
+      const { rerender } = renderHook(
+        ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshSource: vi.fn(async () => undefined),
+            refreshRuntime,
+            refreshRun: vi.fn(async () => undefined),
+            intent: { current: { pickedModelId: null } },
+          });
+        },
+        { initialProps: { state: failed("error") } },
+      );
+      refreshRuntime.mockClear();
+      const [first = 0, second = 0] = RUNTIME_READINESS_RETRY_DELAYS_MS;
+      act(() => vi.advanceTimersByTime(first - 1));
+      expect(refreshRuntime).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(1));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      // The retry fails again: the next, longer delay applies.
+      rerender({ state: failed("loading") });
+      rerender({ state: failed("error") });
+      act(() => vi.advanceTimersByTime(second - 1));
+      expect(refreshRuntime).toHaveBeenCalledOnce();
+      act(() => vi.advanceTimersByTime(1));
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+      // A success ends it.
+      rerender({ state: failed("ready") });
+      act(() => vi.advanceTimersByTime(10 * 60_000));
+      expect(refreshRuntime).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("refreshes an open Workbench after a background catalog change without invalidating the catalog", () => {
     const refreshSource = vi.fn(async () => undefined);
     const refreshRuntime = vi.fn(async () => undefined);
@@ -397,6 +441,7 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
 describe("post-run description refresh (#3390)", () => {
   const settled = (overrides: Record<string, unknown> = {}): CodingWorkbenchRuntimeState =>
     ({
+      runtime: { status: "ready", value: null, error: null },
       run: {
         status: "ready",
         value: {

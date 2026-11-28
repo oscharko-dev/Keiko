@@ -642,6 +642,7 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
+      ...(liveRunHoldsAuthority(deps) ? { liveRunAnchored: true as const } : {}),
       ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
     },
@@ -672,16 +673,20 @@ const RUN_STATES_HOLDING_MINTED_AUTHORITY: ReadonlySet<CodingWorkbenchRuntimeSta
  * confirming it understated the authority the tool facade actually enforces). Once no envelope is
  * held, the next start or retry mints from the request, so the clamped request is the truth.
  */
+function liveRunHoldsAuthority(deps: UiHandlerDeps): boolean {
+  const current = deps.codingRuntimeOrchestrator?.status();
+  return (
+    current?.requestedMode !== undefined && RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
+  );
+}
+
 function confirmedEffectiveMode(
   deps: UiHandlerDeps,
   requestedMode: CodingWorkbenchMode,
   deploymentCeiling: CodingWorkbenchMode,
 ): CodingWorkbenchMode {
   const current = deps.codingRuntimeOrchestrator?.status();
-  if (
-    current?.requestedMode === undefined ||
-    !RUN_STATES_HOLDING_MINTED_AUTHORITY.has(current.state)
-  ) {
+  if (current?.requestedMode === undefined || !liveRunHoldsAuthority(deps)) {
     return resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling);
   }
   return resolveEffectiveCodingWorkbenchMode(current.requestedMode, deploymentCeiling);

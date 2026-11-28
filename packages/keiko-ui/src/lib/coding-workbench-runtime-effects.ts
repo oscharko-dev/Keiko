@@ -22,6 +22,7 @@ import {
 } from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
+  CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
 } from "./coding-workbench-live-state";
@@ -130,6 +131,37 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   }, [refreshRun]);
   useRunRereadOnReturn(refreshRun);
   usePostRunDescriptionRefresh(state.run.value, refreshRun);
+  useRuntimeReadinessRetry(state.runtime.status, refreshRuntime);
+}
+
+/** Waits before each re-read of a failed runtime readiness; after the last one the failure stays. */
+export const RUNTIME_READINESS_RETRY_DELAYS_MS: readonly number[] = [2_000, 8_000, 30_000];
+
+/**
+ * A failed readiness read heals itself (U-37). Nothing else re-reads readiness on its own, so one
+ * transient failure (a refused or reset request while the page was still reloading) left "Runtime
+ * could not be refreshed" on screen, and the composer without its agent switch, although every
+ * later read of the same server succeeded. A bounded, backed-off retry runs only while the
+ * resource is in error and ends at the first success; it is not a polling loop.
+ */
+function useRuntimeReadinessRetry(
+  status: CodingWorkbenchResourceStatus,
+  refreshRuntime: () => Promise<void>,
+): void {
+  const attempts = useRef(0);
+  useEffect(() => {
+    if (status === "ready") attempts.current = 0;
+    if (status !== "error") return;
+    const delay = RUNTIME_READINESS_RETRY_DELAYS_MS[attempts.current];
+    if (delay === undefined) return;
+    const timer = window.setTimeout(() => {
+      attempts.current += 1;
+      void refreshRuntime();
+    }, delay);
+    return (): void => {
+      window.clearTimeout(timer);
+    };
+  }, [status, refreshRuntime]);
 }
 
 /**

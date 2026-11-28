@@ -1768,6 +1768,10 @@ describe("coding runtime routes", () => {
           codingRuntimeOrchestrator: { status: () => liveStatus(state) },
         }),
       );
+      // U-37: whatever the server confirms must be accepted by the browser's own contract check.
+      expect(validateCodingWorkbenchRuntimeReadiness(result.body)).toMatchObject({ ok: true });
+      if (state === "recovery-required") expect(result.body).not.toHaveProperty("liveRunAnchored");
+      else expect(result.body).toMatchObject({ liveRunAnchored: true });
       return (result.body as { effectiveMode?: string }).effectiveMode;
     };
 
