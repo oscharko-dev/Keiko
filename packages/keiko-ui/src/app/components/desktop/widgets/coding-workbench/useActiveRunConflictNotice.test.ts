@@ -32,6 +32,7 @@ function pending(kind: CodingWorkbenchMutationKind): CodingWorkbenchMutationStat
 function stateOf(
   mutation: CodingWorkbenchMutationState,
   runState: "running" | "succeeded" | null,
+  revision = 1,
 ): Pick<CodingWorkbenchRuntimeState, "mutation" | "run"> {
   const value =
     runState === null
@@ -39,7 +40,7 @@ function stateOf(
       : ({
           schemaVersion: "1",
           state: runState,
-          revision: 1,
+          revision,
           updatedAt: "2026-07-13T12:00:00.000Z",
           runId: "run-other",
         } as CodingWorkbenchRuntimeSnapshot);
@@ -50,6 +51,7 @@ interface Props {
   readonly mutation: CodingWorkbenchMutationState;
   readonly runState: "running" | "succeeded" | null;
   readonly draft: string;
+  readonly revision?: number;
 }
 
 function mount(initial: Props): {
@@ -60,9 +62,9 @@ function mount(initial: Props): {
 } {
   const setTaskIntent = vi.fn<(value: string) => void>();
   const hook = renderHook(
-    ({ mutation, runState, draft }: Props) =>
+    ({ mutation, runState, draft, revision }: Props) =>
       useActiveRunConflictNotice({
-        state: stateOf(mutation, runState),
+        state: stateOf(mutation, runState, revision),
         taskIntent: draft,
         setTaskIntent,
       }),
@@ -128,6 +130,16 @@ describe("useActiveRunConflictNotice (U-14)", () => {
     expect(hook.result.current.visible).toBe(true);
 
     hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: "" });
+    expect(hook.result.current.visible).toBe(false);
+    expect(hook.result.current.taskIntent).toBe(TASK);
+  });
+
+  it("ends the notice when a fresh read after the refusal finds the other run already over", () => {
+    const { hook } = mount({ mutation: IDLE, runState: null, draft: TASK });
+    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: TASK });
+    expect(hook.result.current.visible).toBe(true);
+
+    hook.rerender({ mutation: superseded("start", CONFLICT), runState: "succeeded", draft: "", revision: 2 });
     expect(hook.result.current.visible).toBe(false);
     expect(hook.result.current.taskIntent).toBe(TASK);
   });

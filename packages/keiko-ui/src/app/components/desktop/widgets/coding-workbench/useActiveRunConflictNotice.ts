@@ -31,6 +31,12 @@ function refusedAsActiveRunConflict(mutation: CodingWorkbenchMutationState): boo
   );
 }
 
+// Identifies one read of the run snapshot: a re-render of the same read keeps the key, a newer
+// revision of the run changes it.
+function runReadKey(run: CodingWorkbenchRuntimeState["run"]["value"]): string {
+  return run === null ? "none" : `${run.runId ?? ""}:${String(run.revision)}`;
+}
+
 function startsTaskIntent(mutation: CodingWorkbenchMutationState): boolean {
   return mutation.status === "pending" && TASK_INTENT_KINDS.has(mutation.kind);
 }
@@ -72,6 +78,10 @@ export function useActiveRunConflictNotice({
   keptRef.current = kept;
   const armed = useRef(false);
   const sawRun = useRef(false);
+  // The run snapshot the refusal was read against: only a later read can say the other run ended.
+  const armedRun = useRef<string | undefined>(undefined);
+  const runRef = useRef(state.run);
+  runRef.current = state.run;
   const latestIntent = useRef(taskIntent);
   latestIntent.current = taskIntent;
 
@@ -86,6 +96,7 @@ export function useActiveRunConflictNotice({
     }
     if (!refusedAsActiveRunConflict(mutation) || armed.current) return;
     armed.current = true;
+    armedRun.current = runReadKey(runRef.current.value);
     setKept(latestIntent.current === "" ? null : latestIntent.current);
     setVisible(true);
     reportClientDiagnostic("[keiko] coding workbench start refused: active-run-elsewhere");
@@ -99,6 +110,16 @@ export function useActiveRunConflictNotice({
       setVisible(false);
     }
   }, [runIsActive]);
+
+  // The other window's run may have ended before this window read it: it is never seen active, so
+  // the notice would stay for good. A fresh read after the refusal that finds no active run ends it.
+  useEffect(() => {
+    if (!armed.current || runIsActive || state.run.status !== "ready") return;
+    if (runReadKey(state.run.value) === armedRun.current) return;
+    armed.current = false;
+    sawRun.current = false;
+    setVisible(false);
+  }, [state.run, runIsActive]);
 
   const edits = useHeldTaskEdits({ held: kept !== null, setKept, setVisible, setTaskIntent });
   return { visible, taskIntent: kept ?? taskIntent, ...edits };
