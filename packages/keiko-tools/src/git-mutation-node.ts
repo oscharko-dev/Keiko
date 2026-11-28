@@ -64,6 +64,7 @@ import {
   readGitRevision,
   readGitTreeDigest,
   readGitHeadState,
+  readGitCheckoutBranch,
   readGitBaseState,
   readGitWorktreeSnapshot,
   createGitReadSession,
@@ -111,6 +112,13 @@ export interface NodeGitMutationAdapterDeps {
   /** Re-proves live server authority immediately before the sole ref-changing effect. */
   readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
   readonly beforeIndexUpdate?: (() => boolean) | undefined;
+  /**
+   * The checkout an unverified (interactive) commit was prepared on: its signing decision is made
+   * for this branch (`undefined` for a detached HEAD). The commit is refused when the checkout is
+   * on another branch by the time the decision is made, so a switch during the signing read can
+   * never land an unsigned commit on a branch that requires signatures.
+   */
+  readonly preparedCheckout?: { readonly branchName: string | undefined } | undefined;
   // The repository root the mutations run in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -222,6 +230,7 @@ interface RunContext {
   readonly timeoutMs: number | undefined;
   readonly beforeCommitRefUpdate: (() => boolean) | undefined;
   readonly beforeIndexUpdate: (() => boolean) | undefined;
+  readonly preparedCheckout: { readonly branchName: string | undefined } | undefined;
   readonly readSession: GitReadSession | undefined;
   readonly signingRequiredByBranchProtection: (() => Promise<boolean | "unavailable">) | undefined;
   readonly onSigningReadFailure: ((report: GitCommitSigningReadFailureReport) => void) | undefined;
@@ -508,6 +517,9 @@ async function execCommit(
   if (request.verified !== undefined) {
     return { ...(await execVerifiedCommit(ctx, request, sign)), ...signing };
   }
+  // The decision above was made for the prepared branch: a checkout that moved on while it was made
+  // is refused before any commit exists, never committed unsigned on the other branch.
+  if (!(await checkoutStillPrepared(ctx))) return { ...failureFromExit(0, 0), ...signing };
   const result = await execPlan(ctx, () => buildCommitArgv(request, sign));
   if (result.outcome !== "succeeded") return { ...result, ...signing };
   try {
@@ -526,6 +538,11 @@ const UNSIGNED_SIGNING_DECISIONS: ReadonlySet<GitCommitSigningDecision> = new Se
   "not-configured",
   "not-configured-protection-unavailable",
 ]);
+
+async function checkoutStillPrepared(ctx: RunContext): Promise<boolean> {
+  if (ctx.preparedCheckout === undefined) return true;
+  return (await readGitCheckoutBranch(commitReadDeps(ctx))) === ctx.preparedCheckout.branchName;
+}
 
 interface CommitSigningRead {
   readonly decision: GitCommitSigningDecision;
@@ -917,6 +934,7 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     timeoutMs: deps.timeoutMs,
     beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
     beforeIndexUpdate: deps.beforeIndexUpdate,
+    preparedCheckout: deps.preparedCheckout,
     readSession: deps.readSession,
     signingRequiredByBranchProtection: deps.signingRequiredByBranchProtection,
     onSigningReadFailure: deps.onSigningReadFailure,

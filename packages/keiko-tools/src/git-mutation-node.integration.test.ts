@@ -124,6 +124,52 @@ afterEach(() => {
   rmSync(signingRoot, { recursive: true, force: true });
 });
 
+describe("node git mutation adapter — an interactive commit stays on the branch it was prepared for", () => {
+  function preparedAdapter(
+    branchName: string | undefined,
+    whileDeciding: () => void,
+  ): GitLocalMutationAdapter {
+    return createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      preparedCheckout: { branchName },
+      // The trusted branch-protection verdict is read asynchronously: the checkout moves meanwhile.
+      signingRequiredByBranchProtection: (): Promise<boolean> => {
+        whileDeciding();
+        return Promise.resolve(false);
+      },
+    });
+  }
+
+  it("refuses the commit when the checkout moved to another branch while signing was decided", async () => {
+    // Signing is not asked for by the person, so the branch-protection verdict decides.
+    git(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const prepared = git(["branch", "--show-current"]).trim();
+    const ad = preparedAdapter(prepared, () => {
+      git(["checkout", "-q", "-b", "protected-branch"]);
+    });
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "must not land", allowEmpty: false });
+
+    expect(committed.outcome).toBe("failed");
+    expect(git(["rev-list", "--count", "--all"]).trim()).toBe("0");
+  });
+
+  it("commits on the prepared branch when the checkout did not move", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = preparedAdapter(git(["branch", "--show-current"]).trim(), () => undefined);
+    expect((await ad.stage({ pathspecs: ["a.txt"] })).outcome).toBe("succeeded");
+
+    const committed = await ad.commit({ message: "lands", allowEmpty: false });
+
+    expect(committed.outcome).toBe("succeeded");
+    expect(git(["log", "--oneline"])).toContain("lands");
+  });
+});
+
 describe("node git mutation adapter — successful local mutations", () => {
   it("stages and commits a file through the governed boundary", async () => {
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");

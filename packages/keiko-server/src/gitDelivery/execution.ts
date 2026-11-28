@@ -998,12 +998,16 @@ function adapterFor(
   now: () => number,
   correlationId?: string,
   verifiedBranchName?: string,
+  preparedCheckout?: { readonly branchName: string | undefined },
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({
     ...(seams.readSession === undefined ? {} : { readSession: seams.readSession }),
     beforeCommitRefUpdate: seams.beforeCommitRefUpdate,
     beforeIndexUpdate: seams.beforeIndexUpdate,
+    // The interactive commit runs on the checkout, so its signing decision (made for the
+    // preflight branch) holds only while the checkout is still on that branch.
+    ...(preparedCheckout === undefined ? {} : { preparedCheckout }),
     signal: seams.signal,
     workspace,
     processEnv: seams.processEnv ?? process.env,
@@ -1254,7 +1258,9 @@ function guardedAdapterFor(
   root: AdmittedMutationRoot,
 ): GitLocalMutationAdapter {
   return authorityGuardedMutationAdapter(
-    adapterFor(workspace, seams, now, correlationId, snapshot.currentBranchName),
+    adapterFor(workspace, seams, now, correlationId, snapshot.currentBranchName, {
+      branchName: snapshot.currentBranchName,
+    }),
     root.stillAuthorized,
     root.refusal,
   );

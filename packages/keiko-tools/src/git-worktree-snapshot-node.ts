@@ -1180,6 +1180,19 @@ export async function readGitHeadIfBorn(
  * The state of HEAD: its commit when born, or the branch it names when that branch has no commit
  * yet (a fresh repository, #4491). A detached or otherwise unreadable HEAD still fails closed.
  */
+/**
+ * The branch the checkout is on right now, or `undefined` for a detached HEAD. One process; a
+ * name that is not a safe ref name fails the read.
+ */
+export async function readGitCheckoutBranch(
+  deps: NodeGitWorktreeReaderDeps,
+): Promise<string | undefined> {
+  const branch = (await runRead(machineReadContext(deps), ["branch", "--show-current"])).trim();
+  if (branch === "") return undefined;
+  if (!isSafeGitRefName(branch)) throw new GitWorktreeReadError("git head names no branch");
+  return branch;
+}
+
 export async function readGitHeadState(deps: NodeGitWorktreeReaderDeps): Promise<GitHeadState> {
   const sha = await readGitHeadIfBorn(deps);
   if (sha !== undefined) return { kind: "born", sha };
