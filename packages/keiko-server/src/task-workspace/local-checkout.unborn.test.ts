@@ -145,6 +145,13 @@ describe("an unborn repository", () => {
     expect(() => select(unbornFixture())).toThrow();
   });
 
+  it("keeps an unreadable HEAD as an unreachable repository, not a missing branch", () => {
+    writeFileSync(join(unbornRoot, ".git", "HEAD"), "garbage\n");
+    expect(() => select(unbornFixture())).toThrow(
+      expect.objectContaining({ code: "REPOSITORY_UNREACHABLE" }),
+    );
+  });
+
   it("reads a commit made outside as an update of the same checkout, never as drift", () => {
     const service = unbornFixture();
     const selected = select(service);

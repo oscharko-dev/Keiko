@@ -14,13 +14,40 @@ function baseReconciles(
   facts: VerifiedCommitFacts,
   receipt: VerifiedCommitResult,
   context: VerifiedCommitRunContext,
-): boolean {
-  if (verifiedBaseObjectId(facts) === receipt.baseSha) return true;
-  return (
+): "recorded" | "replaced" | undefined {
+  if (verifiedBaseObjectId(facts) === receipt.baseSha) return "recorded";
+  const selfBased =
     context.baseRef === context.headRef &&
     facts.head.kind === "born" &&
-    receipt.baseSha === receipt.parentSha
-  );
+    receipt.baseSha === receipt.parentSha;
+  return selfBased ? "replaced" : undefined;
+}
+
+type RecoveredIdentity = Awaited<ReturnType<typeof readGitCommitIdentity>>;
+
+// A base that replaced the recorded one is compared to the recovered commit itself, never to nothing.
+function baseIsRecovered(
+  base: "recorded" | "replaced",
+  facts: VerifiedCommitFacts,
+  identity: RecoveredIdentity,
+): boolean {
+  return base === "recorded" || verifiedBaseObjectId(facts) === identity.headSha;
+}
+
+function identityMatchesReceipt(
+  identity: RecoveredIdentity,
+  receipt: VerifiedCommitResult,
+  baseRecovered: boolean,
+): boolean {
+  // The root commit of an unborn branch records the all-zero parent and has no parent at all.
+  const parents = isGitZeroObjectId(receipt.parentSha) ? [] : [receipt.parentSha];
+  return [
+    baseRecovered,
+    identity.parentShas.length === parents.length,
+    identity.parentShas.every((sha, index) => sha === parents[index]),
+    identity.treeDigest === receipt.stagedTreeDigest,
+    identity.messageDigest === receipt.messageDigest,
+  ].every(Boolean);
 }
 
 /** Reconciliation reads live objects only: it never retries a mutation or restores an approval. */
@@ -36,11 +63,8 @@ export async function reconcileVerifiedCommit(
   )
     return receipt;
   const facts = await readVerifiedCommitFacts(context, seams);
-  if (
-    !baseReconciles(facts, receipt, context) ||
-    facts.repositoryDigest !== receipt.repositoryDigest
-  )
-    return receipt;
+  const base = baseReconciles(facts, receipt, context);
+  if (base === undefined || facts.repositoryDigest !== receipt.repositoryDigest) return receipt;
   const identity = await readGitCommitIdentity(
     {
       workspace: context.workspace,
@@ -49,14 +73,7 @@ export async function reconcileVerifiedCommit(
     },
     context.headRef,
   );
-  // The root commit of an unborn branch records the all-zero parent and has no parent at all.
-  const parents = isGitZeroObjectId(receipt.parentSha) ? [] : [receipt.parentSha];
-  const matched = [
-    identity.parentShas.length === parents.length,
-    identity.parentShas.every((sha, index) => sha === parents[index]),
-    identity.treeDigest === receipt.stagedTreeDigest,
-    identity.messageDigest === receipt.messageDigest,
-  ].every(Boolean);
+  const matched = identityMatchesReceipt(identity, receipt, baseIsRecovered(base, facts, identity));
   if (!matched || !context.stillAuthorized()) return receipt;
   return {
     ...receipt,

@@ -323,6 +323,8 @@ function requireLocalBranch(root: string, branch: string): void {
     if (isUnbornCurrentBranch(root, branch)) return;
     git(root, "show-ref", "--verify", `refs/heads/${branch}`);
   } catch (error) {
+    // The deliberate REPOSITORY_UNREACHABLE of an unreadable HEAD is not a missing branch.
+    if (error instanceof TaskWorkspaceError) throw error;
     throw new TaskWorkspaceError("INVALID_BASE_BRANCH", "Select an existing local branch.", [], {
       cause: error,
     });
