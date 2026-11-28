@@ -174,7 +174,19 @@ function objectIdLength(
   fileSystem: ProductionWorkspaceHeadFileSystem,
 ): 40 | 64 {
   const config = boundedText(join(commonRoot, "config"), HEAD_BYTES * 16, fileSystem);
-  return config !== undefined && /^\s*objectformat\s*=\s*sha256\s*$/imu.test(config) ? 64 : 40;
+  return config !== undefined && declaresSha256(config) ? 64 : 40;
+}
+
+// A line of the form `objectformat = sha256`, read line by line so no pattern backtracks.
+function declaresSha256(config: string): boolean {
+  return config.split(/\r?\n/u).some((line) => {
+    const [key, value, ...rest] = line.split("=");
+    return (
+      rest.length === 0 &&
+      key?.trim().toLowerCase() === "objectformat" &&
+      value?.trim().toLowerCase() === "sha256"
+    );
+  });
 }
 
 function localBranch(reference: string): string | undefined {
