@@ -3160,7 +3160,13 @@ function ApprovalReviewBody({
           })}
         />
       </dl>
-      <ul className={styles.approvalChangedFiles}>
+      <ul
+        className={styles.approvalChangedFiles}
+        // The list scrolls once it is long, so a keyboard user must be able to reach it.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable region
+        tabIndex={0}
+        aria-label={t("codingWorkbench.approval.changes.title")}
+      >
         {review.paths.map((path) => (
           <li className={styles.approvalChangedFile} key={path}>
             {path}

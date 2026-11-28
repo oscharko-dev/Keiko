@@ -1438,6 +1438,35 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // U-28: a status list of 50 files that says "truncated" left the model to loop on shell output.
+  // It now names the one governed way forward, and only when the list really was cut.
+  it("tells the model a truncated status is staged by directory", async () => {
+    const status = (truncated: boolean): Record<string, unknown> => ({
+      kind: "status",
+      head: "born",
+      headSha: "a".repeat(40),
+      stagedTreeDigest: "b".repeat(64),
+      branch: "main",
+      changes: [],
+      truncated,
+    });
+    const run = async (truncated: boolean): Promise<unknown> => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git: status(truncated) }),
+      );
+      return createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+      });
+    };
+    const guidance = ((await run(true)) as { readonly guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("keiko_git_stage");
+    expect(guidance).toContain("directory");
+    expect(guidance).toContain('"."');
+    expect(await run(false)).not.toHaveProperty("guidance");
+  });
+
   // #4068: on a stock Git for Windows host the system scope sets core.autocrlf=true, so every stage
   // was blocked as unsupported-transformation and the model guessed at file locks and hooks.
   it("names the line-ending conversion and the operator's opt-out for a blocked stage", async () => {

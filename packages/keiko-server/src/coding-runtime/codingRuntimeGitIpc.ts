@@ -77,6 +77,27 @@ export function runtimeGitPaths(value: unknown): value is readonly string[] {
     value.every((path) => isCodingRuntimeGitPath(path) && !path.endsWith("/") && !isDenied(path))
   );
 }
+/** The pathspec that names the whole workspace; it expands to every changed file (U-28). */
+export const RUNTIME_GIT_WORKSPACE_PATHSPEC = ".";
+/**
+ * The `paths` of a stage or unstage proposal request: at most the model-facing request bound of
+ * entries, each a file or a directory below the workspace root, or `"."` for the whole workspace.
+ * A directory is expanded to the files Git lists as changed under it by the Git service, where
+ * the same denied-path, containment and conflict rules apply as to an explicit file path.
+ */
+export function runtimeGitIndexPaths(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= CODING_RUNTIME_GIT_MAX_PATHS &&
+    new Set(value).size === value.length &&
+    value.every(
+      (path) =>
+        path === RUNTIME_GIT_WORKSPACE_PATHSPEC ||
+        (isCodingRuntimeGitPath(path) && !path.endsWith("/") && !isDenied(path)),
+    )
+  );
+}
 export function snapshotRuntimeGitRequest(request: RuntimeGitRequest): RuntimeGitRequest {
   return Object.freeze(
     "paths" in request ? { ...request, paths: Object.freeze([...request.paths]) } : { ...request },
@@ -99,7 +120,7 @@ function parseValidatedRuntimeGitRequest(
   if (value.operation === "diff") return diffRequest(value, base);
   if (value.operation !== "stage" && value.operation !== "unstage") return undefined;
   const operation = value.operation;
-  if (value.phase === "propose" && exact(value, ["phase", "paths"]) && runtimeGitPaths(value.paths))
+  if (value.phase === "propose" && exact(value, ["phase", "paths"]) && runtimeGitIndexPaths(value.paths))
     return { ...base, operation, phase: "propose", paths: value.paths };
   return indexExecution(value, base, operation);
 }

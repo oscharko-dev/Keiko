@@ -13,6 +13,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
@@ -415,8 +416,8 @@ function assembleProposal(
     expiresAtMs: nowMs + GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
     review: {
       requestId: proposalId,
-      paths: [...paths],
-      pathsTruncated: false,
+      paths: paths.slice(0, CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS),
+      pathsTruncated: paths.length > CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
       fileCount: review.fileCount,
       addedLines: review.addedLines,
       deletedLines: review.deletedLines,
@@ -876,26 +877,24 @@ export class RuntimeGitService {
   // binding the operator's numbers to exactly the bytes the proposal will stage.
   private async propose(
     context: VerifiedCommitRunContext,
-    paths: readonly string[],
+    requested: readonly string[],
   ): Promise<IndexProposalResult> {
     this.pruneExpired();
     const proposalId = mintProposalId("stage");
+    let pathCount = requested.length;
     const refuse = (
       status: "blocked" | "drift",
       reason: CodingRuntimeGitStage["reason"],
-    ): CodingRuntimeGitStage => ({
-      kind: "stage",
-      proposalId,
-      status,
-      reason,
-      pathCount: paths.length,
-    });
+    ): CodingRuntimeGitStage => ({ kind: "stage", proposalId, status, reason, pathCount });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("blocked", "proposal-limit");
     if (!context.buffersClean()) return refuse("blocked", "buffers-dirty");
     const execution = this.options.execution ?? {};
     const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitStageSelection(context, execution, paths);
+    const selection = await admitStageSelection(context, execution, requested);
     if (selection === undefined) return refuse("blocked", "selection-unreviewed");
+    // The request may name directories; everything below binds the concrete files they expanded to.
+    const paths = selection.map((entry) => entry.path);
+    pathCount = paths.length;
     const workspaceFs = runtimeWorkspaceFs(context);
     const worktreeDigest = await this.candidateDigest(context, execution, paths, true);
     const review = await reviewStageSelection(context, execution, selection);
@@ -921,7 +920,7 @@ export class RuntimeGitService {
   // list (only staged, unconflicted paths); the review counts the staged lines it gives back.
   private async proposeUnstage(
     context: VerifiedCommitRunContext,
-    paths: readonly string[],
+    requested: readonly string[],
   ): Promise<CodingRuntimeGitUnstage> {
     this.pruneExpired();
     const proposalId = mintProposalId("unstage");
@@ -930,15 +929,22 @@ export class RuntimeGitService {
       proposalId,
       status: "blocked",
       reason,
-      pathCount: paths.length,
+      pathCount: requested.length,
     });
     if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("proposal-limit");
     const execution = this.options.execution ?? {};
     const facts = await readVerifiedCommitFacts(context, execution);
-    const selection = await admitUnstageSelection(context, execution, paths);
+    const selection = await admitUnstageSelection(context, execution, requested);
     if (selection === undefined) return refuse("selection-unreviewed");
     const review = await reviewStageSelection(context, execution, selection, "staged");
-    const proposal = buildUnstageProposal(context, facts, paths, review, this.now(), proposalId);
+    const proposal = buildUnstageProposal(
+      context,
+      facts,
+      selection.map((entry) => entry.path),
+      review,
+      this.now(),
+      proposalId,
+    );
     this.proposals.set(proposalId, proposal);
     const result =
       this.options.mode() === "governed-assist"

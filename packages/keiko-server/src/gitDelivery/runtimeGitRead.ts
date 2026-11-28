@@ -10,7 +10,10 @@ import {
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
-import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  CODING_RUNTIME_GIT_MAX_PATHS,
+  CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -56,7 +59,10 @@ import {
   type GitDeliveryTerminationLogSeam,
 } from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
-import { runtimeGitPaths } from "../coding-runtime/codingRuntimeGitIpc.js";
+import {
+  RUNTIME_GIT_WORKSPACE_PATHSPEC,
+  runtimeGitPaths,
+} from "../coding-runtime/codingRuntimeGitIpc.js";
 
 const DENIED_PATHS_EXCLUDED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -864,41 +870,80 @@ export function admitStageSelection(
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  return admitSelection(context, execution, paths, (change) => change.unstaged || change.untracked);
+  return admitSelection(context, execution, paths, {
+    pending: (change) => change.unstaged || change.untracked,
+    expandable: (change) => change.unstaged || change.untracked,
+  });
 }
 
 /**
  * Admits an unstage selection (#3902 AC2): every path must be one Git lists with a staged change
  * and no conflict, so the proposal can only give staged changes back to the worktree. Anything
- * else (unchanged, unstaged only, absent, a directory, beyond a truncated list) refuses it whole.
+ * else (unchanged, unstaged only, absent, in conflict, beyond a truncated list) refuses it whole.
+ * A directory expands to the staged, unconflicted files below it (U-28).
  */
 export function admitUnstageSelection(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
 ): Promise<readonly StageSelectionChange[] | undefined> {
-  return admitSelection(context, execution, paths, (change) => (change.staged ? true : undefined));
+  return admitSelection(context, execution, paths, {
+    pending: (change) => (change.staged ? true : undefined),
+    expandable: (change) => change.staged,
+  });
+}
+
+interface SelectionRules {
+  /** An exactly named path: its `pending` flag, or `undefined` to refuse the whole selection. */
+  readonly pending: (change: GitChangedFile) => boolean | undefined;
+  /** A change a directory pathspec selects; every other change below it is left out. */
+  readonly expandable: (change: GitChangedFile) => boolean;
+}
+
+// A directory pathspec (or "." for the whole workspace) selects the changes below it by the same
+// prefix rule as the diff reader (`pathMatches`). A conflicted change is left for the person to
+// resolve, and a change the raw reader excluded as denied never reaches this list at all.
+function directoryChanges(
+  requested: string,
+  changes: readonly GitChangedFile[],
+  rules: SelectionRules,
+): readonly GitChangedFile[] {
+  return changes.filter(
+    (change) =>
+      (requested === RUNTIME_GIT_WORKSPACE_PATHSPEC || pathMatches(requested, change.path)) &&
+      !change.conflicted &&
+      rules.expandable(change),
+  );
 }
 
 // Every path must be one Git's change list names without a conflict, and `pending` must admit it
-// (its result is the path's `pending` flag); otherwise the whole selection is refused.
+// (its result is the path's `pending` flag), or a directory with at least one change to select;
+// otherwise the whole selection is refused. A directory is never expanded from a truncated scan,
+// which could silently leave files out, and the expansion is bounded only to protect memory.
 async function admitSelection(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
   paths: readonly string[],
-  pending: (change: GitChangedFile) => boolean | undefined,
+  rules: SelectionRules,
 ): Promise<readonly StageSelectionChange[] | undefined> {
   const raw = await readGitRawChangesAtHead(runtimeGitReadDeps(context, execution));
   logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const changes = new Map(raw.changes.map((change) => [change.path, change]));
-  const admitted: StageSelectionChange[] = [];
+  const admitted = new Map<string, StageSelectionChange>();
   for (const path of paths) {
-    const change = changes.get(path);
-    const admittedAs = change === undefined || change.conflicted ? undefined : pending(change);
-    if (admittedAs === undefined) return undefined;
-    admitted.push({ path, pending: admittedAs });
+    const exact = changes.get(path);
+    if (exact === undefined) {
+      const below = raw.truncated ? [] : directoryChanges(path, raw.changes, rules);
+      if (below.length === 0) return undefined;
+      for (const change of below) admitted.set(change.path, { path: change.path, pending: true });
+    } else {
+      const admittedAs = exact.conflicted ? undefined : rules.pending(exact);
+      if (admittedAs === undefined) return undefined;
+      admitted.set(path, { path, pending: admittedAs });
+    }
+    if (admitted.size > CODING_RUNTIME_GIT_MAX_STAGE_PATHS) return undefined;
   }
-  return admitted;
+  return [...admitted.values()];
 }
 
 // The changed lines of one path's two sides; `undefined` when there is nothing to count (binary or

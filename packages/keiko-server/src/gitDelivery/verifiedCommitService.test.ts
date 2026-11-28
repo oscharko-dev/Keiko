@@ -57,6 +57,7 @@ import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
 import { runMigrations } from "../store/schema.js";
@@ -2150,9 +2151,14 @@ describe("productive runtime status/diff/stage lane", () => {
     expect(git(["ls-files", "--others", "--exclude-standard"])).toBe("");
   });
 
-  it("refuses a directory as a stage path with a reasoned block instead of a Git failure", async () => {
+  // Relocated pin (U-28): a directory used to be refused whole as a stage path. A directory now
+  // selects the pending changes below it; the invariant this pin guards — a path that names no
+  // pending change is a reasoned block, never a Git failure — holds for a directory with none.
+  it("refuses a directory without a pending change with a reasoned block instead of a Git failure", async () => {
     mkdirSync(join(root, "src"));
     writeFileSync(join(root, "src", "value.js"), "export const nested = true;\n");
+    git(["add", "src/value.js"]);
+    git(["commit", "-qm", "test: add src", "--", "src/value.js"]);
     const gitService = new RuntimeGitService({
       ...options,
       mode: (): "supervised-coding" => "supervised-coding",
@@ -2179,6 +2185,140 @@ describe("productive runtime status/diff/stage lane", () => {
       reason: "selection-unreviewed",
       pathCount: 1,
     });
+  });
+
+  describe("directory pathspecs (U-28)", () => {
+    function indexService(): RuntimeGitService {
+      return new RuntimeGitService({
+        ...options,
+        mode: (): "supervised-coding" => "supervised-coding",
+        invalidateVerification: (): void => {
+          service.invalidate();
+        },
+      });
+    }
+    function index(
+      gitService: RuntimeGitService,
+      operation: "stage" | "unstage",
+      paths: readonly string[],
+    ): ReturnType<RuntimeGitService["execute"]> {
+      return gitService.execute(
+        {
+          action: "git",
+          actionId: `${operation}-${paths.join(",")}`,
+          idempotencyKey: `${operation}-${paths.join(",")}`,
+          operation,
+          phase: "propose",
+          paths,
+        },
+        { check: () => true },
+      );
+    }
+    function execute(
+      gitService: RuntimeGitService,
+      operation: "stage" | "unstage",
+      proposalId: string,
+    ): ReturnType<RuntimeGitService["execute"]> {
+      return gitService.execute(
+        {
+          action: "git",
+          actionId: `execute-${proposalId}`,
+          idempotencyKey: `execute-${proposalId}`,
+          operation,
+          phase: "execute",
+          proposalId,
+        },
+        { check: () => true },
+      );
+    }
+    function writeRename(): void {
+      mkdirSync(join(root, "src"));
+      mkdirSync(join(root, "test"));
+      for (let at = 1; at <= 300; at += 1)
+        writeFileSync(
+          join(root, "src", `m${String(at).padStart(3, "0")}.js`),
+          `export const m = ${String(at)};\n`,
+        );
+      writeFileSync(join(root, "src", "config.js"), "export const config = 1;\n");
+      writeFileSync(join(root, "test", "rename.test.js"), "export const test = 1;\n");
+    }
+
+    it(
+      "stages the 302 changed files of two directories in one proposal beyond the request bound",
+      { timeout: 90_000 },
+      async () => {
+        writeRename();
+        const gitService = indexService();
+        const proposed = await index(gitService, "stage", ["src", "test"]);
+        expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 302 });
+        if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+        const review = gitService.review(proposed.proposalId)?.review;
+        expect(review).toMatchObject({ fileCount: 302, pathsTruncated: true });
+        expect(review?.paths).toHaveLength(CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS);
+        expect(await execute(gitService, "stage", proposed.proposalId)).toMatchObject({
+          status: "succeeded",
+          pathCount: 302,
+        });
+        expect(git(["ls-files", "src", "test"]).split("\n")).toHaveLength(302);
+        expect(git(["ls-files", "--others", "--exclude-standard", "src", "test"])).toBe("");
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            op: "git.runtime-action",
+            extra: expect.objectContaining({ phase: "stage-propose", pathCount: 302 }) as unknown,
+          }),
+        );
+      },
+    );
+
+    it("leaves a denied path below the directory out of the proposal", async () => {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src", "value.js"), "export const value = 1;\n");
+      writeFileSync(join(root, "src", ".env"), "TOKEN=secret\n");
+      const gitService = indexService();
+      const proposed = await index(gitService, "stage", ["src"]);
+      expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 1 });
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      expect(gitService.review(proposed.proposalId)?.review.paths).toEqual(["src/value.js"]);
+      await execute(gitService, "stage", proposed.proposalId);
+      expect(git(["ls-files", "src"])).toBe("src/value.js");
+    });
+
+    it('stages every pending change for "." and nothing else', async () => {
+      mkdirSync(join(root, "deep"));
+      writeFileSync(join(root, "deep", "a.js"), "export const a = 1;\n");
+      writeFileSync(join(root, "top.js"), "export const top = 1;\n");
+      const gitService = indexService();
+      const proposed = await index(gitService, "stage", ["."]);
+      if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+      expect(proposed).toMatchObject({ status: "ready" });
+      await execute(gitService, "stage", proposed.proposalId);
+      expect(git(["status", "--porcelain"])).not.toMatch(/^.[MD?]/mu);
+      expect(git(["ls-files", "deep", "top.js"]).split("\n")).toEqual(["deep/a.js", "top.js"]);
+    });
+
+    it(
+      "unstages the staged files below a directory and keeps their bytes",
+      { timeout: 90_000 },
+      async () => {
+        writeRename();
+        const gitService = indexService();
+        const staged = await index(gitService, "stage", ["src"]);
+        if (staged.kind !== "stage") throw new Error("stage proposal unavailable");
+        expect(await execute(gitService, "stage", staged.proposalId)).toMatchObject({
+          status: "succeeded",
+        });
+        expect(git(["ls-files", "src"]).split("\n")).toHaveLength(301);
+        const proposed = await index(gitService, "unstage", ["src"]);
+        expect(proposed).toMatchObject({ kind: "unstage", status: "ready", pathCount: 301 });
+        if (proposed.kind !== "unstage") throw new Error("unstage proposal unavailable");
+        expect(await execute(gitService, "unstage", proposed.proposalId)).toMatchObject({
+          kind: "unstage",
+          status: "succeeded",
+        });
+        expect(git(["ls-files", "src"])).toBe("");
+        expect(readFileSync(join(root, "src", "m001.js"), "utf8")).toBe("export const m = 1;\n");
+      },
+    );
   });
 
   // Run 13 (2026-09-10): the service answered `undefined` without a line whenever its guard, its

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isCodingRuntimeGitResult } from "./coding-runtime-git.js";
+import {
+  CODING_RUNTIME_GIT_MAX_PATHS,
+  CODING_RUNTIME_GIT_MAX_STAGE_PATHS,
+  isCodingRuntimeGitResult,
+} from "./coding-runtime-git.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 const pairs = [
   ["ready", "none"],
@@ -33,6 +37,18 @@ describe("closed runtime Git evidence", () => {
         expect(isCodingRuntimeGitResult({ ...stage, status, reason })).toBe(valid);
       }
     }
+  });
+  // U-28: the request carries at most CODING_RUNTIME_GIT_MAX_PATHS entries, but the proposal a
+  // directory expands to binds up to CODING_RUNTIME_GIT_MAX_STAGE_PATHS files.
+  it.each(["stage", "unstage"] as const)("bounds a %s proposal's expanded file count", (kind) => {
+    const base = { ...stage, kind, proposalId: `${kind}-123`, status: "ready", reason: "none" };
+    const accepted = (pathCount: number): boolean =>
+      isCodingRuntimeGitResult({ ...base, pathCount });
+    expect(accepted(CODING_RUNTIME_GIT_MAX_PATHS + 1)).toBe(true);
+    expect(accepted(302)).toBe(true);
+    expect(accepted(CODING_RUNTIME_GIT_MAX_STAGE_PATHS)).toBe(true);
+    expect(accepted(CODING_RUNTIME_GIT_MAX_STAGE_PATHS + 1)).toBe(false);
+    expect(accepted(0)).toBe(false);
   });
   it.each(["message", "stdout", "token", "capability", "root", "argv", "env"])(
     "rejects unreviewed nested result data %s",

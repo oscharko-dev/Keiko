@@ -264,8 +264,23 @@ export function buildStageArgv(req: GitStageExecRequest): GitMutationArgvPlan {
   return [["add", "--", ...assertPathspecs(req.pathspecs)]];
 }
 
+// One `restore` run's pathspec text stays far below Windows' CreateProcess limit (about 32 K
+// characters for the whole command line), so a directory unstage that names thousands of files
+// (U-28) runs as several restores inside one index transaction instead of one oversized command.
+const UNSTAGE_ARGV_PATHSPEC_CHARS = 16_000;
+
 export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPlan {
-  return [["restore", "--staged", "--", ...assertPathspecs(req.pathspecs)]];
+  const plan: string[][] = [];
+  let used = Infinity;
+  for (const pathspec of assertPathspecs(req.pathspecs)) {
+    if (used + pathspec.length + 1 > UNSTAGE_ARGV_PATHSPEC_CHARS) {
+      plan.push(["restore", "--staged", "--"]);
+      used = 0;
+    }
+    plan.at(-1)?.push(pathspec);
+    used += pathspec.length + 1;
+  }
+  return plan;
 }
 
 // `sign` is Git's effective `commit.gpgsign` for the repository (ADR-0006). A commit that is not to

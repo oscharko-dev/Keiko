@@ -1293,6 +1293,9 @@
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
+  /* A directory stage can name hundreds of files: the list scrolls instead of growing the card. */
+  max-height: 16rem;
+  overflow-y: auto;
 }
 
 .approvalChangedFile {

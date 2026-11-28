@@ -49,6 +49,25 @@ describe("argv builders — fixed, governed argument vectors", () => {
     ]);
   });
 
+  // U-28: a directory unstage names thousands of files; one command line cannot carry them on
+  // Windows (about 32 K characters), so the plan is several restores that together name each
+  // pathspec exactly once, in order.
+  it("splits a long unstage selection into bounded restores covering every pathspec once", () => {
+    const pathspecs = Array.from(
+      { length: 2000 },
+      (_unused, at) => `src/dir/file-${String(at)}.ts`,
+    );
+    const plan = buildUnstageArgv({ pathspecs });
+    expect(plan.length).toBeGreaterThan(1);
+    for (const argv of plan) {
+      expect(argv.slice(0, 3)).toEqual(["restore", "--staged", "--"]);
+      expect(argv.join(" ").length).toBeLessThan(20_000);
+    }
+    expect(plan.flatMap((argv) => argv.slice(3))).toEqual(
+      pathspecs.map((pathspec) => `:(literal)${pathspec}`),
+    );
+  });
+
   it("literalizes Git pathspec-magic filenames", () => {
     expect(buildStageArgv({ pathspecs: [":(top)*", ":(glob)**"] })).toEqual([
       ["add", "--", ":(literal):(top)*", ":(literal):(glob)**"],

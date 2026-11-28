@@ -574,7 +574,9 @@ function gitStatusSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.git.status",
     alias: "keiko_git_status",
-    description: "Read the workspace's current Git status.",
+    description:
+      "Read the workspace's current Git status. It lists at most 50 changed files; when " +
+      'truncated is true, keiko_git_stage with a directory (or ".") stages every change below it.',
     inputSchema: managedObjectSchema({}, []),
     effects: ["workspace-read"],
     idempotency: "read-only",
@@ -620,7 +622,9 @@ function gitStageSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
-      "Create a non-mutating proposal to stage one or more workspace-relative paths, or with " +
+      "Create a non-mutating proposal to stage one or more workspace-relative paths (a file or a " +
+      'directory: a directory selects every change below it and "." every change in the ' +
+      "workspace; one request takes at most 50 entries), or with " +
       "unstage: true to give their staged changes back to the worktree, which keeps its bytes " +
       "(request only paths keiko_git_status lists as staged). This call does not mutate the Git " +
       "index. Execute staging before rerunning verification for commit proof." +

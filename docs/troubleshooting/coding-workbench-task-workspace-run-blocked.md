@@ -944,9 +944,11 @@ Before 2026-09-10 every one of these surfaced as `state: "unavailable"` and reac
 **Root Cause**
 
 The runtime Git service admits a stage selection against Git's own change list: every requested path
-must be an exact file path the list names as a pending change (or as fully staged already). A path
-that is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list refuses
-the whole selection as `selection-unreviewed`. Until run 13 the admission check reused the
+must be an exact file path the list names as a pending change (or as fully staged already), or a
+directory (`"."` for the whole workspace) with at least one pending change below it, which expands to
+those files (U-28; `pathCount` on the line is the expanded file count). A path that is unchanged,
+absent or in conflict, a directory with no pending change, a selection hidden behind a truncated
+change list, or one above 10,000 files refuses the whole selection as `selection-unreviewed`. Until run 13 the admission check reused the
 model-facing diff reader instead and refused whenever that reader had truncated its response — a
 byte budget for a response, not a property of the selection — so eight ordinary files could not be
 staged at all.

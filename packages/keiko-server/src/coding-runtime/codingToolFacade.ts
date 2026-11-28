@@ -1270,7 +1270,7 @@ function verificationPackageDetail(
 // keep their own findings and need none.
 const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path is not a pending change Git lists for this worktree: it is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as changed and not conflicted.",
+    "At least one requested path names no pending change Git lists for this worktree: a file that is unchanged, absent or in conflict, a directory with no pending change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every pending change below it (\".\" the whole workspace). Read keiko_git_status and request changed files, or a directory that holds changes.",
   "buffers-dirty":
     "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
   "proposal-limit":
@@ -1285,7 +1285,7 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
 // An unstage proposal is refused for its own reasons (#3902 AC2).
 const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
   "selection-unreviewed":
-    "At least one requested path has no staged change Git lists for this worktree: it is unstaged only, unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as staged and not conflicted.",
+    "At least one requested path names no staged change Git lists for this worktree: a file that is unstaged only, unchanged, absent or in conflict, a directory with no staged change below it, or a selection hidden behind a truncated change list or larger than 10,000 files. A directory selects every staged change below it (\".\" the whole workspace). Read keiko_git_status and request staged files, or a directory that holds staged changes.",
   "proposal-limit":
     "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
 };
@@ -1318,7 +1318,13 @@ function branchGuidance(result: CodingRuntimeGitResult): { readonly guidance?: s
   return guidance === undefined ? {} : { guidance };
 }
 
+// The status answer lists at most 50 changed files (a context-window bound); a longer list says how
+// to proceed, since a model that cannot read every path must not loop on shell output (U-28).
+const STATUS_TRUNCATED_GUIDANCE =
+  'This list shows only the first 50 changed files of a longer one. Staging a directory stages every change below it: pass a directory such as "src", or "." for every change in the workspace, to keiko_git_stage instead of listing each file.';
+
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  if (result.kind === "status" && result.truncated) return { guidance: STATUS_TRUNCATED_GUIDANCE };
   const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
   const guidance =
     (result.kind === "stage" || result.kind === "unstage") && result.status === "blocked"

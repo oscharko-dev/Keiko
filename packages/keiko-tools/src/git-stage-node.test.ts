@@ -34,6 +34,8 @@ import {
 } from "./git-worktree-snapshot-node.js";
 import { createGitStagedObjectIdPort } from "./git-mutation-node.js";
 import { nodeSpawnFn, type SpawnFn } from "./exec.js";
+import { buildUnstageArgv } from "./git-mutation-adapter.js";
+import { CODING_RUNTIME_GIT_MAX_STAGE_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   gitStageFilesSupported,
   ATTRIBUTE_SPLIT_BUDGET,
@@ -42,6 +44,7 @@ import {
   gitStagedObjectPortArgvAllowed,
   readGitStageCandidate,
   stageExactFiles,
+  unstageExactFiles,
   type GitStageEffectContext,
 } from "./git-stage-node.js";
 
@@ -1289,5 +1292,76 @@ describe("exact-file staging of a decomposed (NFD) file name", () => {
         .trim()
         .normalize("NFC"),
     ).toBe("\u00e9.txt");
+  });
+});
+
+// U-28: a directory pathspec binds hundreds of files in one proposal. The exec contract caps one
+// run's stdin (64 KiB as bytes), so the index entries travel in parts on the private index, and an
+// unstage runs as several restores; the live index changes only after every part succeeded.
+describe("a stage or unstage selection far above the request bound", () => {
+  function manyFilesRepository(count: number): { repo: string; paths: string[] } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-stage-many-")));
+    dirs.push(base);
+    git(base, ["init", "-q", "-b", "main"]);
+    git(base, ["config", "user.name", "Keiko Test"]);
+    git(base, ["config", "user.email", "keiko@example.test"]);
+    writeFileSync(join(base, "seed.txt"), "seed\n");
+    git(base, ["add", "seed.txt"]);
+    git(base, ["-c", "commit.gpgsign=false", "commit", "-qm", "base"]);
+    mkdirSync(join(base, "src"));
+    const paths = Array.from({ length: count }, (_unused, at) => `src/file-${String(at)}.txt`);
+    for (const path of paths) writeFileSync(join(base, path), `${path}\n`);
+    return { repo: base, paths };
+  }
+  function stageRequest(
+    repo: string,
+    paths: readonly string[],
+  ): Parameters<typeof stageExactFiles>[1] {
+    return { ...request(repo), pathspecs: paths };
+  }
+
+  it("feeds update-index in parts that each stay inside the stdin bound", async () => {
+    const { repo, paths } = manyFilesRepository(1200);
+    const stdinSizes: number[] = [];
+    const base = context(repo);
+    const recording: GitStageEffectContext = {
+      ...base,
+      run: (argv, stdin, indexPath) => {
+        if (argv[0] === "update-index") stdinSizes.push(Buffer.byteLength(stdin ?? ""));
+        return base.run(argv, stdin, indexPath);
+      },
+    };
+    await expect(stageExactFiles(recording, stageRequest(repo, paths))).resolves.toBe(true);
+    expect(stdinSizes.length).toBeGreaterThan(1);
+    for (const size of stdinSizes) expect(size).toBeLessThanOrEqual(STDIN_BUDGET_BYTES);
+    expect(git(repo, ["ls-files", "src"]).trim().split("\n")).toHaveLength(1200);
+  });
+
+  it("refuses a selection above the expanded bound without touching the index", async () => {
+    const { repo } = manyFilesRepository(1);
+    const paths = Array.from(
+      { length: CODING_RUNTIME_GIT_MAX_STAGE_PATHS + 1 },
+      (_unused, at) => `src/missing-${String(at)}.txt`,
+    );
+    await expect(stageExactFiles(context(repo), stageRequest(repo, paths))).resolves.toBe(false);
+    expect(git(repo, ["ls-files", "src"]).trim()).toBe("");
+  });
+
+  it("unstages every file of a long selection through several restores", async () => {
+    const { repo, paths } = manyFilesRepository(1200);
+    git(repo, ["add", "src"]);
+    const plan = buildUnstageArgv({ pathspecs: paths });
+    expect(plan.length).toBeGreaterThan(1);
+    await expect(unstageExactFiles(context(repo), plan)).resolves.toBe(true);
+    expect(git(repo, ["ls-files", "src"]).trim()).toBe("");
+    expect(
+      git(repo, ["ls-files", "--others", "--exclude-standard", "src"]).trim().split("\n"),
+    ).toHaveLength(1200);
+  });
+
+  it("refuses an unstage plan that is not made of restores", async () => {
+    const { repo } = manyFilesRepository(1);
+    await expect(unstageExactFiles(context(repo), [["reset", "--hard"]])).resolves.toBe(false);
+    await expect(unstageExactFiles(context(repo), [])).resolves.toBe(false);
   });
 });

@@ -2367,7 +2367,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   checks them, together with the branch, inside the same index transaction as staging and again
   just before the reviewed index replaces the live one, with the run's authority at the swap; a
   change that lands after the review or an approval is never accepted as the effect's new snapshot
-  (PR #4064 review). Staging writes objects from the verified bytes and never runs a filter
+  (PR #4064 review). The two bounds of a stage or unstage are separate (U-28, owner decision
+  2026-11-24 on work-ending limits). The model-facing request carries at most 50 `paths` (the same
+  bound as `keiko_git_diff` and a status list; it protects the model's context window), but a path may
+  name a directory, and `"."` the whole workspace: the server expands each to the files Git's own
+  change list names below it (the prefix rule of the diff reader; pending changes for a stage, staged
+  ones for an unstage; conflicted files are left out; denied paths never reach the list) and the
+  proposal, its approval and its effect bind those concrete files. A directory with no matching change,
+  an expansion from a truncated scan, or one above 10,000 files (`CODING_RUNTIME_GIT_MAX_STAGE_PATHS`,
+  the raw snapshot's own scan limit, which exists to protect memory and to stop a runaway loop) is
+  refused as `selection-unreviewed`. The approval card carries the true file count and the first 50
+  paths marked as truncated; the index entries of a large stage reach Git in parts of at most 48 KiB
+  on the transaction's private index, and an unstage runs as several bounded restores, so the live
+  index changes only after every part succeeded. `keiko_git_status` marks a truncated list with
+  guidance that staging a directory stages every change below it. Staging writes objects from the verified bytes and never runs a filter
   driver; the effective `core.safecrlf` must be `false` and the paths may carry no `filter`, `ident`
   or `working-tree-encoding` attribute and no legacy `crlf` attribute other than `-crlf`. Where neither a `text` or `eol` attribute
   nor the effective `core.autocrlf` asks for a conversion, the verified bytes are staged as they

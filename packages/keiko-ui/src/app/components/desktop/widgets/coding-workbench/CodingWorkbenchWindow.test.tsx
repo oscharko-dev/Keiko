@@ -3835,6 +3835,36 @@ describe("CodingWorkbenchWindow", () => {
     expect(changes).toHaveTextContent("9");
   });
 
+  // U-28: a directory stage binds hundreds of files. The card states the full count, lists the
+  // first fifty in a list the keyboard can scroll, and says how many it leaves out.
+  it("U-28: renders a 302-file stage review as a count, a bounded scrollable list and a remainder", async () => {
+    const paths = Array.from(
+      { length: 50 },
+      (_unused, at) => `src/m${String(at).padStart(3, "0")}.js`,
+    );
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: {
+        requestId: "permission-7",
+        paths,
+        pathsTruncated: true,
+        fileCount: 302,
+        addedLines: 604,
+        deletedLines: 0,
+      },
+      retry: vi.fn(),
+    });
+    renderWorkbench(editApprovalState());
+
+    const changes = screen.getByRole("group", { name: "Files this change would write" });
+    expect(changes).toHaveTextContent("302");
+    expect(changes).toHaveTextContent("Only the first 50 of 302 files are listed.");
+    const list = within(changes).getByRole("list", { name: "Files this change would write" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(50);
+    expect(list).toHaveAttribute("tabindex", "0");
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
   // Workbench audit, 2026-09-03: a transient failure while the operator is deciding a file-edit
   // approval left them with no way to see which files would be written other than denying blind.
   it("#2802/finding 7: offers a retry for unavailable changed files and calls it on click", async () => {

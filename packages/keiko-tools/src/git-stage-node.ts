@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { CODING_RUNTIME_GIT_MAX_STAGE_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   assertGitStageFileUnchanged,
   GIT_STAGE_FILE_CHANGED,
@@ -594,7 +595,7 @@ async function indexEntries(
   files: readonly GitStageContent[],
   hashLength: number,
   lineEndings: GitStageLineEndings,
-): Promise<string | undefined> {
+): Promise<readonly Uint8Array[] | undefined> {
   const stages = await fileStages(ctx, files, lineEndings);
   if (stages === undefined) return undefined;
   const lines: string[] = [];
@@ -609,7 +610,25 @@ async function indexEntries(
     if (sha === undefined) return undefined;
     lines.push(`${file.mode} ${sha}\t${file.path}\0`);
   }
-  return lines.join("");
+  return indexInfoParts(lines);
+}
+// One `update-index --index-info` run's stdin is bounded (the exec contract caps bytes input at
+// 64 KiB), so a selection of hundreds of files (U-28) is fed in parts. Each part is a complete run
+// on the transaction's private index copy, which replaces the live index only after every part
+// succeeded.
+function indexInfoParts(lines: readonly string[]): readonly Uint8Array[] {
+  const parts: string[][] = [];
+  let bytes = Infinity;
+  for (const line of lines) {
+    const size = Buffer.byteLength(line);
+    if (bytes + size > STDIN_BUDGET_BYTES) {
+      parts.push([]);
+      bytes = 0;
+    }
+    parts.at(-1)?.push(line);
+    bytes += size;
+  }
+  return parts.map((part) => utf8.encode(part.join("")));
 }
 /** Whether every named file can be staged under `lineEndings` (the proposal's admission check). */
 export async function gitStageFilesSupported(
@@ -881,7 +900,7 @@ export async function stageExactFiles(
     expected === undefined ||
     !ctx.authorized() ||
     request.pathspecs.length === 0 ||
-    request.pathspecs.length > 50 ||
+    request.pathspecs.length > CODING_RUNTIME_GIT_MAX_STAGE_PATHS ||
     new Set(request.pathspecs).size !== request.pathspecs.length
   )
     return false;
@@ -904,14 +923,16 @@ export async function stageExactFiles(
         lineEndings,
       );
       if (entries === undefined) return false;
-      const result = await ctx.run(
-        ["update-index", "-z", "--index-info"],
-        entries,
-        transaction.temporaryIndexPath,
-      );
-      return (
-        result.exitCode === 0 && !result.truncated && transaction.check() && (await ctx.check())
-      );
+      for (const part of entries) {
+        const result = await ctx.run(
+          // NOSONAR typescript:S9382 -- the parts are fed one after the other to one private index
+          ["update-index", "-z", "--index-info"],
+          part,
+          transaction.temporaryIndexPath,
+        );
+        if (result.exitCode !== 0 || result.truncated) return false;
+      }
+      return transaction.check() && (await ctx.check());
     },
     (result) => {
       if (result && !ctx.authorized()) throw new Error("git-stage-authority-denied");
@@ -931,16 +952,17 @@ export async function unstageExactFiles(
   ctx: GitStageEffectContext,
   plan: GitMutationArgvPlan,
 ): Promise<boolean> {
-  const [argv] = plan;
-  if (argv === undefined || plan.length !== 1 || !ctx.authorized()) return false;
+  if (plan.length === 0 || plan.some((argv) => argv[0] !== "restore") || !ctx.authorized())
+    return false;
   return await withGitIndexTransaction(
     ctx.workspaceRoot,
     async (transaction): Promise<boolean> => {
       if (!(await ctx.check())) return false;
-      const result = await ctx.run(argv, undefined, transaction.temporaryIndexPath);
-      return (
-        result.exitCode === 0 && !result.truncated && transaction.check() && (await ctx.check())
-      );
+      for (const argv of plan) {
+        const result = await ctx.run(argv, undefined, transaction.temporaryIndexPath); // NOSONAR typescript:S9382 -- the runs are sequential on one private index copy
+        if (result.exitCode !== 0 || result.truncated) return false;
+      }
+      return transaction.check() && (await ctx.check());
     },
     (result) => {
       if (result && !ctx.authorized()) throw new Error("git-unstage-authority-denied");

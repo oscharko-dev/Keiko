@@ -3,7 +3,19 @@ import { parseGitEditorDiffResponse, type GitEditorDiffResponse } from "./git-ed
 import { GIT_STATUS_CODES, isSafeGitRefName, type GitChangedFile } from "./git-repository.js";
 import { isGitSyncOutcome, type GitSyncOutcome } from "./git-sync.js";
 
+/**
+ * The most entries one model-facing Git request carries (`paths` of keiko_git_stage, keiko_git_diff
+ * and the unstage inverse) and the most changed files a status answer lists. It protects the
+ * model's context window, not the work: a path may name a directory, which the server expands.
+ */
 export const CODING_RUNTIME_GIT_MAX_PATHS = 50;
+/**
+ * The most files one stage or unstage proposal binds after directory pathspecs expanded. A fixed
+ * small bound here ended healthy work (U-28: a 301-file rename could not be staged), so this one
+ * only protects memory and bounds a runaway loop: it equals the raw worktree snapshot's own scan
+ * limit (`MAX_INSPECTED_PATHS`), beyond which Git's change list is not known to be complete anyway.
+ */
+export const CODING_RUNTIME_GIT_MAX_STAGE_PATHS = 10_000;
 export const CODING_RUNTIME_GIT_MAX_BYTES = 65_536;
 const STATUSES: ReadonlySet<string> = new Set(GIT_STATUS_CODES);
 const STAGE_STATUS_REASONS = {
@@ -211,7 +223,7 @@ function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): bo
     typeof value.pathCount === "number" &&
     Number.isSafeInteger(value.pathCount) &&
     value.pathCount > 0 &&
-    value.pathCount <= CODING_RUNTIME_GIT_MAX_PATHS
+    value.pathCount <= CODING_RUNTIME_GIT_MAX_STAGE_PATHS
   );
 }
 function count(value: unknown): boolean {
