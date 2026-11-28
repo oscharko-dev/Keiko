@@ -8,6 +8,7 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TOOL_TASK_PROMPT_CHARS,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_HEAD_LINES,
   CODING_SAFE_ACTIVITY_TOOL_OUTPUT_TAIL_LINES,
+  type CodingSafeActivityProgramKind,
   type CodingSafeActivityToolFailureOrigin,
   type CodingSafeActivityToolOutput,
   type CodingSafeActivityToolPresentation,
@@ -34,6 +35,7 @@ type ToolDetail = Pick<
   | "agentName"
   | "taskDescription"
   | "taskPrompt"
+  | "programKind"
 >;
 
 /** What one finished or running OpenCode tool part shows beside its state. */
@@ -52,7 +54,9 @@ export function openCodeToolDetail(
   const origin = failureOrigin(name, state, displayState);
   const durationMs = partDuration(part);
   const shortened = shortenedOutput(state);
+  const programKind = name === "execute" ? openCodeProgramKind(state) : undefined;
   return {
+    ...(programKind === undefined ? {} : { programKind }),
     ...(shortened === undefined ? {} : { outputShortened: shortened }),
     ...(origin === undefined ? {} : { failureOrigin: origin }),
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -86,6 +90,26 @@ function subagentDetail(
 
 function inputText(value: unknown, maxChars: number): CodingSafeActivityToolText | undefined {
   return typeof value === "string" ? boundedToolText(value, maxChars) : undefined;
+}
+
+// The Code Mode namespaces a program reaches a tool through: `tools.automation.*` changes a
+// scheduled task, `tools.shell(` / `tools.bash(` runs a command, and any other server namespace is a
+// connected tool. The program's own text is matched, never kept: only the closed kind leaves here.
+// `tools.opencode.*` is the runtime's own management surface and names no kind.
+const PROGRAM_SCHEDULE_CALL = /\btools\.automation\.(?:create|pause|resume|delete|update|run)\b/u;
+const PROGRAM_COMMAND_CALL = /\btools\.(?:shell|bash)\s*\(/u;
+const PROGRAM_TOOL_CALL =
+  /\btools\.(?!opencode\b|automation\b|shell\b|bash\b)[A-Za-z_]\w*\.[A-Za-z_]\w*\s*\(/u;
+
+/** What a Code Mode program does, from the tools its code calls; undefined when it calls none. */
+export function openCodeProgramKind(
+  state: Readonly<Record<string, unknown>>,
+): CodingSafeActivityProgramKind | undefined {
+  const code = record(state.input)?.code;
+  if (typeof code !== "string") return undefined;
+  if (PROGRAM_SCHEDULE_CALL.test(code)) return "schedule";
+  if (PROGRAM_COMMAND_CALL.test(code)) return "command";
+  return PROGRAM_TOOL_CALL.test(code) ? "tool" : undefined;
 }
 
 /**

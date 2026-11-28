@@ -194,6 +194,14 @@ export type CodingSafeActivityToolFailureOrigin =
   (typeof CODING_SAFE_ACTIVITY_TOOL_FAILURE_ORIGINS)[number];
 
 /**
+ * What a Code Mode `execute` program does, in closed words read from the tools it calls (never from
+ * its text): `command` runs a shell command, `schedule` changes a scheduled task, `tool` calls a
+ * connected server's tool. A program that calls none carries no kind. Body-free (#4491 U-56).
+ */
+export const CODING_SAFE_ACTIVITY_PROGRAM_KINDS = ["command", "schedule", "tool"] as const;
+export type CodingSafeActivityProgramKind = (typeof CODING_SAFE_ACTIVITY_PROGRAM_KINDS)[number];
+
+/**
  * A failed call's origin when its producer named none: the closed state decides it. The server's
  * projection and the Workbench share this one rule, so a row and the run's log never disagree.
  */
@@ -260,6 +268,8 @@ export interface CodingSafeActivityToolPresentation {
   readonly exitCode?: number;
   /** Where a call that did not succeed failed; absent while running and on success. */
   readonly failureOrigin?: CodingSafeActivityToolFailureOrigin;
+  /** What a Code Mode `execute` program does; present on `execute` calls that call a tool only. */
+  readonly programKind?: CodingSafeActivityProgramKind;
   /** Why Keiko refused the call, where the governed facade knows it. */
   readonly refusalCause?: CodingSafeActivityToolRefusalCause;
   /** Wall time the runtime ran the call, from its start to its end. */
@@ -995,6 +1005,7 @@ export function isCodingSafeActivityToolPresentation(
     "bridgeDurationMs",
     "exitCode",
     "failureOrigin",
+    "programKind",
     "refusalCause",
     "durationMs",
     "failureCount",
@@ -1040,6 +1051,8 @@ function isOutputShortened(value: unknown): boolean {
 function validPresentationVocabulary(value: Record<string, unknown>): boolean {
   return (
     (value.gitAction === undefined || isOneOf(value.gitAction, CODING_SAFE_ACTIVITY_GIT_ACTIONS)) &&
+    (value.programKind === undefined ||
+      isOneOf(value.programKind, CODING_SAFE_ACTIVITY_PROGRAM_KINDS)) &&
     validPresentationOutcomeVocabulary(value)
   );
 }

@@ -19,6 +19,7 @@ import {
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   CODING_SAFE_ACTIVITY_TOOL_STATES,
   CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES,
+  CODING_SAFE_ACTIVITY_PROGRAM_KINDS,
   isCodingSafeActivityToolPresentation,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityAnswerPage,
@@ -157,6 +158,15 @@ describe("coding safe-activity contract", () => {
     }
     for (const gitOutcome of ["committed", "failed", "", null, 1, ["blocked"], "Blocked"]) {
       expect(isCodingSafeActivityToolPresentation({ gitOutcome })).toBe(false);
+    }
+  });
+
+  it("admits only a closed program kind on a tool presentation", () => {
+    for (const programKind of CODING_SAFE_ACTIVITY_PROGRAM_KINDS) {
+      expect(isCodingSafeActivityToolPresentation({ programKind })).toBe(true);
+    }
+    for (const programKind of ["bash", "Schedule", "", null, 1, ["tool"]]) {
+      expect(isCodingSafeActivityToolPresentation({ programKind })).toBe(false);
     }
   });
 

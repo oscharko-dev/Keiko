@@ -474,3 +474,40 @@ describe("a subagent call's agent, description and prompt (U-52)", () => {
     expect(isCodingSafeActivityToolPresentation(redacted)).toBe(true);
   });
 });
+
+describe("what a Code Mode program does (U-56)", () => {
+  const program = (code: string): ReturnType<typeof openCodeToolDetail> => {
+    const state = { status: "completed", input: { code } };
+    return openCodeToolDetail("execute", shellPart(state), state, "succeeded");
+  };
+
+  it.each([
+    ["schedule", 'return await tools.automation.create({ name: "x" });'],
+    ["schedule", "await tools.automation.delete({ id });"],
+    ["command", 'return await tools.shell({ command: "ls" });'],
+    ["tool", 'return await tools.fixture.echo({ text: "a" });'],
+  ] as const)("reads %s from the called tool", (kind, code) => {
+    expect(program(code).programKind).toBe(kind);
+  });
+
+  it.each([
+    "return 1 + 1;",
+    "return await tools.opencode.worktree_list({});",
+    "return await tools.automation.list();",
+    "const tools = []; return tools.map((tool) => tool);",
+  ])("names no kind for a program that calls no governed tool: %s", (code) => {
+    expect(program(code).programKind).toBeUndefined();
+  });
+
+  it("carries only the closed kind, never the program's text", () => {
+    const detail = program('return await tools.automation.create({ prompt: "SECRET_BODY" });');
+    expect(JSON.stringify(detail)).not.toContain("SECRET_BODY");
+  });
+
+  it("names no kind on a tool that is not a program", () => {
+    const state = { status: "completed", input: { code: "tools.automation.create({})" } };
+    expect(openCodeToolDetail("read", shellPart(state), state, "succeeded")).not.toHaveProperty(
+      "programKind",
+    );
+  });
+});

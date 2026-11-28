@@ -23,6 +23,7 @@ import type {
   CodingSafeActivityMessage,
   CodingSafeActivityTextPart,
   CodingSafeActivityPlan,
+  CodingSafeActivityProgramKind,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
   CodingWorkbenchRuntimeSseEvent,
@@ -128,6 +129,10 @@ const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>>
   todowrite: "codingWorkbench.timeline.tool.todo",
   question: "codingWorkbench.timeline.tool.question",
   execute: "codingWorkbench.timeline.tool.execute",
+  automation_create: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_pause: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_resume: "codingWorkbench.timeline.tool.execute_schedule",
+  automation_delete: "codingWorkbench.timeline.tool.execute_schedule",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -788,7 +793,17 @@ function redeemedLabelKey(
 function proposalLabelKey(tool: CodingSafeActivityTool): CodingWorkbenchMessageKey | undefined {
   if (tool.tool === "keiko_git_stage" && tool.presentation?.gitAction === "unstage")
     return "codingWorkbench.timeline.tool.git_unstage";
+  if (tool.tool === "execute") return programLabelKey(tool.presentation?.programKind);
   return toolLabelKey(tool.tool);
+}
+
+// A Code Mode program reads as what it does when the server named a kind; otherwise as a tool run.
+function programLabelKey(
+  kind: CodingSafeActivityProgramKind | undefined,
+): CodingWorkbenchMessageKey {
+  if (kind === "command") return "codingWorkbench.timeline.tool.execute_command";
+  if (kind === "schedule") return "codingWorkbench.timeline.tool.execute_schedule";
+  return "codingWorkbench.timeline.tool.execute";
 }
 
 function markSuperseded(marked: TimelineItem[], indexes: readonly number[]): void {

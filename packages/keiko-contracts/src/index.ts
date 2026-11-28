@@ -1618,6 +1618,7 @@ export type {
   CodingSafeActivityTextSegment,
   CodingSafeActivityTool,
   CodingSafeActivityToolFailureOrigin,
+  CodingSafeActivityProgramKind,
   CodingSafeActivityOutputShortened,
   CodingSafeActivityToolOutput,
   CodingSafeActivityToolRefusalCause,
