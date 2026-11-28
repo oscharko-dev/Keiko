@@ -537,6 +537,7 @@ describe("CodingWorkbenchTimeline", () => {
     ["branch-not-local-checkout", "only in a Local checkout"],
     ["branch-executable-filters", "executable Git filters"],
     ["branch-preflight", "repository condition that blocks the branch"],
+    ["commit-protected-branch", "does not commit there. Use a task branch"],
     ["blocked", "policy or authority checks refused"],
   ] as const)("explains the refused task branch %s precisely", (gitOutcome, sentence) => {
     const feed = feedWithGitOutcomes();

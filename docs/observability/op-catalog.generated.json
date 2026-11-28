@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c77a306fff1991161841c3e5de3fe2da79b853d025d3ac85419974cb180722e4",
+    "catalogDigest": "16596460f72db169a69498ee8e6e25527610e183ffe7e889eb0819f4d7a48a04",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -19305,6 +19305,7 @@
               "not-staged",
               "unsaved-changes",
               "blocked",
+              "commit-protected-branch",
               "branch-invalid-name",
               "branch-protected-name",
               "branch-exists",
@@ -19340,6 +19341,7 @@
               "not-staged",
               "unsaved-changes",
               "blocked",
+              "commit-protected-branch",
               "branch-invalid-name",
               "branch-protected-name",
               "branch-exists",
@@ -19356,7 +19358,7 @@
         "proofIds": ["coding-runtime.tool-result-rendered.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:51",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:202"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/governedToolModelContent.ts:203"]
       },
       {
         "contractKind": "activity-log-operation",

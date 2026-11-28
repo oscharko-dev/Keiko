@@ -115,6 +115,7 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
         "not-staged",
         "unsaved-changes",
         "blocked",
+        "commit-protected-branch",
         "branch-invalid-name",
         "branch-protected-name",
         "branch-exists",

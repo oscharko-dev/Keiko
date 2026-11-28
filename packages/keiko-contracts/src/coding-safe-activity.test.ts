@@ -140,6 +140,7 @@ describe("coding safe-activity contract", () => {
       "not-staged",
       "unsaved-changes",
       "blocked",
+      "commit-protected-branch",
       "branch-invalid-name",
       "branch-protected-name",
       "branch-exists",

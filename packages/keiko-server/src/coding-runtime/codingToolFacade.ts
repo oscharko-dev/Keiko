@@ -500,6 +500,10 @@ function gitStepOutcome(status: string): CodingSafeActivityGitOutcome {
 }
 
 function commitOutcome(commit: VerifiedCommitResult): CodingSafeActivityGitOutcome {
+  // The run sits on a protected branch (lab U-48): the same `blocked` status as any policy refusal,
+  // but the closed block reason names the cause, so the card can say why. The decision is unchanged.
+  if (commit.status === "blocked" && commit.blockReason === "protected-branch")
+    return "commit-protected-branch";
   return COMMIT_OUTCOME_BY_REASON.get(commit.reason) ?? gitStepOutcome(commit.status);
 }
 

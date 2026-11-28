@@ -1587,6 +1587,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Not committed: files open in the editor hold unsaved changes. Save them, verify the staged change, then commit.",
   "codingWorkbench.activity.git.blocked":
     "Not done: Keiko's policy or authority checks refused this step.",
+  "codingWorkbench.activity.git.commit-protected-branch":
+    "Not done: this run is on a protected branch such as main or dev, and Keiko does not commit there. Use a task branch.",
   "codingWorkbench.activity.git.branch-invalid-name":
     "Not done: that is not a branch name Keiko will create. Use letters, digits, '-', '_', '.' and '/'.",
   "codingWorkbench.activity.git.branch-protected-name":

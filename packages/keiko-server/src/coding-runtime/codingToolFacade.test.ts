@@ -2871,6 +2871,22 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     });
   });
 
+  // Lab U-48: a commit refused on a protected branch read only the generic policy sentence.
+  it("names a commit refused on a protected branch, and keeps other policy blocks generic", () => {
+    const blocked = (blockReason: string): CodingToolResult =>
+      completedWith("verifiedCommit", {
+        status: "blocked",
+        reason: "policy-block",
+        blockReason,
+      });
+    expect(codingToolGitPresentation(blocked("protected-branch"))).toEqual({
+      gitOutcome: "commit-protected-branch",
+    });
+    expect(codingToolGitPresentation(blocked("policy-forbidden"))).toEqual({
+      gitOutcome: "blocked",
+    });
+  });
+
   it.each([
     [{ kind: "stage", status: "succeeded", reason: "none" }, "completed"],
     [{ kind: "stage", status: "blocked", reason: "scope-denied" }, "blocked"],

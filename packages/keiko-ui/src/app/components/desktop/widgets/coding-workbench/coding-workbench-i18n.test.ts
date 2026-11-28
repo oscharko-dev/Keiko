@@ -194,6 +194,7 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.activity.git.not-staged",
     "codingWorkbench.activity.git.unsaved-changes",
     "codingWorkbench.activity.git.blocked",
+    "codingWorkbench.activity.git.commit-protected-branch",
     "codingWorkbench.activity.git.branch-invalid-name",
     "codingWorkbench.activity.git.branch-protected-name",
     "codingWorkbench.activity.git.branch-exists",

@@ -1646,6 +1646,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Nicht committet: Im Editor geöffnete Dateien enthalten ungespeicherte Änderungen. Speichere sie, verifiziere die vorgemerkte Änderung und committe dann.",
   "codingWorkbench.activity.git.blocked":
     "Nicht durchgeführt: Die Richtlinien- oder Berechtigungsprüfung von Keiko hat diesen Schritt abgelehnt.",
+  "codingWorkbench.activity.git.commit-protected-branch":
+    "Nicht durchgeführt: Dieser Lauf arbeitet auf einem geschützten Branch wie main oder dev, und Keiko committet dort nicht. Nutze einen Aufgaben-Branch.",
   "codingWorkbench.activity.git.branch-invalid-name":
     "Nicht durchgeführt: Dies ist kein Branch-Name, den Keiko anlegt. Verwende Buchstaben, Ziffern, '-', '_', '.' und '/'.",
   "codingWorkbench.activity.git.branch-protected-name":
