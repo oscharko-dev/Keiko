@@ -34,9 +34,11 @@ the model as activated WITHOUT any request to a model (startup still loads no mo
 only the basic-chat proof is restored, so a tool-calling proof is never claimed from the record: the
 Workbench proves tool calling lazily at first use of the activated model, as before, and the proof
 already stored with the configuration keeps its own configuration fingerprint. Any mismatch (first
-start, product update, changed endpoint, model or credential, a replaced configuration) discards the
+start, product update, changed endpoint, model or credential) discards the
 record and the model is inactive until a person activates it again; so does Deactivate and a failed
-check that invalidated the observation. Evidence is `gateway.activation.persistence`: a count of
+check that invalidated the observation. Saving the configuration again keeps every activation whose
+per-model binding and credential are unchanged and discards only the models whose binding changed or
+that were removed (only the basic-chat proof is carried, never a feature proof). Evidence is `gateway.activation.persistence`: a count of
 restored records and a count discarded per closed reason (`first-start`, `product-changed`,
 `configuration-changed`, `credential-changed`, `deactivated`, `invalidated`).
 

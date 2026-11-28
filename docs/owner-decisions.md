@@ -17,7 +17,7 @@ Binding rules: Keiko remembers a model a person activated in Settings > Models (
 Workbench notice). The record is bound to the installation, the product version and the model's
 configuration and credential digest, and is restored at the next start without sending any request
 (startup loads no model). Only a first start, a product update, a changed endpoint, model or
-credential, Deactivate, or a proven failure of the model discards it and requires a new activation.
+credential of that model (a configuration saved again keeps every unchanged model), Deactivate, or a proven failure of the model discards it and requires a new activation.
 A tool-calling proof is never inferred from the record. Activation stays the person's act: Keiko
 never activates a model by itself. Amends ADR-0171 D2.
 

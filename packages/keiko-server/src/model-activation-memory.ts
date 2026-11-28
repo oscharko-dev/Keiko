@@ -172,6 +172,17 @@ function bindingOf(
   };
 }
 
+/**
+ * Whether a model's connection is the same one an activation was proven against: the same
+ * configuration digest and the same credential. A replaced configuration keeps exactly these.
+ */
+export function sameActivationBinding(
+  left: ModelProviderConfig,
+  right: ModelProviderConfig,
+): boolean {
+  return configurationDigest(left) === configurationDigest(right) && left.apiKey === right.apiKey;
+}
+
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
@@ -203,12 +214,8 @@ interface StoredFileOutcome {
 }
 
 function parseFile(raw: Buffer, installation: string): StoredFileOutcome | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return undefined;
-  }
+  // A malformed file throws here; the reader reports it and treats the record as unusable.
+  const parsed: unknown = JSON.parse(raw.toString("utf8"));
   if (typeof parsed !== "object" || parsed === null) return undefined;
   const record = parsed as Record<string, unknown>;
   if (record.schemaVersion !== SCHEMA_VERSION || record.installation !== installation)
@@ -226,6 +233,25 @@ function sameBinding(left: StoredActivation, right: StoredActivation): boolean {
   return (
     left.configurationDigest === right.configurationDigest &&
     left.credentialDigest === right.credentialDigest
+  );
+}
+
+function reportActivationFailure(
+  options: ModelActivationMemoryOptions,
+  operation: string,
+  error: unknown,
+  correlationId: string,
+): void {
+  emitServerDiagnostic(
+    options.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation,
+      source: "model-activation-memory",
+      error,
+      redact: () => "Keiko could not read or write its record of activated models.",
+      ...(options.now === undefined ? {} : { now: options.now }),
+    }),
   );
 }
 
@@ -310,7 +336,7 @@ class FileModelActivationMemory implements ModelActivationMemory {
       if (raw === undefined) return { kind: "none" };
       return parseFile(raw, this.installation) ?? { kind: "unusable" };
     } catch (error) {
-      this.reportFailure("gateway.activation.restore", error, correlationId);
+      reportActivationFailure(this.options, "gateway.activation.restore", error, correlationId);
       return { kind: "unusable" };
     }
   }
@@ -325,23 +351,9 @@ class FileModelActivationMemory implements ModelActivationMemory {
       });
       return true;
     } catch (error) {
-      this.reportFailure("gateway.activation.persist", error, correlationId);
+      reportActivationFailure(this.options, "gateway.activation.persist", error, correlationId);
       return false;
     }
-  }
-
-  private reportFailure(operation: string, error: unknown, correlationId: string): void {
-    emitServerDiagnostic(
-      this.options.diagnostics,
-      serverDiagnosticFromError({
-        correlationId,
-        operation,
-        source: "model-activation-memory",
-        error,
-        redact: () => "Keiko could not read or write its record of activated models.",
-        ...(this.options.now === undefined ? {} : { now: this.options.now }),
-      }),
-    );
   }
 
   private logChange(

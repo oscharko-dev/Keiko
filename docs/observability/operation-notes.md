@@ -1060,8 +1060,8 @@ an inference request only to a model a person activated (#4351, owner decision 2
 activation, product decision 2026-11-16): a check loads the model, which on a shared gateway evicts
 a model somebody else is using. Startup checks no chat model and starts no tool-calling proof; every
 chat model is inactive until the person activates it in Settings > Models and then stays activated across restarts until a product update or a changed connection (owner decision 2026-11-28; `gateway.activation.persistence` records the restored count and the count discarded per closed reason, body-free)
-(per model or "Activate all"), and that activation is its readiness check. Replacing a connection
-deactivates it, and the person can deactivate an activated model there again (Deactivate,
+(per model or "Activate all"), and that activation is its readiness check. Saving the configuration again deactivates only the models whose connection or credential
+changed or that were removed (`gateway.activation.persistence`, reason `configuration-changed`, with a count), and the person can deactivate an activated model there again (Deactivate,
 `POST /api/gateway/readiness/deactivation`): that sends nothing to the provider, the model leaves the
 Chat picker and is refused until it is activated anew, and a deactivation while that model's check
 still runs is refused (`gateway.readiness.deactivation` records the closed outcome). Only activated models are offered by the Chat picker and elected as an automatic

@@ -2417,6 +2417,9 @@ function recordReadinessObservation(
       retained.checkedAt,
       observedGeneration,
       report.checkedAt,
+      undefined,
+      undefined,
+      correlationId,
     );
     return;
   }
@@ -2425,6 +2428,10 @@ function recordReadinessObservation(
     fields,
     report.checkedAt,
     observedGeneration,
+    undefined,
+    undefined,
+    undefined,
+    correlationId,
   );
 }
 
@@ -2462,6 +2469,9 @@ function retainBusyConversationReadiness(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    undefined,
+    correlationId,
   );
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -2518,8 +2528,18 @@ function recordFailedReadinessObservation(
   const chat = report.probes.find((probe) => probe.name === "chat");
   const failure =
     chat?.status === "failed" && busySignal(chat.warning) !== undefined ? "transient" : undefined;
-  if (preserveUnexecutedCapabilityObservation(deps, report, observedGeneration, failure)) return;
-  if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration)) return;
+  if (
+    preserveUnexecutedCapabilityObservation(
+      deps,
+      report,
+      observedGeneration,
+      failure,
+      correlationId,
+    )
+  )
+    return;
+  if (preserveVerifiedToolCallingObservation(deps, report, observedGeneration, correlationId))
+    return;
   // A proven failure also removes the durable activation record (owner decision 2026-11-28).
   deps.gatewayConfig?.clearVerifiedCapability(report.modelId, observedGeneration, {
     cause: "invalidated",
@@ -2534,6 +2554,7 @@ function recordFailedReadinessObservation(
       undefined,
       undefined,
       failure,
+      correlationId,
     );
 }
 
@@ -2542,6 +2563,7 @@ function preserveUnexecutedCapabilityObservation(
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
   conversationReadinessFailure: "transient" | undefined,
+  correlationId: string,
 ): boolean {
   if (executedCategoricalFeatureProbe(report.probes)) return false;
   const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
@@ -2556,6 +2578,7 @@ function preserveUnexecutedCapabilityObservation(
     report.checkedAt,
     undefined,
     conversationReadinessFailure,
+    correlationId,
   );
   return true;
 }
@@ -2564,6 +2587,7 @@ function preserveVerifiedToolCallingObservation(
   deps: UiHandlerDeps,
   report: GatewayReadinessReport,
   observedGeneration: number | undefined,
+  correlationId: string,
 ): boolean {
   const toolCallingProbe = report.probes.find((probe) => probe.name === "tool_calling");
   if (toolCallingProbe?.status !== "skipped") return false;
@@ -2584,6 +2608,9 @@ function preserveVerifiedToolCallingObservation(
     previous.checkedAt,
     observedGeneration,
     report.checkedAt,
+    undefined,
+    undefined,
+    correlationId,
   );
   return true;
 }

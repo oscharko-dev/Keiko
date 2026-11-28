@@ -227,6 +227,7 @@ import {
   activatedModelsOf,
   createModelActivationMemory,
   MODEL_ACTIVATION_FILE,
+  sameActivationBinding,
   type ActivationRemovalReason,
   type ModelActivationMemory,
 } from "./model-activation-memory.js";
@@ -722,6 +723,7 @@ export interface RuntimeGatewayConfig {
     conversationCheckedAt?: string,
     citationObservation?: CitationCapabilityObservation,
     conversationReadinessFailure?: "transient",
+    correlationId?: string,
   ): void;
   /**
    * Drops a model's observation. `evidence.cause` says why for the activation record: a person's
@@ -1871,6 +1873,39 @@ function mergeConfiguredGateway(state: RuntimeGatewayState, active: GatewayConfi
   };
 }
 
+/**
+ * The activations a replaced configuration keeps (owner decision 2026-11-28): a model whose
+ * connection and credential are unchanged stays activated, so adding a model never costs the others
+ * their activation. Only the basic-chat proof is carried, never a feature proof.
+ */
+function unchangedActivations(
+  state: RuntimeGatewayState,
+  next: GatewayConfig | undefined,
+): readonly VerifiedModelCapabilityObservation[] {
+  const kept: VerifiedModelCapabilityObservation[] = [];
+  for (const provider of next?.providers ?? []) {
+    const observation = state.observations.get(provider.modelId);
+    const previous = state.config?.providers.find((entry) => entry.modelId === provider.modelId);
+    if (
+      observation?.generation !== state.generation ||
+      observation.fields.conversationReady !== true ||
+      previous === undefined ||
+      !sameActivationBinding(previous, provider)
+    )
+      continue;
+    kept.push({
+      modelId: provider.modelId,
+      generation: state.generation + 1,
+      checkedAt: observation.checkedAt,
+      ...(observation.conversationCheckedAt === undefined
+        ? {}
+        : { conversationCheckedAt: observation.conversationCheckedAt }),
+      fields: { conversationReady: true },
+    });
+  }
+  return kept;
+}
+
 function setRuntimeGateway(
   state: RuntimeGatewayState,
   next: GatewayConfig | undefined,
@@ -1878,12 +1913,14 @@ function setRuntimeGateway(
   correlationId?: string,
   configured = next,
 ): void {
+  const kept = unchangedActivations(state, next);
   state.config = next;
   state.configured = configured;
   state.present = present;
   state.verification = UNVERIFIED_GATEWAY;
   state.observations.clear();
   state.generation++;
+  for (const observation of kept) state.observations.set(observation.modelId, observation);
   syncActivation(state, "configuration-changed", correlationId);
   state.listeners.notify(correlationId);
 }
@@ -2040,8 +2077,8 @@ function runtimeObservationFacets(
       state.observations,
       () => state.generation,
       (id) => state.config?.providers.some((provider) => provider.modelId === id) === true,
-      () => {
-        syncActivation(state, "invalidated");
+      (correlationId) => {
+        syncActivation(state, "invalidated", correlationId);
       },
     ),
     clearVerifiedCapability(id, generation, evidence): boolean {
@@ -2060,7 +2097,7 @@ function gatewayCapabilityRecorder(
   observations: Map<string, VerifiedModelCapabilityObservation>,
   generation: () => number,
   admitted: (modelId: string) => boolean,
-  changed: () => void,
+  changed: (correlationId?: string) => void,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
   return (
     modelId,
@@ -2070,6 +2107,7 @@ function gatewayCapabilityRecorder(
     conversationCheckedAt,
     citationObservation,
     conversationReadinessFailure,
+    correlationId,
   ): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
@@ -2090,7 +2128,7 @@ function gatewayCapabilityRecorder(
         currentGeneration,
       ),
     });
-    changed();
+    changed(correlationId);
   };
 }
 

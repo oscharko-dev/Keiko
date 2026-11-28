@@ -23,6 +23,10 @@ const baseEnv = {
   KEIKO_MODEL_CHAT_A_BASE_URL: "http://127.0.0.1:41999/v1",
 };
 
+type ProviderList = NonNullable<
+  ReturnType<NonNullable<UiHandlerDeps["gatewayConfig"]>["current"]>
+>["providers"];
+
 describe("activated models across a server restart", () => {
   let dir: string;
   const compositions: UiHandlerDeps[] = [];
@@ -163,12 +167,129 @@ describe("activated models across a server restart", () => {
     expect(currentConversationReady(second, MODEL)).toBe(false);
   });
 
-  it("forgets every activation when the configuration is replaced", async () => {
+  describe("when the configuration is saved again", () => {
+    const twoModels = {
+      ...baseEnv,
+      KEIKO_MODEL_CHAT_B_API_KEY: "sk-test-activation-credential-b",
+      KEIKO_MODEL_CHAT_B_BASE_URL: "http://127.0.0.1:41998/v1",
+    };
+
+    function activateBoth(deps: UiHandlerDeps): void {
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Expected the gateway holder.");
+      for (const modelId of ["chat-a", "chat-b"])
+        holder.recordVerifiedCapability(
+          modelId,
+          { conversationReady: true },
+          new Date().toISOString(),
+          holder.generation(),
+        );
+    }
+
+    function saved(deps: UiHandlerDeps, change: (providers: ProviderList) => ProviderList): void {
+      const holder = deps.gatewayConfig;
+      const config = holder?.current();
+      if (holder === undefined || config === undefined) throw new TypeError("Expected a config.");
+      holder.set({ ...config, providers: change(config.providers) }, true, "corr-saved");
+    }
+
+    function discarded(sink: ReturnType<typeof createBufferedServerLogSink>): unknown[] {
+      return sink.events
+        .filter((event) => event.op === "gateway.activation.persistence")
+        .filter(
+          (event) => event.extra?.change === "discarded" && event.extra.reason !== "first-start",
+        )
+        .map((event) => event.extra);
+    }
+
+    it("adding a model keeps the other activated models", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const first = start(twoModels);
+      activateBoth(first);
+      saved(first, (providers) => [
+        ...providers,
+        ...providers.slice(0, 1).map((provider) => ({ ...provider, modelId: "chat-c" })),
+      ]);
+      expect(currentConversationReady(first, "chat-a")).toBe(true);
+      expect(currentConversationReady(first, "chat-b")).toBe(true);
+      expect(currentConversationReady(first, "chat-c")).toBe(false);
+      expect(discarded(sink)).toEqual([]);
+      // Only the basic-chat proof is carried over a save, never a feature proof.
+      expect(first.gatewayConfig?.verifiedCapability("chat-a")?.fields).toEqual({
+        conversationReady: true,
+      });
+      const second = await restart(first, twoModels);
+      expect(currentConversationReady(second, "chat-a")).toBe(true);
+      expect(currentConversationReady(second, "chat-b")).toBe(true);
+      expect(fetchDouble).not.toHaveBeenCalled();
+    });
+
+    it("changing one model's endpoint drops only that model", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const first = start(twoModels);
+      activateBoth(first);
+      saved(first, (providers) =>
+        providers.map((provider) =>
+          provider.modelId === "chat-b"
+            ? { ...provider, baseUrl: "http://127.0.0.1:41997/v1" }
+            : provider,
+        ),
+      );
+      expect(currentConversationReady(first, "chat-a")).toBe(true);
+      expect(currentConversationReady(first, "chat-b")).toBe(false);
+      expect(discarded(sink)).toContainEqual(
+        expect.objectContaining({ reason: "configuration-changed", count: 1 }),
+      );
+      const second = await restart(first, {
+        ...twoModels,
+        KEIKO_MODEL_CHAT_B_BASE_URL: "http://127.0.0.1:41997/v1",
+      });
+      expect(currentConversationReady(second, "chat-a")).toBe(true);
+      expect(currentConversationReady(second, "chat-b")).toBe(false);
+    });
+
+    it("drops a model that a save removed and keeps the rest", () => {
+      const first = start(twoModels);
+      activateBoth(first);
+      saved(first, (providers) => providers.filter((provider) => provider.modelId !== "chat-b"));
+      expect(currentConversationReady(first, "chat-a")).toBe(true);
+      expect(currentConversationReady(first, "chat-b")).toBe(false);
+    });
+
+    it("drops a model whose credential a save changed", () => {
+      const first = start(twoModels);
+      activateBoth(first);
+      saved(first, (providers) =>
+        providers.map((provider) =>
+          provider.modelId === "chat-a" ? { ...provider, apiKey: "sk-test-rotated" } : provider,
+        ),
+      );
+      expect(currentConversationReady(first, "chat-a")).toBe(false);
+      expect(currentConversationReady(first, "chat-b")).toBe(true);
+    });
+  });
+
+  it("logs a record-driven invalidation under the correlation id of the check that caused it", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const first = start();
     activate(first);
-    first.gatewayConfig?.set(first.gatewayConfig.current(), true, "corr-replace");
-    expect(currentConversationReady(first, MODEL)).toBe(false);
-    const second = await restart(first);
-    expect(currentConversationReady(second, MODEL)).toBe(false);
+    first.gatewayConfig?.recordVerifiedCapability(
+      MODEL,
+      { conversationReady: false },
+      new Date().toISOString(),
+      first.gatewayConfig.generation(),
+      undefined,
+      undefined,
+      undefined,
+      "corr-record-invalidated",
+    );
+    const line = sink.events.find(
+      (event) =>
+        event.op === "gateway.activation.persistence" && event.extra?.reason === "invalidated",
+    );
+    expect(line?.correlationId).toBe("corr-record-invalidated");
   });
 });

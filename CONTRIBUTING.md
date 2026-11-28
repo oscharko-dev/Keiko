@@ -260,8 +260,8 @@ activation, product decision 2026-11-16): a check loads the model, which on a sh
 a model somebody else is using. Startup checks no chat model and starts no tool-calling proof; every
 chat model is inactive until the person activates it in Settings > Models (per model or "Activate all"),
 and that activation is its readiness check; it is then remembered across restarts until a first start,
-a product update or a changed connection discards it (owner decision 2026-11-28). Replacing a connection
-deactivates it, and the person can deactivate an activated model there again (Deactivate,
+a product update or a changed connection discards it (owner decision 2026-11-28). Saving the configuration again deactivates only the models whose connection or credential
+changed or that were removed, and the person can deactivate an activated model there again (Deactivate,
 `POST /api/gateway/readiness/deactivation`): that sends nothing to the provider, the model leaves the
 Chat picker and is refused until it is activated anew, and a deactivation while that model's check
 still runs is refused (`gateway.readiness.deactivation` records the closed outcome). Only activated models are offered by the Chat picker and elected as an automatic

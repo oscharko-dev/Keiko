@@ -1118,6 +1118,10 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -1687,6 +1691,10 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -1795,6 +1803,10 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ contextWindow: 64_000 }),
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     expect(report.probes).toEqual([
       expect.objectContaining({ name: "chat", status: "passed" }),
@@ -1944,6 +1956,10 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ conversationReady: true }),
       report.checkedAt,
       7,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -1985,6 +2001,10 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       4,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -2015,6 +2035,10 @@ describe("gateway readiness route", () => {
       { conversationReady: true },
       expect.any(String),
       0,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -2050,6 +2074,9 @@ describe("gateway readiness route", () => {
       { streaming: true, conversationReady: true },
       "2026-08-15T00:00:00.000Z",
       4,
+      expect.any(String),
+      undefined,
+      undefined,
       expect.any(String),
     );
     deps.store.close();
@@ -2303,8 +2330,11 @@ it.each([true, false])(
         "2026-10-07T12:00:00.000Z",
         0,
         report.checkedAt,
-        // Failed chat observations explicitly pass the optional citation and failure slots.
-        ...(passes ? [] : [undefined, undefined]),
+        // Citation and failure slots stay empty; the correlation id follows them.
+        undefined,
+        undefined,
+        // The record carries the check's correlation id, so an invalidation it causes is traceable.
+        expect.any(String),
       );
     } finally {
       deps.store.close();

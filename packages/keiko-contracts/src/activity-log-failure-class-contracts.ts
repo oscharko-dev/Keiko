@@ -5980,7 +5980,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
       state: [
         "gateway.activation.persistence",
-      "gateway.conversation.admission",
+        "gateway.conversation.admission",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.withheld",
         "gateway.readiness.busy-retained",
