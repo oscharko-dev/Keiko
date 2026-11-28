@@ -545,6 +545,9 @@ function isReviewablePath(value: unknown): boolean {
  * the fail-closed choice: no real repository path starts that way), invisible format characters
  * and anything past the length bound. The path is display text only: the card shows it and no
  * file operation ever resolves it, so this check keeps the card honest and not the filesystem safe.
+ *
+ * DISPLAY ONLY: these paths must never be joined onto a root, opened, staged or otherwise resolved;
+ * `~$report.docx` and `C:notes` are legal here precisely because nothing resolves them.
  */
 function isReviewableRepositoryPath(value: unknown): boolean {
   return (
