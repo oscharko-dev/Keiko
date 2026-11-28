@@ -54,6 +54,7 @@ import type { OpenCodeV2FileDiff, OpenCodeV2HttpClient } from "./opencodeV2HttpC
 /** The refusals this port itself can produce; the dispatcher adds `unsupported` and `not-admitted`. */
 const OPENCODE_REVERT_REFUSALS = [
   "already-staged",
+  "index-changed",
   "interrupt-failed",
   "nothing-staged",
   "nothing-to-undo",
@@ -452,8 +453,9 @@ async function restoreUndo(
   if (!(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))) {
     return { ok: false, reason: "workspace-changed" };
   }
-  const moved = await reapplyIndexMoves(ports, run, staged);
-  if (moved === "refused") return { ok: false, reason: "workspace-changed" };
+  const moved = await reapplyIndexMoves(run, staged);
+  if (moved === "changed") return { ok: false, reason: "index-changed" };
+  if (moved === "failed") return { ok: false, reason: "revert-failed" };
   try {
     await run.client.clearRevert(run.sessionId);
   } catch (error) {
@@ -474,25 +476,20 @@ async function restoreUndo(
 }
 
 /**
- * Makes the undo's index transitions again, under the same drift checks. `refused` when a person's
- * staging changed one of the paths since the undo (nothing is overwritten), `none` when the undo
- * moved no index path. An index that cannot be changed is logged and refuses like a drifted one.
+ * Makes the undo's index transitions again, under the same drift checks. `changed` when a person's
+ * staging or a commit changed one of the paths since the undo (nothing is overwritten), `failed`
+ * when the index could not be changed, `none` when the undo moved no index path. A throw propagates
+ * to the caller, which logs it with its frames.
  */
 async function reapplyIndexMoves(
-  ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   staged: OpenCodeStagedRevert,
-): Promise<"restored" | "none" | "refused"> {
+): Promise<"restored" | "none" | "changed" | "failed"> {
   const moves = staged.indexMoves;
   if (moves === undefined || moves.entries.length === 0) return "none";
-  try {
-    return (await reapplyTurnIndexMoves(run.workspaceRoot, moves)) === "restored"
-      ? "restored"
-      : "refused";
-  } catch (error) {
-    reportIndexFailure(ports, run, error);
-    return "refused";
-  }
+  const result = await reapplyTurnIndexMoves(run.workspaceRoot, moves);
+  if (result === "restored") return "restored";
+  return result === "changed-after-turn" ? "changed" : "failed";
 }
 
 async function undoIndexMoves(
@@ -501,10 +498,19 @@ async function undoIndexMoves(
   moves: TurnIndexMoves,
 ): Promise<void> {
   try {
-    await reapplyTurnIndexMoves(run.workspaceRoot, {
+    const result = await reapplyTurnIndexMoves(run.workspaceRoot, {
       headSha: moves.headSha,
       entries: moves.entries.map(({ path, from, to }) => ({ path, from: to, to: from })),
     });
+    // A person's restaging in this window is correctly left alone, but never silently.
+    if (result !== "restored")
+      recordRevertRefused(ports.activityLog, {
+        runId: run.runId,
+        operation: "restore",
+        reason: result === "changed-after-turn" ? "index-changed" : "revert-failed",
+        correlationId: undefined,
+        error: undefined,
+      });
   } catch (error) {
     reportIndexFailure(ports, run, error);
   }

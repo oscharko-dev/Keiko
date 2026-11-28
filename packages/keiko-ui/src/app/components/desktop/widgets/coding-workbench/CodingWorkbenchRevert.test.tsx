@@ -96,6 +96,21 @@ describe("CodingWorkbenchRevertBar", () => {
     expect(screen.getByRole("status")).toHaveTextContent("files may still be staged");
   });
 
+  it.each([
+    ["changed-after-turn", "because the Git index changed after the turn"],
+    ["head-moved", "because the turn committed"],
+  ] as const)(
+    "says an index-only undo took nothing back when the outcome is %s",
+    (index, reason) => {
+      renderBar({ staged: true, fileCount: 0, additions: 0, deletions: 0, index });
+
+      const status = screen.getByRole("status");
+      expect(status).toHaveTextContent("no staged change was taken back");
+      expect(status).toHaveTextContent(reason);
+      expect(status).not.toHaveTextContent("0 files");
+    },
+  );
+
   it("names a single file in the singular", () => {
     renderBar({ ...NEWEST, fileCount: 1 });
 

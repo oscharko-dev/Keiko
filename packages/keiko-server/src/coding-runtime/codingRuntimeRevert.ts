@@ -15,6 +15,7 @@ import type { CodingWorkbenchRuntimeRevertIndexOutcome } from "@oscharko-dev/kei
  */
 export const CODING_RUNTIME_REVERT_REFUSALS = [
   "already-staged",
+  "index-changed",
   "interrupt-failed",
   "not-admitted",
   "nothing-staged",
@@ -79,6 +80,7 @@ const REVERT_REFUSAL_FAILURE_CODES = {
   "turn-boundary-missing": "invalid-intent",
   unsupported: "invalid-intent",
   "workspace-changed": "invalid-intent",
+  "index-changed": "invalid-intent",
 } as const satisfies Record<CodingRuntimeRevertRefusal, RevertFailureCode>;
 
 export function revertRefusalFailureCode(reason: CodingRuntimeRevertRefusal): RevertFailureCode {

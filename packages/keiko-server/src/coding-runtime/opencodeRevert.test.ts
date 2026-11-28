@@ -1294,11 +1294,17 @@ describe("undo and the Git index (U-34b)", () => {
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ index: "restored" });
   });
 
-  async function undoneIndexOnlyTurn(): Promise<
-    ReturnType<typeof subject> & { readonly root: string }
-  > {
+  function refusals(
+    events: readonly { readonly op: string }[],
+  ): readonly { readonly op: string }[] {
+    return events.filter((event) => event.op === "coding-runtime.revert.refused");
+  }
+
+  async function undoneIndexOnlyTurn(
+    clear?: () => Promise<never>,
+  ): Promise<ReturnType<typeof subject> & { readonly root: string }> {
     const { root, begun } = await stagedTurn({ editBeforeTurn: true });
-    const made = subject({ root, files: [] });
+    const made = subject({ root, files: [], ...(clear === undefined ? {} : { clear }) });
     made.run.turnIndex = begun;
     await noteGoverned(root, ["a.txt"]);
     recordOpenCodeTurnImage(made.run, made.log);
@@ -1337,11 +1343,77 @@ describe("undo and the Git index (U-34b)", () => {
 
     await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
       ok: false,
-      reason: "workspace-changed",
+      reason: "index-changed",
     });
 
     expect(gitIn(root, "ls-files", "-s", "a.txt")).toBe(personsEntry);
     await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: true });
+  });
+
+  it("refuses Restore changes with its own reason, and leaves the index alone, when HEAD moved since the Undo", async () => {
+    const { port, root, log } = await undoneIndexOnlyTurn();
+    gitIn(
+      root,
+      "-c",
+      "user.name=fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "moved",
+    );
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "index-changed",
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    expect(log.events.at(-1)).toMatchObject({
+      op: "coding-runtime.revert.refused",
+      extra: { operation: "restore", reason: "index-changed" },
+    });
+  });
+
+  it("puts the index back to the undone state when clearing the runtime's revert fails", async () => {
+    const { port, root, log } = await undoneIndexOnlyTurn(() =>
+      Promise.reject(new Error("clear failed")),
+    );
+
+    await expect(port.revertTurn(RUN_ID, "restore", CORRELATION_ID)).resolves.toEqual({
+      ok: false,
+      reason: "revert-failed",
+    });
+
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("");
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: true });
+    expect(refusals(log.events)).toMatchObject([
+      { extra: { operation: "restore", reason: "revert-failed" } },
+    ]);
+  });
+
+  it("logs, and keeps the person's entry, when they restage during a failed clear", async () => {
+    let root = "";
+    const made = await undoneIndexOnlyTurn(() => {
+      writeFileSync(join(root, "a.txt"), "staged by the person\n");
+      gitIn(root, "add", "a.txt");
+      return Promise.reject(new Error("clear failed"));
+    });
+    root = made.root;
+    // The restore moved the entry back first; the person then replaced it before the rollback.
+
+    await made.port.revertTurn(RUN_ID, "restore", CORRELATION_ID);
+
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("staged by the person\n");
+    expect(gitIn(root, "diff", "--cached", "--name-only")).toBe("a.txt\n");
+    expect(refusals(made.log.events)).toMatchObject([
+      { extra: { operation: "restore", reason: "index-changed" } },
+      { extra: { operation: "restore", reason: "revert-failed" } },
+    ]);
   });
 
   it("restores nothing in the index that governed staging did not stage, and says staged changes may remain", async () => {
