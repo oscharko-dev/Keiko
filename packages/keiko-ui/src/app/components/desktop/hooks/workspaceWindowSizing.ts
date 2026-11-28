@@ -134,7 +134,11 @@ export function computeDisplayFits(
   return fits;
 }
 
-/** Applies fits whose stored frame is still current; a window the person moved is shown as stored. */
+/**
+ * Applies fits whose stored frame is still current. A window the person only moved keeps the fitted
+ * size at its new position (a drag stores x/y alone, so dropping the size would grow it back below
+ * the visible area); one the person resized is shown as stored.
+ */
 export function applyDisplayFits(
   windows: readonly AppWindow[],
   fits: ReadonlyMap<string, DisplayFit>,
@@ -143,7 +147,12 @@ export function applyDisplayFits(
   let changed = false;
   const next = windows.map((window) => {
     const fit = fits.get(window.id);
-    if (fit === undefined || !sameGeometry(window, fit.from)) return window;
+    if (fit === undefined) return window;
+    if (!sameGeometry(window, fit.from)) {
+      if (window.w !== fit.from.w || window.h !== fit.from.h) return window;
+      changed = true;
+      return { ...window, w: fit.to.w, h: fit.to.h };
+    }
     changed = true;
     return { ...window, ...fit.to };
   });

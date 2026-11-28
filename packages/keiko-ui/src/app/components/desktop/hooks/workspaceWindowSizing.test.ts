@@ -61,6 +61,16 @@ describe("display fits for restored window frames", () => {
     expect(applyDisplayFits([{ ...stored, x: 80 }], fits)[0]?.y).toBe(24);
   });
 
+  // Review #4573 finding 35: a horizontal drag stores x/y only and must keep the fitted height.
+  it("keeps the fitted size when the person only moves the window, and not after a resize", () => {
+    const stored = chat({ h: 900 });
+    const fits = computeDisplayFits([stored], vp, 1);
+    const dragged = { ...stored, x: 45, y: 0 };
+    expect(applyDisplayFits([dragged], fits)[0]).toMatchObject({ x: 45, y: 0, h: 824 });
+    expect(applyDisplayFits([{ ...dragged, h: 700 }], fits)[0]?.h).toBe(700);
+    expect(applyDisplayFits([{ ...dragged, w: 700 }], fits)[0]?.h).toBe(900);
+  });
+
   it("shows the original frame again on a larger screen", () => {
     const stored = chat();
     const larger = { x: 0, y: 0, w: 1800, h: 1100 };
