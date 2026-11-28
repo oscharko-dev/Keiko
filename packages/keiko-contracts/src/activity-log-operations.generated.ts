@@ -30059,6 +30059,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "empty-message",
           "message-invalid",
           "message-too-large",
+          "ref-symbolic",
           "cleanup-unavailable",
           "landed-after-failure",
           "nothing-to-commit",

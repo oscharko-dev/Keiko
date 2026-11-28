@@ -152,6 +152,7 @@ export const GIT_COMMIT_REFUSAL_CAUSES = [
   "empty-message",
   "message-invalid",
   "message-too-large",
+  "ref-symbolic",
   "cleanup-unavailable",
   "landed-after-failure",
   "nothing-to-commit",
@@ -1013,9 +1014,12 @@ async function updateBoundCommitRef(
   message: string,
 ): Promise<GitDeliveryExecutionResult> {
   const oldValue = head.kind === "born" ? head.sha : gitZeroObjectId(head.objectIdLength);
+  // The ref moved is the direct ref the signing decision was made for, never the target of a symref.
+  if (await refIsSymbolic(ctx, `refs/heads/${branch}`))
+    return reportCommitRefusal(ctx, "ref-symbolic");
   const result = await runOne(
     ctx,
-    ["update-ref", "-m", commitReflogMessage(head, message), "--stdin"],
+    ["update-ref", "--no-deref", "-m", commitReflogMessage(head, message), "--stdin"],
     `start\nupdate refs/heads/${branch} ${commit} ${oldValue}\nprepare\ncommit\n`,
   );
   let landedAfterFailure = false;
@@ -1032,6 +1036,18 @@ async function updateBoundCommitRef(
   });
 }
 
+// Whether `ref` is a symbolic ref (`git symbolic-ref --quiet`: exit 0 yes, 1 no or absent). Any other
+// answer is a failed read, never "no". `update-ref` follows a symref by default, and with an expected
+// old value it only verifies the resolved value, so a symbolic destination is refused up front and
+// every final update runs with `--no-deref`.
+async function refIsSymbolic(ctx: RunContext, ref: string): Promise<boolean> {
+  const argv = ["symbolic-ref", "--quiet", ref];
+  const result = await runOne(ctx, argv);
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1 && !result.truncated) return false;
+  throw new GitObjectCommandFailure(result, argv);
+}
+
 // A non-zero `update-ref` is a conflict only when the branch really is not at the value the commit
 // was built on; a held ref lock or any other Git failure leaves it there and is a plain failure of
 // the command (its exit class only, never its text), as the plain lane reports it.
@@ -1046,6 +1062,8 @@ async function classifyRefUpdateFailure(
   head: GitHeadState,
   commit: string,
 ): Promise<GitDeliveryExecutionResult | undefined> {
+  if (await refIsSymbolic(ctx, `refs/heads/${branch}`))
+    return reportCommitRefusal(ctx, "ref-symbolic");
   const tip = await readGitLocalBranchTip(commitReadDeps(ctx), branch);
   if (tip === commit) {
     reportCommitRefusal(ctx, "landed-after-failure");
@@ -1342,7 +1360,9 @@ async function updateVerifiedCommitRef(
 ): Promise<GitDeliveryExecutionResult> {
   const transaction = verifiedCommitRefTransaction(request.verified, prepared);
   if (transaction === undefined) return failureFromExit(0, 0);
-  const result = await runOne(ctx, ["update-ref", "--stdin"], transaction);
+  if (await refIsSymbolic(ctx, `refs/heads/${request.verified.branchName}`))
+    return reportCommitRefusal(ctx, "ref-symbolic");
+  const result = await runOne(ctx, ["update-ref", "--no-deref", "--stdin"], transaction);
   if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
   return executionResult("succeeded", result.durationMs, { externalId: prepared.head });
 }

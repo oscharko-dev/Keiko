@@ -407,6 +407,31 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(git(["rev-parse", "HEAD^"])).toBe(bornSha(request.verified.head));
     expectLastCommitSigned();
   });
+  it("refuses a destination that turns symbolic at the last authority check", async () => {
+    const request = await candidate();
+    const sha = bornSha(request.verified.head);
+    git(["branch", "elsewhere", sha]);
+    const causes: string[] = [];
+    let checks = 0;
+    const result = await createNodeGitMutationAdapter({
+      workspace,
+      processEnv: { PATH: process.env.PATH, HOME: root },
+      // The branch becomes a symref right before the ref update: it must not move its target.
+      beforeCommitRefUpdate: (): boolean => {
+        checks += 1;
+        if (checks === 3) git(["symbolic-ref", "refs/heads/codex/task", "refs/heads/elsewhere"]);
+        return true;
+      },
+      onCommitRefused: (report) => {
+        causes.push(report.cause);
+      },
+    }).commit(request);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("precondition-failed");
+    expect(causes).toEqual(["ref-symbolic"]);
+    expect(git(["rev-parse", "refs/heads/elsewhere"])).toBe(sha);
+    expect(git(["symbolic-ref", "refs/heads/codex/task"])).toBe("refs/heads/elsewhere");
+  });
   it("atomically refuses movement of a branch that is its own base", async () => {
     const request = await candidate();
     const ownBase = {

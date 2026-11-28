@@ -878,6 +878,47 @@ describe("node git mutation adapter — the bound commit leaves the repository a
       expect(result.errorCode).toBe("precondition-failed");
     });
 
+    it("never moves the branch a symbolic prepared branch points to", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["branch", "other"]);
+      // `refs/heads/task` is a symref to `refs/heads/other`, and the checkout is on it: the branch the
+      // signing decision was made for is not the ref an update would move.
+      gitIn(repo, ["symbolic-ref", "refs/heads/task", "refs/heads/other"]);
+      gitIn(repo, ["symbolic-ref", "HEAD", "refs/heads/task"]);
+      const otherBefore = gitIn(repo, ["rev-parse", "refs/heads/other"]).trim();
+      const { result, causes } = await refused(repo, "mine", true, {
+        preparedCheckout: { branchName: "task" },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      // The checkout reads as the branch the symref resolves to, so it is not the prepared one.
+      expect(causes).toEqual(["not-on-prepared-branch"]);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/other"]).trim()).toBe(otherBefore);
+      expect(gitIn(repo, ["symbolic-ref", "refs/heads/task"]).trim()).toBe("refs/heads/other");
+    });
+
+    it("refuses a destination that turns symbolic after the commit object was written", async () => {
+      const repo = newRepo();
+      seedBase(repo);
+      gitIn(repo, ["branch", "other"]);
+      const otherBefore = gitIn(repo, ["rev-parse", "refs/heads/other"]).trim();
+      let authorizations = 0;
+      const { result, causes } = await refused(repo, "mine", true, {
+        // The last authorization runs right before the ref update: the branch becomes a symref there.
+        beforeCommitRefUpdate: (): boolean => {
+          authorizations += 1;
+          if (authorizations === 2)
+            gitIn(repo, ["symbolic-ref", "refs/heads/main", "refs/heads/other"]);
+          return true;
+        },
+      });
+      expect(result.outcome).toBe("failed");
+      expect(result.errorCode).toBe("precondition-failed");
+      expect(causes).toEqual(["ref-symbolic"]);
+      expect(gitIn(repo, ["rev-parse", "refs/heads/other"]).trim()).toBe(otherBefore);
+    });
+
     it("names an empty message", async () => {
       const repo = newRepo();
       seedBase(repo);
