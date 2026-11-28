@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8a7598216a8e7f07319c86e7c0e59e67245fda6c240d2a3dbb0507006329a441",
+    "catalogDigest": "38708431d7e2f25aa466c6e0af39355dd916f460923afe762a981eeaaf0f8281",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26027,7 +26027,7 @@
         "proofIds": ["gateway.activation.persistence.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/model-activation-memory.ts:75",
-        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:649"]
+        "emitterSites": ["packages/keiko-server/src/model-activation-memory.ts:728"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -127601,7 +127601,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/model-activation-memory.ts:313",
+      "site": "packages/keiko-server/src/model-activation-memory.ts:330",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
