@@ -77,13 +77,20 @@ const NON_SECRET_SUFFIXES: ReadonlySet<string> = new Set([
   "version",
   "format",
 ]);
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const ENV_NAME = /^[A-Za-z_]\w*$/u;
 const SEPARATOR_CHARS = ";|&";
 const BEARER_VALUE = /(\b(?:bearer|basic)\s+)[^\s"']+/giu;
-const USER_OPTIONS: ReadonlySet<string> = new Set(["-u", "--user", "--proxy-user"]);
+/** Options that always take a value, even one that starts with a hyphen. */
+const REQUIRED_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-u",
+  "--user",
+  "--proxy-user",
+  "--oauth2-bearer",
+]);
 const POWERSHELL_ENV = "$env:";
 
-type Pending = "none" | "next" | "env" | "run" | "assign" | "value";
+/** `required` masks the next word unconditionally; `next` skips a word that looks like an option. */
+type Pending = "none" | "next" | "required" | "env" | "run" | "assign" | "value";
 
 interface Token {
   readonly text: string;
@@ -139,6 +146,12 @@ function endsWord(char: string): boolean {
   return isSpace(char) || SEPARATOR_CHARS.includes(char);
 }
 
+/** The quote state after `char`: it opens a span, closes the span it opened, or is literal inside the other. */
+function toggleQuote(quote: string | undefined, char: string): string | undefined {
+  if (quote === undefined) return char;
+  return quote === char ? undefined : quote;
+}
+
 /** The end of the word at `start`: a quote keeps its span, a backslash escapes outside single quotes. */
 function scanWord(line: string, start: number): { readonly end: number; readonly open: boolean } {
   let index = start;
@@ -150,7 +163,7 @@ function scanWord(line: string, start: number): { readonly end: number; readonly
       index += 2;
       continue;
     }
-    if (isQuote(char)) quote = quote === undefined ? char : quote === char ? undefined : quote;
+    if (isQuote(char)) quote = toggleQuote(quote, char);
     index += 1;
   }
   return quote === undefined
@@ -202,12 +215,17 @@ interface Option {
   readonly powershell: boolean;
 }
 
+function optionLead(core: string, double: boolean, powershell: boolean): number {
+  if (powershell) return POWERSHELL_ENV.length;
+  return double || core.startsWith("-D") ? 2 : 0;
+}
+
 /** The option of `--name[=v]`, `-Dname[=v]`, `$env:NAME[=v]` or `NAME=v`, or undefined. */
 function optionOf(core: string): Option | undefined {
   const lower = core.slice(0, POWERSHELL_ENV.length).toLowerCase();
   const double = core.startsWith("--");
   const powershell = lower === POWERSHELL_ENV;
-  const lead = powershell ? POWERSHELL_ENV.length : double || core.startsWith("-D") ? 2 : 0;
+  const lead = optionLead(core, double, powershell);
   const body = core.slice(lead);
   const equals = body.indexOf("=");
   if (equals < 0)
@@ -232,7 +250,7 @@ function maskValue(word: string): string {
   const head = word.slice(0, word.indexOf("=") + 1);
   let open: string | undefined;
   for (const char of head) {
-    if (isQuote(char)) open = open === undefined ? char : open === char ? undefined : open;
+    if (isQuote(char)) open = toggleQuote(open, char);
   }
   return `${head}${MASK}${open ?? ""}`;
 }
@@ -305,7 +323,7 @@ function maskOption(
 
 function maskWord(token: Token): { readonly text: string; readonly pending: Pending } {
   const { prefix, core } = unwrap(token.text);
-  if (USER_OPTIONS.has(core)) return { text: token.text, pending: "next" };
+  if (REQUIRED_VALUE_OPTIONS.has(core)) return { text: token.text, pending: "required" };
   const option = optionOf(core);
   return option === undefined ? maskLoose(prefix, core) : maskOption(token, prefix, core, option);
 }

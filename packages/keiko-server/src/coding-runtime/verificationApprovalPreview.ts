@@ -70,6 +70,8 @@ function projectText(text: string): string {
   return redact(redactContent(redactCommandLineCredentials(text), "preserve"));
 }
 
+const HIGH_SURROGATE = /^[\ud800-\udbff]$/u;
+
 /** Cuts at a code point, never inside a surrogate pair, and ends the cut text in an ellipsis. */
 export function cutVisibly(
   text: string,
@@ -77,9 +79,8 @@ export function cutVisibly(
 ): { readonly text: string; readonly cut: boolean } {
   if (text.length <= max) return { text, cut: false };
   let end = max - ELLIPSIS.length;
-  const last = text.charCodeAt(end - 1);
   // A high surrogate at the cut has lost its low half: drop it with it.
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  if (HIGH_SURROGATE.test(text.charAt(end - 1))) end -= 1;
   return { text: `${text.slice(0, end)}${ELLIPSIS}`, cut: true };
 }
 

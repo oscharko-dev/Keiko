@@ -45,7 +45,7 @@ export function yamlNestingExceeds(text: string, limit = MAX_YAML_NESTING): bool
 
 function skipSpaces(text: string, from: number, end: number): number {
   let at = from;
-  while (at < end && text.charCodeAt(at) === 0x20) at += 1;
+  while (at < end && text.codePointAt(at) === 0x20) at += 1;
   return at;
 }
 

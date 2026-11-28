@@ -30,7 +30,7 @@ const NAME_CHARACTERS: readonly string[] = [
   "目",
   "😀",
   " ",
-  "‮",
+  "\u202e",
   "\t",
   "\n",
   '"',

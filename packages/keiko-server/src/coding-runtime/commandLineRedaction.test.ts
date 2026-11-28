@@ -29,6 +29,11 @@ describe("redactCommandLineCredentials", () => {
     [`curl -u admin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
     [`curl -uadmin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
     [`curl --user admin:${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
+    // A required-value credential option masks the next word even when it starts with a hyphen.
+    [`curl --user -${CURL_PASSWORD}:pw https://example.test`, CURL_PASSWORD],
+    [`curl -u -${CURL_PASSWORD}:pw https://example.test`, CURL_PASSWORD],
+    [`curl --proxy-user --${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
+    [`curl --oauth2-bearer -${CURL_PASSWORD} https://example.test`, CURL_PASSWORD],
     ["git clone https://admin:hunter2@example.test/repo.git", "hunter2"],
     ['git clone "https://admin:hunter2@example.test/repo.git"', "hunter2"],
     // Shell quoting: a backslash escapes inside double quotes only.
