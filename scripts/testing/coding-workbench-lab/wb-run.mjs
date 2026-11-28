@@ -67,13 +67,23 @@ export function selectCheckout(session, repo, branch) {
   return selectLabCheckout((path, body) => session.request("POST", path, body), repo, branch);
 }
 
-/** `repository` is the real path the checkout selection registered; the server refuses a start elsewhere. */
-export async function startRun(session, { text, mode, model, repository }) {
+/**
+ * `repository` is the real path the checkout selection registered; the server refuses a start
+ * elsewhere. `statesRepository: false` speaks the protocol of a published release older than the
+ * field, which refuses it; every current server requires it, so it is the default.
+ */
+export async function startRun(
+  session,
+  { text, mode, model, repository, statesRepository = true },
+) {
+  if (statesRepository && typeof repository !== "string") {
+    throw new Error("a start against a current server must state its repository");
+  }
   const started = await session.request("POST", "/api/coding-workbench/runtime/runs", {
     requestId: `lab-${randomUUID()}`,
     taskIntent: text,
     requestedMode: mode.id,
-    expectedWorkspace: { root: repository },
+    ...(statesRepository ? { expectedWorkspace: { root: repository } } : {}),
     runtimePreference: "managed-gateway",
     modelId: model,
     projectMemory: { enabled: false },
