@@ -206,7 +206,6 @@ import {
   modeLabel,
   modelSourceLabel,
   startBlockedReason,
-  visibleAlert,
   visibleAlertFailure,
   visibleStatusNotice,
 } from "./codingWorkbenchLabels";
@@ -1988,7 +1987,6 @@ function WorkbenchColumns(
     state,
     actions,
     activeWorkspace,
-    selectedRoot,
     selectedBranch,
     location,
     locationState,

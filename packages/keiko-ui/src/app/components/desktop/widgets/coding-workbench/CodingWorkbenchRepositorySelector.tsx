@@ -871,9 +871,9 @@ function ReconnectNotice({
   // The status region stays mounted and empty, so a screen reader announces the text swapped in.
   return (
     <>
-      <p className={styles.cmpRepositorySelectorNotice} role="status">
+      <output className={styles.cmpRepositorySelectorNotice}>
         {reconnecting ? t("codingWorkbench.repository.reconnecting") : null}
-      </p>
+      </output>
       {failed ? (
         <p className={styles.cmpRepositorySelectorNotice} role="alert">
           {t("codingWorkbench.repository.reconnectChoiceFailed")}

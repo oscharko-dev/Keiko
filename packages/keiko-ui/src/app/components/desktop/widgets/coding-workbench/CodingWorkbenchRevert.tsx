@@ -47,9 +47,9 @@ function summaryText(
       values,
     );
     // What the undo did to the paths the turn staged is said right beside the undo itself.
-    return revert.index === undefined
-      ? undone
-      : `${undone} ${t(`codingWorkbench.revert.index.${revert.index}`)}`;
+    if (revert.index === undefined) return undone;
+    const indexKey = `codingWorkbench.revert.index.${revert.index}` as const;
+    return `${undone} ${t(indexKey)}`;
   }
   return t(
     revert.fileCount === 1
