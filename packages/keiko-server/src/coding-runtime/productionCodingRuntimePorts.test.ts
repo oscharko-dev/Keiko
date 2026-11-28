@@ -1995,7 +1995,7 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(outcome).toEqual({ reason: "provider-failed" });
   });
 
-  it("maps an unavailable snapshot capture, and a capture without a reference, to generation-unavailable", async () => {
+  it("maps an unavailable snapshot capture to generation-unavailable", async () => {
     const dispatcher = createProductionWorkbenchDescriptionDispatcher(
       fakeDeps({
         snapshots: fakeSnapshots(() =>
@@ -2009,6 +2009,16 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
             },
           }),
         ),
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toEqual({ reason: "generation-unavailable" });
+  });
+
+  it("maps a complete capture that carries no snapshot reference to generation-unavailable", async () => {
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: fakeSnapshots(() => Promise.resolve({ snapshot: snapshotFixture() })),
       }),
     );
     const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
