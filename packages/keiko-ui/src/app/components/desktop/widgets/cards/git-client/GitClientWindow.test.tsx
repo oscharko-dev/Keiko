@@ -128,6 +128,14 @@ function makeBranchList(overrides: Partial<GitBranchListResponse> = {}): GitBran
   };
 }
 
+// Every status read passes its options, so a path pin names the second argument too.
+const SIGNAL_OPTIONS = expect.objectContaining({ signal: expect.any(AbortSignal) });
+
+// The repositories the window read, regardless of the options each read carried.
+function statusReadPaths(client: GitClientSeam): unknown[] {
+  return vi.mocked(client.getStatus).mock.calls.map((call) => call[0]);
+}
+
 // The Git-client settlements a test's diagnostic writer captured (PR #3625 review).
 function captureRetrySettlements(): () => unknown[] {
   const metas: (ClientDiagnosticMeta | undefined)[] = [];
@@ -837,7 +845,7 @@ describe("GitClientWindow — repository list", () => {
     await waitFor(() =>
       expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path, expect.anything()),
     );
-    expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path, expect.anything());
+    expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path, SIGNAL_OPTIONS);
   });
 
   it("clears a repository-scoped commit draft when the selected repository changes", async () => {
@@ -1079,9 +1087,7 @@ describe("GitClientWindow — repository list", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor((): void =>
-      expect(getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor((): void => expect(getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
     expect(screen.getByText("Loading changes…")).toBeInTheDocument();
     const readsAfterSwitch = getStatus.mock.calls.length;
 
@@ -1112,9 +1118,7 @@ describe("GitClientWindow — repository list", () => {
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
 
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
     expect(screen.queryByLabelText("Stage README.md")).not.toBeInTheDocument();
     expect(screen.getByText("Loading changes…")).toBeInTheDocument();
 
@@ -1906,11 +1910,9 @@ describe("GitClientWindow — repository list", () => {
 
     await user.click(screen.getByRole("button", { name: /beta/ }));
 
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
-    expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
-    expect(client.getStatus).not.toHaveBeenCalledWith(legacy.path);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
+    expect(statusReadPaths(client)).not.toContain(REPO_A.path);
+    expect(statusReadPaths(client)).not.toContain(legacy.path);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -1939,9 +1941,9 @@ describe("GitClientWindow — repository list", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
     await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith("/repos/legacy", expect.anything()),
+      expect(client.getStatus).toHaveBeenCalledWith("/repos/legacy", SIGNAL_OPTIONS),
     );
-    expect(client.getStatus).not.toHaveBeenCalledWith(REPO_A.path);
+    expect(statusReadPaths(client)).not.toContain(REPO_A.path);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -3108,9 +3110,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
 
     await act(async () => {
       resolveSwitch({
@@ -3567,9 +3567,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     await waitFor(() => expect(client.syncExecute).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
     await act(async () => {
       resolveSync({
         schemaVersion: "1",
@@ -4239,6 +4237,43 @@ describe("GitClientWindow — empty / loading / error states", () => {
     await act(async () => {
       resolveRetry(makeStatus({ clean: true }));
     });
+
+    expect(settlements()).toEqual([
+      {
+        kind: "other",
+        correlationId: expect.any(String),
+        gitClientOperation: { operation: "status-read", outcome: "retry-superseded" },
+      },
+    ]);
+  });
+
+  // A newer read aborts the older read's request, so a superseded manual retry rejects with an
+  // AbortError: that is the supersession itself, reported as such and never as a failed retry.
+  it("reports a retry that a newer read aborted as superseded, not as a failed retry", async () => {
+    const settlements = captureRetrySettlements();
+    let call = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async (_path, options) => {
+      call += 1;
+      if (call === 1) throw new Error("Status fetch failed");
+      if (call === 2) {
+        return new Promise<GitRepositoryStatusResponse>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Cancelled", "AbortError"));
+          });
+        });
+      }
+      return makeStatus({ clean: true });
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Status fetch failed");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      notifyGitRepositoryStateInvalidated(REPO_A.path);
+    });
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
 
     expect(settlements()).toEqual([
       {
@@ -4992,9 +5027,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     fireEvent.click(screen.getByLabelText("Stage README.md"));
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
 
     await act(async () => {
       resolveStage({
@@ -5026,9 +5059,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     fireEvent.click(screen.getByLabelText("Stage README.md"));
     fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
     fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
-    await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, expect.anything()),
-    );
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path, SIGNAL_OPTIONS));
     await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
@@ -5655,7 +5686,7 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
       />,
     );
     await waitFor(() => {
-      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, expect.anything());
+      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, SIGNAL_OPTIONS);
     });
     expect(
       screen.queryByText("This local repository is unavailable. Choose another repository."),
@@ -5684,7 +5715,7 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     );
 
     await waitFor(() =>
-      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, expect.anything()),
+      expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT, SIGNAL_OPTIONS),
     );
     expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("Keiko");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
