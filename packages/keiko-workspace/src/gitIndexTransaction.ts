@@ -175,6 +175,8 @@ async function publishAccepted(
     throw new Error("git-index-metadata-drift");
   if (!accept()) throw new Error("git-index-authority-denied");
   await notifyObserver("prepared", candidate.temporaryIndexPath);
+  if (!check()) throw new Error("git-index-metadata-drift");
+  if (!accept()) throw new Error("git-index-authority-denied");
   for (const quarantine of candidate.quarantines) quarantine.publish();
   promoteIndex(base, candidate.temporaryIndexPath, candidate.indexExisted);
 }

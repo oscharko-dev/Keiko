@@ -211,6 +211,44 @@ describe("existing workspace Git metadata index owner", () => {
     expect(seen[1]).toContain("added");
     expect(git(["ls-files"])).toContain("added");
   });
+  it("refuses to publish or promote when acceptance lapses while the observer is pending", async () => {
+    let accepting = true;
+    let published = false;
+    const before = git(["ls-files", "--stage"]);
+    writeFileSync(join(root, "added"), "added\n");
+    await expect(
+      observeGitIndexTransactions(
+        {
+          copied: () => Promise.resolve(),
+          prepared: () => {
+            accepting = false;
+            return Promise.resolve();
+          },
+        },
+        () =>
+          withGitIndexTransaction(
+            root,
+            (transaction): Promise<boolean> => {
+              execFileSync("git", ["add", "added"], {
+                cwd: root,
+                env: { PATH: process.env.PATH, GIT_INDEX_FILE: transaction.temporaryIndexPath },
+              });
+              const quarantine = transaction.openObjectQuarantine(40);
+              const publish = quarantine.publish;
+              (quarantine as { publish: () => void }).publish = (): void => {
+                published = true;
+                publish();
+              };
+              return Promise.resolve(true);
+            },
+            (value) => value && accepting,
+          ),
+      ),
+    ).rejects.toThrow("git-index-authority-denied");
+    expect(published).toBe(false);
+    expect(git(["ls-files", "--stage"])).toBe(before);
+    expect(existsSync(join(root, ".git", "index.lock"))).toBe(false);
+  });
   it("tells no observer about a transaction that was refused", async () => {
     let prepared = 0;
     await observeGitIndexTransactions(
