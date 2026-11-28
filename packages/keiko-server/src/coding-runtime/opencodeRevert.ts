@@ -440,12 +440,14 @@ function reportIndexFailure(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   error: unknown,
+  correlationId?: string,
+  operation: "undo" | "restore" = "undo",
 ): void {
   recordRevertRefused(ports.activityLog, {
     runId: run.runId,
-    operation: "undo",
+    operation,
     reason: "revert-failed",
-    correlationId: undefined,
+    correlationId,
     error,
   });
 }
@@ -471,17 +473,8 @@ async function restoreUndo(
   const moved = await reapplyIndexMoves(run, staged, correlationId);
   if (moved === "changed") return { ok: false, reason: "index-changed" };
   if (moved === "failed") return { ok: false, reason: "revert-failed" };
-  // The index work above took time the first check did not cover: a human edit made meanwhile must
-  // still be there when the runtime writes the turn's files, so the witness is proven again right
-  // before that write, and the index goes back to the undone state if it no longer holds.
-  if (
-    moved === "restored" &&
-    !(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))
-  ) {
-    await rollBackIndex(ports, run, staged, correlationId);
+  if (!(await clearOrRollBack(ports, run, staged, moved, correlationId)))
     return { ok: false, reason: "workspace-changed" };
-  }
-  await clearOrRollBack(ports, run, staged, moved, correlationId);
   run.revert = undefined;
   return {
     ok: true,
@@ -493,15 +486,34 @@ async function restoreUndo(
   };
 }
 
+/**
+ * The last step before the runtime writes the turn's files back. The index work before it took time
+ * the first witness check did not cover, so the files are proven once more here, with nothing but
+ * this check between it and the request. `false` when a human edit landed meanwhile: nothing is
+ * written and the index goes back to the undone state.
+ *
+ * Residual window, which Keiko cannot close: the proof and the runtime's own write are two steps. The
+ * request is `DELETE /api/session/{id}/revert`; Keiko's client does not hand the runtime the proven
+ * contents and nothing here shows the runtime re-reads the files before it writes them, so an edit
+ * landing between this proof and that write (one HTTP round trip) is still overwritten.
+ */
 async function clearOrRollBack(
   ports: OpenCodeRevertPorts,
   run: OpenCodeRevertRun,
   staged: OpenCodeStagedRevert,
   moved: "restored" | "none",
   correlationId: string,
-): Promise<void> {
+): Promise<boolean> {
+  if (
+    moved === "restored" &&
+    !(await witnessHolds(run.workspaceRoot, staged.files, staged.witness))
+  ) {
+    await rollBackIndex(ports, run, staged, correlationId);
+    return false;
+  }
   try {
     await run.client.clearRevert(run.sessionId);
+    return true;
   } catch (error) {
     // The files stay undone, so the index goes back to the undone state with them.
     if (moved === "restored") await rollBackIndex(ports, run, staged, correlationId);
@@ -531,7 +543,9 @@ async function reapplyIndexMoves(
  * Puts the index back to the undone state after a restore that cannot finish. A rollback that is
  * refused (a person restaged a path since) or fails leaves staged effects of the turn behind, so the
  * retained undo no longer claims `restored`: the outcome it keeps says the index changed or could not
- * be proven, and the refusal is on the log. The person's own staging is never overwritten.
+ * be proven, and the refusal is on the log. The person's own staging is never overwritten, and the
+ * moves are dropped: the index is theirs now, so a later Restore still brings the files back
+ * without it instead of refusing every retry as `index-changed`.
  */
 async function rollBackIndex(
   ports: OpenCodeRevertPorts,
@@ -552,6 +566,7 @@ async function rollBackIndex(
     );
     if (result === "restored") return;
     staged.index = result === "changed-after-turn" ? "changed-after-turn" : "unavailable";
+    staged.indexMoves = undefined;
     recordRevertRefused(ports.activityLog, {
       runId: run.runId,
       operation: "restore",
@@ -561,7 +576,8 @@ async function rollBackIndex(
     });
   } catch (error) {
     staged.index = "unavailable";
-    reportIndexFailure(ports, run, error);
+    staged.indexMoves = undefined;
+    reportIndexFailure(ports, run, error, correlationId, "restore");
   }
 }
 

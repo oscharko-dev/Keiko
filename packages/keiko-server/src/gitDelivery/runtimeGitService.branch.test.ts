@@ -860,13 +860,18 @@ describe("the paths governed staging records for the turn's undo", () => {
     const record = governedIndexRecord("run-branch");
     expect(record.paths).toEqual([]);
     expect(record.truncated).toBe(true);
-    // The unproven second stage is on the log as a closed reason, on the mutation's correlation.
+    // The one line of the unproven second stage carries the closed reason, on the mutation's
+    // correlation; no second completion line is written for it.
+    const executes = events.filter(
+      (event) => event.op === "git.runtime-action" && event.extra?.phase === "stage-execute",
+    );
+    expect(executes.map((event) => event.extra?.state)).toEqual(["succeeded", "succeeded"]);
     const unproven = events.filter((event) => event.extra?.indexUnproven !== undefined);
     expect(unproven).toHaveLength(1);
     expect(unproven[0]).toMatchObject({
       op: "git.runtime-action",
       correlationId: "runtime-git-branch-test",
-      extra: { phase: "stage-execute", state: "completed", indexUnproven: "index-unreadable" },
+      extra: { phase: "stage-execute", state: "succeeded", indexUnproven: "index-unreadable" },
     });
     expect(JSON.stringify(unproven)).not.toContain(root);
   });

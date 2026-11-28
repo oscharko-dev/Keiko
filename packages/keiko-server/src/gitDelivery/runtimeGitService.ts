@@ -554,6 +554,17 @@ function indexEvidence(
   };
 }
 
+// Why a succeeded stage or unstage left the Undo nothing it could prove, keyed by the result object
+// the mutation returned so the wire result itself stays unchanged.
+const UNPROVEN_INDEX = new WeakMap<object, GovernedTransitionsUnproven>();
+
+function unprovenEvidence(result: RuntimeGitOutcome): {
+  readonly indexUnproven?: GovernedTransitionsUnproven;
+} {
+  const reason = UNPROVEN_INDEX.get(result);
+  return reason === undefined ? {} : { indexUnproven: reason };
+}
+
 function resultEvidence(
   result: RuntimeGitOutcome,
   request: RuntimeGitRequest,
@@ -703,7 +714,12 @@ export class RuntimeGitService {
         const result = await this.dispatch(context, request, guard);
         if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
           throw new Error("git-runtime-result-invalid");
-        this.log(context, phase, resultEvidence(result, request), resultOutcome(result));
+        this.log(
+          context,
+          phase,
+          { ...resultEvidence(result, request), ...unprovenEvidence(result) },
+          resultOutcome(result),
+        );
         if (context.stillAuthorized()) return result;
         this.log(
           context,
@@ -1275,8 +1291,11 @@ export class RuntimeGitService {
     );
     const status = outcome.outcome.status;
     if (status === "succeeded") {
-      this.recordGovernedIndex(context, proposal, transitions, unproven);
-      return this.result(proposal, "succeeded", "none");
+      this.recordGovernedIndex(context, proposal, transitions);
+      const result = this.result(proposal, "succeeded", "none");
+      // The one completion line `execute()` writes for this result carries why Undo owns nothing.
+      if (transitions === undefined && unproven !== undefined) UNPROVEN_INDEX.set(result, unproven);
+      return result;
     }
     if (status === "blocked") return this.result(proposal, "blocked", outcome.outcome.category);
     if (status === "approval-required")
@@ -1285,24 +1304,15 @@ export class RuntimeGitService {
       ? this.result(proposal, status, "execution-uncertain")
       : this.result(proposal, status, "execution-failed");
   }
-  // The undo owns only what the index proved: an unobserved mutation withdraws its paths and says why.
+  // The undo owns only what the index proved: an unobserved mutation withdraws its paths.
   private recordGovernedIndex(
     context: VerifiedCommitRunContext,
     proposal: RuntimeGitProposal,
     transitions: readonly GovernedIndexTransition[] | undefined,
-    unproven: GovernedTransitionsUnproven | undefined,
   ): void {
-    if (transitions !== undefined) {
-      noteGovernedIndexTransitions(context.runId, transitions);
-      return;
-    }
-    noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
-    this.log(context, `${proposal.command.kind}-execute`, {
-      state: "completed",
-      proposalId: proposal.proposalId,
-      pathCount: proposal.command.pathspecs.length,
-      ...(unproven === undefined ? {} : { indexUnproven: unproven }),
-    });
+    if (transitions === undefined)
+      noteGovernedIndexUnproven(context.runId, proposal.command.pathspecs);
+    else noteGovernedIndexTransitions(context.runId, transitions);
   }
   private result(
     proposal: RuntimeGitProposal,
