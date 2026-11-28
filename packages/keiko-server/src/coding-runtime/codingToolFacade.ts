@@ -547,6 +547,47 @@ export function codingToolGitPresentation(
   });
 }
 
+/** The opaque reference a proposal and the execute that redeems it share (a digest of the id). */
+export function codingGitProposalRef(proposalId: string): string {
+  return createHash("sha256")
+    .update(`keiko-git-proposal-ref\u0000${proposalId}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function resultProposalId(result: CodingToolResult): string | undefined {
+  if ("verifiedCommit" in result) return result.verifiedCommit.proposalId;
+  if ("draftDelivery" in result)
+    return result.draftDelivery.status === "recorded"
+      ? result.draftDelivery.record.proposalId
+      : undefined;
+  if ("git" in result)
+    return result.git.kind === "stage" || result.git.kind === "unstage"
+      ? result.git.proposalId
+      : undefined;
+  return undefined;
+}
+
+function requestProposalId(request: CodingToolActionRequest): string | undefined {
+  if (request.action === "git" && "phase" in request && request.phase === "execute")
+    return request.proposalId;
+  if (request.action === "delivery" && request.phase === "execute") return request.proposalId;
+  return undefined;
+}
+
+/**
+ * Server-private live presentation tying a Git proposal to the `keiko_git_execute` that redeemed
+ * it: both rows carry the same opaque reference, so the Workbench names exactly which proposal an
+ * execute carried out instead of guessing from order. Absent when the call names no proposal.
+ */
+export function codingToolGitProposalPresentation(
+  request: CodingToolActionRequest,
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  const proposalId = requestProposalId(request) ?? resultProposalId(result);
+  return proposalId === undefined ? {} : { gitProposalRef: codingGitProposalRef(proposalId) };
+}
+
 function gitStepOutcomeOf(result: CodingToolResult): CodingSafeActivityGitOutcome | undefined {
   if ("verifiedCommit" in result) {
     const outcome = commitOutcome(result.verifiedCommit);

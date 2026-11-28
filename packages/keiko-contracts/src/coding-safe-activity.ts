@@ -175,6 +175,13 @@ export const CODING_SAFE_ACTIVITY_GIT_ACTIONS = ["stage", "unstage"] as const;
 export type CodingSafeActivityGitAction = (typeof CODING_SAFE_ACTIVITY_GIT_ACTIONS)[number];
 
 /**
+ * An opaque reference to one Git proposal, shared by the proposing call and the `keiko_git_execute`
+ * that redeemed it, so a row names the proposal it carried out. It is a one-way digest of the
+ * proposal id, unique among one run's proposals, and carries no id, path or content.
+ */
+export const CODING_SAFE_ACTIVITY_GIT_PROPOSAL_REF_PATTERN = /^[0-9a-f]{16}$/u;
+
+/**
  * Where a tool call that did not succeed failed, so a person sees at a glance whether Keiko caused
  * it: `keiko-refused` Keiko's governance (a policy rule, a refused step or a declined approval)
  * blocked the call; `command-failed` a command ran and ended with a non-zero exit status;
@@ -262,6 +269,8 @@ export interface CodingSafeActivityToolPresentation {
   readonly gitOutcome?: CodingSafeActivityGitOutcome;
   /** Whether a governed index step staged or unstaged; present on `keiko_git_stage` calls only. */
   readonly gitAction?: CodingSafeActivityGitAction;
+  /** The Git proposal this call proposed or redeemed; pairs them within one run. */
+  readonly gitProposalRef?: string;
   /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
   readonly bridgeDurationMs?: number;
   /** A finished native shell call's own exit status, as the runtime reported it. */
@@ -1002,6 +1011,7 @@ export function isCodingSafeActivityToolPresentation(
     "verificationOutcome",
     "gitOutcome",
     "gitAction",
+    "gitProposalRef",
     "bridgeDurationMs",
     "exitCode",
     "failureOrigin",
@@ -1053,6 +1063,9 @@ function validPresentationVocabulary(value: Record<string, unknown>): boolean {
     (value.gitAction === undefined || isOneOf(value.gitAction, CODING_SAFE_ACTIVITY_GIT_ACTIONS)) &&
     (value.programKind === undefined ||
       isOneOf(value.programKind, CODING_SAFE_ACTIVITY_PROGRAM_KINDS)) &&
+    (value.gitProposalRef === undefined ||
+      (typeof value.gitProposalRef === "string" &&
+        CODING_SAFE_ACTIVITY_GIT_PROPOSAL_REF_PATTERN.test(value.gitProposalRef))) &&
     validPresentationOutcomeVocabulary(value)
   );
 }

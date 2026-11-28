@@ -22,6 +22,7 @@ import {
   createCodingToolFacade,
   codingToolEditPresentation,
   codingToolGitPresentation,
+  codingToolGitProposalPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -2979,6 +2980,38 @@ describe("CodingToolFacade Git presentation (#4271)", () => {
     [{ kind: "branch", status: "succeeded", reason: "none" }, { gitOutcome: "completed" }],
   ] as const)("presents the index step %j as %j", (git, presentation) => {
     expect(codingToolGitPresentation(completedWith("git", git))).toEqual(presentation);
+  });
+
+  // A Git proposal and the execute that redeems it carry one opaque reference, so the Workbench
+  // names the proposal an execute carried out instead of guessing from order.
+  it("gives a proposal and its execute the same opaque reference, and none to a call naming no proposal", () => {
+    const proposal = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "propose", paths: ["a.ts"] } as never,
+      completedWith("git", {
+        kind: "stage",
+        proposalId: "stage-7",
+        status: "ready",
+        reason: "none",
+      }),
+    );
+    const execute = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "execute", proposalId: "stage-7" } as never,
+      { status: "denied", evidence: [] } as never,
+    );
+    expect(proposal.gitProposalRef).toMatch(/^[0-9a-f]{16}$/u);
+    expect(execute).toEqual(proposal);
+    const other = codingToolGitProposalPresentation(
+      { action: "git", operation: "stage", phase: "execute", proposalId: "stage-8" } as never,
+      { status: "denied", evidence: [] } as never,
+    );
+    expect(other.gitProposalRef).not.toBe(proposal.gitProposalRef);
+    expect(JSON.stringify(proposal)).not.toContain("stage-7");
+    expect(
+      codingToolGitProposalPresentation(
+        { action: "git", operation: "status" } as never,
+        completedWith("git", { kind: "fetch", status: "succeeded" }),
+      ),
+    ).toEqual({});
   });
 
   it("fails closed to not done for a Git or commit status it does not know", () => {

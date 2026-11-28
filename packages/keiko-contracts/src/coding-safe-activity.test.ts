@@ -200,6 +200,13 @@ describe("coding safe-activity contract", () => {
     ).toBe(false);
   });
 
+  it("admits only an opaque 16-hex reference as the Git proposal reference of a presentation", () => {
+    expect(isCodingSafeActivityToolPresentation({ gitProposalRef: "0123456789abcdef" })).toBe(true);
+    for (const gitProposalRef of ["stage-7", "0123456789ABCDEF", "0123", "", null, 1]) {
+      expect(isCodingSafeActivityToolPresentation({ gitProposalRef })).toBe(false);
+    }
+  });
+
   // PERF-2: a result the runtime shortened for the model carries counts only; the lines are both
   // present or both absent, and the model cannot have kept as many lines as the output had.
   it("admits only counts as the shortened-output fact of a tool presentation", () => {

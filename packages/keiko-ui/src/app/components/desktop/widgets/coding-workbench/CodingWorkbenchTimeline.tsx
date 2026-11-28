@@ -177,6 +177,8 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly tool: CodingSafeActivityTool;
+      /** The run whose feed carried the call; a proposal reference is unique within one run only. */
+      readonly runId?: string;
       readonly count: number;
       /**
        * A Git step the server answered as prepared and waiting for approval, after which the run
@@ -617,6 +619,7 @@ function feedItems(
         occurredAt: tool.occurredAt,
         order: first + items.length,
         tool: shownTool(tool, feed.runId === activeRunId ? activeRunId : undefined),
+        runId: feed.runId,
         count: 1,
       });
     }
@@ -650,7 +653,7 @@ function timelineItems(
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
   const compacted = compactToolItems(
-    markRedeemedGitProposals(markSupersededGitProposals(orderedItems)),
+    markRedeemedGitProposals(markSupersededGitProposals(markPairedGitProposals(orderedItems))),
   );
   return feed?.plan === undefined
     ? compacted
@@ -712,6 +715,40 @@ function insertPlan(
   return [...items.slice(0, anchor + 1), planItem, ...items.slice(anchor + 1)];
 }
 
+// The run and opaque proposal reference a Git call carries, when the server projected one.
+function gitProposalKey(item: Extract<TimelineItem, { kind: "tool" }>): string | undefined {
+  const ref = item.tool.presentation?.gitProposalRef;
+  return ref === undefined || item.runId === undefined ? undefined : `${item.runId}\u0000${ref}`;
+}
+
+/**
+ * Rows that carry the server's opaque proposal reference are paired exactly: an execute names the
+ * proposal with the same reference in the same run, however many other proposals are open or
+ * visible, and a completed one ends that proposal's wait. An execute whose proposal is not shown
+ * stays generic. Rows without a reference fall back to the order-based rules below.
+ */
+function markPairedGitProposals(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const marked = [...items];
+  const open = new Map<string, number>();
+  marked.forEach((item, index) => {
+    const key = item.kind === "tool" ? gitProposalKey(item) : undefined;
+    if (item.kind !== "tool" || key === undefined) return;
+    if (item.tool.tool !== "keiko_git_execute") {
+      if (isOpenGitProposal(item.tool)) open.set(key, index);
+      return;
+    }
+    const at = open.get(key);
+    const proposal = at === undefined ? undefined : marked[at];
+    if (at === undefined || proposal?.kind !== "tool") return;
+    const label = proposalLabelKey(proposal.tool);
+    if (label !== undefined) marked[index] = { ...item, redeemedLabel: label };
+    if (!executeCompleted(item.tool)) return;
+    markSuperseded(marked, [at]);
+    open.delete(key);
+  });
+  return marked;
+}
+
 /**
  * A governed commit (or stage, unstage, branch) first answers "approval required" with a proposal;
  * the run then carries it out with `keiko_git_execute`, asking the person first where the mode says
@@ -726,7 +763,7 @@ function markSupersededGitProposals(items: readonly TimelineItem[]): readonly Ti
   let open: number[] = [];
   let redeemed = 0;
   marked.forEach((item, index) => {
-    if (item.kind !== "tool") return;
+    if (item.kind !== "tool" || gitProposalKey(item) !== undefined) return;
     if (item.tool.tool === "keiko_git_execute") {
       if (open.length > 0 && executeCompleted(item.tool)) redeemed += 1;
     } else if (isOpenGitProposal(item.tool)) {
@@ -766,7 +803,7 @@ function markRedeemedGitProposals(items: readonly TimelineItem[]): readonly Time
   let open: CodingSafeActivityTool[] = [];
   let redeemed = 0;
   marked.forEach((item, index) => {
-    if (item.kind !== "tool") return;
+    if (item.kind !== "tool" || gitProposalKey(item) !== undefined) return;
     if (item.tool.tool === "keiko_git_execute") {
       const label = redeemedLabelKey(open);
       if (label !== undefined) marked[index] = { ...item, redeemedLabel: label };

@@ -114,6 +114,7 @@ import type {
 import {
   codingToolEditPresentation,
   codingToolGitPresentation,
+  codingToolGitProposalPresentation,
   codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
@@ -5903,7 +5904,12 @@ function governedToolPresentation(
 ): CodingSafeActivityToolPresentation {
   if (request.action === "edit") return codingToolEditPresentation(result);
   if (request.action === "verification") return codingToolVerificationPresentation(result);
-  if (isGitStepRequest(request)) return codingToolGitPresentation(result);
+  if (isGitStepRequest(request)) {
+    return {
+      ...codingToolGitPresentation(result),
+      ...codingToolGitProposalPresentation(request, result),
+    };
+  }
   if (result.status !== "completed" || !("read" in result)) return {};
   if (request.action === "discover") {
     return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"
