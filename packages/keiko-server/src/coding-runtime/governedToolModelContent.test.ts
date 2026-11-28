@@ -261,6 +261,7 @@ describe("the closed Git outcome on the rendering record (#4271)", () => {
         "not-staged",
         "unsaved-changes",
         "blocked",
+        "commit-protected-branch",
         "branch-invalid-name",
         "branch-protected-name",
         "branch-exists",

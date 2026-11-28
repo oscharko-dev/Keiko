@@ -136,11 +136,12 @@ export type CodingSafeActivityVerificationOutcome =
  * execute step, `verification-failed` and
  * `verification-missing` a commit that no passing verification of the staged change covers,
  * `not-staged` a commit whose change is only partly staged, `unsaved-changes` a commit that open
- * editor files with unsaved changes hold back, `commit-protected-branch` a commit refused because the
- * run works directly on a protected branch such as main or dev, `blocked` a policy or authority refusal, `branch-*` a
- * task branch Keiko refused for the one reason the word names (a name it will not create, a name
- * already taken, a run that is not on its base branch, a checkout that is not local or holds
- * executable Git filters, a repository condition that blocks the switch), `changed` a candidate or repository that moved since the
+ * editor files with unsaved changes hold back, `blocked` a policy or authority refusal,
+ * `commit-protected-branch` a commit refused because the run works directly on a protected branch
+ * such as main or dev, `branch-*` a task branch Keiko refused for the one reason the word names (a
+ * name it will not create, a name already taken, a run that is not on its base branch, a checkout
+ * that is not local or holds executable Git filters, a repository condition that blocks the
+ * switch), `changed` a candidate or repository that moved since the
  * proposal, and `not-done` a step that failed or whose result is uncertain.
  */
 export const CODING_SAFE_ACTIVITY_GIT_OUTCOMES = [
